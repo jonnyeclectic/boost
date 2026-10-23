@@ -61,7 +61,7 @@ def test_held_copies_round_trip_beside_the_store(tmp_path):
     # Lost since the save, and a different copy now held under that name.
     util.rmtree(beta)
     _held(tmp_path, "beta", "newer\n")
-    assert snapshot.restore(tar, root, "snap-held", held_root) == ["beta"]
+    assert snapshot.restore(tar, root, "snap-held", held_root).held == ["beta"]
     assert _tree(root) == [".skill-lock.json", "alpha", "alpha/SKILL.md"]
     assert (held_root / "beta" / "SKILL.md").read_text(
         encoding="utf-8") == "# beta\n"
@@ -74,11 +74,11 @@ def test_held_copies_never_land_in_the_store(tmp_path):
     tar = tmp_path / "snapcore-held2.tar.gz"
     snapshot.archive(root, tar, {"beta": _held(tmp_path, "beta", "b\n")})
     # No held root to put them in: dropped, still not in the store.
-    assert snapshot.restore(tar, root, "snap-held2") == []
+    assert snapshot.restore(tar, root, "snap-held2").held == []
     assert snapshot.HELD_ARC not in os.listdir(root)
     assert snapshot.archive(root, tmp_path / "snapcore-none.tar.gz").held == []
     assert snapshot.restore(tmp_path / "snapcore-none.tar.gz", root, "s",
-                            tmp_path / "snapcore-held") == []
+                            tmp_path / "snapcore-held").held == []
 
 
 def test_a_store_child_named_like_the_held_dir_is_refused(tmp_path):
@@ -384,7 +384,7 @@ def test_an_archive_of_an_empty_store_needs_no_lock(tmp_path, held):
     root = _store(tmp_path)
     tar = _tar_with(tmp_path, "snapcore-empty", skill=False, held=held)
     assert snapshot.restore(tar, root, "snap-empty",
-                            tmp_path / "snapcore-held") == (
+                            tmp_path / "snapcore-held").held == (
         ["gamma"] if held else [])
     assert _tree(root) == []
 
@@ -396,26 +396,51 @@ def test_an_older_schema_lock_restores(tmp_path):
     assert _tree(root) == [".skill-lock.json", "foo", "foo/SKILL.md"]
 
 
-def test_rehome_rewrites_the_staged_lock_only_when_it_says_so(tmp_path):
+def test_rehome_rewrites_the_staged_lock_and_restamps_it(tmp_path,
+                                                       monkeypatch):
+    # The restored lock is stamped `updated` now, whatever `rehome` says: the
+    # archive's own stamp put the restored state into lock history under an
+    # id that collided with, and sorted above, entries written after it.
+    monkeypatch.setattr(util, "now_iso", lambda: "2026-10-22T05:00:00Z")
     root = _store(tmp_path)
-    tar = _tar_with(tmp_path, "snapcore-rh", '{"version": 3, "rules": {}}')
+    tar = _tar_with(tmp_path, "snapcore-rh",
+                    '{"version": 3, "rules": {}, '
+                    '"updated": "2026-01-01T00:00:00Z"}')
     seen = []
 
     def unchanged(lock):
-        seen.append(lock)
+        seen.append(dict(lock))
         return False
     snapshot.restore(tar, root, "snap-rh", rehome=unchanged)
-    assert seen == [{"version": 3, "rules": {}}]
-    assert (root / ".skill-lock.json").read_text(
-        encoding="utf-8") == '{"version": 3, "rules": {}}'
+    assert seen == [{"version": 3, "rules": {},
+                     "updated": "2026-01-01T00:00:00Z"}]
+    assert (root / ".skill-lock.json").read_text(encoding="utf-8") == (
+        '{\n  "version": 3,\n  "rules": {},\n'
+        '  "updated": "2026-10-22T05:00:00Z"\n}\n')
 
     def changed(lock):
         lock["rules"]["r"] = {"x": 1}
         return True
     snapshot.restore(tar, root, "snap-rh", rehome=changed)
-    assert (root / ".skill-lock.json").read_text(encoding="utf-8") == (
-        '{\n  "version": 3,\n  "rules": {\n    "r": {\n      "x": 1\n'
-        '    }\n  }\n}\n')
+    assert json.loads((root / ".skill-lock.json").read_text(
+        encoding="utf-8")) == {"version": 3, "rules": {"r": {"x": 1}},
+                               "updated": "2026-10-22T05:00:00Z"}
+
+
+def test_before_swap_runs_once_the_archive_is_vetted(tmp_path):
+    # It is where `snapshot restore` keeps the live lock in history: run
+    # while the store still holds it, and never for an archive refused.
+    root = _store(tmp_path)
+    tar = _tar_with(tmp_path, "snapcore-bs", '{"version": 3}')
+    seen = []
+    snapshot.restore(tar, root, "snap-bs", before_swap=lambda: seen.append(
+        (root / ".skill-lock.json").read_text(encoding="utf-8")))
+    assert seen == ["{}\n"]
+    bad = _tar_with(tmp_path, "snapcore-bsx", "not json")
+    with pytest.raises(BoostError):
+        snapshot.restore(bad, root, "snap-bsx",
+                         before_swap=lambda: seen.append("ran"))
+    assert seen == ["{}\n"]
 
 
 def test_a_rehome_refusal_leaves_the_store_untouched(tmp_path):
@@ -498,3 +523,229 @@ def test_project_skills(sandbox, tmp_path, monkeypatch):
     assert skills["snapcore-p"]["version"] == "2.0.0"
     monkeypatch.chdir(sandbox)
     assert store.project_skills() == (None, {})
+
+
+def _linked_skill(name, only=None):
+    from boost_cli.core import paths
+    d = paths.store_dir() / name
+    d.mkdir(parents=True)
+    (d / "SKILL.md").write_text("# %s\n" % name, encoding="utf-8")
+    res = store.link_agents(name, only)
+    row = {"version": "1.0.0", "commit": "c1", "agents": res.linked}
+    if only:
+        row["only_agents"] = list(only)
+    lockfile.set_skill(name, row)
+    return row
+
+
+def test_restore_recorded_holds_sets_and_clears(sandbox):
+    _linked_skill("snapcore-h")
+    assert store.restore_recorded_holds("snapcore-missing", {}) == []
+    assert store.restore_recorded_holds(
+        "snapcore-h", {"version": "1.0.0"}) == []
+    assert store.restore_recorded_holds(
+        "snapcore-h", {"pinned": True, "commit_pin": "c0"}) == [
+            "pinned", "commit_pin"]
+    row = lockfile.get_skill("snapcore-h")
+    assert row["pinned"] is True and row["commit_pin"] == "c0"
+    assert store.restore_recorded_holds("snapcore-h", {}) == [
+        "pinned", "commit_pin"]
+    row = lockfile.get_skill("snapcore-h")
+    assert "pinned" not in row and "commit_pin" not in row
+
+
+def test_restore_recorded_holds_relinks_a_changed_scope(sandbox):
+    from boost_cli.core import agents
+    every = sorted(agents.linking_agents())
+    _linked_skill("snapcore-s")
+    assert sorted(lockfile.get_skill("snapcore-s")["agents"]) == every
+    assert store.restore_recorded_holds(
+        "snapcore-s", {"only_agents": ["cursor"]}) == ["only_agents"]
+    row = lockfile.get_skill("snapcore-s")
+    assert row["only_agents"] == ["cursor"] and row["agents"] == ["cursor"]
+    assert store.linked_agents("snapcore-s") == ["cursor"]
+    assert store.restore_recorded_holds("snapcore-s", {}) == ["only_agents"]
+    row = lockfile.get_skill("snapcore-s")
+    assert "only_agents" not in row and sorted(row["agents"]) == every
+    assert sorted(store.linked_agents("snapcore-s")) == every
+
+
+def test_restore_recorded_holds_only_records_a_held_skill_s_scope(sandbox):
+    _linked_skill("snapcore-q")
+    store.quarantine_skill("snapcore-q", lockfile.get_skill("snapcore-q"))
+    assert store.restore_recorded_holds(
+        "snapcore-q", {"only_agents": ["cursor"]}) == ["only_agents"]
+    row = lockfile.get_skill("snapcore-q")
+    assert row["only_agents"] == ["cursor"] and row["agents"] == []
+    assert store.linked_agents("snapcore-q") == []
+
+
+def test_reapply_recorded_aside(sandbox):
+    _linked_skill("snapcore-r")
+    assert store.reapply_recorded_aside("snapcore-r", {}) is None
+    assert store.reapply_recorded_aside("snapcore-gone",
+                                        {"quarantined": True}) is None
+    assert store.reapply_recorded_aside("snapcore-gone",
+                                        {"sidelined_by": "focus"}) is None
+    assert store.reapply_recorded_aside(
+        "snapcore-r", {"sidelined_by": "focus"}) == (
+            "sidelined by `boost focus`")
+    row = lockfile.get_skill("snapcore-r")
+    assert row["sidelined_by"] == "focus" and row["agents"] == []
+    assert store.linked_agents("snapcore-r") == []
+    assert store.reapply_recorded_aside(
+        "snapcore-r", {"quarantined": True, "sidelined_by": "focus"}) == (
+            "quarantined")
+    row = lockfile.get_skill("snapcore-r")
+    assert row["quarantined"] is True and "sidelined_by" not in row
+    assert store.is_held(row)
+
+
+def test_restore_recorded_holds_only_records_a_sidelined_skill_s_scope(sandbox):
+    _linked_skill("snapcore-f")
+    store.sideline("snapcore-f", "focus")
+    assert store.restore_recorded_holds(
+        "snapcore-f", {"only_agents": ["cursor"]}) == ["only_agents"]
+    row = lockfile.get_skill("snapcore-f")
+    assert row["only_agents"] == ["cursor"] and row["agents"] == []
+    assert store.linked_agents("snapcore-f") == []
+
+
+# ── carrying what a snapshot does not cover across the swap ─────────────
+
+def _carry_store(tmp_path):
+    """A store with a recorded skill, the lock's .corrupt backup and a dir
+    the lock never recorded; and an archive of the recorded part only."""
+    root = _store(tmp_path)
+    tar = tmp_path / "snapcore-carry.tar.gz"
+    snapshot.archive(root, tar)
+    (root / ".skill-lock.json.corrupt").write_text("CORRUPT\n", encoding="utf-8")
+    (root / "mine").mkdir()
+    (root / "mine" / "SKILL.md").write_text("# mine\n", encoding="utf-8")
+    (root / "alpha" / "SKILL.md").write_text("changed\n", encoding="utf-8")
+    return root, tar
+
+
+def test_carried_children_survive_the_swap(tmp_path):
+    root, tar = _carry_store(tmp_path)
+    backup = tmp_path / "snapcore-kept"
+    res = snapshot.restore(tar, root, "snap-carry",
+                           carry=[".skill-lock.json.corrupt", "mine"],
+                           backup_dir=backup)
+    assert res.carried == [".skill-lock.json.corrupt", "mine"]
+    assert res.backed_up == [] and res.held == []
+    assert _tree(root) == [".skill-lock.json", ".skill-lock.json.corrupt",
+                           "alpha", "alpha/SKILL.md", "mine", "mine/SKILL.md"]
+    assert (root / ".skill-lock.json.corrupt").read_text(
+        encoding="utf-8") == "CORRUPT\n"
+    assert (root / "alpha" / "SKILL.md").read_text(encoding="utf-8") == "# alpha\n"
+    assert not backup.exists()
+    assert _restore_dirs(root) == []
+
+
+def test_a_carried_child_the_archive_also_holds_is_backed_up(tmp_path):
+    root, tar = _carry_store(tmp_path)
+    backup = tmp_path / "snapcore-kept"
+    (backup / "alpha").mkdir(parents=True)        # taken: the next free name
+    res = snapshot.restore(tar, root, "snap-clash", carry=["alpha", "mine"],
+                           backup_dir=backup)
+    assert res.carried == ["mine"]
+    assert res.backed_up == [backup / "alpha.2"]
+    assert (backup / "alpha.2" / "SKILL.md").read_text(
+        encoding="utf-8") == "changed\n"
+    assert (root / "alpha" / "SKILL.md").read_text(encoding="utf-8") == "# alpha\n"
+    assert _restore_dirs(root) == []
+
+
+def test_keep_live_wins_a_clash(tmp_path):
+    root, tar = _carry_store(tmp_path)
+    res = snapshot.restore(tar, root, "snap-live", carry=["alpha"],
+                           keep_live=["alpha"],
+                           backup_dir=tmp_path / "snapcore-kept")
+    assert res.carried == ["alpha"] and res.backed_up == []
+    assert (root / "alpha" / "SKILL.md").read_text(encoding="utf-8") == "changed\n"
+    assert not (root / "mine").exists()
+    assert not (tmp_path / "snapcore-kept").exists()
+
+
+def test_set_aside_always_goes_to_the_backup(tmp_path):
+    root, tar = _carry_store(tmp_path)
+    backup = tmp_path / "snapcore-kept"
+    res = snapshot.restore(tar, root, "snap-aside",
+                           carry=[".skill-lock.json.corrupt"],
+                           keep_live=["mine"], set_aside=["mine"],
+                           backup_dir=backup)
+    assert res.carried == [".skill-lock.json.corrupt"]
+    assert res.backed_up == [backup / "mine"]
+    assert (backup / "mine" / "SKILL.md").read_text(encoding="utf-8") == "# mine\n"
+    assert not (root / "mine").exists()
+
+
+def test_without_a_backup_dir_a_clash_stays_parked(tmp_path):
+    root, tar = _carry_store(tmp_path)
+    res = snapshot.restore(tar, root, "snap-park", carry=["alpha", "mine"])
+    assert res.carried == ["mine"] and res.backed_up == []
+    [parked] = _restore_dirs(root)
+    assert parked.startswith(snapshot.PARKED_PREFIX)
+    assert (root.parent / parked / "alpha" / "SKILL.md").read_text(
+        encoding="utf-8") == "changed\n"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs symlinks")
+def test_a_dangling_symlink_is_not_carried(tmp_path):
+    root, tar = _carry_store(tmp_path)
+    (root / "gone").symlink_to(tmp_path / "snapcore-nowhere")
+    res = snapshot.restore(tar, root, "snap-dangle", carry=["gone", "mine"],
+                           backup_dir=tmp_path / "snapcore-kept")
+    assert res.carried == ["mine"]
+    assert not os.path.lexists(root / "gone")
+    assert _restore_dirs(root) == []
+
+
+def test_a_failed_carry_keeps_what_is_parked(tmp_path, monkeypatch):
+    root, tar = _carry_store(tmp_path)
+    real = os.replace
+
+    def fail_mine(src, dst):
+        if os.path.basename(str(src)) == "mine" and str(dst).startswith(
+                str(root)):
+            raise OSError(5, "no")
+        return real(src, dst)
+    monkeypatch.setattr(snapshot.os, "replace", fail_mine)
+    with pytest.raises(BoostError) as ei:
+        snapshot.restore(tar, root, "snap-cfail", carry=["mine"])
+    assert ei.value.message.startswith(
+        "restored snap-cfail, but could not carry everything")
+    [parked] = _restore_dirs(root)
+    assert ei.value.hint == "what was not carried is still in %s" % (
+        root.parent.resolve() / parked)
+    assert (root.parent / parked / "mine" / "SKILL.md").is_file()
+
+
+@pytest.mark.parametrize("lock, why", [
+    ("{not json", "has a corrupt lock file"),
+    ('{"version": 99}',
+     "has a lock file in schema 99, which this boost does not read"),
+    (None, "holds skills but no lock file to say which are installed"),
+])
+def test_save_refuses_what_restore_would(sandbox, tmp_path, lock, why):
+    root = _store(tmp_path)
+    if lock is None:
+        (root / ".skill-lock.json").unlink()
+    else:
+        (root / ".skill-lock.json").write_text(lock, encoding="utf-8")
+    tar = tmp_path / "snapcore-refuse.tar.gz"
+    with pytest.raises(BoostError) as ei:
+        snapshot.archive(root, tar)
+    assert ei.value.message == "cannot snapshot the store: it " + why
+    assert ei.value.hint.endswith(
+        ", then save again — a snapshot of it could not be restored")
+    assert not tar.exists()
+
+
+def test_save_of_an_empty_store_without_a_lock_is_allowed(tmp_path):
+    root = tmp_path / "snapcore-bare"
+    root.mkdir()
+    tar = tmp_path / "snapcore-bare.tar.gz"
+    snapshot.archive(root, tar)
+    assert snapshot.restore(tar, root, "snap-bare").carried == []

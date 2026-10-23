@@ -70,6 +70,44 @@ def detect_slot(source_rel: str) -> str:
     return SLOT_AGENTS if parts & AGENT_DIRS else SLOT_COMMANDS
 
 
+#: Source dirs a slash command's namespace is read under: the subdirectories
+#: between one of these and the file. Claude Code: ``.claude/commands/
+#: frontend/component.md`` is ``/frontend:component``; Gemini's
+#: FileCommandLoader joins the same path segments with ``:``.
+COMMAND_DIRS = {"commands", "workflows"}
+#: How a namespaced command is spelled as a boost name: ``frontend/test``. Not
+#: ``:``, the agents' own separator, because ``tap:name`` already owns it
+#: (``catalog.split_name``) and ``tap:frontend:test`` would split wrongly.
+NAMESPACE_SEP = "/"
+
+
+def command_namespace(source_rel: str) -> tuple[str, ...]:
+    """The namespace dirs of the command at ``source_rel``, outermost first.
+
+    The directories after the LAST :data:`COMMAND_DIRS` segment, so a
+    plugin's ``plugins/x/commands/test.md`` has none and ``commands/
+    frontend/test.md`` has ``("frontend",)``. A file under no such dir (a
+    frontmatter-tagged loose command) has none.
+    """
+    parts = Path(source_rel).parts[:-1]
+    at = [i for i, part in enumerate(parts) if part.lower() in COMMAND_DIRS]
+    return parts[at[-1] + 1:] if at else ()
+
+
+def name_parts(name: str, slot: str) -> list[str]:
+    """``name`` split into its path components, each one validated.
+
+    Only a command may be namespaced. Every component is tap-controlled and
+    about to become a path component, so traversal is refused before any
+    join, as :func:`rules.rule_target` does for a rule.
+    """
+    parts = name.split(NAMESPACE_SEP)
+    if (len(parts) > 1 and slot != SLOT_COMMANDS) or not all(
+            util.is_safe_component(part) for part in parts):
+        raise BoostError("invalid workflow name %r" % name)
+    return parts
+
+
 def target_ext(agent: str | None, slot: str) -> str:
     """The file extension workflow files use for ``agent`` in ``slot``.
 
@@ -104,13 +142,13 @@ def workflow_target(skills_dir: Path, slot: str, name: str,
     same terms. It is passed in rather than looked up here so this module stays
     a pure function of its arguments and needs no config read.
     """
-    # Same guard as rule_target: `name` is tap-controlled and is about to become
-    # a path component, so traversal has to be refused before the join.
-    if not util.is_safe_component(name):
-        raise BoostError("invalid workflow name %r" % name)
+    # A namespaced command (``frontend/test``) keeps its subdirectory, which
+    # is what makes it ``/frontend:test`` rather than a ``/test`` that a
+    # second namespace's ``test`` would overwrite. See :func:`name_parts`.
+    *namespace, leaf = name_parts(name, slot)
     root = (Path(base) / (dotdir or Path(skills_dir).parent.name)) \
         if base is not None else Path(skills_dir).parent
-    return root / slot / (name + target_ext(agent, slot))
+    return root.joinpath(slot, *namespace, leaf + target_ext(agent, slot))
 
 
 def _toml_str(s: str) -> str:
@@ -140,6 +178,78 @@ def _toml_str(s: str) -> str:
 # it, and not the indexed ``$ARGUMENTS[0]`` form, which has no Gemini twin.
 _ARGUMENTS = re.compile(r"\$ARGUMENTS(?![\w\[])")
 
+# Claude's dynamic content, and Gemini's spelling of the same two things.
+# Source: Gemini CLI's bundled FileCommandLoader (chunk-55E6VPR2.js,
+# `SHELL_INJECTION_TRIGGER = "!{"`, `AT_FILE_INJECTION_TRIGGER = "@{"`), whose
+# extractor closes an injection on the brace that balances its opener and has
+# no escape. Claude Code documents !`cmd` as "runs before the prompt" and
+# @path as "includes the file".
+#
+# A command holding a brace is left alone: inside !{...} it would close the
+# injection early or leave it unclosed, and Gemini refuses the whole command
+# with "Unclosed injection".
+_BANG_CMD = re.compile(r"(?<!`)!`([^`\n{}]+)`(?!`)")
+_BANG_CMD_BRACED = re.compile(r"(?<!`)!`([^`\n]*[{}][^`\n]*)`(?!`)")
+# Conservative on purpose: a missing path is an error line in Gemini where it
+# was plain text in Claude, so only a token that names a FILE is converted —
+# one ending in an extension (`@src/main.py`, `@package.json`). An npm scope
+# (`@angular/core`), a mention (`@alice`), an email (`a@b.com`, the `@` is
+# not at a word start) and git's `stash@{0}` are all left as written.
+_AT_FILE = re.compile(
+    r"(?<![^\s(\[])@((?:\.{0,2}/|~/)?[\w./-]*\.[A-Za-z]\w*)(?![\w/-])")
+# A fenced code block, closed by a fence of the same character at least as
+# long, or running to the end of the body when never closed (CommonMark).
+# Inside one, `@pytest.fixture` and `@app.route` are decorators in an
+# example, not files (converted, each was a missing-file error in Gemini),
+# and a shown !`git reset --hard` is an example, not a command to run.
+_FENCE = re.compile(
+    r"^[ \t]{0,3}(`{3,}|~{3,})[^\n]*\n.*?(?:^[ \t]{0,3}\1[`~]*[ \t]*$|\Z)",
+    re.MULTILINE | re.DOTALL)
+
+
+def _outside_fences(text: str, fix) -> str:
+    """``text`` with ``fix`` applied to every span outside a fenced block."""
+    out, at = [], 0
+    for m in _FENCE.finditer(text):
+        out += [fix(text[at:m.start()]), m.group(0)]
+        at = m.end()
+    out.append(fix(text[at:]))
+    return "".join(out)
+
+
+def _gemini_prompt(body: str) -> str:
+    """``body`` with Claude's placeholders in Gemini's spelling."""
+    # Commands first: `{{args}}` is legal inside !{...} (Gemini shell-escapes
+    # it there), but its braces would stop _BANG_CMD matching the command.
+    # Neither is converted inside a fenced block: there each is an example,
+    # and as !{...} Gemini would RUN the example at every invocation.
+    out = _outside_fences(
+        body, lambda part: _BANG_CMD.sub(lambda m: "!{%s}" % m.group(1), part))
+    out = _ARGUMENTS.sub("{{args}}", out)
+    return _outside_fences(
+        out, lambda part: _AT_FILE.sub(lambda m: "@{%s}" % m.group(1), part))
+
+
+def gemini_command_notes(raw: str) -> list[str]:
+    """What a Gemini rendering of command ``raw`` could not carry over.
+
+    Gemini's loader has no escape for its two triggers, so text a tap meant
+    literally — git's ``stash@{0}`` or ``@{u}``, a shell ``!{`` — is read as
+    a file or shell injection: an error line at each run, or the whole command
+    refused when the braces do not balance. :func:`render_gemini_command`
+    cannot fix that without changing the prompt, so it is said instead.
+    """
+    _meta, body = frontmatter.parse(raw)
+    notes = ["Gemini reads the `%s` in its prompt as %s; the text is written "
+             "as the tap has it" % (trigger, what)
+             for trigger, what in (("@{", "a file to inject"),
+                                   ("!{", "a shell command to run"))
+             if trigger in body]
+    notes += ["Gemini cannot run `!`%s`` before the prompt (a brace would end "
+              "its `!{...}` early); left as text" % m.group(1)
+              for m in _BANG_CMD_BRACED.finditer(body)]
+    return notes
+
 
 def render_gemini_command(name: str, raw: str) -> str:
     """A Markdown workflow rendered as a Gemini CLI ``.toml`` slash command.
@@ -160,7 +270,10 @@ def render_gemini_command(name: str, raw: str) -> str:
     with what the user typed, and a prompt without one gets the input
     appended after two newlines, so a literal ``$ARGUMENTS`` left the model
     reading a placeholder where the input belonged. Claude's positional
-    ``$1``/``$2`` have no Gemini counterpart and are left as written. A
+    ``$1``/``$2`` have no Gemini counterpart and are left as written.
+    Claude's !`cmd` and @path become Gemini's !{cmd} and @{path} (see
+    :data:`_BANG_CMD` and :data:`_AT_FILE` for what is left alone, and
+    :func:`gemini_command_notes` for what is said about it). A
     ``description`` that is not a string (a YAML list) is dropped rather than
     emitted as its Python repr.
     """
@@ -170,7 +283,7 @@ def render_gemini_command(name: str, raw: str) -> str:
     description = d.strip() if isinstance(d, str) else ""
     if description:
         lines.append("description = %s" % _toml_str(description))
-    prompt = _ARGUMENTS.sub("{{args}}", body.strip("\n"))
+    prompt = _gemini_prompt(body.strip("\n"))
     lines.append("prompt = %s" % _toml_str(prompt))
     return "\n".join(lines) + "\n"
 
@@ -691,6 +804,27 @@ def _tools_verdict(lines: list[tuple[str, str]],
     return _REWRITE, out
 
 
+_NULL_TEXTS = ("", "~", "null")
+
+
+def _is_empty_value(lines: list[tuple[str, str]], key: _Key) -> bool:
+    """Whether ``key`` holds YAML null (or an empty string): no value at all."""
+    shape, text, _items = _read_value(lines, key)
+    return shape == _SCALAR and text.lower() in _NULL_TEXTS
+
+
+def _plain_scalar_needs_quotes(lines: list[tuple[str, str]], key: _Key) -> bool:
+    """Whether ``key``'s one-line plain scalar is invalid YAML as written.
+
+    Only the shape js-yaml refuses that a quote cures: ``": "`` inside an
+    unquoted value. A quoted value, a list, or anything :func:`_read_value`
+    cannot read is left alone.
+    """
+    shape, text, _items = _read_value(lines, key)
+    return (shape == _SCALAR and not _is_quoted(_strip_comment(key.value))
+            and ": " in text)
+
+
 def _plan(install: str, lines: list[tuple[str, str]],
           keys: list[_Key]) -> _Plan | None:
     """The edit to make, or None for "hand this file back untouched"."""
@@ -751,6 +885,17 @@ def _plan(install: str, lines: list[tuple[str, str]],
             drop -= {tools_key.start}
             drop |= set(range(tools_key.start + 1, tools_key.end))
             values["tools"] = tools
+
+    # A plain scalar holding ": " is a YAML error ("bad indentation of a
+    # mapping entry"), and it is the common Claude-corpus description: one
+    # line of `Use this agent when...\n\n<example>\nContext: ...`. Claude
+    # reads the line as text; quoting it gives Gemini that same text.
+    for text_key in ("description", "display_name"):
+        key = seen.get(text_key)
+        if key is not None and _plain_scalar_needs_quotes(lines, key):
+            value = _read_value(lines, key)[1]
+            replace[key.start] = "%s: %s" % (text_key, _yaml_str(value))
+            values[text_key] = value
 
     name_key = seen.get("name")
     declared = ""
@@ -893,8 +1038,8 @@ def sanitize_gemini_agent(name: str, raw: str) -> str:
     - every key outside :data:`GEMINI_AGENT_KEYS` is deleted, span and all,
       because ``localAgentSchema`` is ``.strict()``. This is safe *because it
       is the Gemini copy*: ``store.render`` runs once per enabled agent and
-      writes four separate regular files, so ``~/.gemini/agents/<x>.md`` is
-      read by Gemini and by nothing else. Claude, Cursor and Windsurf still get
+      writes a separate regular file each, so ``~/.gemini/agents/<x>.md`` is
+      read by Gemini and by nothing else. Claude and Cursor still get
       the tap's bytes verbatim, keys boost has never heard of included.
     - ``tools`` is kept when Gemini already accepts it, translated when every
       entry has an exact Gemini counterpart, and otherwise the whole FILE is
@@ -916,6 +1061,8 @@ def sanitize_gemini_agent(name: str, raw: str) -> str:
     fails at load. Those files are returned byte-identical (6 of 5,005 in the
     tapped corpus), as are remote agents, duplicated keys, and every construct
     :func:`_scan_keys` and :func:`_read_value` decline to interpret.
+    Returned, not written: ``store`` asks :func:`gemini_agent_problem` of
+    the result and withholds a file Gemini would reject, with the reason.
 
     The result is verified before it is returned (:func:`_verify_output`) and
     then required to be a fixed point — ``sanitize(sanitize(x)) ==
@@ -923,10 +1070,82 @@ def sanitize_gemini_agent(name: str, raw: str) -> str:
     refused instead. A renderer that does not settle makes ``boost sync``
     rewrite files that never changed.
     """
+    # Gemini's FRONTMATTER_REGEX is anchored at `---` on a plain utf-8 read,
+    # so a leading BOM is "Missing mandatory YAML frontmatter". boost's own
+    # frontmatter.parse strips one, which is why the catalog never saw it.
+    raw = raw.removeprefix("\ufeff")
     out = _sanitize_once(name, raw)
     if out == raw:
         return raw
     return out if _sanitize_once(name, out) == out else raw
+
+
+def gemini_agent_problem(text: str) -> str | None:
+    """Why Gemini would reject the agent file ``text``, or None.
+
+    Asked of :func:`sanitize_gemini_agent`'s OUTPUT, so it answers for what
+    the repair could not fix — a description that is missing, a ``tools``
+    list with a name that has no Gemini counterpart, a file with no
+    frontmatter. ``store`` does not write such a file: written, it was a
+    validation error at every Gemini session for a file boost reported as
+    installed and `boost verify` called ok.
+
+    Only definite rejections, each one a rule of ``localAgentSchema`` or of
+    ``parseAgentMarkdown``. A construct this module cannot read (a block
+    scalar, a nested mapping, a remote agent) answers None: refusing a file
+    Gemini might load is the worse error, and it keeps the pre-existing
+    behaviour for exactly the shapes nothing here can judge.
+    """
+    if not text.startswith(("---\n", "---\r\n")):
+        return "has no YAML frontmatter, which Gemini requires"
+    span = _locate_frontmatter(text)
+    if span is None:
+        return None if "\n---" in text[3:] else (
+            "has a frontmatter block that is never closed")
+    lines = _lines_of(text[span[0]:span[1]])
+    keys = _scan_keys(lines)
+    if keys is None:
+        return None
+    seen = {key.name: key for key in keys}
+    if len(seen) != len(keys):
+        return "repeats a frontmatter key, which Gemini's YAML parser refuses"
+    if not GEMINI_REMOTE_KEYS.isdisjoint(seen):
+        return None
+    unknown = [key.name for key in keys if key.name not in GEMINI_AGENT_KEYS]
+    if unknown:
+        return "carries %s, which Gemini's agent schema does not allow" % (
+            ", ".join("`%s`" % k for k in unknown))
+    for name in ("name", "description"):
+        if name not in seen or _is_empty_value(lines, seen[name]):
+            return "has no `%s`, which Gemini requires" % name
+    for key in keys:
+        if _plain_scalar_needs_quotes(lines, key):
+            return "has an unquoted `: ` in `%s`, which is not valid YAML" % (
+                key.name)
+    shape, declared, _items = _read_value(lines, seen["name"])
+    if shape == _SCALAR and (not GEMINI_NAME_RE.match(declared) or (
+            not _is_quoted(_strip_comment(seen["name"].value))
+            and _NON_STRING_RE.match(declared))):
+        return "is named %r, which is not a Gemini agent name" % declared
+    if "tools" in seen:
+        return _tools_problem(lines, seen["tools"])
+    return None
+
+
+def _tools_problem(lines: list[tuple[str, str]], key: _Key) -> str | None:
+    """Why Gemini would reject this ``tools`` value, or None."""
+    shape, text, items = _read_value(lines, key)
+    if shape == _OTHER:
+        return None
+    if shape == _SCALAR:
+        return ("has an empty `tools`, which Gemini reads as null"
+                if text.lower() in _NULL_TEXTS else
+                "has `tools` as a string, where Gemini requires a list")
+    bad = [t for t in items if not _valid_gemini_tool(t)]
+    if bad:
+        return "grants %s, which Gemini has no tool for" % ", ".join(
+            "`%s`" % t for t in bad)
+    return None
 
 
 def skill_description(slot: str, meta: dict) -> str | None:
@@ -983,6 +1202,30 @@ def render_skill(name: str, description: str, raw: str) -> str:
     """
     head = frontmatter.dump({"name": name, "description": description})
     return "%s\n\n%s" % (head, _skill_body(raw))
+
+
+def render_notes(agent: str | None, slot: str, raw: str) -> list[str]:
+    """What :func:`render` could not carry over for ``agent`` in ``slot``.
+
+    The file is still written; these are said beside it. Only Gemini's TOML
+    commands have any (:func:`gemini_command_notes`).
+    """
+    if target_ext(agent, slot) == TOML_EXT:
+        return gemini_command_notes(raw)
+    return []
+
+
+def render_problem(agent: str | None, slot: str, text: str) -> str | None:
+    """Why ``agent`` would reject ``text`` (what :func:`render` produced for
+    it in ``slot``), or None when nothing says it would.
+
+    Only Gemini's subagent slot is judged (:func:`gemini_agent_problem`): it
+    is the one target with a strict load-time schema, and the one whose repair
+    can decline. A caller that gets a reason does not write the file.
+    """
+    if agent in TOML_COMMAND_AGENTS and slot == SLOT_AGENTS:
+        return gemini_agent_problem(text)
+    return None
 
 
 def render(agent: str | None, slot: str, name: str, raw: str) -> str:

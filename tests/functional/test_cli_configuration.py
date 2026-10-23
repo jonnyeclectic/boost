@@ -238,6 +238,55 @@ class TestClean:
         assert "nothing to clean" in r.out
         assert mine.is_symlink()
 
+    def test_leaves_a_native_store_agents_dir_to_its_owner(
+            self, boost, installed):
+        # boost never links into ~/.gemini/skills (Gemini reads the store
+        # directly), so doctor and heal call what dangles there someone
+        # else's. clean deleted it anyway, with no flag and no prompt.
+        theirs = paths.home() / ".gemini" / "skills" / "old-thing"
+        theirs.parent.mkdir(parents=True, exist_ok=True)
+        theirs.symlink_to(paths.store_dir() / "old-thing")
+        r = boost("clean", "--dry-run")
+        assert "nothing to clean" in r.out
+        assert "old-thing" not in r.out
+        boost("clean")
+        assert theirs.is_symlink()
+
+    def test_sweeps_a_dir_boost_linked_into_before(self, boost, installed):
+        cfg = config.load()
+        cfg["agents"]["cursor"]["dir"] = str(paths.home() / "elsewhere")
+        config.save(cfg)
+        ghost = paths.home() / ".cursor" / "skills" / "ghost"
+        ghost.symlink_to(paths.store_dir() / "ghost")
+        r = boost("clean", "--dry-run")
+        assert "would remove ~/.cursor/skills/ghost (broken symlink)" in r.out
+        boost("clean")
+        assert not ghost.is_symlink()
+
+    def test_leaves_the_inside_of_a_store_dir_no_lock_row_claims(
+            self, boost, installed):
+        # sync and heal name `notskill/` and leave it; clean reached inside.
+        other = paths.store_dir() / "notskill" / "__pycache__"
+        other.mkdir(parents=True)
+        (other / "x.pyc").write_bytes(b"1")
+        ds = paths.store_dir() / "has space" / ".DS_Store"
+        ds.parent.mkdir()
+        ds.write_bytes(b"1")
+        top = paths.store_dir() / ".DS_Store"
+        top.write_bytes(b"12")
+        mine = paths.store_dir() / "brainstorming" / "sub" / ".DS_Store"
+        mine.parent.mkdir()
+        mine.write_bytes(b"123")
+        r = boost("clean", "--dry-run")
+        assert "would remove ~/.agents/skills/.DS_Store (.DS_Store)" in r.out
+        assert ("would remove ~/.agents/skills/brainstorming/sub/.DS_Store "
+                "(.DS_Store)") in r.out
+        assert "notskill" not in r.out and "has space" not in r.out
+        assert "2 item(s) · 5B would be freed" in r.out
+        boost("clean")
+        assert other.is_dir() and ds.is_file()
+        assert not top.exists() and not mine.exists()
+
     def test_deep_clean_pycache_history_snapshots(self, boost, installed):
         import os
         pyc = paths.store_dir() / "brainstorming" / "__pycache__"
@@ -1721,7 +1770,9 @@ class TestMcp:
         import hashlib
 
         from boost_cli.core import lockfile
-        rp = paths.home() / ".cursor" / "rules" / "house.mdc"
+        # The rule's own Cursor target: a row anywhere else reads as one
+        # left behind by a repointed agent dir, which doctor flags.
+        rp = paths.home() / ".cursor" / "rules" / "house-style.mdc"
         rp.parent.mkdir(parents=True)
         rp.write_text("rule body", encoding="utf-8")
         lockfile.set_rule("house-style", {

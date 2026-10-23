@@ -84,7 +84,7 @@ def cmd_config(argv) -> int:
     p.add_argument("action", nargs="?", default="list",
                    choices=("list", "get", "set", "unset"),
                    help="what to do (default: list)")
-    p.add_argument("key", nargs="?", help="dotted key, e.g. ai.enabled")
+    p.add_argument("key", type=util.nonempty_str, nargs="?", help="dotted key, e.g. ai.enabled")
     p.add_argument("value", nargs="?", help="new value (JSON or string)")
     p.add_argument("--json", action="store_true",
                    help="machine-readable output")
@@ -183,9 +183,18 @@ def cmd_clean(argv) -> int:
         return {"path": str(pth), "kind": kind, "bytes": size}
 
     items: list[tuple[Path, str, int]] = []  # (path, kind, bytes)
-    for spec in agents.known_agents().values():
-        adir = spec["dir"]
-        if not adir.is_dir():
+    # The dirs `boost heal` sweeps (`agents.sweep_dirs`): each linking
+    # agent's, enabled or not, and the dirs boost linked into before. Never a
+    # native-store agent's: boost does not link into ~/.gemini/skills, so
+    # what dangles there is another tool's — doctor and heal both say so, and
+    # clean deleted it anyway when it walked `known_agents`. The exception is
+    # a native-store dir boost recorded linking into before that agent's
+    # `links_skills` went false: what dangles into the store there is boost's.
+    for adir in (*agents.sweep_dirs(),
+                 *(d for _a, d in agents.remembered_native_dirs())):
+        # ``os.path``: ``Path.is_dir`` raises under a dir with no search bit
+        # on Python 3.12 and 3.13.
+        if not os.path.isdir(adir):  # noqa: FURB146
             continue
         # Same ownership rule as `boost sync`: a broken symlink is only ours to
         # remove if it pointed into the canonical store. A user's own dangling
@@ -232,14 +241,17 @@ def cmd_clean(argv) -> int:
     items.extend((pth, kind, util.dir_size(pth) if pth.is_dir()
                   else pth.stat().st_size) for pth, kind in temps)
     leftovers += [pth for pth, _kind in temps if pth.is_dir()]
-    if paths.store_dir().is_dir():
-        for pth in sorted(paths.store_dir().rglob("*")):
-            if any(pth.is_relative_to(d) for d in leftovers):
-                continue    # removed whole, above
-            if pth.name == "__pycache__" and pth.is_dir():
-                items.append((pth, "__pycache__", util.dir_size(pth)))
-            elif pth.name == ".DS_Store" and pth.is_file():
-                items.append((pth, ".DS_Store", pth.stat().st_size))
+    # Only inside the store dirs the lock records (and the store's own
+    # top level): a dir sync and heal call not boost's — `notskill/`, a name
+    # no skill could have — is left alone by them, so clean leaves what is
+    # inside it alone too.
+    for pth in store.hygiene_candidates():
+        if any(pth.is_relative_to(d) for d in leftovers):
+            continue    # removed whole, above
+        if pth.name == "__pycache__" and pth.is_dir():
+            items.append((pth, "__pycache__", util.dir_size(pth)))
+        elif pth.name == ".DS_Store" and pth.is_file():
+            items.append((pth, ".DS_Store", pth.stat().st_size))
 
     declined = False
     old_snaps: list[snapshot.Unit] = []
@@ -338,7 +350,7 @@ def cmd_compact(argv) -> int:
     p = cliparse.parser(
         prog="boost compact",
         description="Shrink tap clones to the files boost indexes")
-    p.add_argument("tap", nargs="*",
+    p.add_argument("tap", type=util.nonempty_str, nargs="*",
                    help="taps to compact (default: all cloned taps)")
     p.add_argument("--dry-run", action="store_true",
                    help="show what would be reclaimed without touching anything")
@@ -570,10 +582,10 @@ def cmd_create(argv) -> int:
     p = cliparse.parser(
         prog="boost create",
         description="Scaffold a new skill from a template")
-    p.add_argument("name", help="skill name (slugified)")
-    p.add_argument("--description", default=None,
+    p.add_argument("name", type=util.nonempty_str, help="skill name (slugified)")
+    p.add_argument("--description", type=util.nonempty_str, default=None,
                    help="one-line trigger description for the frontmatter")
-    p.add_argument("--dir", default=None,
+    p.add_argument("--dir", type=util.nonempty_str, default=None,
                    help="parent directory (default: current directory)")
     p.add_argument("--install", action="store_true",
                    help="install the new skill immediately")
@@ -671,7 +683,7 @@ def cmd_policy(argv) -> int:
     p.add_argument("action", nargs="?", default="list",
                    choices=("list", "set", "unset", "check"),
                    help="what to do (default: list)")
-    p.add_argument("key", nargs="?",
+    p.add_argument("key", type=util.nonempty_str, nargs="?",
                    help="policy key: " + ", ".join(sorted(policy.DEFAULTS)))
     p.add_argument("value", nargs="?", help="new value (JSON, comma list, or string)")
     p.add_argument("--json", action="store_true",
@@ -746,6 +758,8 @@ def cmd_policy(argv) -> int:
     # every per-item row carries both.
     violations: list[tuple[str | None, str | None, str, str]] = []
     not_checked: set[str] = set()
+    # One provenance verdict per tap, not per item installed from it.
+    signing: dict[str, list[str]] = {}
     total = 0
     # `max_skills` caps what `install` counts, which is the user lock.
     skill_count = len(everything.get("skill", {}))
@@ -762,6 +776,12 @@ def cmd_policy(argv) -> int:
         if pol["allowed_taps"] and tap not in pol["allowed_taps"] and tap != "local":
             violations.append((name, kind, label,
                                "tap %s is not on the allowlist" % tap))
+        if pol["require_signed_taps"]:
+            # A tap added before the policy was set is still tapped; `trust
+            # verify` failed it while this check passed what came from it.
+            if tap not in signing:
+                signing[tap] = policy.installed_tap_signing(tap)
+            violations.extend((name, kind, label, msg) for msg in signing[tap])
         if store.is_url_import(entry):
             # `local` is exempt above, but a URL import names its source; the
             # clone is gone, so signing cannot be re-checked here.
@@ -977,7 +997,7 @@ def cmd_onboard(argv) -> int:
     p = cliparse.parser(
         prog="boost onboard",
         description="Add skill-tracker telemetry to a repo (optionally open a PR with --pr)")
-    p.add_argument("--repo", default=None,
+    p.add_argument("--repo", type=util.nonempty_str, default=None,
                    help="repository directory (default: the enclosing "
                         "project root)")
     p.add_argument("--pr", action="store_true",
@@ -1517,7 +1537,7 @@ def cmd_serve(argv) -> int:
         description="Browse the catalogue in a browser: search, facets and a tap graph")
     p.add_argument("--port", type=util.port_number, default=None,
                    help="port to listen on (default: config serve.port)")
-    p.add_argument("--host", default="127.0.0.1",
+    p.add_argument("--host", type=util.nonempty_str, default="127.0.0.1",
                    help="address to bind (default: 127.0.0.1)")
     args = p.parse_args(argv)
     port = args.port
@@ -1724,12 +1744,12 @@ def _tool_list(args: dict):
                          % (n, e.get("version", "?"), e.get("tap", "?"),
                             "" if kind == "skill" else " [%s]" % kind,
                             " [project %s]" % where if where else "",
-                            " [pinned]" if e.get("pinned") else ""))
+                            mcp.state_marks(e)))
     if project:
         lines.append("project skills (%s):" % _tilde(pbase))
         lines.extend("%s v%s (%s) [project]%s"
                      % (n, e.get("version", "?"), e.get("tap", "?"),
-                        " [pinned]" if e.get("pinned") else "")
+                        mcp.state_marks(e))
                      for n, e in sorted(project.items()))
     lines.append(footer)
     return "\n".join(lines), False
@@ -1882,10 +1902,12 @@ def _tool_read(args: dict):
                 == cat.get("rel_dir"))
         return mcp.read_reply(name, text, kind=cat.get("kind") or "skill",
                               installed=here,
-                              where=scopes.project_label(rec or {})), False
+                              where=scopes.project_label(rec or {}),
+                              held=mcp.held_line(name, rec)), False
     text, kind, lock, _cat = info._resolve_text(name)
     return mcp.read_reply(name, text, kind=kind, installed=lock is not None,
-                          where=scopes.project_label(lock or {})), False
+                          where=scopes.project_label(lock or {}),
+                          held=mcp.held_line(name, lock)), False
 
 
 @_path_hint
@@ -1905,13 +1927,10 @@ def _tool_install(args: dict):
     # The requested item's own refusal ("already installed", "is pinned")
     # first, so a refused call changes nothing — not its dependencies either.
     store.check_existing(entry)
-    warnings = installplan.confusion_lines([entry])
-    entries, dep_res = installplan.expand_dependencies([entry])
-    warnings.extend(installplan.dependency_warnings(dep_res))
-    lines: list[str] = []
-    added = installplan.added_line(dep_res)
-    if added:
-        lines.append(added)
+    the_plan = installplan.plan([entry])
+    entries = the_plan.entries
+    warnings = [*the_plan.confusions, *the_plan.dep_warnings]
+    lines: list[str] = [the_plan.added] if the_plan.added else []
     done: list[dict] = []
     for e in entries:
         try:
@@ -2334,7 +2353,8 @@ REGISTRY.register(
     "The skills, rules and workflows already installed on this machine and "
     "usable this second — capability you own and may not know you own. "
     "Returns one line each: name, version, tap, a [rule] or [workflow] marker "
-    "where it is not a skill, and [pinned] where the version is held, then a "
+    "where it is not a skill, [pinned] where the version is held, and "
+    "[quarantined] or [sidelined] where no agent loads it, then a "
     "closing count per kind. That count is the other half of the answer: it is "
     "what this machine holds, not what exists, and a kind sitting at zero is a "
     "kind nothing here could have loaded. boost_search is what reads the "
@@ -2680,7 +2700,7 @@ def cmd_mcp(argv) -> int:
     p.add_argument("action", nargs="?", default="register",
                    choices=("register", "unregister"),
                    help="what to do (default: register)")
-    p.add_argument("--host", metavar="H", default="auto",
+    p.add_argument("--host", type=util.nonempty_str, metavar="H", default="auto",
                    help="agent CLI to (un)register with: %s, `auto` "
                         "(default) for every one that is installed, or "
                         "`all` for every known host regardless of install"

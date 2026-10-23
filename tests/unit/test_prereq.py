@@ -491,6 +491,59 @@ class TestInstalledNames:
         assert prereq.installed_names("/repo") == frozenset({"a", "b"})
 
 
+class TestInstalledSet:
+    """`requires: [alpha:base]` against what the lock holds."""
+
+    S = prereq.InstalledSet({"base": {"owner/alpha"}, "loose": {""},
+                             "twice": {"owner/a", "owner/b"}})
+
+    @pytest.mark.parametrize("token,want", [
+        ("base", True),
+        ("owner/alpha:base", True),
+        ("alpha:base", True),            # the repo tail selects the tap
+        ("beta:base", False),            # installed, but from another tap
+        ("alpha:other", False),
+        ("other", False),
+        ("anytap:loose", True),          # no recorded tap: nothing to refute
+        ("owner/b:twice", True),
+        ("owner/c:twice", False),
+    ])
+    def test_membership(self, token, want):
+        assert (token in self.S) is want
+
+    def test_a_non_string_is_never_a_member(self):
+        assert 3 not in self.S
+
+    def test_it_iterates_and_counts_bare_names(self):
+        assert sorted(self.S) == ["base", "loose", "twice"]
+        assert len(self.S) == 3
+        assert set(self.S) | {"x"} == {"base", "loose", "twice", "x"}
+
+
+class TestInstalledSetFromLocks:
+    def test_taps_come_from_every_section_and_the_project(self, monkeypatch):
+        monkeypatch.setattr(prereq.lockfile, "all_installed",
+                            lambda: {"skill": {"a": {"tap": "t1"}},
+                                     "rule": {"a": {"tap": "t2"}, "r": {}},
+                                     "workflow": {"w": "not-a-dict"}})
+        monkeypatch.setattr(prereq.projectlock, "installed",
+                            lambda base: {"p": {"tap": "t3"}})
+        got = prereq.installed_set("/repo", also=["dry"])
+        assert sorted(got) == ["a", "dry", "p", "r", "w"]
+        assert "t1:a" in got and "t2:a" in got and "t9:a" not in got
+        assert "t3:p" in got and "t1:p" not in got
+        assert "t9:r" in got and "t9:w" in got and "t9:dry" in got
+
+    def test_no_project_base_reads_no_project_lock(self, monkeypatch):
+        monkeypatch.setattr(prereq.lockfile, "all_installed",
+                            lambda: {"skill": {"a": {"tap": "t1"}}})
+        monkeypatch.setattr(prereq.projectlock, "installed",
+                            lambda base: pytest.fail("read a project lock"))
+        got = prereq.installed_set()
+        assert list(got) == ["a"]
+        assert "t2:a" not in got
+
+
 class TestForInstalled:
     @staticmethod
     def _wire(monkeypatch, installed, entries, seen=None):

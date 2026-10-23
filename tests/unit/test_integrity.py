@@ -22,6 +22,7 @@ from boost_cli.core import (
     registry,
     scopes,
     store,
+    util,
 )
 from boost_cli.errors import BoostError
 
@@ -538,8 +539,13 @@ class TestAnItemMaterializedNowhere:
         config.save(cfg)
 
     def _written_row(self, tmp_path, body="hello\n"):
-        """A row for an agent boost still writes, present and correctly hashed."""
-        f = tmp_path / "written.md"
+        """A row for an agent boost still writes, present and correctly hashed.
+
+        At rule ``x``'s own Cursor target: a row anywhere else is one whose
+        agent dir moved since, which reads as missing (`agents.relocated_to`).
+        """
+        f = paths.home() / ".cursor" / "rules" / "x.mdc"
+        f.parent.mkdir(parents=True, exist_ok=True)
         f.write_text(body, encoding="utf-8")
         return self._row("cursor", f,
                          hashlib.sha256(body.encode("utf-8")).hexdigest())
@@ -614,7 +620,7 @@ class TestAnItemMaterializedNowhere:
         earlier draft of this docstring claimed the move "dies here" and it
         does not. The position is argued in the source comment instead."""
         row = self._written_row(tmp_path)
-        (tmp_path / "written.md").unlink()
+        Path(row["path"]).unlink()
         e = {"kind": "rule", "materializations": [self._skipped_row(), row]}
         assert integrity.materialized_status("x", e, "rule") == \
             integrity.STATUS_MISSING
@@ -975,16 +981,17 @@ def test_modified_remedy_for_an_edited_held_copy_is_a_reinstall(installed):
 
 
 def test_modified_remedy_for_a_quarantined_copy_never_names_reinstall(installed):
-    # A reinstall clears `quarantined` and relinks: as the fix for an edited
-    # quarantined copy it would walk the user out of the quarantine.
+    # A reinstall refuses a quarantined row, and lifting the quarantine is
+    # not the fix for an edited held copy.
     from boost_cli.core import lockfile
 
     def quarantine(entry: dict) -> None:
         entry["quarantined"] = True
     lockfile.update_skill(installed, quarantine)
     cmd, why = integrity.modified_remedy(installed)
-    assert cmd == "boost quarantine --list"
-    assert "quarantined" in why
+    assert (cmd, why) == ("boost quarantine --list",
+                          "to review it — it is quarantined, so a reinstall "
+                          "waits for `boost quarantine --release`")
     assert "reinstall" not in cmd and cmd != "boost heal"
     # Quarantine outranks held_at and a missing store SKILL.md alike.
     held = {"quarantined": True, "held_at": "/h/x"}
@@ -1009,3 +1016,19 @@ def test_modified_remedy_for_a_rule_or_workflow_is_a_reinstall(sandbox):
     for kind in ("rule", "workflow"):
         assert integrity.modified_remedy("r", kind) == (
             "boost reinstall r", "to discard local edits")
+
+
+def test_held_status_labels_an_intact_quarantined_copy(installed):
+    assert integrity.held_status(installed, lockfile.get_skill(installed)) \
+        == integrity.STATUS_OK
+    store.quarantine_skill(installed, lockfile.get_skill(installed))
+    entry = lockfile.get_skill(installed)
+    assert integrity.held_status(installed, entry) == \
+        integrity.STATUS_QUARANTINED
+    # An edit to the held copy is not laundered by the label.
+    md = store.held_copy_dir(installed) / "SKILL.md"
+    md.write_text("edit\n", encoding="utf-8")
+    assert integrity.held_status(installed, entry) == integrity.STATUS_MODIFIED
+    assert integrity.skill_modified(installed, entry) is True
+    util.rmtree(store.held_copy_dir(installed))
+    assert integrity.held_status(installed, entry) == integrity.STATUS_MISSING

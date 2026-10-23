@@ -152,8 +152,14 @@ def keep_dirs(start=None) -> dict[str, list[str]]:
 
 
 def _kept_prefixes(keep_dirs: list[str]) -> tuple[str, ...]:
-    """`source_dir` entries as directory prefixes, e.g. `skills/demo/`."""
-    return tuple("%s/" % d.strip("/") for d in keep_dirs)
+    """`source_dir` entries as directory prefixes, e.g. `skills/demo/`.
+
+    A skill at the repo root (``"."``) keeps the whole tree, which ``compact``
+    re-materializes as ``/*``, so its prefix is the empty string: ``./``
+    matched no path and the preview promised to free every byte it keeps.
+    """
+    return tuple("" if d.strip("/") in ("", ".") else "%s/" % d.strip("/")
+                 for d in keep_dirs)
 
 
 def _off_cone_files(repo: Path, keep_dirs: list[str]):

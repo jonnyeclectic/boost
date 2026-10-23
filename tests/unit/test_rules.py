@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from boost_cli.core import agents, rules
+from boost_cli.core import agents, paths, rules
 from boost_cli.errors import BoostError
 
 
@@ -332,7 +332,7 @@ class TestMalformedBlock:
     def test_refusal_names_the_file(self):
         with pytest.raises(BoostError) as ei:
             rules.require_well_formed(self.ORPHAN, "r", Path("/x/CLAUDE.md"))
-        assert ("managed block in %s has" % Path("/x/CLAUDE.md")
+        assert ("managed block in %s has" % paths.tilde(Path("/x/CLAUDE.md"))
                 in ei.value.message)
 
     def test_well_formed_and_absent_pass(self):
@@ -370,6 +370,76 @@ class TestMalformedBlock:
     def test_read_block_returns_exactly_the_body(self):
         t = rules.merge_block("head\n", "r", "B1\nB2") + "tail\n"
         assert rules.read_block(t, "r") == "B1\nB2"
+
+
+class TestDuplicateBlocks:
+    """Two clean copies of one rule's block: legal, and every writer acts on
+    all of them, so one update or uninstall leaves the file consistent."""
+
+    S, E = "<!-- boost:rule:r start -->", "<!-- boost:rule:r end -->"
+
+    def _block(self, body):
+        return "%s\n%s\n%s" % (self.S, body, self.E)
+
+    def _doubled(self, a="Old.", b="Old."):
+        # The finding's shape: user text around and between two copies.
+        return ("user top\n%s\nuser middle\n%s\n"
+                % (self._block(a), self._block(b)))
+
+    def test_block_spans_finds_each_in_order(self):
+        t = self._doubled()
+        first = t.index(self.S)
+        second = t.index(self.S, first + 1)
+        assert rules.block_spans(t, "r") == [
+            (first, t.index(self.E) + len(self.E)),
+            (second, len(t) - 1)]
+
+    def test_block_spans_none_and_one(self):
+        assert rules.block_spans("plain\n", "r") == []
+        t = rules.merge_block("", "r", "B")
+        assert rules.block_spans(t, "r") == [(0, len(t) - 1)]
+
+    def test_block_spans_stops_at_a_damaged_start(self):
+        t = self._block("A") + "\n" + self.S + "\nmine\n"
+        assert rules.block_spans(t, "r") == [(0, len(self._block("A")))]
+        t = self._block("A") + "\n" + self.S + "\n" + self._block("B")
+        assert len(rules.block_spans(t, "r")) == 1
+
+    def test_another_rules_block_is_not_counted(self):
+        t = rules.merge_block(rules.merge_block("", "r", "A"), "q", "B")
+        assert len(rules.block_spans(t, "r")) == 1
+
+    def test_merge_rewrites_the_first_and_drops_the_rest(self):
+        out = rules.merge_block(self._doubled(), "r", "New.")
+        assert out == "user top\n%s\nuser middle\n" % self._block("New.")
+
+    def test_merge_drops_an_adjacent_appended_copy_with_its_gap(self):
+        once = rules.merge_block("notes\n", "r", "A")
+        twice = once + "\n" + self._block("A") + "\n"
+        assert rules.merge_block(twice, "r", "A") == once
+
+    def test_merge_keeps_another_rules_block_between_copies(self):
+        t = (self._block("A") + "\n\n" + rules.merge_block("", "q", "Q")
+             + "\n" + self._block("A") + "\n")
+        out = rules.merge_block(t, "r", "A")
+        assert len(rules.block_spans(out, "r")) == 1
+        assert rules.read_block(out, "q") == "Q"
+        assert out == self._block("A") + "\n\n" + rules.merge_block("", "q", "Q")
+
+    def test_merge_of_a_crlf_file_keeps_crlf(self):
+        t = self._doubled().replace("\n", "\r\n")
+        out = rules.merge_block(t, "r", "New.")
+        assert out == ("user top\r\n%s\r\nuser middle\r\n"
+                       % self._block("New.").replace("\n", "\r\n"))
+
+    def test_strip_removes_every_copy(self):
+        assert rules.strip_block(self._doubled("A", "B"), "r") == (
+            "user top\nuser middle\n")
+
+    def test_strip_of_two_appended_copies_restores_the_original(self):
+        once = rules.merge_block("notes\n", "r", "A")
+        twice = once + "\n" + self._block("A") + "\n"
+        assert rules.strip_block(twice, "r") == "notes\n"
 
 
 class TestRuleNameTraversal:

@@ -2532,6 +2532,19 @@ class TestConflict:
         r = boost("conflict")
         assert "no contradictory rules across 1 skill" in r.out
 
+    def test_a_fenced_line_is_not_a_rule(self, boost, sandbox, tmp_path):
+        _import_skill(boost, tmp_path, "pushes",
+                      "- Always force push to main.\n")
+        _import_skill(boost, tmp_path, "shell-notes",
+                      "```bash\n# never force push to main\n"
+                      "never force push to main\n```\n")
+        r = boost("conflict")
+        assert "no contradictory rules across 2 skills" in r.out
+        _import_skill(boost, tmp_path / "b", "guard",
+                      "- Never force push to main.\n")
+        r = boost("conflict", expect=1)
+        assert "pushes ↔ guard" in r.out or "guard ↔ pushes" in r.out
+
     def test_quarantine_clears_a_declared_conflict(self, boost, tapped):
         # Quarantine removes a skill's active links/materialization on purpose
         # (see quality.py's doctor/drift comments) — a MED conflict finding
@@ -3361,8 +3374,9 @@ class TestSyncSaysWhyARuleWasNotRematerialized:
         store = paths.store_dir()
         store.chmod(0o500)
         try:
-            text = self._flat(boost("sync").out)
-            actions = json.loads(boost("sync", "--json").out)["actions"]
+            # A repair it could not make fails the run, as it fails heal.
+            text = self._flat(boost("sync", expect=1).out)
+            actions = json.loads(boost("sync", "--json", expect=1).out)["actions"]
         finally:
             store.chmod(0o700)
         cause = ("rule team-conventions was not re-materialized: cannot "
@@ -4007,3 +4021,103 @@ class TestStoreDirsBoostDidNotInstall:
         assert ("brainstorming shows twice in Claude Code — plugin "
                 "eight-backend@eight ships a different skill by that name; both "
                 "left as they are") in _flat(boost("doctor").out)
+
+
+# ------------------------------------------------- an unusable activity feed
+
+_READERS = (("pulse",), ("trending",), ("who",), ("log",),
+            ("stats", "brainstorming"), ("decay",), ("health",))
+
+
+_UNREADABLE_MODES = [
+    pytest.mark.skipif(sys.platform == "win32",
+                       reason="chmod can't make a file unreadable on Windows"),
+    pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                       reason="root ignores mode bits"),
+]
+
+
+class TestAnUnreadableActivityFeed:
+    """chmod 000 on pulse.jsonl took doctor, health, pulse, trending, decay
+    and stats down at exit 70, while `install` beside them degraded."""
+
+    pytestmark = _UNREADABLE_MODES
+
+    @pytest.fixture
+    def locked_feed(self, installed):
+        paths.pulse_path().chmod(0)
+        yield paths.pulse_path()
+        paths.pulse_path().chmod(0o644)
+
+    @pytest.mark.parametrize("argv", _READERS)
+    def test_every_reader_warns_once_and_carries_on(self, boost, locked_feed,
+                                                     argv):
+        r = boost(*argv)
+        err = _flat(r.err)
+        assert err.count("could not read the activity feed") == 1
+        assert "make ~/.boost/state/pulse.jsonl readable" in err
+
+    def test_doctor_counts_it_as_an_issue(self, boost, locked_feed):
+        r = boost("doctor", expect=1)
+        assert ("activity feed ~/.boost/state/pulse.jsonl cannot be read "
+                "(Permission denied) — make it readable; until then pulse, "
+                "trending and stats show no activity") in _flat(r.out)
+        assert "journal is overdue for rotation" not in r.out
+        data = json.loads(boost("doctor", "--json", expect=1).out)
+        assert any(c["name"] == "journal" and c["status"] == "issue"
+                   for c in data["checks"])
+
+    def test_health_needs_attention(self, boost, locked_feed):
+        data = json.loads(boost("health", "--json").out)
+        assert data["ok"] is False
+        assert data["status"] == "needs attention"
+
+
+class TestMalformedActivityRows:
+    """A row that parses but is not an object, or whose text fields are not
+    text, crashed pulse/trending/who/log/stats at exit 70; doctor said
+    healthy."""
+
+    @pytest.fixture
+    def bad_rows(self, installed):
+        with paths.pulse_path().open("a", encoding="utf-8") as f:
+            f.write("[1,2]\n")
+            f.write(json.dumps({"ts": "2026-10-22T04:40:00Z", "user": None,
+                                "action": "install", "subject": "zed"}) + "\n")
+            f.write(json.dumps({"ts": "2026-10-22T04:40:00Z", "user": "bob",
+                                "action": "install", "subject": 7}) + "\n")
+
+    @pytest.mark.parametrize("argv", _READERS)
+    def test_every_reader_skips_them(self, boost, bad_rows, argv):
+        r = boost(*argv)
+        assert "zed" not in r.out and "bob" not in r.out
+
+    def test_pulse_still_shows_the_good_rows(self, boost, bad_rows):
+        rows = [l for l in boost("pulse").out.splitlines()
+                if "brainstorming" in l]
+        assert len(rows) == 1
+
+    def test_doctor_names_them_without_failing(self, boost, bad_rows):
+        r = boost("doctor", expect=None)
+        assert ("3 malformed rows in the activity feed are skipped by every "
+                "reader") in _flat(r.out)
+        data = json.loads(boost("doctor", "--json", expect=None).out)
+        row = next(c for c in data["checks"] if c["name"] == "journal")
+        assert row["status"] == "info"
+
+    def test_one_row_is_singular(self, boost, installed):
+        with paths.pulse_path().open("a", encoding="utf-8") as f:
+            f.write("[1]\n")
+        assert ("1 malformed row in the activity feed is skipped by every "
+                "reader") in _flat(boost("doctor", expect=None).out)
+
+
+class TestFutureDatedActivity:
+    def test_pulse_says_in_the_future_not_one_second_ago(self, boost,
+                                                         installed):
+        with paths.pulse_path().open("a", encoding="utf-8") as f:
+            f.write(json.dumps({"ts": "2999-01-01T00:00:00Z", "user": "skew",
+                                "action": "install",
+                                "subject": "commit-messages"}) + "\n")
+        row = next(l for l in boost("pulse").out.splitlines() if "skew" in l)
+        assert row.split()[:3] == ["in", "the", "future"]

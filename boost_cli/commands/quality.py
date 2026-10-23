@@ -10,6 +10,7 @@ quarantine) live in commands/safety.py; shared helpers in commands/_common.py.
 from __future__ import annotations
 
 import hashlib
+import itertools
 import json
 import os
 import re
@@ -53,7 +54,6 @@ from ..core import output as out
 from ..core import rules as rule_blocks
 from ..errors import BoostError
 from ._common import (
-    _iter_installed,
     _iter_installed_all,
     _iter_installed_rows,
     _require_lock_integrity,
@@ -209,7 +209,9 @@ def _broken_links() -> tuple[list[Path], list[Path]]:
     **It does not look in a native-store agent's dir.** `unlinking_agents`,
     not `known_agents`: boost never links into `~/.gemini/skills`, so anything
     dangling there belongs to someone else and is none of this command's
-    business. A *disabled* agent's dir is looked in: boost linked there while
+    business -- unless boost recorded linking there before ``links_skills``
+    went false, and then only its own dangling links count, as ours. A
+    *disabled* agent's dir is looked in: boost linked there while
     it was enabled, and a link it left behind still dangles where that agent
     reads.
 
@@ -231,6 +233,15 @@ def _broken_links() -> tuple[list[Path], list[Path]]:
         for link in sorted(adir.iterdir()):
             if link.is_symlink() and not link.exists():
                 (ours if _owned_link(link) else theirs).append(link)
+    # A native-store dir boost once linked into, before that agent's
+    # `links_skills` went false: boost's own dangling links there are its to
+    # remove, and anything else in it is none of this command's business.
+    for _agent, adir in agents.remembered_native_dirs():
+        if not os.path.isdir(adir):  # noqa: FURB146
+            continue
+        ours.extend(link for link in sorted(adir.iterdir())
+                    if link.is_symlink() and not link.exists()
+                    and _owned_link(link))
     return ours, theirs
 
 
@@ -246,9 +257,17 @@ def _read_skill(skill_dir: Path) -> tuple[dict, str]:
 
 
 def _drift_status(name: str, entry: dict) -> str:
-    """'in-sync' | 'local-edits' | 'upstream-moved' | 'source-missing'
-    | 'source-changed'
+    """'in-sync' | 'local-edits' | 'upstream-moved' | 'upstream-rewound'
+    | 'source-missing' | 'source-changed'
     | 'store-missing' | 'n/a' (local imports with no tap source)."""
+    if entry.get("quarantined"):
+        # The word a quarantined rule or workflow gets, so the board labels
+        # all three kinds alike; the held copy is still checked, and an edit
+        # to it or its loss outranks the label.
+        st = integrity.status(name, entry)
+        return {integrity.STATUS_MISSING: staleness.STORE_MISSING,
+                integrity.STATUS_MODIFIED: staleness.LOCAL_EDITS}.get(
+                    st, "quarantined")
     sdir = store.copy_dir(name, entry)
     if sdir.is_dir() and integrity.self_sourced(name, entry):
         # Kept in the store itself: an edit there is the skill, not drift.
@@ -281,9 +300,33 @@ def _drift_from_copy(name: str, entry: dict, copy_sha: str | None,
                 source_sha = None
             if source_sha is not None:
                 exec_changed = store.source_exec_changed(cat, entry, copy)
-    return staleness.drift_state(copy_sha, lock_sha, is_local, source_sha,
-                                 source_changed=changed,
-                                 exec_changed=exec_changed)
+    return _rewound_or(staleness.drift_state(
+        copy_sha, lock_sha, is_local, source_sha, source_changed=changed,
+        exec_changed=exec_changed), "skill", name, entry)
+
+
+def _rewound_or(status: str, kind: str, name: str, entry: dict) -> str:
+    """``status``, or ``upstream-rewound`` for a move to an older version.
+
+    A tap force-pushed back to an earlier release reads as upstream-moved,
+    whose hint is `boost update` -- which holds it ("update skipped") on
+    every run. The catalog version is read only for an unpinned
+    upstream-moved row, and only from the item's own tap: a pinned one is
+    held by its pin, which ``--allow-downgrade`` does not release.
+    """
+    if status != staleness.UPSTREAM_MOVED or entry.get("pinned"):
+        return status
+    try:
+        entries = catalog.load_tap(registry.get(str(entry.get("tap", ""))))
+    except BoostError:
+        return status
+    row = catalog.installed_row([e for e in entries if e.get("name") == name],
+                                kind, entry)
+    latest = str(row.get("version") or "") if row else ""
+    if staleness.rewound(staleness.CONTENT, str(entry.get("version") or ""),
+                         latest) == staleness.DOWNGRADE:
+        return staleness.UPSTREAM_REWOUND
+    return status
 
 
 def _tap_source_changed(entry: dict) -> bool:
@@ -356,7 +399,7 @@ def _drift_status_materialized(kind: str, name: str, entry: dict) -> str:
     except (OSError, BoostError):
         return "source-missing"
     if hashlib.sha256(raw.encode("utf-8")).hexdigest() != entry.get("sha256"):
-        return "upstream-moved"
+        return _rewound_or(staleness.UPSTREAM_MOVED, kind, name, entry)
     return "in-sync"
 
 
@@ -366,7 +409,8 @@ def _drift_status_materialized(kind: str, name: str, entry: dict) -> str:
 #: mis-painting one cell. `test_drift_vocabulary_is_covered` pins the two
 #: against each other.
 _DRIFT_ROLE = {"in-sync": "success", "local-edits": "warn",
-               "upstream-moved": "accent", "source-missing": "danger",
+               "upstream-moved": "accent", "upstream-rewound": "warn",
+               "source-missing": "danger",
                "source-changed": "warn",
                "store-missing": "danger", "n/a": "muted",
                "quarantined": "muted", "unreachable": "warn",
@@ -383,6 +427,11 @@ def _drift_hint(name: str, status: str, tap: str = "",
         return "boost quarantine --release %s to restore" % name
     if status == "upstream-moved":
         return "boost update"
+    if status == staleness.UPSTREAM_REWOUND:
+        # `boost update` holds a rewind back on every run; only the flag
+        # that releases that hold follows it.
+        return "%s to follow it, or keep your newer copy" % (
+            staleness.DOWNGRADE_REMEDY)
     if status == "source-changed":
         # `boost update` holds these back on purpose: the tap's copy of the
         # name is another repository's item, taken only when asked for.
@@ -446,7 +495,11 @@ def _fingerprint() -> tuple[str, list[str], list[str]]:
     Deterministic: the same lock file and tap commits always produce the same
     hash. An uncloned tap hashes as an empty commit rather than being skipped
     silently — its name is returned separately so callers can say the digest
-    is incomplete instead of passing it off as a real measurement."""
+    is incomplete instead of passing it off as a real measurement.
+
+    The current project's skills count too: a skill vendored into the repo
+    is loaded by every agent run there, so the digest depends on the lock
+    of the project the command runs in, as `list` and `doctor` already do."""
     comps = sorted("%s:%s%s" % (n, e.get("sha256", ""), _q_suffix(e))
                    for n, e in lockfile.installed().items())
     # Rules and workflows are part of the environment the agent runs on —
@@ -455,6 +508,10 @@ def _fingerprint() -> tuple[str, list[str], list[str]]:
     comps += sorted("%s/%s:%s%s" % (kind, n, e.get("sha256", ""), _q_suffix(e))
                     for kind, section in lockfile.all_installed().items()
                     if kind != "skill" for n, e in section.items())
+    # Scope-prefixed for the same reason: outside a project there are no
+    # such lines and a user-only environment hashes exactly as before.
+    comps += sorted("project/%s:%s%s" % (n, e.get("sha256", ""), _q_suffix(e))
+                    for n, e in integrity.project_skills()[1].items())
     uncloned = []
     tap_lines = []
     for t in registry.list_taps():
@@ -493,7 +550,11 @@ def _stack_keywords(cwd: Path) -> set:
 
 
 def _decay_rows(cwd: Path) -> list[dict]:
-    """Relevance/recency verdict per installed skill (shared by decay/health)."""
+    """Relevance/recency verdict per installed skill (shared by decay/health).
+
+    Both scopes: a skill installed ``--local`` is read from the repo's copy
+    and judged like any other, with ``scope`` saying which install a row is
+    (a name in both scopes is two rows)."""
     kws = _stack_keywords(cwd)
     last_by: dict = {}
     for e in journal.events():
@@ -502,8 +563,9 @@ def _decay_rows(cwd: Path) -> list[dict]:
             last_by[subj] = ts
     cutoff = datetime.now(UTC) - timedelta(days=30)
     rows = []
-    for name, _entry in _iter_installed():
-        meta, _ = _read_skill(store.skill_store_dir(name))
+    for row in _iter_installed_rows():
+        name = row.name
+        meta, _ = _read_skill(row_dir(row))
         toks = {_norm_token(t) for t in re.split(r"[-_/\s]+", name)}
         toks |= {_norm_token(w) for w in
                  re.findall(r"[A-Za-z0-9]+", str(meta.get("description") or ""))}
@@ -524,7 +586,7 @@ def _decay_rows(cwd: Path) -> list[dict]:
             verdict = "review"
         else:
             verdict = "ok"
-        rows.append({"name": name, "relevance": relevance,
+        rows.append({"name": name, "scope": row.scope, "relevance": relevance,
                      "last_activity": last_iso, "verdict": verdict})
     return rows
 
@@ -589,6 +651,21 @@ def _drifted(kind: str, name: str, entry: dict, bad) -> int:
     return 1
 
 
+def _project_moved_line(name: str, gone: list[str], base) -> str:
+    """Doctor's line for a missing project skill whose tap has moved."""
+    tracked = bool(gone) and all(gitutil.tracks(Path(base), g) for g in gone)
+    restore = ("`git -C %s checkout -- %s` restores the committed cop%s, or "
+               % (util.shell_arg(str(base)),
+                  " ".join(util.shell_arg(g) for g in gone),
+                  "y" if len(gone) == 1 else "ies")) if tracked else ""
+    return ("project skill %s is missing %s, and its tap has moved since the "
+            "project lock was written, so `boost heal` restores it only if "
+            "this skill's files did not change — `boost heal --dry-run` says "
+            "which; otherwise %s`boost install --local %s --force` moves every "
+            "copy and the lock to the tap's new version"
+            % (name, ", ".join(gone), restore, name))
+
+
 def cmd_doctor(argv):
     ap = cliparse.parser(
         prog="boost doctor", description="Check installation health & report issues")
@@ -616,14 +693,22 @@ def cmd_doctor(argv):
     # machine whose clones were all still on disk. Say what was lost instead.
     cfg_err = config.check()
     if cfg_err:
-        clones = config.unlisted_clones()
+        # Each clone named with the command that re-adds it: "re-add your
+        # taps" named none, though every clone's origin says where it came
+        # from.
+        clones = registry.unlisted_clones()
+        if clones:
+            unread = "the %d tap clone%s on disk %s not listed" % (
+                len(clones), _s(len(clones)),
+                "is" if len(clones) == 1 else "are")
+            re_add = "re-add %s with %s" % (
+                "it" if len(clones) == 1 else "them",
+                ", ".join(itertools.starmap(registry.readd_hint, clones)))
+        else:
+            unread, re_add = "no taps or settings are read", "re-add your taps"
         bad("config", "%s — boost is running on defaults, so %s. Repair the "
-            "file, or re-add your taps; the next write moves the bad file "
-            "to config.json.corrupt" % (cfg_err, (
-                "the %d tap clone%s on disk %s not listed" % (
-                    len(clones), _s(len(clones)),
-                    "is" if len(clones) == 1 else "are"))
-                if clones else "no taps or settings are read"), wrap=True)
+            "file, or %s; the next write moves the bad file to "
+            "config.json.corrupt" % (cfg_err, unread, re_add), wrap=True)
 
     # Same for policy.json: unreadable, it reads as defaults, and the
     # verdict was "healthy" while every rule in it went unenforced.
@@ -701,7 +786,15 @@ def cmd_doctor(argv):
     configured = builtin.configured_tap_count()
     tap_ok = 0
     for tap in taps:
-        if not tap.is_cloned:
+        if not tap.is_cloned and tap.pin:
+            # Doctor reads no network, so it cannot know the pin is gone
+            # upstream -- but `boost update` alone failed forever when it
+            # was, and this line used to send the user straight back to it.
+            bad("tap", "tap %s not cloned — run `boost update %s` to clone it "
+                "at its pin %s; if that commit is gone upstream, %s"
+                % (tap.name, tap.name, tap.pin[:7],
+                   registry.pin_missing_remedy(tap.name)), wrap=True)
+        elif not tap.is_cloned:
             bad("tap", "tap %s not cloned — run `boost update`" % tap.name)
         elif tap.is_broken_clone:
             bad("tap", registry.broken_clone_line(tap.name), wrap=True)
@@ -733,6 +826,10 @@ def cmd_doctor(argv):
     for half in [] if cfg_err else registry.unfinished_clones():
         bad("tap", "%s is a clone that never finished (no tap lists it and it "
             "has no commit checked out) — delete it" % _tilde(half), wrap=True)
+    # A complete clone no tap lists: re-adding one tap after a corrupt config
+    # turned doctor green over every clone still unlisted.
+    for clone, url in [] if cfg_err else registry.unlisted_clones():
+        bad("tap", registry.unlisted_clone_line(clone, url), wrap=True)
     if taps and cache_block:
         bad("cache", "%s — every command rescans its taps and cannot keep the "
             "result; %s"
@@ -776,12 +873,23 @@ def cmd_doctor(argv):
                                                     _tilde(store_dir)),
                 wrap=True)
     temps = [t for t in temps if t[1] != store.PARKED_STORE]
-    if temps:
-        bad("store", "%d stale temp file%s or staging dir%s a killed boost "
-            "left in %s (%s) — `boost clean` removes %s"
-            % (len(temps), _s(len(temps)), _s(len(temps)), _tilde(store_dir),
-               ", ".join(p.name for p, _kind in temps),
-               "it" if len(temps) == 1 else "them"), wrap=True)
+    # One line per dir: the store's (its staging dirs and the restore dirs
+    # beside it included), then each other dir a write left a temp file in —
+    # beside config.json, a tap cache, or the user's CLAUDE.md.
+    by_dir: dict[Path, list[Path]] = {}
+    for pth, kind in temps:
+        where = (pth.parent if kind == store.STALE_TEMP_FILE
+                 and pth.parent != store_dir else store_dir)
+        by_dir.setdefault(where, []).append(pth)
+    for where in sorted(by_dir, key=lambda d: d != store_dir):
+        found = by_dir[where]
+        n = len(found)
+        what = ("stale temp file%s or staging dir%s" % (_s(n), _s(n))
+                if where == store_dir else "stale temp file%s" % _s(n))
+        bad("store", "%d %s a killed boost left in %s (%s) — `boost clean` "
+            "removes %s" % (n, what, _tilde(where),
+                            ", ".join(p.name for p in found),
+                            "it" if n == 1 else "them"), wrap=True)
     if configured and tap_ok == len(taps):
         rep.ok("taps", "%d tap%s cloned%s" % (len(taps), _s(len(taps)),
                                               "" if cache_block
@@ -877,6 +985,15 @@ def cmd_doctor(argv):
                    name, _tilde(paths.store_dir())), wrap=True)
             skill_issues += 1
         sdir = store.copy_dir(name, entry)
+        if not sdir.is_dir() and store.is_held(entry):
+            # Held aside on purpose, and the held copy is gone too. `heal`
+            # leaves a held row alone and a release has nothing to put back,
+            # so naming either was a loop.
+            bad("skill", "skill %s is %s, but its held copy is gone — %s"
+                % (name, store.held_reason(name, entry)[0],
+                   store.lost_held_copy_hint(name)), wrap=True)
+            skill_issues += 1
+            continue
         if not sdir.is_dir():
             # A pin over a moved source is a repair heal declines, so naming
             # heal sent the user round doctor -> heal -> doctor. Whether the
@@ -910,6 +1027,14 @@ def cmd_doctor(argv):
                 bad("skill-quarantine", "quarantined skill %s may still be "
                     "linked for %s — run `boost quarantine %s` again"
                     % (name, ", ".join(still), name))
+                skill_issues += 1
+            # Its held copy is checked as `boost verify` checks it: an edit
+            # there failed verify while this called the machine healthy.
+            if integrity.skill_modified(name, entry):
+                cmd, why = integrity.modified_remedy(name, entry=entry)
+                bad("skill", "quarantined skill %s modified since install "
+                    "(its held copy) — run `%s` %s" % (name, cmd, why),
+                    wrap=True)
                 skill_issues += 1
             continue
         # tamper detection: the lock file records a sha256 at install time, but
@@ -983,13 +1108,35 @@ def cmd_doctor(argv):
                 "run `boost sync --prune`"
                 % (name, ", ".join(stray), ", ".join(scope)))
             skill_issues += 1
+    # A declared scope naming an agent boost does not know. It used to read
+    # as "linked for no agent", and doctor's remedy (`sync --prune`) then
+    # unlinked the skill everywhere; it is ignored now, and heal drops it.
+    for kind, name, unknown in (store.unknown_scope_rows() if lock_ok else []):
+        bad("%s-scope" % kind, store.unknown_scope_line(kind, name, unknown),
+            wrap=True)
+        if kind == "skill":
+            skill_issues += 1
     active_skills = len(skills) - quarantined_skills
+    # Counted on disk: a skill with no link at all is not one "with agent
+    # links", which is what this line said over one `sync --prune` stranded.
+    # A sidelined skill is unlinked on purpose and counts as it always did.
+    unlinked = sum(
+        1 for name, entry in skills.items()
+        if not entry.get("quarantined") and not entry.get("sidelined_by")
+        and enabled and not any(os.path.islink(d / name)
+                                for d in enabled.values()))
     # "with agent links" is a claim the loop above only checked with agents_ok.
     if skills and not skill_issues and agents_ok:
         # A quarantined skill has no agent links — the check above counts
         # any it could not remove as an issue — so it must not inflate this count into a false
         # "healthy, N skills with agent links" the way it used to.
-        if active_skills:
+        if active_skills and unlinked:
+            rep.ok("skills", "%d skill%s present in store, %d with agent "
+                   "links%s" % (active_skills, _s(active_skills),
+                                active_skills - unlinked,
+                                " (%d quarantined)" % quarantined_skills
+                                if quarantined_skills else ""))
+        elif active_skills:
             rep.ok("skills", "%d skill%s present in store with agent links%s"
                    % (active_skills, _s(active_skills),
                       " (%d quarantined)" % quarantined_skills
@@ -1010,14 +1157,24 @@ def cmd_doctor(argv):
         # wrong with copies nothing records any more.
         bad("project-lock", "%s — boost sees no project skills here and "
             "refuses to install or uninstall any until it is repaired; %s"
-            % (plock_err, projectlock.RECOVER_HINT % projectlock.LOCK_REL),
+            % (plock_err, projectlock.recover_hint(pbase)),
             wrap=True)
         proj_issues += 1
     for name, entry in sorted(pskills.items()):
         st = integrity.project_status(entry, pbase)
         if st == integrity.STATUS_MISSING:
             gone = integrity.project_missing_rows(entry, pbase)
-            if integrity.project_skill_dirs(entry, pbase):
+            if (store.project_intact_copy(entry, pbase) is None
+                    and store.project_source_moved(name, entry)):
+                # heal/sync restore from an intact copy, or from a tap still
+                # at the locked content; past a moved tap they may decline,
+                # and naming them sent the user round doctor -> heal ->
+                # doctor. Whether the skill's files moved too is a hash of
+                # the source (a clone widen, maybe a fetch), so doctor names
+                # the preview that answers, and the two ways out.
+                bad("project-skill", _project_moved_line(name, gone, pbase),
+                    wrap=True)
+            elif integrity.project_skill_dirs(entry, pbase):
                 # Some copies stand: name the agents' copies that do not, or
                 # "its files are gone" reads false over an intact .claude/.
                 bad("project-skill", "project skill %s is missing %s — run "
@@ -1094,6 +1251,18 @@ def cmd_doctor(argv):
             for m in entry.get("materializations") or []:
                 if not store.materialization_is_written(kind, entry, m):
                     continue  # named once below, not reported as rot
+                belongs = agents.relocated_to(kind, name, entry, m)
+                if belongs is not None:
+                    # Present or not, it is not where the agent now reads:
+                    # its dir was repointed after the write.
+                    bad(kind, "%s %s for %s is at %s, but %s now reads %s — "
+                        "run `boost sync` to move it"
+                        % (kind, name, m.get("agent", "?"),
+                           _tilde(m.get("path", "")),
+                           agents.display_name(m.get("agent", "?")),
+                           _tilde(str(belongs))), wrap=True)
+                    mat_issues += 1
+                    continue
                 if m.get("unwritable"):
                     # Refused at install, so `boost reinstall` would be refused
                     # too until the dir allows it; the agent-dir line below
@@ -1133,11 +1302,22 @@ def cmd_doctor(argv):
                 continue
             if not store.materialization_is_written("rule", entry, m):
                 continue
+            if agents.relocated_to("rule", name, entry, m) is not None:
+                continue  # named above, with the dir it belongs in
             if m.get("mode") == "claude":
                 try:
                     text = p.read_text(encoding="utf-8") if p.exists() else ""
                 except OSError:
                     text = ""
+                except UnicodeDecodeError:
+                    # Every command that edits the file refuses it the same
+                    # way (`util.read_user_text`); doctor names it instead of
+                    # crashing before it could report anything.
+                    bad("rule", "rule %s's block in %s cannot be read: the "
+                        "file is not UTF-8 — save it as UTF-8, then run "
+                        "`boost doctor` again" % (name, _tilde(p)), wrap=True)
+                    mat_issues += 1
+                    continue
                 present = ("boost:rule:%s start" % name) in text
                 # The start marker alone counted as present, while `verify`
                 # reads the same block as missing and the next write appends
@@ -1147,6 +1327,27 @@ def cmd_doctor(argv):
                         "no end marker — restore its `%s` line or delete the "
                         "orphaned block, then run `boost reinstall %s`"
                         % (name, _tilde(p), rule_blocks.markers(name)[1], name),
+                        wrap=True)
+                    mat_issues += 1
+                    continue
+                # The mirror: the start marker deleted, the end left. It read
+                # as missing, and the reinstall that remedy named appended a
+                # second block under the remnant (`rules.orphan_end`).
+                if rule_blocks.orphan_end(text, name):
+                    bad("rule", "rule %s's block in %s has an end marker and "
+                        "no start marker — restore its `%s` line above the "
+                        "rule's text, or delete that text and the end marker, "
+                        "then run `boost reinstall %s`"
+                        % (name, _tilde(p), rule_blocks.markers(name)[0], name),
+                        wrap=True)
+                    mat_issues += 1
+                    continue
+                # Two clean copies: the agent reads both, and a refresh that
+                # rewrote one of them left stale instructions live under an
+                # all-clear. `boost heal` keeps the first.
+                count = len(rule_blocks.block_spans(text, name))
+                if count > 1:
+                    bad("rule", store.duplicate_block_line(name, str(p), count),
                         wrap=True)
                     mat_issues += 1
                     continue
@@ -1173,6 +1374,8 @@ def cmd_doctor(argv):
         for m in entry.get("materializations") or []:
             if not store.materialization_is_written("workflow", entry, m):
                 continue
+            if agents.relocated_to("workflow", name, entry, m) is not None:
+                continue  # named above, with the dir it belongs in
             if not m.get("unwritable") and not os.path.isfile(m.get("path", "")):
                 if lockfile.is_skill_copy(m):
                     bad("workflow", "workflow %s missing its skill copy at %s "
@@ -1441,8 +1644,20 @@ def cmd_doctor(argv):
         bad("agent-dir", "agent dir %s — %s, then `boost sync` writes what "
             "it missed" % store.unwritable_refusal(str(adir)), wrap=True)
 
-    rotation = journal.rotation_healthy()
-    if not rotation:
+    feed_err = journal.read_error()
+    if feed_err:
+        bad("journal", "activity feed %s cannot be read (%s) — make it "
+            "readable; until then pulse, trending and stats show no activity"
+            % (paths.tilde(paths.pulse_path()), feed_err), wrap=True)
+    else:
+        skipped = journal.skipped_rows()
+        if skipped:
+            rep.note("journal", "%d malformed row%s in the activity feed %s "
+                     "skipped by every reader" % (
+                         skipped, _s(skipped),
+                         "is" if skipped == 1 else "are"), wrap=True)
+    rotation = feed_err is None and journal.rotation_healthy()
+    if feed_err is None and not rotation:
         bad("journal", "journal is overdue for rotation — run `boost heal`")
 
     # Which search engine will actually answer a query. Dense retrieval needs
@@ -1681,10 +1896,10 @@ def _print_skipped(skipped: list[dict]) -> None:
 def cmd_lint(argv):
     ap = cliparse.parser(
         prog="boost lint", description="Validate SKILL.md frontmatter & quality")
-    ap.add_argument("names", nargs="*", metavar="NAME",
+    ap.add_argument("names", type=util.nonempty_str, nargs="*", metavar="NAME",
                     help="installed skill name(s), or a path to a skill "
                          "directory / its SKILL.md")
-    ap.add_argument("--tap", metavar="TAP", help="lint every skill in a tap's clone")
+    ap.add_argument("--tap", type=util.nonempty_str, metavar="TAP", help="lint every skill in a tap's clone")
     ap.add_argument("--min", type=util.score_int, default=40, dest="min_score", metavar="N",
                     help="minimum passing score, 0-100 (default 40)")
     ap.add_argument("--json", action="store_true", help="machine-readable output")
@@ -1781,7 +1996,7 @@ def cmd_drift(argv):
     ap = cliparse.parser(
         prog="boost drift",
         description="Detect installed skills diverging from source")
-    ap.add_argument("names", nargs="*", metavar="NAME",
+    ap.add_argument("names", type=util.nonempty_str, nargs="*", metavar="NAME",
                     help="installed skill, rule or workflow (default: all)")
     ap.add_argument("--json", action="store_true", help="machine-readable output")
     args = ap.parse_args(argv)
@@ -1818,6 +2033,11 @@ def cmd_drift(argv):
         # reinstall) is the repair for — the split doctor and verify name.
         hint = (" ".join(integrity.modified_remedy(name))
                 if kind == "skill" and status == "local-edits"
+                # A held copy that is gone: heal skips a held row, so the
+                # store-missing hint looped (`store.lost_held_copy_hint`).
+                else store.lost_held_copy_hint(name).replace("`", "")
+                if (kind == "skill" and status == staleness.STORE_MISSING
+                    and store.is_held(entry))
                 else _drift_hint(name, status, entry.get("tap", ""),
                                  str(entry.get("tap_url") or "")))
         rows.append({"name": name, "kind": kind, "scope": scope,
@@ -1861,7 +2081,7 @@ def cmd_test(argv):
         prog="boost test",
         description="Validate installed skills against quality checks "
                     "(exits 1 when any skill fails)")
-    ap.add_argument("names", nargs="*", metavar="NAME",
+    ap.add_argument("names", type=util.nonempty_str, nargs="*", metavar="NAME",
                     help="installed skill (default: all)")
     ap.add_argument("--json", action="store_true", help="machine-readable output")
     args = ap.parse_args(argv)
@@ -1962,7 +2182,10 @@ def cmd_decay(argv):
     verdicts = {"decay": out.role("decay candidate", "danger"),
                 "review": out.role("review", "warn"),
                 "ok": out.role("ok", "success")}
-    out.table([(r["name"], out.role(r["relevance"], rel_role[r["relevance"]]),
+    # `(project)` as `outdated` words it: a name can be two rows.
+    out.table([(r["name"] + (" (project)" if r["scope"] == scopes.SCOPE_PROJECT
+                            else ""),
+                out.role(r["relevance"], rel_role[r["relevance"]]),
                 util.rel_time(r["last_activity"]) if r["last_activity"] else "never",
                 verdicts[r["verdict"]]) for r in rows],
               headers=("SKILL", "RELEVANCE", "LAST ACTIVITY", "VERDICT"),
@@ -2101,6 +2324,29 @@ def cmd_heal(argv):
         for msg in store.project_sync_apply({"missing": pplan["missing"]}):
             (out.warn if store.is_unrepaired(msg) else out.ok)(msg)
             actions.append(msg)
+    # A declared scope naming an agent this boost does not know: dropped, so
+    # the lock says what boost already does with it (`store.effective_scope`).
+    for line in store.drop_unknown_scope_agents(dry=dry):
+        (out.info if dry else out.ok)(line)
+        actions.append(line)
+    # A rule block present twice in one context file: the first copy stays,
+    # with its text, and the rest come out.
+    not_collapsed: list[Path] = []
+    for name, where, count in store.duplicate_rule_blocks():
+        if dry:
+            out.info("would keep one of rule %s's %d blocks in %s"
+                     % (name, count, _tilde(where)))
+        else:
+            try:
+                store.collapse_rule_block(name, where)
+            except (OSError, BoostError) as e:
+                out.warn("rule %s's %d blocks in %s were not collapsed: %s"
+                         % (name, count, _tilde(where), e), wrap=True)
+                not_collapsed.append(Path(where))
+                continue
+            out.ok("kept one of rule %s's %d blocks in %s"
+                   % (name, count, _tilde(where)))
+        actions.append("dedupe %s" % name)
     # A repair heal will not make (a pin over a moved source, a URL import it
     # cannot re-clone) fails the run like any other thing it left: exiting 0
     # over a skill still missing is what kept doctor and heal in a loop.
@@ -2204,6 +2450,9 @@ def cmd_heal(argv):
                  wrap=True)
     for tap in registry.list_taps():
         if not tap.is_cloned:
+            # Left as a broken clone is: re-cloning is `update`'s (network),
+            # and doctor counts it, so heal must not exit 0 under this line.
+            broken_taps.append(tap.path)
             out.warn("tap %s not cloned — skipped (run `boost update`)" % tap.name)
             continue
         if tap.is_broken_clone:
@@ -2272,6 +2521,12 @@ def cmd_heal(argv):
                  "then `boost sync`" % store.unwritable_refusal(str(adir)),
                  wrap=True)
     stuck.extend(broken_taps)
+    stuck.extend(not_collapsed)
+    # Re-adding a tap is the user's call (it is a clone, and a source), so
+    # heal names the one doctor flags rather than answer "nothing to heal".
+    for clone, url in [] if cfg_err else registry.unlisted_clones():
+        stuck.append(clone)
+        out.warn(registry.unlisted_clone_line(clone, url), wrap=True)
     # The same rule for the cache dir doctor flags, and for any directory a
     # refused mkdir left missing: heal cannot make the parent writable, so it
     # must not answer "nothing to heal" beneath the problem. The preview and
@@ -2345,12 +2600,23 @@ def cmd_heal(argv):
                  "`boost sync --prune`"
                  % (len(oos), _s(len(oos)),
                     ", ".join("%s → %s" % (n, a) for n, a in oos)), wrap=True)
+    # What a killed boost left beside a file it was writing. Removing it is
+    # `boost clean`'s job (it already decides what is safe to delete there),
+    # so heal names it rather than answer "nothing to heal" over it.
+    temps = [pth for pth, kind in store.stale_temps()
+             if kind != store.PARKED_STORE]
+    if temps:
+        out.warn("%d stale temp file%s or staging dir%s a killed boost left "
+                 "(%s) — `boost clean` removes %s"
+                 % (len(temps), _s(len(temps)), _s(len(temps)),
+                    ", ".join(_tilde(p) for p in temps),
+                    "it" if len(temps) == 1 else "them"), wrap=True)
     if not actions and not stuck and not cfg_err and not no_git:
         # A duplicate this run declined to prune is something `heal` saw, can
         # fix, and deliberately left. A bare "nothing to heal" printed under
         # the line offering the flag contradicts it.
         out.ok("nothing to heal automatically"
-               if declined_duplicates or declined_copies or oos
+               if declined_duplicates or declined_copies or oos or temps
                else "nothing to heal")
     if actions and not dry:
         journal.log("heal", "%d actions" % len(actions))
@@ -2386,7 +2652,7 @@ def cmd_conflict(argv):
             for other in (conflicts if isinstance(conflicts, list) else [conflicts])
             if str(other) in installed_names and str(other) != name
         )
-        for raw in body.splitlines():
+        for raw in imperative.prose_lines(body):
             m = imperative.RULE_RE.match(raw)
             if not m:
                 continue
@@ -2472,7 +2738,7 @@ def cmd_changelog(argv):
     ap = cliparse.parser(
         prog="boost changelog",
         description="Show an item's upstream change history")
-    ap.add_argument("name", metavar="NAME",
+    ap.add_argument("name", type=util.nonempty_str, metavar="NAME",
                     help="skill, rule or workflow, installed or in a tap")
     ap.add_argument("-n", type=util.positive_int, default=20, metavar="N",
                     help="number of entries (default 20)")
@@ -2652,6 +2918,7 @@ def cmd_health(argv):
                  or drift_counts.get("source-missing", 0) > 0
                  or drift_counts.get("unreachable", 0) > 0
                  or drift_counts.get("stranded", 0) > 0
+                 or journal.read_error() is not None
                  or not journal.rotation_healthy())
     if args.json:
         print(json.dumps(data | {"ok": not attention,
@@ -2692,9 +2959,9 @@ def cmd_trust(argv) -> int:
     p.add_argument("action", nargs="?", default="list",
                    choices=("list", "add", "remove", "verify"),
                    help="what to do (default: list)")
-    p.add_argument("name", nargs="?",
+    p.add_argument("name", type=util.nonempty_str, nargs="?",
                    help="key name (add/remove) or tap name (verify)")
-    p.add_argument("key", nargs="?",
+    p.add_argument("key", type=util.nonempty_str, nargs="?",
                    help="with add: a minisign .pub file or its base64 line")
     p.add_argument("--json", action="store_true", help="machine-readable output")
     args = p.parse_args(argv)

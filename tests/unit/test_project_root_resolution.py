@@ -94,6 +94,67 @@ def test_an_agent_user_skills_dir_is_refused(sandbox):
         "(~/.claude/skills)")
 
 
+@pytest.mark.parametrize("dotdir", [".gemini", ".codex", ".claude",
+                                    ".cursor", ".windsurf"])
+def test_an_agent_user_config_root_is_refused(sandbox, dotdir):
+    # Gemini and Codex name the project context file the same as the user
+    # one, so a "project" at ~/.gemini writes the global GEMINI.md.
+    root = paths.home() / dotdir
+    root.mkdir()
+    assert scopes.managed_by_boost(root) == (
+        "~/%s is inside an agent's user config directory (~/%s)"
+        % (dotdir, dotdir))
+    sub = root / "notes"
+    (sub / ".git").mkdir(parents=True)
+    assert scopes.managed_by_boost(sub) == (
+        "~/%s/notes is inside an agent's user config directory (~/%s)"
+        % (dotdir, dotdir))
+
+
+def test_a_disabled_agents_config_root_is_still_refused(sandbox):
+    from boost_cli.core import config
+    cfg = config.load()
+    cfg["agents"]["codex"]["enabled"] = False
+    config.save(cfg)
+    root = paths.home() / ".codex"
+    root.mkdir()
+    assert scopes.managed_by_boost(root) == (
+        "~/.codex is inside an agent's user config directory (~/.codex)")
+
+
+def test_an_agent_whose_skills_sit_in_home_does_not_refuse_home(sandbox):
+    # Its config root would be $HOME, and refusing that refuses every project.
+    from boost_cli.core import config
+    cfg = config.load()
+    cfg["agents"] = {"flat": {"dir": "~/skills"}}
+    config.save(cfg)
+    proj = paths.home() / "code" / "proj"
+    (proj / ".git").mkdir(parents=True)
+    assert scopes.managed_by_boost(proj) is None
+    assert scopes.managed_by_boost(paths.home() / "skills") == (
+        "~/skills is inside an agent's user skills directory (~/skills)")
+
+
+def test_an_agent_whose_config_root_is_above_home_refuses_nothing_by_it(
+        sandbox):
+    # A skills dir one level above $HOME makes its parent an ancestor of
+    # $HOME, which as a refused root would refuse every project on the box.
+    from boost_cli.core import config
+    above = paths.home().resolve().parent
+    cfg = config.load()
+    cfg["agents"] = {"wide": {"dir": str(above / "skills")}}
+    config.save(cfg)
+    proj = paths.home() / "code" / "proj"
+    (proj / ".git").mkdir(parents=True)
+    assert scopes.managed_by_boost(proj) is None
+
+
+def test_a_sibling_named_like_an_agent_root_is_allowed(sandbox):
+    sib = paths.home() / ".gemini-old"
+    sib.mkdir()
+    assert scopes.managed_by_boost(sib) is None
+
+
 def test_a_bare_repo_and_a_dir_inside_it_are_refused(sandbox):
     bare = paths.home() / "bare.git"
     (bare / "objects").mkdir(parents=True)

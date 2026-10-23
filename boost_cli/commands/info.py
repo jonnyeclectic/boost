@@ -29,6 +29,7 @@ from ..core import (
     gitutil,
     imperative,
     installedview,
+    installplan,
     integrity,
     journal,
     lockfile,
@@ -193,31 +194,82 @@ def _as_list(v) -> list:
     return [s.strip() for s in str(v).split(",") if s.strip()]
 
 
-def _skill_meta(name: str, project: dict | None = None, pbase=None):
+def _skill_meta(name: str, project: dict | None = None, pbase=None,
+                declaring_tap: str | None = None):
     """Frontmatter for a named skill — installed copy preferred, else tap.
 
     ``project``/``pbase`` are the current repo's lock and base: a project-only
     skill has no store dir, so its copy in the repo is the installed one.
+    ``name`` may be a ``tap:name`` requirement as written: the store and the
+    project lock are keyed by the bare name, and handing the qualified token
+    to ``skill_store_dir`` raised "invalid skill name". ``declaring_tap``
+    picks the catalog copy the same way the install resolver does (same tap
+    first).
     """
-    p = store.skill_store_dir(name) / "SKILL.md"
-    if not p.exists() and project and name in project:
-        pdir = integrity.project_skill_dir(project[name], pbase)
+    _qualifier, bare = catalog.split_name(name)
+    try:
+        p = store.skill_store_dir(bare) / "SKILL.md"
+    except BoostError:
+        return None
+    if not p.exists() and project and bare in project:
+        pdir = integrity.project_skill_dir(project[bare], pbase)
         if pdir is not None:
             p = pdir / "SKILL.md"
     if not p.exists():
-        matches = catalog.find(name)
-        if not matches:
+        entry = (installplan.pick_dependency(name, declaring_tap)
+                 or next(iter(catalog.find(name)), None))
+        if entry is None:
             return None
         try:
-            root = registry.get(matches[0]["tap"]).path
+            root = registry.get(entry["tap"]).path
         except BoostError:
             return None
-        p = root / matches[0]["skill_md"]
+        p = root / entry["skill_md"]
         # Metadata only, so no clone is worth paying for — but a file that
         # links out of the clone is not this tap's to describe.
         if not p.exists() or catalog.escapes(root, p):
             return None
     return frontmatter.parse(_read(p))[0]
+
+
+def _deps_walk(project: dict) -> dict[str, tuple[str, dict]]:
+    """``{name: (kind, lock entry)}`` for every installed item `deps` checks.
+
+    All three user-lock sections plus the current project's skills. A name in
+    more than one section is walked once, as the kind `find_any` resolves it
+    to (skill first), which is also the one `deps NAME` would read.
+    """
+    walk: dict[str, tuple[str, dict]] = {}
+    for kind, section in lockfile.all_installed().items():
+        for name, entry in section.items():
+            walk.setdefault(name, (kind, entry if isinstance(entry, dict) else {}))
+    for name, entry in project.items():
+        walk.setdefault(name, ("skill", entry if isinstance(entry, dict) else {}))
+    return walk
+
+
+def _item_meta(name: str, kind: str, project: dict, pbase) -> dict:
+    """Frontmatter for an installed item of any kind, ``{}`` when unreadable.
+
+    A skill reads the way :func:`_skill_meta` does. A rule or workflow reads
+    its materialized artifact through :func:`_resolve_text`, as `deps NAME`
+    does. Unreadable is ``{}`` rather than an error: one item whose source is
+    gone must not abort the whole-environment check.
+    """
+    if kind == "skill":
+        return _skill_meta(name, project, pbase) or {}
+    try:
+        return frontmatter.parse(_resolve_text(name)[0])[0]
+    except BoostError:
+        return {}
+
+
+def _install_hint(specs) -> str:
+    """The warning line naming one command that meets every unmet requirement."""
+    missing = sorted(set(specs))
+    return ("`boost install %s` to satisfy %d unmet requirement%s"
+            % (" ".join(missing), len(missing),
+               "" if len(missing) == 1 else "s"))
 
 
 def _mark(installed: bool) -> str:
@@ -308,7 +360,7 @@ def cmd_list(argv):
                                  description="List installed skills, rules and workflows")
     ap.add_argument("--kind", choices=("skill", "rule", "workflow"), default=None,
                     help="only show installed items of this kind")
-    ap.add_argument("--tag", help="only show skills carrying this tag")
+    ap.add_argument("--tag", type=util.nonempty_str, help="only show skills carrying this tag")
     ap.add_argument("--local", action="store_true",
                     help="only what is installed into this repo")
     ap.add_argument("--json", action="store_true", help="machine-readable output")
@@ -548,7 +600,7 @@ def _info_materialized(name: str, kind: str, entry: dict, as_json: bool) -> int:
 def cmd_info(argv):
     ap = cliparse.parser(prog="boost info",
                                  description="Show detailed info about a skill")
-    ap.add_argument("name", help="skill, rule or workflow, installed or in a "
+    ap.add_argument("name", type=util.nonempty_str, help="skill, rule or workflow, installed or in a "
                                  "tap (owner/repo:name picks the tap)")
     ap.add_argument("--json", action="store_true", help="machine-readable output")
     args = ap.parse_args(argv)
@@ -559,6 +611,8 @@ def cmd_info(argv):
     # rejects the qualified string, since `owner/repo:skill` is not a safe path
     # component). Everything below this line works from the bare name.
     qualifier, name = catalog.split_name(args.name)
+    # A tap's `c++-helper` is catalogued, locked and stored as `c--helper`.
+    name = catalog.addressable_name(name)
     lock = _for_tap(lockfile.get_skill(name), qualifier)
     if lock is None:
         # An installed rule/workflow is installed — `boost list` shows it, so
@@ -630,9 +684,17 @@ def cmd_info(argv):
         size = sum(f.stat().st_size for f in copied)
         files = len(copied)
 
+    # A submodule installs as an empty dir: what the install recorded, or,
+    # before one, what the tap's index holds.
+    submodules = [str(p) for p in ((lock or plock or {}).get("submodules")
+                                   or [])]
+    if not (lock or plock) and cat and kind == "skill":
+        submodules = store.unfetched_submodules(cat)
+
     if args.json:
         print(json.dumps({
             "name": name, "kind": kind, "description": desc,
+            "submodules": submodules,
             "upstream_description": upstream or None,
             "installed": lock, "project": plock,
             "capabilities": declared_caps, "detected_capabilities": detected_extra,
@@ -761,6 +823,8 @@ def cmd_info(argv):
                + ("" if src in (None, "", ".") else " (%s)" % src))
     elif src:
         out.kv("source", _tilde(src))
+    for sub in submodules:
+        out.kv("submodule", out.plain(store.submodule_note(sub)), wrap=True)
     if entry:
         if entry.get("commit"):
             out.kv("commit", str(entry["commit"])[:9])
@@ -816,7 +880,7 @@ def cmd_info(argv):
 def cmd_cat(argv):
     ap = cliparse.parser(prog="boost cat",
                                  description="Print a skill or rule's contents")
-    ap.add_argument("name", help="skill, rule or workflow: the installed copy, "
+    ap.add_argument("name", type=util.nonempty_str, help="skill, rule or workflow: the installed copy, "
                                  "else the tap's (owner/repo:name picks the tap)")
     ap.add_argument("--raw", action="store_true", help="no styling even on a TTY")
     args = ap.parse_args(argv)
@@ -839,7 +903,7 @@ def cmd_cat(argv):
 def cmd_edit(argv):
     ap = cliparse.parser(prog="boost edit",
                                  description="Open a skill's SKILL.md in your editor")
-    ap.add_argument("name", help="installed skill to open in $VISUAL or "
+    ap.add_argument("name", type=util.nonempty_str, help="installed skill to open in $VISUAL or "
                                  "$EDITOR")
     args = ap.parse_args(argv)
     # `args.name` may be tap-qualified (`owner/repo:skill`); resolve to the
@@ -970,7 +1034,7 @@ def _render_markdown(body: str) -> None:
 def cmd_preview(argv):
     ap = cliparse.parser(prog="boost preview",
                                  description="Render a SKILL.md with rich formatting")
-    ap.add_argument("name", help="skill, rule or workflow: the installed copy, "
+    ap.add_argument("name", type=util.nonempty_str, help="skill, rule or workflow: the installed copy, "
                                  "else the tap's (raw text when piped)")
     args = ap.parse_args(argv)
     text, _kind, lock, cat = _resolve_text(args.name)
@@ -1026,7 +1090,7 @@ def _explanation_is_faithful(reply: str, source: str) -> bool:
 def cmd_explain(argv):
     ap = cliparse.parser(prog="boost explain",
                                  description="Explain what a skill does in plain English")
-    ap.add_argument("name", help="skill, rule or workflow, installed or in a tap")
+    ap.add_argument("name", type=util.nonempty_str, help="skill, rule or workflow, installed or in a tap")
     args = ap.parse_args(argv)
     _qualifier, _bare = catalog.split_name(args.name)
     text, _kind, _lock, _cat = _resolve_text(args.name)
@@ -1089,7 +1153,11 @@ def cmd_explain(argv):
     elif upstream:
         _print_wrapped("Upstream description (the tap's current version, "
                        "not the installed one): " + upstream)
-    headings = re.findall(r"^(#{1,6})\s+(.*)$", body, re.MULTILINE)
+    # Fenced code is skipped: a shell `# comment` is not a heading, and a
+    # heredoc's `1. ...` line is not a rule.
+    prose = imperative.prose_lines(body)
+    headings = [m.groups() for line in prose
+                if (m := re.match(r"(#{1,6})\s+(.*)$", line))]
     if headings:
         print()
         out.info(out.c("Outline:", out.BOLD))
@@ -1100,7 +1168,7 @@ def cmd_explain(argv):
             out.info(out.role("  … and %d more heading%s"
                               % (more, "" if more == 1 else "s"), "muted"))
     rules, seen = [], set()
-    for line in body.splitlines():
+    for line in prose:
         stripped = re.sub(r"^\s*(?:[-*]|\d+\.)\s+", "", line).strip()
         if not stripped or stripped in seen:
             continue
@@ -1200,7 +1268,7 @@ def _show_crashes(limit, as_json=False):
 def cmd_log(argv):
     ap = cliparse.parser(prog="boost log",
                                  description="Git log for a skill, or boost's activity log")
-    ap.add_argument("name", nargs="?", help="skill to show upstream history for")
+    ap.add_argument("name", type=util.nonempty_str, nargs="?", help="skill to show upstream history for")
     ap.add_argument("-n", "--limit", type=util.positive_int, default=20, metavar="N",
                     help="max entries (default 20)")
     ap.add_argument("--diagnostics", action="store_true",
@@ -1292,7 +1360,7 @@ def cmd_log(argv):
 def cmd_home(argv):
     ap = cliparse.parser(prog="boost home",
                                  description="Open an item's GitHub page in the browser")
-    ap.add_argument("name", help="skill, rule or workflow, installed or in a "
+    ap.add_argument("name", type=util.nonempty_str, help="skill, rule or workflow, installed or in a "
                                  "tap")
     ap.add_argument("--print", dest="print_only", action="store_true",
                     help="print the URL without opening a browser")
@@ -1369,10 +1437,9 @@ def _mcp_requirement_rows(skill_dir) -> list[dict]:
 def cmd_deps(argv):
     ap = cliparse.parser(prog="boost deps",
                                  description="Show dependency & conflict relationships")
-    ap.add_argument("name", nargs="?", help="skill to inspect (default: check all installed)")
+    ap.add_argument("name", type=util.nonempty_str, nargs="?", help="skill to inspect (default: check all installed)")
     ap.add_argument("--json", action="store_true", help="machine-readable output")
     args = ap.parse_args(argv)
-    inst = lockfile.installed()
     # `requires:`/`conflicts:` name an installed item, not a kind — a
     # requirement met by an installed rule or workflow is met, and denying it
     # ("✗ not installed" while `boost list` shows it) was the section-blind lie.
@@ -1380,17 +1447,32 @@ def cmd_deps(argv):
     # its dependent is met, and the old hint to `boost install` it again would
     # have added a second, user-scope copy.
     pbase, project = integrity.project_skills()
-    have = set(prereq.installed_names(pbase))
+    # Tap aware, and deliberately not copied into a plain set: `requires:
+    # [alpha:base]` is met by `base` installed from alpha, which a set of bare
+    # names never answered — the row read "✗ not installed" forever.
+    have = prereq.installed_set(pbase)
 
     if args.name:
-        text, _kind, _lock, _cat = _resolve_text(args.name)
+        text, _kind, lock, cat = _resolve_text(args.name)
         meta = frontmatter.parse(text)[0]
         requires = deps.requirement_names(meta)
         conflicts = deps.conflict_names(meta)
-        req_rows = [deps.requirement_row(
-                        r, have, deps.requirement_names(
-                            _skill_meta(r, project, pbase) or {}))
-                    for r in requires]
+        own_tap = str((lock or {}).get("tap") or (cat or {}).get("tap") or "")
+        # What to hand `boost install` for each unmet name: resolved the way
+        # install resolves it (same tap first), qualified when ambiguous — a
+        # bare `newdep` two taps ship is a hint that fails.
+        specs: dict[str, str] = {}
+        req_rows = []
+        for req in requires:
+            dep = installplan.pick_dependency(req, own_tap)
+            specs.setdefault(req, installplan.dependency_label(dep)
+                             if dep is not None else req)
+            dep_tap = str(dep["tap"]) if dep is not None else None
+            subs = deps.requirement_names(
+                _skill_meta(req, project, pbase, own_tap) or {})
+            for sub in subs:
+                specs.setdefault(sub, installplan.install_spec(sub, dep_tap))
+            req_rows.append(deps.requirement_row(req, have, subs))
         conflict_rows = [deps.conflict_row(c, have) for c in conflicts]
         _qualifier, bare = catalog.split_name(args.name)
         mcp_rows = _mcp_requirement_rows(_skill_dir_for_deps(bare))
@@ -1425,22 +1507,27 @@ def cmd_deps(argv):
         if problems:
             missing = deps.unmet_names(req_rows)
             if missing:
-                out.warn("`boost install %s` to satisfy %d unmet requirement%s"
-                         % (" ".join(missing), len(missing),
-                            "" if len(missing) == 1 else "s"))
+                out.warn(_install_hint(specs.get(n, n) for n in missing))
         return 1 if problems else 0
 
     unmet: list[dict] = []
     pairs: list[dict] = []
     seen: set = set()
-    names = sorted(set(inst) | set(project))
+    # Every kind, as `deps NAME` accepts: walking `lockfile.installed()` alone
+    # gave a clean bill of health (rc 0) over an installed workflow whose own
+    # `deps NAME` reported an unmet requirement (rc 1).
+    walk = _deps_walk(project)
+    names = sorted(walk)
+    hint_specs: list[str] = []
     for name in names:
-        meta = _skill_meta(name, project, pbase) or {}
-        unmet.extend(
-            {"skill": name, "requires": deps.requirement_row(r, have)}
-            for r in deps.requirement_names(meta)
-            if r not in have
-        )
+        kind, entry = walk[name]
+        meta = _item_meta(name, kind, project, pbase)
+        tap = str(entry.get("tap") or "")
+        for req in deps.requirement_names(meta):
+            if req not in have:
+                unmet.append({"skill": name,
+                              "requires": deps.requirement_row(req, have)})
+                hint_specs.append(installplan.install_spec(req, tap))
         for c_name in deps.conflict_names(meta):
             if c_name in have:
                 key = tuple(sorted((name, c_name)))
@@ -1462,15 +1549,26 @@ def cmd_deps(argv):
         out.info("%s %s %s" % (out.c(pair["a"], out.BOLD),
                                out.role("conflicts with", "danger"), out.c(pair["b"], out.BOLD)))
     if not unmet and not pairs:
-        out.ok("no unmet requirements or conflicts across %d skill%s"
-               % (len(names), "" if len(names) == 1 else "s"))
+        noun = ("skill" if all(walk[n][0] == "skill" for n in names)
+                else "item")
+        out.ok("no unmet requirements or conflicts across %d %s%s"
+               % (len(names), noun, "" if len(names) == 1 else "s"))
         return 0
     if unmet:
-        missing = sorted({u["requires"]["name"] for u in unmet})
-        out.warn("`boost install %s` to satisfy %d unmet requirement%s"
-                 % (" ".join(missing), len(missing),
-                    "" if len(missing) == 1 else "s"))
+        out.warn(_install_hint(hint_specs))
     return 1
+
+
+def _split_at_double_dash(argv: list[str]) -> tuple[list[str], list[str]]:
+    """``(before, after)`` around the first ``--`` in ``argv``.
+
+    ``after`` holds every token past the separator verbatim, ``--x`` included;
+    the separator itself is in neither half.
+    """
+    if "--" not in argv:
+        return argv.copy(), []
+    i = argv.index("--")
+    return argv[:i], argv[i + 1:]
 
 
 def cmd_tag(argv):
@@ -1479,27 +1577,36 @@ def cmd_tag(argv):
     ap.add_argument("--list", dest="list_all", action="store_true",
                     help="show every tag and the skills carrying it")
     ap.add_argument("--json", action="store_true", help="machine-readable output")
-    ap.add_argument("name", nargs="?", help="installed skill")
-    ap.add_argument("mods", nargs="*", help="+tag to add, -tag to remove")
+    ap.add_argument("name", type=util.nonempty_str, nargs="?", help="installed skill")
+    ap.add_argument("mods", type=util.nonempty_str, nargs="*", help="+tag to add, -tag to remove")
     # A `-tag` removal looks like an option to argparse, which forced the old
     # parse_known_args + argv re-walk. Instead split the literal option strings
     # from operands ourselves: the skill name and its +tag/-tag operands keep
     # their exact argv order with no re-walk, so `-x +x` still nets differently
     # from `+x -x`.
     flag_strings = {"--list", "--json", "-h", "--help"}
-    flags = [t for t in argv if t in flag_strings]
+    # Everything after the first `--` is an operand, the POSIX convention
+    # argparse itself follows: `tag NAME -- --zz` used to drop `--zz` (and
+    # the `--`) as if neither were there and exit 0 having done nothing.
+    head, tail = _split_at_double_dash(argv)
+    flags = [t for t in head if t in flag_strings]
     # A long option this command does not know must not silently fall through
     # as an operand: `tag brainstorming --verbose` used to read as removing
     # the tag `-verbose`, and `tag --verbose` as `--verbose is not installed`
     # — every sibling command instead rejects an unrecognized `--flag` with
     # exit 2. Handing the untouched argv to argparse here raises that same
     # "unrecognized arguments" error rather than the misleading ones above.
-    unknown_long = [t for t in argv if t.startswith("--") and t not in flag_strings]
+    unknown_long = [t for t in head if t.startswith("--") and t not in flag_strings]
     if unknown_long:
-        ap.parse_args(argv)
-    operands = [t for t in argv if t not in flag_strings and not t.startswith("--")]
+        ap.parse_args(head)
+    operands = [t for t in head if t not in flag_strings and not t.startswith("--")]
+    operands += tail
     args = ap.parse_args(flags)
     args.name = operands[0] if operands else None
+    if args.name is not None and not args.name.strip():
+        # The operands bypass argparse, so `type=util.nonempty_str` on `name`
+        # never runs; this is the same refusal, worded the same way.
+        ap.error("argument name: must not be empty")
     mods = operands[1:]
 
     if args.list_all:

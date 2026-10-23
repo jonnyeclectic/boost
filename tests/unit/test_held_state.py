@@ -12,7 +12,8 @@ import os
 
 import pytest
 
-from boost_cli.core import catalog, lockfile, paths, registry, store, util
+from boost_cli.core import agents, catalog, lockfile, paths, registry, store, util
+from boost_cli.errors import BoostError
 
 
 @pytest.fixture()
@@ -220,3 +221,142 @@ class TestHeldCopiesForSnapshots:
         util.rmtree(store.held_copy_dir(installed))
         assert store.unhold_lost_copies() == []
         assert store.is_held(lockfile.get_skill(installed))
+
+
+class TestQuarantineRefusesReinstall:
+    """`install --force` and `reinstall` used to lift a quarantine silently:
+    the held copy was thrown away and the item jumped to the tap's HEAD."""
+
+    def test_refusal_names_the_release(self):
+        err = store.quarantine_refusal("x", {"quarantined": True})
+        assert err is not None
+        assert err.message == "x is quarantined — not reinstalled"
+        assert err.hint == "`boost quarantine --release x` first"
+        rule = store.quarantine_refusal("r", {"quarantined": True}, "rule")
+        assert rule is not None
+        assert rule.message == "rule r is quarantined — not reinstalled"
+        assert rule.hint == "`boost quarantine --release r` first"
+
+    def test_no_refusal_for_an_active_or_absent_row(self):
+        assert store.quarantine_refusal("x", None) is None
+        assert store.quarantine_refusal("x", {}) is None
+        assert store.quarantine_refusal("x", {"quarantined": False}) is None
+
+    @pytest.mark.parametrize("force", [False, True])
+    def test_install_over_a_quarantined_skill_is_refused(self, installed,
+                                                         force):
+        store.quarantine_skill(installed, lockfile.get_skill(installed))
+        held = store.held_copy_dir(installed) / "SKILL.md"
+        held.write_text(held.read_text(encoding="utf-8") + "\nmy edit\n",
+                        encoding="utf-8")
+        with pytest.raises(BoostError) as exc:
+            store.install(catalog.resolve_one(installed), force=force)
+        assert exc.value.message == "%s is quarantined — not reinstalled" \
+            % installed
+        assert exc.value.hint == "`boost quarantine --release %s` first" \
+            % installed
+        entry = lockfile.get_skill(installed)
+        assert entry["quarantined"] is True
+        assert store.is_held(entry)
+        assert "my edit" in held.read_text(encoding="utf-8")
+        assert not os.path.lexists(store.skill_store_dir(installed))
+        assert not os.path.lexists(_link(installed))
+
+    def test_install_from_path_over_a_quarantined_skill_is_refused(
+            self, installed, tmp_path):
+        store.quarantine_skill(installed, lockfile.get_skill(installed))
+        src = tmp_path / installed
+        src.mkdir()
+        (src / "SKILL.md").write_text(
+            "---\nname: %s\ndescription: d\n---\nbody\n" % installed,
+            encoding="utf-8")
+        with pytest.raises(BoostError) as exc:
+            store.install_from_path(src, name=installed, force=True)
+        assert exc.value.message == "%s is quarantined — not reinstalled" \
+            % installed
+        assert lockfile.get_skill(installed)["quarantined"] is True
+
+
+class TestReleaseWithALostHeldCopy:
+    def test_refuses_and_links_nothing(self, installed):
+        store.quarantine_skill(installed, lockfile.get_skill(installed))
+        util.rmtree(store.held_copy_dir(installed))
+        with pytest.raises(BoostError) as exc:
+            store.release_skill(installed, lockfile.get_skill(installed))
+        assert exc.value.message == (
+            "%s has no held copy to release (%s is gone)"
+            % (installed, paths.tilde(store.held_copy_dir(installed))))
+        assert exc.value.hint == store.lost_held_copy_hint(installed)
+        assert exc.value.hint == (
+            "`boost uninstall brainstorming` drops the record, then "
+            "`boost install brainstorming` fetches it again")
+        entry = lockfile.get_skill(installed)
+        assert entry["quarantined"] is True
+        assert store.is_held(entry)
+        assert not os.path.lexists(_link(installed))
+        for adir in agents.linking_agents().values():
+            assert not os.path.lexists(adir / installed)
+
+    def test_a_present_held_copy_still_releases(self, installed):
+        store.quarantine_skill(installed, lockfile.get_skill(installed))
+        res = store.release_skill(installed, lockfile.get_skill(installed))
+        assert "claude-code" in res.linked
+        assert _link(installed).is_symlink()
+        entry = lockfile.get_skill(installed)
+        assert entry["quarantined"] is False
+        assert not store.is_held(entry)
+
+
+class TestReleaseLeavesAUserFileAlone:
+    def test_taken_while_held(self, sandbox, tmp_path):
+        p = tmp_path / "x.md"
+        assert store._taken_while_held(p, "boost") is False      # absent
+        p.write_text("boost", encoding="utf-8")
+        assert store._taken_while_held(p, "boost") is False      # same text
+        p.write_text("mine", encoding="utf-8")
+        assert store._taken_while_held(p, "boost") is True
+        p.unlink()
+        p.mkdir()
+        assert store._taken_while_held(p, "boost") is False      # a dir
+        p.rmdir()
+        if os.name != "nt":
+            target = tmp_path / "t.md"
+            target.write_text("boost", encoding="utf-8")
+            p.symlink_to(target)
+            assert store._taken_while_held(p, "boost") is True   # a link
+
+    def test_release_records_it_foreign_and_restores_the_rest(self, sandbox):
+        home = paths.home()
+        mine = home / ".claude" / "commands" / "w.md"
+        free = home / ".cursor" / "commands" / "w.md"
+        mine.parent.mkdir(parents=True)
+        mine.write_text("mine\n", encoding="utf-8")
+        rows = [{"agent": "claude-code", "slot": "commands",
+                 "path": str(mine), "sha256": "a"},
+                {"agent": "cursor", "slot": "commands",
+                 "path": str(free), "sha256": "b"}]
+        entry = {"kind": "workflow", "name": "w", "version": "1.0.0",
+                 "quarantined": True, "materializations": rows,
+                 "quarantine_stash": [{**r, "content": "boost\n",
+                                       "full_text": None} for r in rows]}
+        lockfile.set_workflow("w", entry)
+        theirs: list[str] = []
+        restored = store.release_materialized("workflow", "w", entry,
+                                              foreign=theirs)
+        assert restored == ["cursor"]
+        assert theirs == [str(mine)]
+        assert mine.read_text(encoding="utf-8") == "mine\n"
+        assert free.read_text(encoding="utf-8") == "boost\n"
+        saved = lockfile.get_workflow("w")
+        assert saved["quarantined"] is False
+        assert "quarantine_stash" not in saved
+        assert [m["path"] for m in saved["materializations"]] == [str(free)]
+        assert saved["foreign"] == [{"agent": "claude-code",
+                                     "slot": "commands", "path": str(mine)}]
+        # Released twice over a kept foreign row: never duplicated.
+        saved["quarantined"] = True
+        saved["quarantine_stash"] = [{**rows[0], "content": "boost\n"}]
+        saved["materializations"] = [rows[0]]
+        store.release_materialized("workflow", "w", saved)
+        assert lockfile.get_workflow("w")["foreign"] == [
+            {"agent": "claude-code", "slot": "commands", "path": str(mine)}]

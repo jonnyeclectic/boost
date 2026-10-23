@@ -498,7 +498,7 @@ class TestUninstall:
     def test_workflow_uninstall_says_removed_from_not_unlinked(
             self, boost, fixture_tap_src, tmp_path):
         tap_dir = _copy_tap(fixture_tap_src, tmp_path / "un-wf-tap")
-        _add_and_commit(tap_dir, "commands/ship.md",
+        _add_and_commit(tap_dir, "commands/ship-it.md",
                         "---\nname: ship-it\nversion: 1.0.0\ndescription: d\n"
                         "allowed-tools: Bash\n---\n\ngo\n", "add wf")
         boost("tap", tap_dir)
@@ -1097,12 +1097,12 @@ class TestUpdate:
     def test_upgrades_workflow_on_version_bump(self, boost, fixture_tap_src,
                                                tmp_path):
         tap_dir = _copy_tap(fixture_tap_src, tmp_path / "wf-tap")
-        _add_and_commit(tap_dir, "commands/ship.md",
+        _add_and_commit(tap_dir, "commands/ship-it.md",
                         "---\nname: ship-it\nversion: 1.0.0\ndescription: d\n"
                         "allowed-tools: Bash\n---\n\ngo\n", "add wf")
         boost("tap", tap_dir)
         boost("install", "ship-it")
-        _add_and_commit(tap_dir, "commands/ship.md",
+        _add_and_commit(tap_dir, "commands/ship-it.md",
                         "---\nname: ship-it\nversion: 1.1.0\ndescription: d\n"
                         "allowed-tools: Bash\n---\n\ngo v2\n", "bump wf")
         r = boost("update")
@@ -1349,6 +1349,29 @@ class TestUpdateKeepsWhatItCannotGetBack:
         assert "`boost update --allow-downgrade` downgrades" in r.out
         assert "--force" not in r.out
 
+    def test_outdated_and_drift_name_allow_downgrade_for_a_rewind(
+            self, boost, fixture_tap_src, tmp_path):
+        """They sent the user to plain `boost update`, which holds a rewind
+        back ("update skipped") on every run."""
+        self._rewound(fixture_tap_src, tmp_path, "rewind-tap-od", boost)
+        assert "update skipped" in boost("update").out   # the hold, held
+        r = boost("outdated")
+        assert "1.4.0 (older than installed)" in r.out
+        assert ("1 outdated · 1 rewound upstream (older than installed; "
+                "`boost update --allow-downgrade` follows it)") in r.out
+        assert "`boost update` upgrades" not in r.out
+        rows = json.loads(boost("outdated", "--json").out)
+        assert [(x["name"], x["installed"], x["latest"], x["reason"])
+                for x in rows] == [("brainstorming", "1.5.0", "1.4.0",
+                                    "downgrade")]
+        drift = json.loads(boost("drift", "--json").out)["skills"]
+        assert [(x["name"], x["status"], x["hint"]) for x in drift] == [
+            ("brainstorming", "upstream-rewound",
+             "boost update --allow-downgrade to follow it, or keep your "
+             "newer copy")]
+        r = boost("drift")
+        assert "upstream-rewound" in r.out
+
     def test_allow_downgrade_downgrades_and_says_which_way(
             self, boost, fixture_tap_src, tmp_path):
         self._rewound(fixture_tap_src, tmp_path, "rewind-tap2", boost)
@@ -1372,6 +1395,14 @@ class TestUpdateKeepsWhatItCannotGetBack:
         assert "Use tabs." in claude.read_text(encoding="utf-8")
         assert ("rule house-style: upstream is at v1.0.0, behind your v1.1.0"
                 in r.out)
+        rows = json.loads(boost("outdated", "--json").out)
+        assert [(x["name"], x["reason"]) for x in rows] == [
+            ("house-style", "downgrade")]
+        drift = json.loads(boost("drift", "--json").out)["skills"]
+        assert [(x["status"], x["hint"]) for x in drift
+                if x["name"] == "house-style"] == [
+            ("upstream-rewound", "boost update --allow-downgrade to follow "
+             "it, or keep your newer copy")]
         r = boost("update", "--allow-downgrade")
         assert "downgraded rule house-style v1.1.0 → v1.0.0" in r.out
         assert "two-space" in claude.read_text(encoding="utf-8")
@@ -1757,7 +1788,7 @@ class TestMaterializedGovernance:
 
     def test_a_workflow_pins_too(self, boost, fixture_tap_src, tmp_path):
         tap_dir = _copy_tap(fixture_tap_src, tmp_path / "wf-tap")
-        _add_and_commit(tap_dir, "commands/ship.md",
+        _add_and_commit(tap_dir, "commands/ship-it.md",
                         "---\nname: ship-it\nversion: 1.0.0\n---\n\nRun the release.\n",
                         "add workflow")
         boost("tap", tap_dir)
@@ -2432,6 +2463,127 @@ class TestSnapshot:
         r = boost("snapshot", "restore", "nope", expect=1)
         assert "no snapshot snap-nope" in r.err
 
+    def test_restore_keeps_rule_and_workflow_rows_at_the_installed_version(
+            self, boost, fixture_tap_src, tmp_path):
+        # Restore leaves CLAUDE.md and the rendered command as they are, and
+        # put the snapshot's older rows back over them: verify, doctor and
+        # drift then called boost's own v2 content the user's local edits.
+        tap_dir = _copy_tap(fixture_tap_src, tmp_path / "snapver-tap")
+        _add_and_commit(tap_dir, "rules/test-first.mdc",
+                        "---\nname: test-first\nversion: 1.0.0\n---\n\n"
+                        "Write tests before code.\n", "add rule")
+        _add_and_commit(tap_dir, "commands/review-diff.md",
+                        "---\ndescription: Review the diff\nversion: 1.0.0\n"
+                        "---\nReview the diff carefully.\n", "add workflow")
+        boost("tap", tap_dir)
+        boost("install", "brainstorming", "test-first", "review-diff")
+        snap_id = re.search(r"saved (snap-[\w-]+)",
+                            boost("snapshot", "save").out).group(1)
+        for rel, old, new in (
+                ("rules/test-first.mdc", "Write tests before code.",
+                 "Write tests before code. V2 text."),
+                ("commands/review-diff.md", "Review the diff carefully.",
+                 "Review the diff carefully. V2 text.")):
+            f = tap_dir / rel
+            f.write_text(f.read_text(encoding="utf-8").replace(
+                "version: 1.0.0", "version: 2.0.0").replace(old, new),
+                encoding="utf-8")
+        subprocess.run(["git", "-C", str(tap_dir), "commit", "-aqm", "v2"],
+                       check=True, capture_output=True)
+        boost("update")
+        live = (lockfile.installed_rules()["test-first"],
+                lockfile.installed_workflows()["review-diff"])
+        assert [row["version"] for row in live] == ["2.0.0", "2.0.0"]
+
+        r = boost("snapshot", "restore", snap_id, "-y")
+        assert ("1 rule and 1 workflow untouched — snapshots cover the skill "
+                "store only (2 entries kept at the installed version, not the "
+                "snapshot's)") in " ".join(r.out.split())
+        assert (lockfile.installed_rules()["test-first"],
+                lockfile.installed_workflows()["review-diff"]) == live
+        assert "V2 text." in (paths.home() / ".claude" / "CLAUDE.md").read_text(
+            encoding="utf-8")
+        r = boost("verify")
+        assert "local edits" not in r.out
+        assert "failed verification" not in r.out
+
+    def test_a_second_restore_keeps_a_hand_made_dir_the_first_adopted(
+            self, boost, installed):
+        # The first restore's sync records a carried hand-made dir as a local
+        # skill; the second then treated it as one the snapshot replaces and
+        # deleted the only copy.
+        snap_id = re.search(r"saved (snap-[\w-]+)",
+                            boost("snapshot", "save").out).group(1)
+        mine = paths.store_dir() / "my-own"
+        mine.mkdir()
+        (mine / "SKILL.md").write_text("---\nname: my-own\n---\n# mine\n",
+                                       encoding="utf-8")
+        boost("snapshot", "restore", snap_id, "-y")
+        assert "my-own" in lockfile.installed()
+        r = boost("snapshot", "restore", snap_id, "-y")
+        assert "kept 1 store item the snapshot does not cover: my-own" in r.out
+        assert (mine / "SKILL.md").read_text(encoding="utf-8").endswith(
+            "# mine\n")
+        assert "my-own" in lockfile.installed()
+
+    def test_restore_keeps_the_corrupt_lock_backup_and_a_hand_made_dir(
+            self, boost, installed):
+        # Restore swapped the whole store and deleted what the archive did not
+        # hold: the .corrupt backup `boost list` had just pointed the user at,
+        # with no copy anywhere, and a skill dir the lock never recorded.
+        snap_id = re.search(r"saved (snap-[\w-]+)",
+                            boost("snapshot", "save").out).group(1)
+        mine = paths.store_dir() / "my-own"
+        mine.mkdir()
+        (mine / "SKILL.md").write_text("---\nname: my-own\n---\n# mine\n",
+                                       encoding="utf-8")
+        r = boost("snapshot", "restore", snap_id, "-y")
+        assert "kept 1 store item the snapshot does not cover: my-own" in r.out
+        assert (mine / "SKILL.md").read_text(encoding="utf-8").endswith(
+            "# mine\n")
+
+        paths.lockfile_path().write_text('{"version": 3, "skills": {UNIQMARK',
+                                         encoding="utf-8")
+        boost("list")
+        backup = paths.store_dir() / ".skill-lock.json.corrupt"
+        assert "UNIQMARK" in backup.read_text(encoding="utf-8")
+        r = boost("snapshot", "restore", snap_id, "-y")
+        out = " ".join(r.out.split())
+        assert ("kept 1 store item the snapshot does not cover: "
+                ".skill-lock.json.corrupt") in out
+        assert "UNIQMARK" in backup.read_text(encoding="utf-8")
+        # With the lock unreadable boost cannot tell whose a dir is, so each
+        # one goes to a named backup rather than into the restored store.
+        m = re.search(r"moved 2 store items the live lock did not record as "
+                      r"installed to (\S+): brainstorming, my-own", out)
+        assert m, out
+        kept_dir = paths.state_dir() / "restore-kept"
+        [run] = list(kept_dir.iterdir())
+        assert run.name.startswith(snap_id + "-")
+        assert (run / "my-own" / "SKILL.md").read_text(
+            encoding="utf-8").endswith("# mine\n")
+        assert (run / "brainstorming" / "SKILL.md").is_file()
+        assert not (paths.store_dir() / "my-own").exists()
+        assert sorted(_lock()) == ["brainstorming"]
+
+    def test_save_refuses_a_store_restore_would_refuse(self, boost, installed):
+        # Save said "saved" and how to restore it; restore then refused it.
+        lock = paths.lockfile_path()
+        good = lock.read_bytes()
+        lock.write_text('{"version": 3, "skills": {', encoding="utf-8")
+        r = boost("snapshot", "save", "corrupt-lock", expect=1)
+        assert "cannot snapshot the store: it has a corrupt lock file" in r.err
+        assert "then save again" in " ".join(r.err.split())
+        assert "restore with" not in r.out
+        assert list(paths.snapshots_dir().glob("snap-*")) == []
+        lock.unlink()
+        r = boost("snapshot", "save", "no-lock", expect=1)
+        assert ("cannot snapshot the store: it holds skills but no lock file "
+                "to say which are installed") in " ".join(r.err.split())
+        assert list(paths.snapshots_dir().glob("snap-*")) == []
+        lock.write_bytes(good)
+        boost("snapshot", "save", "ok")
+
 
 # ── export ───────────────────────────────────────────────────────────────
 
@@ -2616,7 +2768,7 @@ class TestKindAwarePkgSurface:
     def test_reinstall_all_covers_every_kind(self, boost, fixture_tap_src,
                                              tmp_path):
         tap_dir = self._tap_with_rule(fixture_tap_src, tmp_path, "all-tap")
-        _add_and_commit(tap_dir, "commands/ship.md",
+        _add_and_commit(tap_dir, "commands/ship-it.md",
                         "---\nname: ship-it\nversion: 1.0.0\n---\n\n"
                         "Run the release.\n", "add workflow")
         boost("tap", tap_dir)
@@ -2989,7 +3141,7 @@ class TestSyncJson:
                         "unrecorded_store": [], "out_of_scope_links": [],
                         "blocked_links": [], "unwritable_agent_dirs": [],
                         "blocked_agent_dirs": [], "occupied_targets": [],
-                        "lock": None}
+                        "unrepaired": [], "lock": None}
 
     def test_both_shapes_say_what_the_lock_was(self, boost, installed):
         paths.lockfile_path().unlink()
@@ -3433,7 +3585,7 @@ class TestBundleAuditFindings:
         ("rule", "rules/house.mdc",
          "---\nname: house-style\nversion: 1.0.0\n---\n\nTabs.\n",
          "house-style"),
-        ("workflow", "commands/ship.md",
+        ("workflow", "commands/ship-it.md",
          "---\nname: ship-it\nversion: 1.0.0\ndescription: d\n"
          "allowed-tools: Bash\n---\n\ngo\n", "ship-it"),
     ], ids=["rule", "workflow"])
@@ -3990,7 +4142,8 @@ class TestImportProvenance:
         _commit_all(repo)
         boost("import", _URL)
         shutil.rmtree(paths.store_dir() / "url-skill")
-        r = boost("sync")
+        # Left unrepaired, so the run fails, as heal does over the same line.
+        r = boost("sync", expect=1)
         assert ("`boost reinstall url-skill` clones it again from %s" % _URL
                 in _flat(r.out))
         assert _lock()["url-skill"]["source_url"] == _URL
@@ -4688,12 +4841,15 @@ class TestUnmetPrerequisites:
                            check=True, capture_output=True)
             return str(root)
 
-        boost("tap", tap("amb-a", [("rooted", "requires: [shared]\n"),
-                                   ("shared", "")]))
+        # The declaring tap ships no `shared` of its own: with one there, the
+        # resolver takes it (same tap first) and nothing is ambiguous.
+        boost("tap", tap("amb-r", [("rooted", "requires: [shared]\n")]))
+        boost("tap", tap("amb-a", [("shared", "")]))
         boost("tap", tap("amb-b", [("shared", "")]))
         r = boost("install", "rooted")
         out = " ".join((r.out + r.err).split())
         assert "is in no tap" not in out
+        assert "pulling in" not in out    # skipped, so never announced
         assert "'shared' matches 2 catalog entries" in out
         assert "amb-a:shared" in out and "amb-b:shared" in out
 

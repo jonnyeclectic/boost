@@ -20,6 +20,7 @@ from ..core import (
     cohort,
     complete,
     dialog,
+    integrity,
     journal,
     jsonstate,
     lockfile,
@@ -29,6 +30,7 @@ from ..core import (
     util,
 )
 from ..core import output as out
+from ..core import profiles as profile_rules
 from ..errors import BoostError
 from ._common import _s
 from .pkg import _report_result, _warn_unwritable
@@ -86,9 +88,9 @@ def cmd_cohort(argv) -> int:
     p.add_argument("action", nargs="?", default="list",
                    choices=["list", "create", "delete", "status", "apply"],
                    help="what to do (default: list; status is the same as list)")
-    p.add_argument("name", nargs="?",
+    p.add_argument("name", type=util.nonempty_str, nargs="?",
                    help="cohort name (list/status: show only that cohort)")
-    p.add_argument("--skills", action="append", default=[],
+    p.add_argument("--skills", type=util.nonempty_str, action="append", default=[],
                    help="with `create`: comma-separated skill names "
                         "(repeatable)")
     p.add_argument("--percent", type=int, default=None,
@@ -192,14 +194,14 @@ def cmd_cohort(argv) -> int:
             print(out.empty_state("no cohorts defined"))
             return 0
         applied = skipped = 0
-        total_installed = total_present = total_missing = 0
+        total_installed = total_present = total_missing = total_failed = 0
         per_cohort = []
         for cname in targets:
             spec = cohorts[cname]
             if not _is_member(user, cname, spec["percent"]):
                 per_cohort.append({"cohort": cname, "member": False,
                                    "installed": [], "already_present": [],
-                                   "not_found": []})
+                                   "not_found": [], "failed": []})
                 if not args.json:
                     out.info(out.role("%s: not in the %d%% rollout — skipping"
                                    % (cname, spec["percent"]), "muted"))
@@ -207,6 +209,7 @@ def cmd_cohort(argv) -> int:
             if not args.json:
                 out.heading("cohort %s" % cname)
             installed_here, present_here, missing_here = [], [], []
+            failed_here: list[str] = []
             for skill in spec["skills"]:
                 # find_any, not installed(): a cohort item installed as a rule
                 # or workflow would otherwise be re-installed on every apply.
@@ -237,7 +240,18 @@ def cmd_cohort(argv) -> int:
                                  wrap=True)
                     missing_here.append(skill)
                     continue
-                res = store.install(entry)
+                try:
+                    res = store.install(entry)
+                except BoostError as err:
+                    # One refused member (a policy block, an unwritable
+                    # store) used to abort the whole apply: earlier members
+                    # stayed installed, later members and cohorts were never
+                    # tried, and no summary, JSON or journal entry said so.
+                    # Counted and carried on past, as `bundle install` does.
+                    if not args.json:
+                        out.warn("%s: %s" % (skill, err.message), wrap=True)
+                    failed_here.append(skill)
+                    continue
                 if not args.json:
                     out.ok("installed %s → %s" % (skill, " · ".join(res.linked)))
                     _warn_unwritable(res)
@@ -246,26 +260,30 @@ def cmd_cohort(argv) -> int:
             per_cohort.append({"cohort": cname, "member": True,
                                "installed": installed_here,
                                "already_present": present_here,
-                               "not_found": missing_here})
+                               "not_found": missing_here,
+                               "failed": failed_here})
             journal.log("cohort", cname, op="apply",
                         installed=len(installed_here),
                         present=len(present_here),
-                        missing=len(missing_here))
+                        missing=len(missing_here),
+                        failed=len(failed_here))
             total_installed += len(installed_here)
             total_present += len(present_here)
             total_missing += len(missing_here)
+            total_failed += len(failed_here)
         # #767's exit code is the substance of that PR — a cohort member no tap
         # can resolve must not read as success — so it applies under --json too:
         # an exit code that depended on the output format would undo it.
         if args.json:
             print(json.dumps({"cohorts": per_cohort, "installed": applied,
-                              "already_present": skipped}, indent=2))
+                              "already_present": skipped,
+                              "failed": total_failed}, indent=2))
             return cohort.apply_exit_code(total_installed, total_present,
-                                          total_missing)
+                                          total_missing, total_failed)
         out.info(cohort.apply_summary(total_installed, total_present,
-                                      total_missing))
+                                      total_missing, total_failed))
         return cohort.apply_exit_code(total_installed, total_present,
-                                      total_missing)
+                                      total_missing, total_failed)
 
     # list / status — a NAME narrows to that cohort, and one that does not
     # exist is an error rather than every other cohort's data under rc 0.
@@ -385,8 +403,14 @@ def _profile_diff(profile: dict):
     ``other_kind`` maps a profile name to the kind it is installed as when
     that kind is not "skill" — reporting those as missing would tell the user
     to install something `boost list` already shows.
+
+    ``extras`` are *active* skills only. `profile save` leaves sidelined
+    skills out (``split_sidelined``) and `profile use` sidelines extras, so
+    counting a sidelined one as an extra made `diff` report a mismatch right
+    after either — and made every repeat `use` sideline it again.
     """
     current = lockfile.installed()
+    active, _ = lockfile.split_sidelined(current)
     want = profile.get("skills", {})
     missing, other_kind = [], {}
     for n in sorted(want):
@@ -397,7 +421,7 @@ def _profile_diff(profile: dict):
             other_kind[n] = found[0]
         else:
             missing.append(n)
-    extras = sorted(n for n in current if n not in want)
+    extras = sorted(n for n in active if n not in want)
     changed = sorted(n for n in want
                      if n in current and _row_differs(want[n], current[n]))
     return missing, extras, changed, other_kind
@@ -411,7 +435,7 @@ def cmd_profile(argv) -> int:
     p.add_argument("action", nargs="?", default="list",
                    choices=["list", "save", "use", "show", "diff", "delete"],
                    help="what to do (default: list)")
-    p.add_argument("name", nargs="?", help="profile name")
+    p.add_argument("name", type=util.nonempty_str, nargs="?", help="profile name")
     p.add_argument("--prune", action="store_true",
                    help="with `use`: fully uninstall skills not in the profile")
     p.add_argument("-y", "--yes", action="store_true",
@@ -579,7 +603,9 @@ def cmd_profile(argv) -> int:
         if not args.json:
             out.info("%s is installed as a %s — profiles carry skills only, "
                      "leaving it as-is" % (n, kind))
-    installed_now, not_found = [], []
+    installed_now: list[str] = []
+    not_found: list[str] = []
+    failed: list[str] = []
     for n in missing:
         entry, why = _resolve_entry(n, prefer_tap=want[n].get("tap"),
                                    kind=catalog.KIND_SKILL)
@@ -594,7 +620,17 @@ def cmd_profile(argv) -> int:
         # Into the agents the profile recorded: a skill saved linked for one
         # agent came back linked for every agent, so the switch rewrote the
         # scope it was meant to restore.
-        res = store.install(entry, only_agents=saved.get("only_agents") or None)
+        try:
+            res = store.install(entry,
+                                only_agents=saved.get("only_agents") or None)
+        except BoostError as err:
+            # A refused member (policy, an unwritable store) used to abort the
+            # switch halfway: later members untried, extras still linked, no
+            # JSON. Counted and carried past, as `bundle install` does.
+            if not args.json:
+                out.warn("%s: %s" % (n, err.message), wrap=True)
+            failed.append(n)
+            continue
         if saved.get("pinned"):
             lockfile.update_skill(n, lambda row: row.update(pinned=True))
         if not args.json:
@@ -633,13 +669,30 @@ def cmd_profile(argv) -> int:
     sidelined: list[str] = []
     kept_extras = False
     only: list[str] = []
-    if extras:
+    # --prune removes every skill the profile does not name, sidelined ones
+    # included — a skill an earlier `use` set aside is still installed. The
+    # sideline step takes only the active extras: re-sidelining one already
+    # set aside reported a change on every repeat of the same switch.
+    prunable = (sorted(n for n in lockfile.installed() if n not in want)
+                if args.prune else extras)
+    resolved = sum(1 for n in want if lockfile.find_any(n) is not None)
+    left_linked: list[str] = []
+    if not profile_rules.sideline_allowed(resolved, len(not_found), len(failed)):
+        # Nothing the profile names could be installed, so the switch would
+        # trade the user's whole setup for nothing.
+        left_linked, prunable = extras, []
+        if extras and not args.json:
+            out.warn("nothing in profile %s could be installed — left %d "
+                     "skill%s linked: %s"
+                     % (args.name, len(extras), _s(len(extras)),
+                        ", ".join(extras)), wrap=True)
+    if prunable:
         # A skill `boost sync` recorded where it found it has no copy outside
         # the store, so --prune would delete it for good as a side effect of
         # switching profiles. It is set aside like any extra instead.
-        only = [n for n in extras
+        only = [n for n in prunable
                 if args.prune and store.only_copy(n, lockfile.get_skill(n) or {})]
-        doomed = [n for n in extras if n not in only]
+        doomed = [n for n in prunable if n not in only]
         # A declined --prune confirm used to leave extras fully installed
         # and linked, then still print the unconditional "switched" below —
         # a checkmark for a state the machine was not in. Falling through to
@@ -667,7 +720,7 @@ def cmd_profile(argv) -> int:
             for n in only:
                 out.info("kept %s: the store holds its only copy — "
                          "`boost uninstall %s` deletes it" % (n, n))
-        sidelined = only if pruned else extras
+        sidelined = [n for n in (only if pruned else prunable) if n in extras]
         for n in sidelined:
             store.sideline(n, "profile")
         if sidelined and not args.json:
@@ -676,21 +729,23 @@ def cmd_profile(argv) -> int:
     journal.log("profile", args.name, op="use")
     if args.json:
         print(json.dumps({"name": args.name, "installed": installed_now,
-                          "not_found": not_found, "uninstalled": uninstalled,
+                          "not_found": not_found, "failed": failed,
+                          "uninstalled": uninstalled,
                           "sidelined": sidelined, "kept_extras": kept_extras,
                           "other_kind": other_kind, "differs": sorted(changed),
-                          **({"only_copies": only} if only else {})}, indent=2))
-        return 0
-    if changed:
-        # "switched" is a claim that this machine now is the profile; with a
-        # skill at another version or commit it is not, so it is not made.
-        out.warn("applied profile %s, but %d skill%s differ%s from it — "
-                 "compare with `boost profile diff %s`"
-                 % (args.name, len(changed), _s(len(changed)),
-                    "s" if len(changed) == 1 else "", args.name), wrap=True)
-        return 0
-    out.ok("switched to profile %s" % args.name)
-    return 0
+                          **({"only_copies": only} if only else {}),
+                          **({"left_linked": left_linked} if left_linked
+                             else {})}, indent=2))
+        return profile_rules.use_exit_code(len(not_found), len(failed))
+    # "switched" is a claim that this machine now is the profile; with a
+    # member missing, refused, or at another version or commit it is not.
+    summary = profile_rules.use_summary(args.name, len(not_found), len(failed),
+                                   len(changed))
+    if summary:
+        out.warn(summary, wrap=True)
+    else:
+        out.ok("switched to profile %s" % args.name)
+    return profile_rules.use_exit_code(len(not_found), len(failed))
 
 
 # ---------------------------------------------------------------- protocol
@@ -753,7 +808,7 @@ def cmd_protocol(argv) -> int:
     p.add_argument("action", nargs="?", default="status",
                    choices=["status", "register", "unregister", "open"],
                    help="what to do (default: status)")
-    p.add_argument("url", nargs="?", help="a boost:// URL (for `open`)")
+    p.add_argument("url", type=util.nonempty_str, nargs="?", help="a boost:// URL (for `open`)")
     mode = p.add_mutually_exclusive_group()
     mode.add_argument("-y", "--yes", action="store_true",
                       help="`open` without the confirmation prompt")
@@ -922,7 +977,7 @@ def cmd_pulse(argv) -> int:
     p.add_argument("-n", type=util.positive_int, default=20,
                    help="events to show (default 20)")
     p.add_argument("--all", action="store_true", help="show the whole journal")
-    p.add_argument("--action", help="filter by action (install, tap, ...)")
+    p.add_argument("--action", type=util.nonempty_str, help="filter by action (install, tap, ...)")
     p.add_argument("--json", action="store_true", help="machine-readable output")
     args = p.parse_args(argv)
 
@@ -970,9 +1025,12 @@ def cmd_replay(argv) -> int:
                    choices=["list", "show", "rollback"],
                    help="what to do (default: list; rollback restores skills "
                         "only)")
-    p.add_argument("id", nargs="?", help="history entry id (from `boost replay list`)")
+    p.add_argument("id", type=util.nonempty_str, nargs="?", help="history entry id (from `boost replay list`)")
     p.add_argument("-y", "--yes", action="store_true",
                    help="`rollback` without the confirmation prompt")
+    p.add_argument("--discard-edits", action="store_true",
+                   help="`rollback` even where it uninstalls a skill with "
+                        "local edits, deleting them")
     p.add_argument("--json", action="store_true", help="machine-readable output")
     args = p.parse_args(argv)
 
@@ -1060,16 +1118,25 @@ def cmd_replay(argv) -> int:
                    "in %s" % (args.id, backup))
     now_all = lockfile.all_installed()
     # Per-kind diff: snapshots carry all three sections, so a rule that
-    # appeared since the snapshot is a real difference, labeled as one.
+    # appeared since the snapshot is a real difference, labeled as one. A
+    # row in both states is compared field by field (lockfile.row_differences):
+    # by version alone, a pin flip or a same-version content change read as
+    # "matches this snapshot".
     diffs = {}
+    row_diffs: dict[str, dict[str, dict]] = {}
     for kind, section in lockfile.SECTIONS:
         snap = snapshot.get(section, {})
         cur = now_all[kind]
+        row_diffs[kind] = {}
+        for n in sorted(cur):
+            if n in snap:
+                d = lockfile.row_differences(snap[n], cur[n])
+                if d:
+                    row_diffs[kind][n] = d
         diffs[kind] = (
             sorted(n for n in cur if n not in snap),
             sorted(n for n in snap if n not in cur),
-            sorted(n for n in cur if n in snap and
-                   str(cur[n].get("version")) != str(snap[n].get("version"))))
+            sorted(row_diffs[kind]))
     snap_skills = snapshot.get("skills", {})
     current = now_all["skill"]
     added, removed, changed = diffs["skill"]
@@ -1079,6 +1146,10 @@ def cmd_replay(argv) -> int:
         if args.json:
             payload: dict = {"added": added, "removed": removed,
                              "changed": changed}
+            if row_diffs["skill"]:
+                payload["differences"] = {
+                    n: {f: list(v) for f, v in d.items()}
+                    for n, d in row_diffs["skill"].items()}
             for kind in ("rule", "workflow"):
                 a, r, c = diffs[kind]
                 payload[kind + "s"] = {"added": a, "removed": r, "changed": c}
@@ -1099,11 +1170,9 @@ def cmd_replay(argv) -> int:
             for n in r:
                 out.info(out.role("- %s%s" % (n, label), "danger")
                          + out.role("  removed since", "muted"))
-            snap = snapshot.get(_section, {})
             for n in c:
-                out.info(out.role("~ %s%s  %s → %s"
-                                  % (n, label, snap[n].get("version"),
-                                     now_all[kind][n].get("version")), "warn"))
+                out.info(out.role("~ %s%s  %s" % (
+                    n, label, _row_diff_line(row_diffs[kind][n])), "warn"))
         return 0
 
     # rollback — skills only; rule/workflow differences are named, never
@@ -1129,6 +1198,23 @@ def cmd_replay(argv) -> int:
         for n in only:
             out.info("kept %s: the store holds its only copy — `boost "
                      "uninstall %s` deletes it" % (n, n))
+    # An edited store copy is in no history entry and no tap: uninstalling
+    # it deleted the edits for good, and rolling forward again brought back
+    # the tap's copy. Refused before anything changes, as `update` holds an
+    # edited item, unless the user says to discard them.
+    edited = [n for n in added
+              if integrity.locally_edited("skill", n, current[n])]
+    if edited and not args.discard_edits:
+        if args.json:
+            print(json.dumps({"id": args.id, "refused": "local-edits",
+                              "edited": edited}, indent=2))
+            return 1
+        out.warn("not rolled back: it would uninstall %s, which %s local "
+                 "edits nothing else holds — copy %s aside, or `boost replay "
+                 "rollback %s --discard-edits` deletes them"
+                 % (", ".join(edited), "has" if len(edited) == 1 else "have",
+                    "it" if len(edited) == 1 else "them", args.id), wrap=True)
+        return 1
     lookups = {n: _resolve_entry(n, prefer_tap=snap_skills[n].get("tap"),
                                   kind=catalog.KIND_SKILL)
                for n in removed}
@@ -1159,7 +1245,7 @@ def cmd_replay(argv) -> int:
                if mat_diff else "already at this snapshot — nothing to do")
         return 0
     if not args.json:
-        out.info("rollback to %s will: uninstall %d, install %d, revisit %d version change(s)"
+        out.info("rollback to %s will: uninstall %d, install %d, revisit %d changed skill(s)"
                  % (args.id, len(added), len(restorable), len(changed)))
     if not (args.yes or out.confirm("proceed?", quiet=args.json)):
         if args.json:
@@ -1168,6 +1254,18 @@ def cmd_replay(argv) -> int:
         out.info("cancelled")
         return 1
     uninstalled, restored, version_diffs = [], [], []
+    holds_restored: list[str] = []
+
+    def _left(n: str, want: dict, row: dict | None) -> dict:
+        """The content differences rollback could not undo for ``n``."""
+        left = {f: v for f, v in lockfile.row_differences(want, row or {}).items()
+                if f in lockfile.CONTENT_FIELDS}
+        if left:
+            version_diffs.append({"skill": n, "snapshot": want.get("version"),
+                                  "current": (row or {}).get("version"),
+                                  "fields": sorted(left)})
+        return left
+
     for n in added:  # in current, not in snapshot
         store.uninstall(n, kind="skill")
         if not args.json:
@@ -1189,36 +1287,78 @@ def cmd_replay(argv) -> int:
                      % (n, str(want.get("commit_pin"))[:12],
                         str((lockfile.get_skill(n) or {}).get("commit") or "?")[:12]),
                      wrap=True)
-        if str(entry.get("version")) != str(want.get("version")):
-            if not args.json:
-                out.warn("restored %s v%s from current tap state (snapshot had v%s)"
-                         % (n, entry.get("version"), want.get("version")))
-        elif not args.json:
-            out.ok("restored %s → %s" % (n, " · ".join(res.linked)))
+        # ...and set aside again, if the snapshot recorded it set aside: an
+        # install resets both flags, which brought a quarantined skill back
+        # linked into every agent.
+        aside = store.reapply_recorded_aside(n, want)
+        left = _left(n, want, lockfile.get_skill(n))
         if not args.json:
+            if left:
+                out.warn("restored %s from current tap state, which differs "
+                         "from the snapshot: %s" % (n, _row_diff_line(left)),
+                         wrap=True)
+            elif aside:
+                out.ok("restored %s (%s, as the snapshot recorded)"
+                       % (n, aside))
+            else:
+                out.ok("restored %s → %s" % (n, " · ".join(res.linked)))
             _warn_unwritable(res)
         restored.append(n)
-    for n in changed:
-        if not args.json:
-            out.warn("%s version differs from snapshot (%s → %s) — taps only carry "
+    for n in changed:  # in both, recorded differently
+        want = snap_skills[n]
+        fields = store.restore_recorded_holds(n, want)
+        if fields:
+            holds_restored.append(n)
+            if not args.json:
+                out.ok("restored %s's %s as the snapshot recorded"
+                       % (n, ", ".join(fields)))
+        left = _left(n, want, lockfile.get_skill(n))
+        if left and not args.json:
+            out.warn("%s differs from the snapshot: %s — taps only carry "
                      "their current state; `boost pin` prevents future drift"
-                     % (n, snap_skills[n].get("version"), current[n].get("version")))
-        version_diffs.append({"skill": n, "snapshot": snap_skills[n].get("version"),
-                              "current": current[n].get("version")})
+                     % (n, _row_diff_line(left)), wrap=True)
     journal.log("replay", args.id, op="rollback")
     if args.json:
         print(json.dumps({"id": args.id, "uninstalled": uninstalled,
                           "restored": restored, "unrestorable": gone,
                           "version_diffs": version_diffs,
                           "not_rolled_back": mat_diff,
+                          **({"holds_restored": holds_restored}
+                             if holds_restored else {}),
                           **({"only_copies": only} if only else {})}, indent=2))
-        return 1 if gone else 0
-    if gone:
-        out.warn("finished with %d skill%s not restored: %s"
-                 % (len(gone), _s(len(gone)), ", ".join(gone)))
+        return 1 if gone or version_diffs else 0
+    if gone or version_diffs:
+        parts = []
+        if gone:
+            parts.append("%d skill%s not restored: %s"
+                         % (len(gone), _s(len(gone)), ", ".join(gone)))
+        if version_diffs:
+            names = [str(d["skill"]) for d in version_diffs]
+            parts.append("%d skill%s still differing from the snapshot: %s"
+                         % (len(names), _s(len(names)), ", ".join(names)))
+        out.warn("finished with %s" % "; ".join(parts), wrap=True)
         return 1
     out.ok("rollback to %s complete" % args.id)
     return 0
+
+
+def _row_value_text(field: str, value) -> str:
+    """One side of a :func:`lockfile.row_differences` pair, for a person."""
+    if field == "pinned":
+        return "yes" if value else "no"
+    if value is None:
+        return "none"
+    if field == "only_agents":
+        return ",".join(value)
+    text = out.plain(str(value))
+    return text[:12] if field in ("commit", "sha256", "commit_pin") else text
+
+
+def _row_diff_line(diff: dict) -> str:
+    """``version 1.0 → 1.1 · pinned no → yes`` for a row's differences."""
+    return " · ".join("%s %s → %s" % (f, _row_value_text(f, want),
+                                      _row_value_text(f, have))
+                      for f, (want, have) in diff.items())
 
 
 # ---------------------------------------------------------------- who
@@ -1228,7 +1368,7 @@ def cmd_who(argv) -> int:
     p = cliparse.parser(
         prog="boost who",
         description="Discover who on the team has skill expertise")
-    p.add_argument("skill", nargs="?", help="focus on one skill")
+    p.add_argument("skill", type=util.nonempty_str, nargs="?", help="focus on one skill")
     p.add_argument("--json", action="store_true", help="machine-readable output")
     args = p.parse_args(argv)
 

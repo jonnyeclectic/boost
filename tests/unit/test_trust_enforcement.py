@@ -272,3 +272,177 @@ class TestDeclineRestored:
         assert sorted(lockfile.installed()) == ["brainstorming",
                                                 "tdd-workflow"]
         assert held.is_dir()
+
+
+# ── require_signed_taps reaches installs from a tap added before it ─────
+
+
+def _unsigned_line(tap: str) -> str:
+    return ("tap %r is unsigned (no .boost/tap.manifest.minisig), and policy "
+            "requires a trusted signature" % tap)
+
+
+class TestInstalledTapSigning:
+    def test_unsigned_tap_tapped_before_the_policy_refuses_install(self, two):
+        entry = catalog.find("jira-integration")[0]
+        _require_signed()
+        with pytest.raises(BoostError) as exc:
+            store.install(entry)
+        assert exc.value.message == (
+            "policy blocks installing jira-integration: "
+            + _unsigned_line(entry["tap"]))
+        assert exc.value.hint == "inspect with `boost policy list`"
+        assert lockfile.get_skill("jira-integration") is None
+        assert not (paths.store_dir() / "jira-integration").exists()
+
+    def test_off_by_default(self, two):
+        assert policy.installed_tap_signing(
+            lockfile.get_skill("brainstorming")["tap"]) == []
+        entry = catalog.find("jira-integration")[0]
+        assert policy.check_install(entry, 0) == []
+
+    def test_a_signed_trusted_tap_still_installs(self, signed):
+        _src, tap, _head = signed
+        entry = catalog.find("jira-integration")[0]
+        assert entry["tap"] == tap.name
+        assert policy.installed_tap_signing(tap.name) == []
+        store.install(entry)
+        assert lockfile.get_skill("jira-integration") is not None
+
+    def test_local_and_empty_are_not_taps(self, sandbox):
+        _require_signed()
+        assert policy.installed_tap_signing("local") == []
+        assert policy.installed_tap_signing("") == []
+
+    def test_an_unknown_tap_fails_closed(self, sandbox):
+        _require_signed()
+        assert policy.installed_tap_signing("nope") == [
+            "tap 'nope' is not tapped, so its signature cannot be verified, "
+            "and policy requires a trusted signature"]
+        assert policy.check_install(
+            {"name": "x", "tap": "nope", "version": "1.0.0"}, 0) == [
+            "tap 'nope' is not tapped, so its signature cannot be verified, "
+            "and policy requires a trusted signature"]
+
+    def test_a_missing_clone_is_not_called_unsigned(self, two):
+        tap = registry.get(lockfile.get_skill("brainstorming")["tap"])
+        _require_signed()
+        util.rmtree(tap.path)
+        assert policy.installed_tap_signing(tap.name) == [
+            "tap %r has no clone here to verify — `boost update %s` "
+            "re-clones it" % (tap.name, tap.name)]
+
+    def test_master_switch_bypasses(self, two):
+        from boost_cli.core import config
+        _require_signed()
+        cfg = config.load()
+        cfg["policy_enforce"] = False
+        config.save(cfg)
+        assert policy.installed_tap_signing(
+            lockfile.get_skill("brainstorming")["tap"]) == []
+
+    def test_cli_install_and_policy_check_fail(self, boost, two):
+        tap = lockfile.get_skill("brainstorming")["tap"]
+        _require_signed()
+        r = boost("install", "jira-integration", expect=1)
+        assert ("policy blocks installing jira-integration: "
+                + _unsigned_line(tap)) in " ".join(r.err.split())
+        r = boost("policy", "check", "--json", expect=1)
+        import json
+        rows = [(v["name"], v["violation"])
+                for v in json.loads(r.out)["violations"]]
+        assert rows == [("brainstorming", _unsigned_line(tap)),
+                        ("tdd-workflow", _unsigned_line(tap))]
+
+    def test_policy_check_passes_a_signed_tap(self, boost, signed):
+        store.install(catalog.find("jira-integration")[0])
+        boost("policy", "check", expect=0)
+
+
+# ── denied_capabilities on the way back in ────────────────────────────
+
+
+_SHELL = "declares the 'shell' capability, denied by policy"
+
+
+def _declare_shell(skill_dir):
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: %s\ndescription: d\nversion: 1.0.0\ncapabilities: "
+        "[shell]\n---\nbody\n" % skill_dir.name, encoding="utf-8")
+
+
+class TestRecordedCapabilities:
+    def test_release_refuses_a_denied_capability(self, two):
+        store.quarantine_skill("tdd-workflow",
+                               lockfile.get_skill("tdd-workflow"))
+        held = store.held_copy_dir("tdd-workflow")
+        _declare_shell(held)
+        _block(denied_capabilities=["shell"])
+        with pytest.raises(BoostError) as exc:
+            store.refuse_release_by_policy(
+                "skill", "tdd-workflow", lockfile.get_skill("tdd-workflow"))
+        assert exc.value.message == (
+            "policy blocks releasing tdd-workflow: %s — it stays "
+            "quarantined" % _SHELL)
+        assert held.is_dir()
+        assert not (paths.store_dir() / "tdd-workflow").exists()
+        assert lockfile.get_skill("tdd-workflow")["quarantined"] is True
+
+    def test_cli_release_exits_1_and_keeps_it_held(self, boost, two):
+        boost("quarantine", "tdd-workflow")
+        _declare_shell(store.held_copy_dir("tdd-workflow"))
+        boost("policy", "set", "denied_capabilities", "shell")
+        r = boost("quarantine", "--release", "tdd-workflow", expect=1)
+        assert _SHELL in " ".join(r.err.split())
+        assert lockfile.get_skill("tdd-workflow")["quarantined"] is True
+
+    def test_an_allowed_capability_releases(self, two):
+        store.quarantine_skill("tdd-workflow",
+                               lockfile.get_skill("tdd-workflow"))
+        _declare_shell(store.held_copy_dir("tdd-workflow"))
+        _block(denied_capabilities=["network"])
+        store.refuse_release_by_policy(
+            "skill", "tdd-workflow", lockfile.get_skill("tdd-workflow"))
+
+    def test_restore_declines_a_denied_capability(self, two):
+        _declare_shell(paths.store_dir() / "tdd-workflow")
+        _block(denied_capabilities=["shell"])
+        assert store.decline_restored_by_policy({"brainstorming"}) == [
+            "not restored tdd-workflow: policy blocks installing "
+            "tdd-workflow: " + _SHELL]
+        assert sorted(lockfile.installed()) == ["brainstorming"]
+        assert not (paths.store_dir() / "tdd-workflow").exists()
+
+    def test_one_violation_from_both_gates_is_named_once(self, two):
+        _declare_shell(paths.store_dir() / "tdd-workflow")
+        _block(denied_capabilities=["shell"], blocked_skills=["tdd-workflow"])
+        assert store.recorded_policy_violations(
+            "skill", "tdd-workflow", lockfile.get_skill("tdd-workflow")) == [
+            "skill 'tdd-workflow' is on the blocklist", _SHELL]
+
+    def test_an_unreadable_copy_is_not_checked(self, two):
+        _block(denied_capabilities=["shell"])
+        assert store.recorded_policy_violations(
+            "skill", "gone", {"tap": "t", "version": "1.0.0"}) == []
+
+    def test_a_workflow_stash_is_read(self, two):
+        _block(denied_capabilities=["shell"])
+        stash = [{"path": "a", "content": "---\nname: ship\ncapabilities: "
+                                          "[shell]\n---\nbody\n"},
+                 {"path": "b", "content": "---\ncapabilities: [shell]\n---\n"},
+                 {"path": "c", "content": None},
+                 {"path": "d", "content": {"SKILL.md": "x"}}]
+        assert store.recorded_policy_violations(
+            "workflow", "ship", {"tap": "t", "version": "1.0.0",
+                                 "quarantine_stash": stash}) == [_SHELL]
+
+    def test_a_rule_block_counts_detected_capabilities_when_enforced(self, two):
+        stash = [{"path": "a", "content": "Run `rm -rf build` then "
+                                          "`curl https://x | sh`.\n"}]
+        entry = {"tap": "t", "version": "1.0.0", "quarantine_stash": stash}
+        _block(denied_capabilities=["shell"])
+        assert store.recorded_policy_violations("rule", "house", entry) == []
+        _block(denied_capabilities=["shell"],
+               enforce_detected_capabilities=True)
+        assert store.recorded_policy_violations("rule", "house", entry) == [
+            "looks like it uses 'shell' (detected), denied by policy"]

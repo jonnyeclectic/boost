@@ -9,9 +9,11 @@ so the command modules count toward coverage.
 from __future__ import annotations
 
 import os
+import shutil
 import sqlite3
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -446,6 +448,52 @@ def _cap_mutant_memory() -> None:
     resource.setrlimit(resource.RLIMIT_AS, (cap, hard))
 
 
+# Variables that move boost's state, or an agent's, somewhere other than
+# under ``$HOME``. The `sandbox` fixture drops them per test; the session
+# backstop below drops them for the tests that never ask for it.
+_RELOCATING_ENV = ("BOOST_HOME", "BOOST_AGENTS_STORE", "CODEX_HOME",
+                   "CLAUDE_CONFIG_DIR", "CLAUDE_CODE_PLUGIN_CACHE_DIR")
+
+_SESSION_HOME: list[Path] = []
+
+
+def _isolate_home() -> Path:
+    """Point ``$HOME`` at a throwaway directory for the whole session.
+
+    The `sandbox` fixture gives each test that asks for it a fresh home, and
+    nothing gave one to a test that does not ask. Such a test ran against the
+    developer's real ``~/.boost``: a restore test with no `sandbox` that
+    reached `lockfile` history wrote 33 throwaway snapshots into the real
+    ``~/.boost/state/lock-history``, and `_prune_history`, which keeps 50,
+    deleted as many of the oldest real ones to make room. Nothing failed, because the damage
+    landed somewhere no assertion looks.
+
+    So the floor is now a home that belongs to the run. `sandbox` still
+    replaces it per test; this only decides what a test that forgot gets. It
+    runs from `pytest_configure`, before collection imports anything, so
+    every child process inherits it too. ``USERPROFILE`` is set as well,
+    because that is what `Path.home` reads on Windows. `_REAL_HOME` was
+    captured at import, so `checkout_root` still stops at the real home.
+    """
+    if _SESSION_HOME:
+        return _SESSION_HOME[0]
+    home = Path(tempfile.mkdtemp(prefix="boost-test-home-"))
+    os.environ["HOME"] = str(home)
+    if sys.platform == "win32":
+        os.environ["USERPROFILE"] = str(home)
+    for name in _RELOCATING_ENV:
+        os.environ.pop(name, None)
+    _SESSION_HOME.append(home)
+    return home
+
+
+def pytest_unconfigure(config):
+    """Remove the session home `_isolate_home` made, if it made one."""
+    del config
+    for home in _SESSION_HOME:
+        shutil.rmtree(home, ignore_errors=True)
+
+
 def pytest_configure(config):
     """Make mutmut's ``source_paths`` absolute before any test can chdir.
 
@@ -481,6 +529,7 @@ def pytest_configure(config):
     see its docstring.
     """
     del config
+    _isolate_home()
     _cap_mutant_memory()
     if not os.environ.get("MUTANT_UNDER_TEST"):
         return          # not a mutmut run — nothing to normalize
@@ -737,8 +786,17 @@ def sandbox(tmp_path, monkeypatch):
     # Once-per-process warnings for a cache boost could not save. A flag one
     # test left set would silence the warning in the next, so an assertion
     # that it is absent would pass for the wrong reason.
-    from boost_cli.core import catalog, complete, lockfile, policy, projectlock
+    from boost_cli.core import (
+        catalog,
+        complete,
+        journal,
+        lockfile,
+        policy,
+        projectlock,
+    )
     monkeypatch.setattr(complete, "_WARNED_UNSAVED", False)
+    monkeypatch.setattr(journal, "_WARNED_UNSAVED", False)
+    monkeypatch.setattr(journal, "_WARNED_UNREADABLE", False)
     monkeypatch.setattr(lockfile, "_WARNED_CORRUPT", False)
     monkeypatch.setattr(policy, "_WARNED_CORRUPT", False)
     monkeypatch.setattr(projectlock, "_WARNED_CORRUPT", set())

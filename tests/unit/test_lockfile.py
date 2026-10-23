@@ -810,3 +810,80 @@ class TestHistoryIsARecordNotTheWork:
         # still lands in the store.
         lockfile.set_skill("a", {"version": "1"})
         assert paths.lockfile_path().is_file()
+
+
+class TestRecordHistory:
+    def test_keeps_the_live_lock_under_its_own_updated(self, sandbox):
+        lockfile.set_skill("rh-a", {"version": "1.0.0"})
+        stamp = lockfile.read()["updated"]
+        assert lockfile.history_list() == []
+        assert lockfile.record_history() is True
+        [h] = lockfile.history_list()
+        assert h["updated"] == stamp and h["count"] == 1
+        assert list(lockfile.history_read(h["id"])["skills"]) == ["rh-a"]
+
+    def test_an_explicit_path(self, sandbox, tmp_path):
+        p = tmp_path / "rh-lock.json"
+        p.write_text('{"version": 3, "skills": {"rh-b": {}}, '
+                     '"updated": "2026-01-02T03:04:05Z"}', encoding="utf-8")
+        assert lockfile.record_history(p) is True
+        assert [h["id"] for h in lockfile.history_list()] == [
+            "20260102T030405Z"]
+
+    def test_an_older_schema_lock_is_recorded(self, sandbox, tmp_path):
+        # The lock a restore replaces may predate schema v3; it is still a
+        # state `replay` can read, so it is kept.
+        p = tmp_path / "rh-v2.json"
+        p.write_text('{"version": 2, "skills": {"rh-c": {}}, '
+                     '"updated": "2026-01-02T03:04:06Z"}', encoding="utf-8")
+        assert lockfile.record_history(p) is True
+        assert [h["id"] for h in lockfile.history_list()] == [
+            "20260102T030406Z"]
+
+    def test_a_missing_or_corrupt_lock_is_not_recorded(self, sandbox,
+                                                       tmp_path):
+        assert lockfile.record_history() is False
+        p = tmp_path / "rh-bad.json"
+        p.write_text("not json", encoding="utf-8")
+        assert lockfile.record_history(p) is False
+        assert not list(paths.lock_history_dir().glob("lock-*.json"))
+
+
+_ROW = {"version": "1.0.0", "commit": "c1", "sha256": "s1"}
+
+
+class TestRowDifferences:
+    BASE = _ROW
+
+    def test_identical_rows_and_absent_flags_match(self):
+        assert lockfile.row_differences(self.BASE, dict(self.BASE)) == {}
+        assert lockfile.row_differences(
+            {**self.BASE, "pinned": False, "only_agents": [],
+             "commit_pin": None}, self.BASE) == {}
+        assert lockfile.row_differences(
+            {**self.BASE, "only_agents": ["b", "a"]},
+            {**self.BASE, "only_agents": ["a", "b"]}) == {}
+
+    def test_every_field_is_compared(self):
+        cur = {"version": "2.0.0", "commit": "c2", "sha256": "s2",
+               "pinned": True, "commit_pin": "c2",
+               "only_agents": ["cursor"]}
+        assert lockfile.row_differences(self.BASE, cur) == {
+            "version": ("1.0.0", "2.0.0"), "commit": ("c1", "c2"),
+            "sha256": ("s1", "s2"), "pinned": (False, True),
+            "commit_pin": (None, "c2"), "only_agents": (None, ["cursor"])}
+
+    def test_a_digest_one_side_lacks_is_no_evidence(self):
+        assert lockfile.row_differences(
+            {"version": "1.0.0"}, self.BASE) == {}
+        assert lockfile.row_differences(
+            self.BASE, {"version": "1.0.0", "commit": "c1"}) == {}
+
+    def test_version_compares_as_text(self):
+        assert lockfile.row_differences({"version": 1}, {"version": "1"}) == {}
+        assert lockfile.row_differences({}, {"version": "1"}) == {
+            "version": ("None", "1")}
+
+    def test_an_empty_commit_pin_is_no_pin(self):
+        assert lockfile.row_differences(
+            {**_ROW, "commit_pin": ""}, _ROW) == {}

@@ -19,7 +19,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from ..errors import BoostError
-from . import util
+from . import paths, util
 
 # Name-scoped managed-block markers for CLAUDE.md. Stable + per-rule so install
 # is idempotent (a re-install replaces the block) and uninstall strips exactly
@@ -201,6 +201,28 @@ def block_span(text: str, name: str) -> tuple[int, int] | None:
     return i, j + len(end)
 
 
+def block_spans(text: str, name: str) -> list[tuple[int, int]]:
+    """Every clean block of rule ``name`` in ``text``, in order.
+
+    The spans :func:`block_span` would find one after another, stopping at
+    the first damaged start (which :func:`require_well_formed` refuses).
+    Two clean blocks are legal — a dotfiles merge or two concatenated
+    context files make them — and every writer has to act on all of them:
+    `boost update` refreshed only the first and left the stale one live,
+    and uninstall stripped only the first and left the second unrecorded.
+    """
+    start, end = markers(name)
+    spans: list[tuple[int, int]] = []
+    pos = 0
+    while (i := text.find(start, pos)) != -1:
+        j = text.find(end, i + len(start))
+        if j == -1 or text.find(start, i + len(start), j) != -1:
+            break
+        pos = j + len(end)
+        spans.append((i, pos))
+    return spans
+
+
 def require_well_formed(text: str, name: str,
                         path: Path | None = None) -> None:
     """Raise if any start marker for ``name`` in ``text`` is not a clean block.
@@ -221,14 +243,44 @@ def require_well_formed(text: str, name: str,
             damaged = True
             break
         pos = j + len(end)
+    # Shown the way every other path in boost's output is (`paths.tilde`):
+    # the raw WindowsPath printed `~\.claude\CLAUDE.md` in `boost heal`
+    # beside doctor's `~/.claude/CLAUDE.md` for the same file.
+    where = " in %s" % paths.tilde(path) if path is not None else ""
     if damaged:
-        where = " in %s" % path if path is not None else ""
         raise BoostError(
             "rule %s's managed block%s has no matching end marker, so boost "
             "cannot tell where its text stops and yours begins" % (name, where),
             hint="restore `%s` after the rule's text (or delete `%s`), then "
                  "run the command again" % (end, start),
             wrap=True)
+    if orphan_end(text, name):
+        raise BoostError(
+            "rule %s's managed block%s has an end marker with no start marker "
+            "above it, so boost cannot tell where its text begins and yours "
+            "ends" % (name, where),
+            hint="restore `%s` above the rule's text (or delete the rule's "
+                 "text and `%s`), then run the command again" % (start, end),
+            wrap=True)
+
+
+def orphan_end(text: str, name: str) -> bool:
+    """True when an end marker for ``name`` in ``text`` has no start marker
+    between it and the end marker before it — its start was deleted.
+
+    The mirror of :func:`unclosed_block`, and as invisible to `read_block`:
+    with no start there is no block, so doctor called the rule missing, heal
+    appended a whole second block under the remnant, and uninstall reported
+    success with the old rule text still in the file. A body cannot forge an
+    end marker (`neutralize_markers`), so one outside a block is damage.
+    """
+    start, end = markers(name)
+    pos = 0
+    while (at := text.find(end, pos)) != -1:
+        if text.find(start, pos, at) == -1:
+            return True
+        pos = at + len(end)
+    return False
 
 
 def line_ending(text: str) -> str:
@@ -284,10 +336,13 @@ def merge_block(text: str, name: str, body: str) -> str:
              .replace("\n", eol))
     block = start + eol + lines + eol + end
     require_well_formed(text, name)
-    span = block_span(text, name)
-    if span is not None:
-        i, j = span
-        return text[:i] + block + text[j:]
+    spans = block_spans(text, name)
+    if spans:
+        # One block afterwards, in the first one's place: the copies below
+        # it come out the way uninstall takes a block out, so each one's gap
+        # goes with it and the user's text between them stays.
+        i, j = spans[0]
+        return text[:i] + block + strip_block(text[j:], name)
     if not text:
         return block + eol
     if _ends_with_newline(text):
@@ -312,6 +367,20 @@ def read_block(text: str, name: str) -> str | None:
     span = block_span(text, name)
     if span is None:
         return None
+    return _span_body(text, name, span)
+
+
+def block_bodies(text: str, name: str) -> list[str]:
+    """The body of every clean block of rule ``name`` (:func:`block_spans`),
+    each read as :func:`read_block` reads the first.
+
+    What uninstall hashes before it strips: a second copy edited by hand is
+    as much the user's text as an edited first one.
+    """
+    return [_span_body(text, name, span) for span in block_spans(text, name)]
+
+
+def _span_body(text: str, name: str, span: tuple[int, int]) -> str:
     start, end = markers(name)
     i, j = span
     # LF whatever the file uses: the hash `boost verify` compares against was
@@ -341,11 +410,17 @@ def strip_block(text: str, name: str) -> str:
     ending and the blank-line gap it introduced come out, and every other
     byte stays as it was — CRLF, a missing final newline, trailing blank
     lines. Install then uninstall leaves the file byte-identical. A file that
-    held only the block collapses to ``""``.
+    held only the block collapses to ``""``. Every clean copy of the block
+    comes out (:func:`block_spans`), not only the first.
     """
-    span = block_span(text, name)
-    if span is None:
-        return text  # absent, or malformed: leave the file untouched
+    while (span := block_span(text, name)) is not None:
+        text = _strip_span(text, span)
+    return text  # absent, or malformed: the rest is left untouched
+
+
+def _strip_span(text: str, span: tuple[int, int]) -> str:
+    """``text`` less the block at ``span``, and the gap it was appended
+    after (see :func:`strip_block`)."""
     i, j = span
     before, after = text[:i], text[j:]
     after, terminated = _cut_leading_newline(after)

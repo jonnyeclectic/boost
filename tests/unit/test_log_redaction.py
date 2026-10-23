@@ -16,6 +16,7 @@ import os
 import re
 import stat
 import sys
+import time
 
 import pytest
 
@@ -48,9 +49,41 @@ class TestRedactUrl:
         ("https://h/x/y?page=2", "https://h/x/y?page=2"),
         ("user@example.com", "user@example.com"),
         ("plain", "plain"),
+        ("xhttps://u:p@h/x", "xhttps://%s@h/x" % R),
+        (" https://u:p@h/x", " https://%s@h/x" % R),
+        ("https://h/x?a=b?token=t&c=d", "https://h/x?a=b?token=%s&c=d" % R),
+        ("https://h/x?token=a?b&c=d", "https://h/x?token=%s&c=d" % R),
+        ("https://h/x?token=&auth=z", "https://h/x?token=%s&auth=%s" % (R, R)),
+        ("https://h/x?page=1 ?sig=s", "https://h/x?page=1 ?sig=%s" % R),
+        ("?token", "?token"),
+        # A run opening with a non-letter scheme character still redacts.
+        ("1https://u:p@h/x", "1https://%s@h/x" % R),
+        ("--x=2git+https://u:p@h", "--x=2git+https://%s@h" % R),
+        ("-https://u:p@h", "-https://%s@h" % R),
+        (".https://u:p@h", ".https://%s@h" % R),
     ])
     def test_masks_credentials_and_keeps_host_and_path(self, value, want):
         assert logs.redact_url(value) == want
+
+    # Built inside the test, not passed as the parameter: pytest exports each
+    # test's id as PYTEST_CURRENT_TEST, and Windows refuses an environment
+    # variable past 32,767 characters — a 100,000-character id failed setup.
+    @pytest.mark.parametrize("prefix,unit,count", [
+        ("", "x", 100_000),          # one search term, no `://` anywhere
+        ("", "keykey", 20_000),      # scheme-class run that never reaches `://`
+        ("", "?a", 50_000),          # a query name may not span the next `?`
+        ("", "&token", 20_000),      # secret names, none followed by `=`
+        ("https://", "a", 100_000),  # userinfo scan with no `@`
+        ("", "1", 100_000),          # a scheme-class run with no letter
+        ("", "a1", 50_000),          # letters after non-letters, no `://`
+    ], ids=["x", "keykey", "query-a", "amp-token", "https-a", "digits", "a1"])
+    def test_is_linear_on_one_long_token(self, prefix, unit, count):
+        # Both patterns were quadratic here: 40,000 characters took 3.9 s and
+        # `boost search <200,000 x's>` never finished. Linear is milliseconds.
+        value = prefix + unit * count
+        start = time.perf_counter()
+        assert logs.redact_url(value) == value
+        assert time.perf_counter() - start < 1.0
 
 
 class TestRedactArgv:

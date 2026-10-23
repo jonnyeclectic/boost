@@ -93,6 +93,16 @@ class TestRelTime:
     def test_30_seconds(self):
         assert util.rel_time(iso_ago(30)) == "30s ago"
 
+    def test_a_stamp_seconds_ahead_is_just_now(self):
+        # Clock skew between machines sharing the feed: floored, a negative
+        # age read "1s ago" however far ahead the stamp was.
+        assert util.rel_time(iso_ago(-1)) == "just now"
+        assert util.rel_time(iso_ago(-59)) == "just now"
+
+    def test_a_stamp_a_minute_or_more_ahead_is_in_the_future(self):
+        assert util.rel_time(iso_ago(-60)) == "in the future"
+        assert util.rel_time(iso_ago(-2 * 86400)) == "in the future"
+
     def test_59_seconds_still_seconds_bucket(self):
         assert util.rel_time(iso_ago(59)) == "59s ago"
 
@@ -221,6 +231,20 @@ class TestSlugify:
     def test_digits_and_dashes_kept(self):
         assert util.slugify("tdd-workflow-3") == "tdd-workflow-3"
 
+    def test_nfc_and_nfd_spellings_give_one_slug(self):
+        # Precomposed é (NFC) was dropped -> `caf`, while e + U+0301 (NFD,
+        # what a macOS paste often produces) kept its e -> `cafe`: one typed
+        # name saved a profile under one file and looked it up under another.
+        nfc, nfd = "caf\u00e9", "cafe\u0301"
+        assert util.slugify(nfc) == util.slugify(nfd) == "cafe"
+        assert util.slugify("Cr\u00e8me Br\u00fbl\u00e9e") == "creme-brulee"
+
+    def test_compatibility_forms_fold_to_ascii(self):
+        assert util.slugify("\ufb01le \u2460") == "file-1"
+
+    def test_letters_with_no_ascii_fold_still_fall_back(self):
+        assert util.slugify("\u540d\u524d") == "skill"
+
 
 class TestResolveSlug:
     """The shared helper for a user-typed name: slugify, refuse when there is
@@ -262,7 +286,21 @@ class TestResolveSlug:
     def test_empty_raises_instead_of_falling_back_to_skill(self):
         with pytest.raises(BoostError) as exc:
             util.resolve_slug("")
-        assert "no letters or digits" in exc.value.message
+        assert exc.value.message == "name has no letters or digits: ''"
+
+    def test_nfd_input_is_noted_with_the_folded_slug(self, capsys):
+        assert util.resolve_slug("cafe\u0301", what="profile name") == "cafe"
+        assert util.resolve_slug("caf\u00e9", what="profile name") == "cafe"
+        assert capsys.readouterr().err.count("using profile name 'cafe'") == 2
+
+    def test_non_ascii_letters_are_not_called_no_letters(self):
+        # `名前` is all letters; "has no letters or digits" told the user
+        # their input was empty.
+        with pytest.raises(BoostError) as exc:
+            util.resolve_slug("\u540d\u524d", what="skill name")
+        assert exc.value.message == "skill name needs ASCII letters or digits: " \
+            "'\u540d\u524d'"
+        assert exc.value.hint == "a name becomes a file name made of a-z, 0-9 and '-'"
 
     def test_punctuation_only_raises_instead_of_falling_back_to_skill(self):
         # Unlike slugify("!!!") == "skill", a user-typed name with nothing to
@@ -940,6 +978,21 @@ class TestPositiveInt:
         with pytest.raises(argparse.ArgumentTypeError) as exc:
             util.positive_int("abc")
         assert str(exc.value) == "invalid int value: 'abc'"
+
+
+class TestNonemptyStr:
+    """`util.nonempty_str` — the argparse type behind every NAME/path flag."""
+
+    def test_a_real_value_round_trips_unchanged(self):
+        assert util.nonempty_str("brainstorming") == "brainstorming"
+        # Inner and edge whitespace is the caller's business, not stripped.
+        assert util.nonempty_str(" a b ") == " a b "
+
+    @pytest.mark.parametrize("value", ["", " ", "\t\n"])
+    def test_empty_or_blank_rejected_with_exact_message(self, value):
+        with pytest.raises(argparse.ArgumentTypeError) as exc:
+            util.nonempty_str(value)
+        assert str(exc.value) == "must not be empty"
 
 
 class TestScoreInt:

@@ -438,6 +438,85 @@ def former_link_dirs() -> list[tuple[str, Path]]:
             and not aliases_store(Path(d))]
 
 
+def remembered_native_dirs() -> list[tuple[str, Path]]:
+    """``(agent, dir)`` for a native-store agent's dir boost once linked into.
+
+    :func:`former_link_dirs` and :func:`unlinking_agents` leave native-store
+    dirs out because boost never links there -- true of a dir boost never
+    linked into, false of one :func:`remember_link_dir` recorded for that very
+    agent before its ``links_skills`` was flipped off. The links made then
+    stay: uninstall left ``~/.windsurf/skills/<name>`` dangling into the store
+    dir it had just deleted, and doctor called that "0 broken links".
+
+    Kept apart from :func:`sweep_dirs` on purpose. A native dir is where other
+    tools link into the store too (:func:`store.duplicate_discovery`), so the
+    readers of this list remove only a link to one named skill's store dir, or
+    one that dangles into the store, never a live link named for no skill.
+    """
+    remembered = _remembered_link_dirs()
+    return [(n, s["dir"]) for n, s in known_agents().items()
+            if not s["links_skills"] and str(s["dir"]) in remembered.get(n, ())
+            and not aliases_store(s["dir"])]
+
+
+def materialization_target(kind: str, name: str, entry: dict,
+                           m: dict) -> Path | None:
+    """Where the agent's *current* dir puts row ``m`` of rule/workflow
+    ``name``, or None when there is no such place to compare against.
+
+    A row records the path it was written to, and the agent's dir can move
+    after that (``agents.cursor.dir``). None for a row of an agent boost no
+    longer writes (:func:`materialization_is_written` names those), a
+    project-scope row, a workflow's store copy, a workflow row with no
+    ``slot``, and a name the target functions refuse.
+    """
+    from . import rules, workflows
+    agent = m.get("agent")
+    # User scope only. A project row's place is the repo's own layout,
+    # committed with it; repointing a dir under $HOME is no reason for sync
+    # to rewrite files in someone's repo.
+    if (not agent or entry.get("base") is not None
+            or m.get("slot") == workflows.SLOT_SKILL):
+        return None
+    writes = workflow_agents() if kind == "workflow" else materializing_agents()
+    skills_dir = writes.get(agent)
+    if skills_dir is None:
+        return None
+    try:
+        if kind == "workflow":
+            if not m.get("slot"):
+                return None
+            return workflows.workflow_target(skills_dir, m["slot"], name,
+                                             agent=agent)
+        return rules.rule_target(agent, skills_dir, name)[1]
+    except BoostError:
+        return None
+
+
+def relocated_to(kind: str, name: str, entry: dict, m: dict) -> Path | None:
+    """The path row ``m`` now belongs at, when the agent's dir moved away
+    from where it was written; None when it is where the agent reads.
+
+    Every check that read the rows asked only whether the recorded file was
+    there, and after a repointed ``agents.cursor.dir`` it was -- in the dir
+    Cursor no longer reads. doctor called the rule fully materialized, verify
+    said ok and sync moved nothing.
+    """
+    want = materialization_target(kind, name, entry, m)
+    if want is None or not m.get("path"):
+        return None
+    have = os.path.normcase(os.path.normpath(str(m["path"])))
+    if have == os.path.normcase(os.path.normpath(str(want))):
+        return None
+    # The same file by another spelling is not a move: a $HOME of /tmp/x
+    # at install and /private/tmp/x now (macOS) named every row moved, and
+    # sync then rewrote them all on every run.
+    if (os.path.normcase(os.path.realpath(have))
+            == os.path.normcase(os.path.realpath(str(want)))):
+        return None
+    return want
+
+
 def sweep_dirs() -> list[Path]:
     """Every skills dir a broken-link sweep walks: each linking agent's
     current dir, enabled or not, then :func:`former_link_dirs`."""
@@ -499,6 +578,10 @@ def workflow_agents(base=None) -> dict[str, Path]:
     *rewrites* a Claude `commands/*.md` into a `SKILL.md` on disk rather than
     running it as a command. A Markdown file dropped in `~/.codex/commands/`
     would be installed, reported, and never loaded.
+
+    Windsurf is the second: it documents workflows only under
+    `.windsurf/workflows/` and `~/.codeium/windsurf/global_workflows/`, not
+    the `commands/`/`agents/` slots boost writes (see :data:`config.DEFAULTS`).
     """
     return {n: d for n, d in materializing_agents(base).items()
             if known_agents()[n]["workflows"]}

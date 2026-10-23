@@ -1333,7 +1333,8 @@ class TestInstallingOverAStoreDir:
             "record it")
         assert exc.value.hint == (
             "`boost sync` says whose it is, and records it if it is yours; "
-            "`boost install tdd-workflow --force` replaces it")
+            "`boost install fixture-tap:tdd-workflow --path "
+            "skills/tdd-workflow --force` replaces it")
         assert (mine / "SKILL.md").read_text(encoding="utf-8") == "# mine\n"
         assert lockfile.get_skill("tdd-workflow") is None
 

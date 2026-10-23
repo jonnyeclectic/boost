@@ -419,9 +419,10 @@ class TestRemovalPaths:
         assert err.value.message == (
             "reviewer is already in the store at ~/.agents/skills/reviewer, "
             "as the skill copy of workflow reviewer")
-        assert err.value.hint == ("`boost install reviewer --force "
-                                  "--no-as-skill` takes the copy out of the "
-                                  "store")
+        assert err.value.hint == ("`boost install %s:reviewer --path agents "
+                                  "--force --no-as-skill` takes the copy out "
+                                  "of the store" % lockfile.get_workflow(
+                                      "reviewer")["tap"])
         # An entry of its own means the skill is boost's already: no refusal.
         store._refuse_unrecorded("reviewer", {"tap": "t"}, False)
         assert "reviewer" in store.workflow_owned_store_names()
@@ -501,3 +502,19 @@ class TestBackfill:
         assert store.workflows_without_skill_copy() == ["reviewer"]
         store.backfill_skill_copies()
         assert _store_copy().is_file()
+
+
+@pytest.mark.parametrize(("tap", "name", "rel_dir", "want"), [
+    ("t", "ship", "skills/ship", "boost install t:ship --path skills/ship"),
+    ("t", "ship", ".", "boost install t:ship"),
+    ("t", "ship", None, "boost install t:ship"),
+    ("t", "ship", "", "boost install t:ship"),
+    (None, "ship", "agents", "boost install ship --path agents"),
+    (None, "ship", None, "boost install ship"),
+])
+def test_install_spelling_names_one_item(tap, name, rel_dir, want):
+    assert store.install_spelling(tap, name, rel_dir) == want
+
+
+def test_workflow_spelling_without_a_lock_row_is_the_bare_name(sandbox):
+    assert store._workflow_spelling("nothing") == "boost install nothing"

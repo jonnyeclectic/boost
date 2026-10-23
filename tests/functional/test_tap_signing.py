@@ -360,9 +360,11 @@ def test_reclone_of_a_missing_clone_is_gated_too(boost, signed_tapped):
     assert "kept at" not in r.err             # there was nothing to keep
     assert not clone.exists()
     assert not clone.with_name(clone.name + ".boost-reclone").exists()
-    # and the lazy clone `install` takes is the same gated path
+    # and install, which re-checks the tap's signature itself, refuses a tap
+    # with no clone to check and points at the gated reclone above
     r = boost("install", "brainstorming", expect=1)
-    assert "failed provenance policy" in r.err
+    assert ("policy blocks installing brainstorming: tap 'stap' has no clone "
+            "here to verify — `boost update stap` re-clones it") in r.err
     assert not clone.exists()
 
 

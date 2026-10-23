@@ -925,6 +925,26 @@ class TestExplain:
         assert "Key rules:" not in r.out
 
 
+class TestExplainSkipsFencedCode:
+    def test_shell_comments_and_heredoc_lines_are_not_outline_or_rules(
+            self, boost, sandbox, monkeypatch):
+        text = ("---\nname: deploy-helper\ndescription: Deploys.\n---\n\n"
+                "# Deploy\n\n```bash\n# Install dependencies first\n"
+                "# Never commit secrets -- this is just a shell comment\n"
+                "1. not a step, a heredoc line\n```\n\n## After\n\n"
+                "- Always run the smoke test after deploy.\n")
+        monkeypatch.setattr(info, "_resolve_text",
+                            lambda name: (text, "skill", None, None))
+        r = boost("explain", "deploy-helper")
+        lines = [ln.strip() for ln in r.out.split("\n")]
+        start = lines.index("Outline:") + 1
+        assert lines[start:lines.index("", start)] == ["Deploy", "After"]
+        start = lines.index("Key rules:") + 1
+        assert lines[start:] in (
+            ["• Always run the smoke test after deploy."],
+            ["• Always run the smoke test after deploy.", ""])
+
+
 # The outline used to print every heading in the file: 521 lines for one
 # catalog entry, while the "Key rules:" list beside it stopped at 12. The cap
 # is spelled out here rather than read from `info`, so the boundary is a
@@ -1278,6 +1298,31 @@ class TestTag:
     def test_whitespace_in_a_tag_is_rejected(self, boost, installed):
         r = boost("tag", "brainstorming", "+with space", expect=1)
         assert "whitespace" in r.err
+        assert _lock()["brainstorming"].get("tags", []) == []
+
+    def test_every_token_after_double_dash_is_an_operand(self, boost, installed):
+        # `--zz` after `--` used to be dropped (with the `--`), rc 0 and no
+        # change. Now it is the mod it spells: remove the tag `-zz`.
+        r = boost("tag", "brainstorming", "--", "+-zz", "+a")
+        assert _lock()["brainstorming"]["tags"] == ["-zz", "a"]
+        r = boost("tag", "brainstorming", "--", "--zz")
+        assert _lock()["brainstorming"]["tags"] == ["a"]
+        assert r.out == "  ✓ brainstorming  #a\n"
+
+    def test_the_name_may_follow_double_dash(self, boost, installed):
+        boost("tag", "--", "brainstorming", "+b")
+        assert _lock()["brainstorming"]["tags"] == ["b"]
+
+    def test_bad_operand_after_double_dash_is_still_rejected(self, boost,
+                                                             installed):
+        r = boost("tag", "brainstorming", "--", "oops", expect=1)
+        assert "cannot parse 'oops'" in r.err
+        assert _lock()["brainstorming"].get("tags", []) == []
+
+    def test_unknown_long_flag_before_double_dash_still_exits_2(self, boost,
+                                                               installed):
+        r = boost("tag", "brainstorming", "--verbose", "--", "+a", expect=2)
+        assert "unrecognized arguments: --verbose" in r.err
         assert _lock()["brainstorming"].get("tags", []) == []
 
 

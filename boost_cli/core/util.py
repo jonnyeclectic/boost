@@ -8,15 +8,17 @@ import getpass
 import hashlib
 import os
 import re
+import shlex
 import shutil
 import stat
 import sys
 import tempfile
 import time
+import unicodedata
 from datetime import UTC, datetime
 from pathlib import Path
 
-from ..errors import BoostError
+from ..errors import BoostError, NotUTF8Error
 from . import output as out
 from . import paths
 
@@ -452,9 +454,15 @@ def read_user_text(path: Path) -> str:
     that read ``AGENTS.md`` that way and wrote it back turned a Windows
     checkout's committed file into a whole-file diff. ``newline=""`` keeps
     the line endings, and the writer emits the text unchanged.
+
+    Bytes that are not UTF-8 raise :class:`NotUTF8Error`, a `BoostError`
+    naming the file, rather than a ``UnicodeDecodeError`` no caller stops.
     """
     with Path(path).open(encoding="utf-8", newline="") as f:
-        return f.read()
+        try:
+            return f.read()
+        except UnicodeDecodeError as err:
+            raise NotUTF8Error(path, err) from None
 
 
 def write_user_file(path: Path, text: str, base=None) -> Path:
@@ -553,6 +561,31 @@ def score_int(s: str) -> int:
     return v
 
 
+def nonempty_str(s: str) -> str:
+    """argparse ``type=`` for a NAME, path or value that was given explicitly.
+
+    An empty string is not the same as an omitted argument, but every handler
+    that branches on ``if args.name:`` treats it as one: ``attest --verify ""``
+    verified every skill, ``cohort apply ""`` applied every cohort, ``tap ""``
+    and ``import ""`` read ``Path("")`` as the current directory, and
+    ``export -o ""`` wrote the default filename. ``boost attest "$UNSET"`` in a
+    script is the usual way to get here, and it went green having done the
+    wrong thing. Rejecting it at parse time makes it a usage error (exit 2)
+    naming the argument; an *omitted* optional NAME keeps meaning "all",
+    because argparse never runs ``type=`` on a missing positional.
+
+    The value is returned unchanged -- whitespace inside a real value is the
+    caller's business; only a value that is nothing *but* whitespace is
+    refused. A string ``default=`` is passed through ``type=`` too, so an
+    argument using this must default to ``None``, never ``""``.
+    """
+    import argparse
+
+    if not s.strip():
+        raise argparse.ArgumentTypeError("must not be empty")
+    return s
+
+
 def resolve_exe(argv: list[str]) -> list[str]:
     """``argv`` with ``argv[0]`` swapped for the path ``shutil.which`` finds.
 
@@ -605,6 +638,11 @@ def rel_time(iso: str) -> str:
     except (ValueError, TypeError):
         return iso or "?"
     secs = (datetime.now(UTC) - then).total_seconds()
+    if secs < 0:
+        # A stamp from a machine whose clock runs ahead (the feed is shared
+        # via `boost onboard`). Floored, it read "1s ago" however far ahead
+        # it was; a minute of skew is "just now", more is said plainly.
+        return "just now" if secs > -60 else "in the future"
     for limit, size, unit in ((60, 1, "s"), (3600, 60, "m"),
                               (86400, 3600, "h"), (604800, 86400, "d")):
         if secs < limit:
@@ -673,7 +711,18 @@ def head_lines(text: str, cap: int) -> tuple[list[str], int]:
 
 
 def _slug_or_none(name: str) -> str | None:
-    return re.sub(r"[^a-z0-9-]+", "-", name.strip().lower()).strip("-") or None
+    """``name`` as ``[a-z0-9-]``, accents folded to their base letter, or None.
+
+    Folded under NFKD before the character class applies, so one typed name is
+    one slug however its bytes arrived: a precomposed ``é`` (NFC) used to be
+    dropped outright while ``e`` + U+0301 (NFD, what a macOS paste often
+    produces) kept its ``e`` — ``profile save café`` wrote a file one letter
+    short of the ``cafe.json`` that ``profile show café`` looked for. The same fold the
+    catalog applies to a frontmatter name (``catalog._entry_slug``).
+    """
+    folded = "".join(c for c in unicodedata.normalize("NFKD", name)
+                     if not unicodedata.combining(c))
+    return re.sub(r"[^a-z0-9-]+", "-", folded.strip().lower()).strip("-") or None
 
 
 def slugify(name: str) -> str:
@@ -727,9 +776,14 @@ def check_item_name(name: str, kind: str = "skill") -> str:
     rather than later as a bare "invalid skill name" from the store, and
     `boost lint` asks the same question through :func:`item_name_error`.
     """
-    if not is_safe_component(name):
+    # A namespaced slash command (`frontend/test`, `workflows.NAMESPACE_SEP`)
+    # is a dir per namespace plus a file, each one a component of its own.
+    *namespace, leaf = name.split("/") if kind == "workflow" else [name]
+    if not all(is_safe_component(part) for part in (*namespace, leaf)):
         raise BoostError("invalid %s name %r" % (kind, name), hint=NAME_RULE_HINT)
-    _check_component(name + _ITEM_SUFFIX.get(kind, ".toml"), "%s name" % kind)
+    for part in namespace:
+        _check_component(part, "%s name" % kind)
+    _check_component(leaf + _ITEM_SUFFIX.get(kind, ".toml"), "%s name" % kind)
     return name
 
 
@@ -863,6 +917,12 @@ def resolve_slug(raw: str, *, what: str = "name") -> str:
     """
     slug = _slug_or_none(raw)
     if slug is None:
+        # `名前` has letters — just none a slug can hold, and saying it had
+        # none told the user their input was empty.
+        if any(c.isalnum() for c in raw):
+            raise BoostError("%s needs ASCII letters or digits: %r" % (what, raw),
+                             hint="a name becomes a file name made of a-z, "
+                                  "0-9 and '-'")
         raise BoostError("%s has no letters or digits: %r" % (what, raw))
     _check_component(slug, what)
     if slug != raw:
@@ -1203,3 +1263,12 @@ def lint_failed(skill_dir: Path, score: int, min_score: int = 40) -> bool:
     unclosed frontmatter fence, no SKILL.md) from passing on score alone.
     """
     return score < min_score or bool(lint_errors(skill_dir))
+
+
+def shell_arg(arg: str) -> str:
+    """`arg` as one argument a user can paste into their shell."""
+    if sys.platform == "win32":
+        # cmd.exe and PowerShell both take double quotes; neither takes the
+        # single quotes `shlex.quote` emits.
+        return '"%s"' % arg if any(c.isspace() for c in arg) else arg
+    return shlex.quote(arg)

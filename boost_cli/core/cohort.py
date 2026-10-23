@@ -25,28 +25,38 @@ def parse_skills(values: list[str]) -> list[str]:
     return [s.strip() for v in values for s in v.split(",") if s.strip()]
 
 
-def apply_summary(installed: int, present: int, missing: int) -> str:
+def apply_summary(installed: int, present: int, missing: int,
+                  failed: int = 0) -> str:
     """The one-line summary ``cohort apply`` prints after a rollout pass.
 
     ``missing`` (a cohort member not found in any tap) is reported alongside
     the other two counts rather than silently dropped — a cohort whose only
     member is missing used to report "0 installed, 0 already present" with
     the member accounted for nowhere. Suppressed when zero so an unaffected
-    rollout keeps the original two-clause wording.
+    rollout keeps the original two-clause wording. ``failed`` (a member the
+    install refused, e.g. by policy) is counted the same way.
     """
     bits = ["%d installed" % installed, "%d already present" % present]
     if missing:
         bits.append("%d not found" % missing)
+    if failed:
+        bits.append("%d failed" % failed)
     return "applied: " + ", ".join(bits)
 
 
-def apply_exit_code(installed: int, present: int, missing: int) -> int:
-    """1 when a rollout pass found missing members and did nothing else.
+def apply_exit_code(installed: int, present: int, missing: int,
+                    failed: int = 0) -> int:
+    """1 when any member failed to install, or when a rollout pass found
+    missing members and did nothing else.
 
     ``apply`` used to return 0 unconditionally, even when every member of
     the only cohort applied was missing from every tap — a rollout that
-    silently did nothing looked identical to a clean, uneventful pass.
+    silently did nothing looked identical to a clean, uneventful pass. A
+    member the install refused is a failure whatever else landed, as it is
+    for ``bundle install``: the rollout did not reach the state it names.
     """
+    if failed:
+        return 1
     return 1 if missing and not installed and not present else 0
 
 

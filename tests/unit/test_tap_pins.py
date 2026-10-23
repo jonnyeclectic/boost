@@ -416,3 +416,65 @@ class TestUpdateReturnsAnOffPinClone:
 
         assert results["o/a"] == "pinned at aaaaaaa (skipped)"
         assert fake_clone["checkouts"] == []
+
+
+class TestPinGoneUpstream:
+    """git's "not our ref" becomes the pin, the remote and a remedy that works."""
+
+    URL = "https://github.com/o/a"
+
+    def _gone(self, monkeypatch, seen=None):
+        def checkout(repo, sha, verify=None):
+            if seen is not None:
+                seen.append(sha)
+            raise gitutil.CommitNotUpstream(sha, self.URL)
+        monkeypatch.setattr(gitutil, "checkout_commit", checkout)
+
+    def test_pin_missing_names_tap_pin_remote_and_force(self):
+        tap = registry.Tap(name="o/a", url=self.URL)
+        err = registry.pin_missing(tap, SHA)
+        assert err.message == ("tap o/a is pinned at aaaaaaa, which is no "
+                               "longer on https://github.com/o/a (history "
+                               "rewritten upstream?)")
+        assert err.hint == registry.pin_missing_remedy("o/a") == (
+            "`boost update --force o/a` re-clones its default branch and "
+            "drops the pin, or re-tap it with `--at <sha>` to pin a commit "
+            "that exists there")
+        assert registry.PIN_MISSING in err.message
+        assert "untap" not in err.message + err.hint
+        assert registry.pin_missing(tap, SHA, "/elsewhere").message.endswith(
+            "no longer on /elsewhere (history rewritten upstream?)")
+
+    def test_a_named_update_of_an_uncloned_tap_raises_it(
+            self, sandbox, fake_clone, monkeypatch):
+        registry.add("o/a", at=SHA)
+        util.rmtree(registry.list_taps()[0].path)
+        self._gone(monkeypatch)
+        with pytest.raises(BoostError) as ei:
+            registry.update("o/a")
+        assert ei.value.message == registry.pin_missing(
+            registry.get("o/a"), SHA).message
+        assert ei.value.hint == registry.pin_missing_remedy("o/a")
+        assert registry.list_taps()[0].pin == SHA
+
+    def test_a_sweep_collects_it_with_the_marker(self, sandbox, fake_clone,
+                                                 monkeypatch):
+        registry.add("o/a", at=SHA)
+        util.rmtree(registry.list_taps()[0].path)
+        self._gone(monkeypatch)
+        results, failures = registry.update()
+        assert "o/a" not in results
+        assert registry.PIN_MISSING in failures["o/a"]
+
+    def test_an_off_pin_clone_whose_pin_is_gone_raises_it(
+            self, sandbox, fake_clone, monkeypatch):
+        registry.add("o/a", at=SHA)
+        monkeypatch.setattr(gitutil, "head_commit", lambda p: "b" * 40)
+        seen: list = []
+        self._gone(monkeypatch, seen)
+        with pytest.raises(BoostError) as ei:
+            registry.update("o/a")
+        assert seen == [SHA]
+        assert ei.value.message.startswith(
+            "tap o/a is pinned at aaaaaaa, which is no longer on ")
+        assert ei.value.hint == registry.pin_missing_remedy("o/a")

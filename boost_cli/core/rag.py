@@ -28,7 +28,7 @@ import re
 import sqlite3
 import tempfile
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from functools import lru_cache
 from pathlib import Path
 from typing import cast
@@ -1593,6 +1593,32 @@ def collapse_near_duplicate_hits(hits: list[Hit],
     return out[:limit]
 
 
+def name_key(text: str) -> str:
+    """``text`` as a name comparison key: case-folded, runs of ``-``, ``_``
+    and whitespace folded to one ``-``, ends trimmed — so ``code_review``,
+    ``Code-Review`` and ``code review`` are one key."""
+    return re.sub(r"[\s_-]+", "-", text.casefold()).strip("-")
+
+
+def promote_exact_name(hits: list[Hit], query: str) -> list[Hit]:
+    """``hits`` with every hit whose name is the query moved to the front.
+
+    Ranking is BM25 (or fused ranks), where a name is only a 3x-weighted
+    field: a keyword-denser competitor outscored the item the user typed the
+    exact name of — installed, even — and `boost search code_review` listed
+    it second. Stable within both groups, so several items sharing the name
+    keep their relative order, and scores are left as ranked: the score says
+    how well the text matched, the position says what the user asked for.
+    """
+    want = name_key(query)
+    if not want:
+        return hits
+    exact = [h for h in hits if name_key(str(h["entry"].get("name") or "")) == want]
+    if not exact:
+        return hits
+    return exact + [h for h in hits if name_key(str(h["entry"].get("name") or "")) != want]
+
+
 def _windowed(hits: list[Hit], terms: Sequence[str]) -> list[Hit]:
     """Window each hit's raw stored snip onto the query terms.
 
@@ -1606,7 +1632,7 @@ def _windowed(hits: list[Hit], terms: Sequence[str]) -> list[Hit]:
 
 def _retrieve_from_index(docs: list[dict], scores: dict[int, float],
                          terms: list[str], k: int, kind: str | None,
-                         ) -> list[Hit] | None:
+                         want: str = "") -> list[Hit] | None:
     """Rank from the index's own doc metadata — no full-catalogue parse.
 
     The slow path builds a ``live`` map by parsing every tap cache on the
@@ -1640,8 +1666,11 @@ def _retrieve_from_index(docs: list[dict], scores: dict[int, float],
         prev = best.get(key)
         if prev is None or score > prev[0]:
             best[key] = (score, d["snip"], d.get("h", ""), d["n"])
+    # An exact name match sorts first (see `promote_exact_name`), and does so
+    # here, before the `k` cut, so it cannot be truncated away.
     ranked = sorted(best.items(),
-                    key=lambda kv: (-kv[1][0], kv[1][3], kv[0]))
+                    key=lambda kv: (name_key(kv[1][3]) != want, -kv[1][0],
+                                    kv[1][3], kv[0]))
     # The shadow entry carries exactly what downstream code reads before
     # materialisation: `source_rank` consults tap + curated, and the loop
     # below reads tap + skill_md. Nothing else — an extra field here would
@@ -1693,8 +1722,9 @@ def retrieve(query: str, k: int = 60, kind: str | None = None,
         terms = [substitutions.get(t, t) for t in terms]
     docs = raw["docs"]
     scores = _bm25(terms, raw, read_postings(terms))
+    want = name_key(query)
     if entries is None:
-        fast = _retrieve_from_index(docs, scores, terms, k, kind)
+        fast = _retrieve_from_index(docs, scores, terms, k, kind, want)
         if fast is not None:
             return fast
         # An entry vanished between index and cache: answer from the full
@@ -1718,7 +1748,8 @@ def retrieve(query: str, k: int = 60, kind: str | None = None,
     # (tap, path), and ordering by it would silently reshuffle equal-scoring
     # results relative to every previous release.
     ranked = sorted(best.items(),
-                    key=lambda kv: (-kv[1][0], live[kv[0]]["name"], kv[0]))
+                    key=lambda kv: (name_key(live[kv[0]]["name"]) != want,
+                                    -kv[1][0], live[kv[0]]["name"], kv[0]))
     # Over-fetch, then collapse byte-identical copies before taking k — the
     # duplicates have to be removed from the pool, not from the visible page,
     # or they still consume the slots they were removed from.
@@ -1991,11 +2022,46 @@ def retrieve_any(query: str, k: int = 60, kind: str | None = None,
         hits, engine = bm25_hits[:k], "BM25 full-content"     # already deduped
     else:
         return None, ""
+    # Again after fusion: RRF can still seat a competitor first (BM25 #2 +
+    # dense #1 outranks BM25 #1 + dense #5), and dense alone never saw it.
+    hits = promote_exact_name(hits, query)
     if collapse_near_duplicates and hits and dense.ready():
         vectors = dense.entry_vectors([entry_key(h["entry"]) for h in hits])
         if vectors:
             hits = collapse_near_duplicate_hits(hits, vectors, k)
     return hits, engine
+
+
+#: How far :func:`retrieve_filtered` widens the pool before giving up: a
+#: filter matching nothing in the first 16k hits is answered as capped rather
+#: than ranking the whole catalogue (70k+ entries on a real machine).
+FILTER_POOL_CEILING = 16384
+
+
+def retrieve_filtered(query: str, k: int, want: int,
+                      keep: Callable[[dict], bool], kind: str | None = None,
+                      collapse_near_duplicates: bool = False,
+                      ceiling: int = FILTER_POOL_CEILING,
+                      ) -> tuple[list[Hit] | None, str, int]:
+    """:func:`retrieve_any`, widened until ``want`` hits pass ``keep``.
+
+    Returns ``(hits, engine, k)`` — every hit of the last round, *unfiltered*,
+    and the ``k`` that round used, so the caller still knows whether the
+    final pool hit its cap. ``boost search --category`` filtered one page of
+    ``max(60, limit * 4)`` and returned whatever of it passed: 10 of a
+    category's 20 matches against a ``--limit`` of 15, with nothing saying
+    the rest sat past the cut. The pool grows fourfold until enough pass, the
+    engine runs out (fewer than ``k`` came back), or ``ceiling`` is reached.
+    """
+    while True:
+        hits, engine = retrieve_any(query, k=k, kind=kind,
+                                    collapse_near_duplicates=collapse_near_duplicates)
+        if hits is None:
+            return None, engine, k
+        if (sum(1 for h in hits if keep(h["entry"])) >= want
+                or len(hits) < k or k >= ceiling):
+            return hits, engine, k
+        k = min(k * 4, ceiling)
 
 
 HEURISTIC_ENGINE = "heuristic relevance"

@@ -1179,3 +1179,104 @@ class TestAnInstalledItemIsRefusedInBothModes:
 def store_catalog_skills():
     from boost_cli.core import catalog
     return [e for e in catalog.all_entries() if e.get("kind", "skill") == "skill"]
+
+
+class TestDryRunAsksThePolicy:
+    """`install --dry-run` and `bundle --dry-run install` promised a
+    blocklisted skill with rc 0; the run refused it with rc 1."""
+
+    BLOCKED = ("policy blocks installing cowboy-coding: skill 'cowboy-coding' "
+               "is on the blocklist")
+
+    @pytest.fixture()
+    def blocked(self, boost, tapped):
+        boost("policy", "set", "blocked_skills", "cowboy-coding")
+
+    def test_install_preview_refuses_like_the_run(self, boost, blocked):
+        preview = boost("install", "--dry-run", "cowboy-coding", expect=1)
+        assert self.BLOCKED in preview.err
+        assert "would install" not in preview.out
+        run = boost("install", "cowboy-coding", expect=1)
+        assert self.BLOCKED in run.err
+
+    def test_install_preview_carries_on_past_a_refused_name(self, boost,
+                                                            blocked):
+        r = boost("install", "--dry-run", "brainstorming", "cowboy-coding",
+                  expect=1)
+        assert "would install brainstorming" in r.out
+        assert "cowboy-coding: " + self.BLOCKED in " ".join(r.err.split())
+
+    def test_bundle_preview_counts_the_refusal_like_the_run(
+            self, boost, blocked, tmp_path):
+        bf = tmp_path / "bf-block"
+        bf.write_text("skill cowboy-coding\n", encoding="utf-8")
+        preview = boost("bundle", "--dry-run", "install", bf, expect=1)
+        flat = " ".join(preview.out.split())
+        assert "bf-block:1: cowboy-coding: " + self.BLOCKED in flat
+        assert "would install 0 skills, 1 would fail" in flat
+        assert "would install cowboy-coding" not in flat
+        run = boost("bundle", "install", bf, expect=1)
+        assert ("bf-block:1: cowboy-coding: " + self.BLOCKED
+                in " ".join(run.out.split()))
+
+    def test_bundle_preview_refuses_a_blocked_dependency(self, boost, tapped,
+                                                         tmp_path):
+        # jira-integration requires commit-messages; the run fails the
+        # dependency, so the preview must count it too.
+        boost("policy", "set", "blocked_skills", "commit-messages")
+        bf = tmp_path / "bf-dep"
+        bf.write_text("skill jira-integration\n", encoding="utf-8")
+        r = boost("bundle", "--dry-run", "install", bf, expect=1)
+        flat = " ".join(r.out.split())
+        assert ("required skill commit-messages would not be installed: "
+                "policy blocks installing commit-messages: skill "
+                "'commit-messages' is on the blocklist") in flat
+        assert "would install 1 skill, 1 would fail" in flat
+        boost("bundle", "install", bf, expect=1)
+
+
+class TestPolicyRefusal:
+    def test_allowed_is_none(self, sandbox):
+        assert store.policy_refusal({"name": "x", "tap": "t"}, {}) is None
+
+    def test_blocked_names_the_violation(self, sandbox):
+        from boost_cli.core import policy
+        policy.save({**policy.load(), "blocked_skills": ["x"]})
+        assert store.policy_refusal({"name": "x", "tap": "t"}, {}) == (
+            "policy blocks installing x: skill 'x' is on the blocklist")
+        with pytest.raises(BoostError) as exc:
+            store.refuse_by_policy({"name": "x", "tap": "t"}, {})
+        assert exc.value.message == (
+            "policy blocks installing x: skill 'x' is on the blocklist")
+        assert exc.value.hint == "inspect with `boost policy list`"
+
+    def test_a_reinstall_does_not_count_against_max_skills(self, sandbox):
+        from boost_cli.core import policy
+        policy.save({**policy.load(), "max_skills": 1})
+        have = {"x": {}}
+        assert store.policy_refusal({"name": "x", "tap": "t"}, have) is None
+        assert store.policy_refusal({"name": "y", "tap": "t"}, have) == (
+            "policy blocks installing y: max_skills limit (1) reached")
+        assert store.policy_refusal({"name": "x", "tap": "t"}, have,
+                                    replaces=False) == (
+            "policy blocks installing x: max_skills limit (1) reached")
+
+    def test_install_policy_refusal_weighs_the_lock_the_run_weighs(
+            self, sandbox, monkeypatch, tmp_path):
+        from boost_cli.core import policy, projectlock
+        policy.save({**policy.load(), "max_skills": 1})
+        monkeypatch.setattr(lockfile, "installed", lambda: {"a": {}})
+        monkeypatch.setattr(projectlock, "installed",
+                            lambda base: {} if base == tmp_path else {"b": {}})
+        skill = {"name": "s", "tap": "t"}
+        full = "policy blocks installing s: max_skills limit (1) reached"
+        assert store.install_policy_refusal(skill) == full
+        assert store.install_policy_refusal(
+            skill, scope="project", base=tmp_path) is None
+        assert store.install_policy_refusal(
+            skill, scope="project", base=tmp_path / "other") == full
+        rule = {"name": "r", "tap": "t", "kind": "rule"}
+        assert store.install_policy_refusal(rule, scope="project",
+                                            base=tmp_path) == (
+            "policy blocks installing r: max_skills limit (1) reached")
+        assert store.install_policy_refusal(rule, existing={"r": 1}) is None

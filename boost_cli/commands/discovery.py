@@ -30,10 +30,13 @@ from ..core import (
     catalog,
     config,
     gitutil,
+    installplan,
+    installscan,
     integrity,
     journal,
     lockfile,
     paths,
+    prereq,
     rag,
     registry,
     rules,
@@ -116,7 +119,7 @@ def cmd_search(argv):
     p.add_argument("query", nargs="+", help="search terms")
     p.add_argument("--smart", action="store_true",
                    help="rerank the top hits with Claude")
-    p.add_argument("--category", default="",
+    p.add_argument("--category", type=util.nonempty_str,
                    help="only show entries whose category matches (case-insensitive)")
     p.add_argument("-k", "--limit", type=util.positive_int, default=15,
                    help="max results (default 15)")
@@ -166,8 +169,19 @@ def cmd_search(argv):
         # built and floors to BM25 otherwise, so the CLI and the MCP server
         # answer from the same engine instead of the CLI being BM25-only.
         k = max(60, args.limit * 4)
-        hits, engine = rag.retrieve_any(
-            query, k=k, collapse_near_duplicates=args.collapse_dupes)
+        if args.category:
+            # Widen until --limit rows survive the filter: filtering one
+            # page of `k` returned 10 of a category's 20 matches against a
+            # --limit of 15, the rest sitting past the cut unmentioned.
+            categories = _tap_categories()
+            hits, engine, k = rag.retrieve_filtered(
+                query, k=k, want=args.limit,
+                keep=lambda e: catalog.matches_category(e, args.category,
+                                                        categories),
+                collapse_near_duplicates=args.collapse_dupes)
+        else:
+            hits, engine = rag.retrieve_any(
+                query, k=k, collapse_near_duplicates=args.collapse_dupes)
         hits = hits or []
         # Retrieval never returns more than `k` — hitting that cap means
         # there may be more matches beyond it, not that there are exactly
@@ -649,10 +663,10 @@ def cmd_reindex(argv):
     p.add_argument("--dense", action="store_true",
                    help="also embed chunks into the opt-in dense vector store "
                         "(needs the `rag` extra; no API key required)")
-    p.add_argument("--export-shard", metavar="TAP",
+    p.add_argument("--export-shard", type=util.nonempty_str, metavar="TAP",
                    help="write TAP's prebuilt vectors to stdout as JSON, for "
                         "publishing so others need not re-embed them")
-    p.add_argument("--import-shard", metavar="FILE",
+    p.add_argument("--import-shard", type=util.nonempty_str, metavar="FILE",
                    help="merge a prebuilt vector shard, skipping the embed "
                         "cost; refused unless it matches this store's backend "
                         "and the tap's current commit")
@@ -1260,8 +1274,8 @@ def cmd_recommend(argv):
     p = cliparse.parser(
         prog="boost recommend",
         description="Suggest skills based on your project's tech stack")
-    p.add_argument("--path", default=".", help="project directory (default: cwd)")
-    p.add_argument("--category", default="",
+    p.add_argument("--path", type=util.nonempty_str, default=".", help="project directory (default: cwd)")
+    p.add_argument("--category", type=util.nonempty_str,
                    help="only recommend entries whose category matches (case-insensitive)")
     p.add_argument("--limit", type=util.positive_int, default=8,
                    help="max suggestions (default 8)")
@@ -1299,7 +1313,15 @@ def cmd_recommend(argv):
     for rec in agg.values():
         if rec["entry"].get("curated"):
             rec["score"] += 10
-    ranked = sorted(agg.values(),
+    # What is already installed is not a suggestion, and leaving it in spent
+    # --limit slots on it: excluded by name across every kind and both scopes
+    # (the project being the one --path names), the match search's installed
+    # dot makes. A lock problem must not take recommend down with it.
+    have: frozenset[str] = frozenset()
+    with contextlib.suppress(Exception):
+        have = prereq.installed_names(
+            scopes.resolve_base(scopes.SCOPE_PROJECT, start=target))
+    ranked = sorted((r for r in agg.values() if r["entry"]["name"] not in have),
                     key=lambda r: (-r["score"], r["entry"]["name"]))
     # The shown set (curated fallback included) is computed once, before the
     # --json/text split, so both modes report the same recommendations — the
@@ -1313,7 +1335,7 @@ def cmd_recommend(argv):
         # read below an error about indexing `object`.
         curated: list[dict[str, Any]] = [
             {"entry": e, "score": 0, "because": {"curated"}}
-            for e in catalog.curated_entries(entries)]
+            for e in catalog.curated_entries(entries) if e["name"] not in have]
         shown = curated[:args.limit]
     if args.as_json:
         print(json.dumps({"stack": stack, "recommendations": [
@@ -1701,9 +1723,33 @@ def _install_targets() -> dict[str, str]:
     }
 
 
+def _installed_rows() -> set:
+    """``(tap, name)`` for every installed skill — row identity, not a name.
+
+    By name, a same-named skill from another tap drew as installed and Enter
+    on it was a silent no-op. A lock row that records no tap is kept as
+    ``("", name)`` and matches any tap (:func:`_row_installed`), so an older
+    lock still shows what it holds."""
+    return {(str(rec.get("tap") or ""), name)
+            for name, rec in store.installed().items()}
+
+
+def _row_installed(e: dict, installed) -> bool:
+    """Whether this catalog row is the copy the lock holds."""
+    return (_desc_key(e) in installed) or (("", e["name"]) in installed)
+
+
 def _browse_tui(curses, entries, install=None, category=""):
-    """Run the curses UI. Returns the list of entries picked for install
-    (one or more, via multi-select), or None if the user quit without picking.
+    """Run the curses UI. Returns a :class:`browse.InstallSession` saying what
+    Enter installed, refused and (on ^C) cancelled, or None if the user quit
+    without asking for anything.
+
+    An install takes ``boost install``'s plan (:func:`installplan.plan`: the
+    look-alike warning and the ``requires:`` closure, dependencies first) and
+    its refusals (``store.check_existing``, policy inside ``store.install``),
+    and the pane shows the injection/secret scan. What prompts — the MCP offer
+    — cannot prompt under curses, so the caller runs it after the browser
+    exits, from the session.
 
     Layout is a single framed surface — title tab, query, scope toggles, then
     a list pane and a detail pane divided by a rule — with a status bar under
@@ -1715,11 +1761,10 @@ def _browse_tui(curses, entries, install=None, category=""):
     ^R and ^K open the category, tap and kind pickers (one facet picker, see
     :class:`browse.Picker`); their filters AND together and with the query.
     """
-    state: dict[str, Any] = {"picks": None}
     categories = _tap_categories()
     desc_cache: dict = {}
     loading: set = set()
-    installed_names = set(store.installed())
+    installed_rows = _installed_rows()
     do_install = install or store.install
     from .pkg import _skipped_agent_lines  # imported here: pkg is large
     # Collapse rows that say the same thing. A registry renders one skill into
@@ -1736,64 +1781,133 @@ def _browse_tui(curses, entries, install=None, category=""):
     # Measured over a 61,801-entry catalogue: a one-letter query 122 ms
     # unfrozen, 52 ms frozen. Undone on the way out (see the finally below).
     gc.freeze()
-    # name -> (state, message). Item 1: an install runs without leaving the
-    # browser, and the detail pane reports it. Threaded so the draw loop keeps
-    # answering keys while files are written — an install that freezes the UI
-    # reads as a crash.
-    status: dict[str, tuple[str, str]] = {}
-    done: list = []
+    # (tap, name) -> (state, message). Item 1: an install runs without leaving
+    # the browser, and the detail pane reports it. Threaded so the draw loop
+    # keeps answering keys while files are written — an install that freezes
+    # the UI reads as a crash. Keyed by row, not name: two taps' `brainstorming`
+    # are two rows, and one installing must not mark the other.
+    status: dict[tuple, tuple[str, str]] = {}
+    session = browse.InstallSession()
     workers: list = []
-    queue: list = []
+    queue: list = []                      # one list of picked roots per Enter
     queue_lock = threading.Lock()
+    draining = [False]                    # a worker owns the queue
+    cancel = threading.Event()
     # What Enter will touch, by kind. Built once: the paths cannot change
     # mid-session, and browse.install_target stays pure by receiving them.
     targets = _install_targets()
 
-    def start_install(entry):
-        """Queue an install. Installs run one at a time, in a single worker.
+    def fail(item, err):
+        msg, hint = ((err.message, err.hint or "") if isinstance(err, BoostError)
+                     else (str(err) or type(err).__name__, ""))
+        session.failed.append((item, msg, hint))
+        status[_desc_key(item)] = (browse.FAILED,
+                                   " — ".join(p for p in (msg, hint) if p))
+
+    def install_one(item, notes):
+        key = _desc_key(item)
+        status[key] = (browse.BUSY, "")
+        try:
+            res = do_install(item)
+        except Exception as e:                  # never kill the TUI
+            fail(item, e)
+            return
+        installed_rows.add(key)
+        session.installed.append((item, res))
+        # An agent the install skipped rides on the message, and so do the
+        # plan's warnings and the injection/secret scan `boost install`
+        # prints: the pane is the only report an in-place install gets while
+        # the browser is open, and a bare path there read as "nothing to see".
+        conflicts, refused = _skipped_agent_lines(res)
+        scan = (installscan.scan(res)
+                if isinstance(res, store.InstallResult) else [])
+        status[key] = (browse.OK, " · ".join(
+            [_tilde(getattr(res, "dest", "")), *conflicts, *refused,
+             *("! " + n for n in notes),
+             *("! " + rep.headline for rep in scan)]))
+
+    def run_request(roots):
+        """One Enter: refuse what `boost install` refuses, plan the closure,
+        install it dependencies first."""
+        ok_roots = []
+        for e in roots:
+            try:
+                store.check_existing(e)
+            except BoostError as err:
+                fail(e, err)
+                continue
+            ok_roots.append(e)
+        if not ok_roots:
+            return
+        try:
+            the_plan = installplan.plan(ok_roots)
+        except BoostError as err:
+            for e in ok_roots:
+                fail(e, err)
+            return
+        session.notes.extend(the_plan.notes())
+        warnings = [text for role, text in the_plan.notes() if role == "warn"]
+        root_keys = {_desc_key(e) for e in ok_roots}
+        for i, item in enumerate(the_plan.entries):
+            if cancel.is_set():
+                session.cancelled.extend(the_plan.entries[i:])
+                return
+            key = _desc_key(item)
+            if key not in root_keys and \
+                    status.get(key, ("", ""))[0] == browse.OK:
+                continue                        # landed earlier this session
+            install_one(item, warnings if key in root_keys else [])
+
+    def start_install(picked):
+        """Queue one Enter's picks. Requests run one at a time, in a single
+        worker.
 
         Serial on purpose. Running them in parallel threads was a lost update:
         every `store.install` does a read-modify-write of `.skill-lock.json`, so
         two at once raced and one entry vanished from the lock — a Tab-select of
         two skills installed both to disk and recorded one. It showed up as a
-        test that passed alone and failed 3 runs in 5 in the suite.
+        test that passed alone and failed 3 runs in 5 in the suite. The plan's
+        `requires:` closure reads that lock too, which serial keeps honest.
 
         One background worker still keeps the draw loop answering keys, which is
-        the property that actually mattered.
+        the property that actually mattered. It is *not* a daemon: a daemon dies
+        with the process, and ^C mid-install left a store copy and agent links
+        with no lock row behind them.
         """
-        name = entry["name"]
         with queue_lock:
-            if status.get(name, ("", ""))[0] in (browse.BUSY, browse.OK):
+            fresh = [e for e in picked
+                     if status.get(_desc_key(e), ("", ""))[0]
+                     not in (browse.BUSY, browse.OK)]
+            if not fresh:
                 return
-            status[name] = (browse.BUSY, "")
-            queue.append(entry)
-            if any(t.is_alive() for t in workers):
+            for e in fresh:
+                status[_desc_key(e)] = (browse.BUSY, "")
+            queue.append(fresh)
+            # A flag, not `is_alive()`: a worker that has just found the queue
+            # empty is still alive for a moment, and a request queued then was
+            # stranded with its rows spinning.
+            if draining[0]:
                 return                                  # a worker is draining
+            draining[0] = True
 
         def worker():
             while True:
                 with queue_lock:
                     if not queue:
+                        draining[0] = False
                         return
-                    item = queue.pop(0)
-                nm = item["name"]
+                    req = queue.pop(0)
                 try:
-                    res = do_install(item)
-                except BoostError as e:
-                    status[nm] = (browse.FAILED, e.message)
-                except Exception as e:                  # never kill the TUI
-                    status[nm] = (browse.FAILED, str(e))
-                else:
-                    installed_names.add(nm)
-                    done.append(item)
-                    # An agent the install skipped rides on the message: the
-                    # pane is the only report an in-place install gets, and a
-                    # bare path there read as every agent reached.
-                    conflicts, refused = _skipped_agent_lines(res)
-                    status[nm] = (browse.OK, " · ".join(
-                        [_tilde(getattr(res, "dest", "")), *conflicts, *refused]))
+                    run_request(req)
+                except Exception as e:          # the plan, not an install
+                    # A dead worker would leave every later Enter ignored and
+                    # these rows spinning, reported nowhere.
+                    for root in req:
+                        if status.get(_desc_key(root), ("", ""))[0] == \
+                                browse.BUSY:
+                            fail(root, e)
 
-        t = threading.Thread(target=worker, daemon=True)
+        t = threading.Thread(target=worker, daemon=False)
         workers.append(t)
         t.start()
 
@@ -1920,14 +2034,14 @@ def _browse_tui(curses, entries, install=None, category=""):
                 else:
                     rows = _draw_rows(put, th, lay, found, sel, selected,
                                       filt, focus, describe, categories,
-                                      installed_names,
+                                      installed_rows,
                                       copies if collapse else None, status,
                                       scope, hidden if collapse else 0,
                                       filters)
                 if lay.has_detail and found:
                     dscroll = _draw_detail(
                         put, th, lay, found[sel], dscroll, focus,
-                        installed_names, status,
+                        installed_rows, status,
                         browse.install_target(found[sel], targets), categories)
                 scr.refresh()
             except curses.error:
@@ -1973,9 +2087,8 @@ def _browse_tui(curses, entries, install=None, category=""):
                 # It installs in place rather than exiting: the browser is for
                 # finding several things, and dropping to a shell after the
                 # first one makes the user re-run and re-type to get the next.
-                for e in ([e for e in entries if _desc_key(e) in selected]
-                          if selected else [found[sel]]):
-                    start_install(e)
+                start_install([e for e in entries if _desc_key(e) in selected]
+                              if selected else [found[sel]])
                 selected.clear()
                 continue
             if key in (curses.KEY_LEFT, curses.KEY_RIGHT) and \
@@ -2022,18 +2135,24 @@ def _browse_tui(curses, entries, install=None, category=""):
 
     try:
         curses.wrapper(ui)  # wrapper guards drawing with try/finally endwin()
+    except KeyboardInterrupt as exc:
+        # ^C. The install in flight finishes (the join below) — killing it
+        # between the copy and the lock write is what left an unrecorded store
+        # dir — and nothing queued behind it starts. The caller reports both
+        # and re-raises, so the exit code stays the interrupt's.
+        session.interrupted = exc
+        cancel.set()
+        with queue_lock:
+            for req in queue:
+                session.cancelled.extend(req)
+            queue.clear()
     finally:
         gc.unfreeze()
-    # Join before returning. The workers are daemons so the draw loop can exit
-    # promptly, but a daemon dies with the process — quitting right after Enter
-    # would abandon an install mid-write. `store.install` stages atomically, so
-    # the store survives either way; what would not survive is the user's
-    # belief that it finished.
-    for t in workers:
-        t.join(timeout=60)
-    # Installs already happened in-loop; hand back what landed so the caller
-    # can print a summary rather than repeating the work.
-    return done or state["picks"]
+        # Join on every way out. Quitting right after Enter must not leave an
+        # install half-written, nor its result unreported.
+        for t in workers:
+            t.join()
+    return session if session.requested() or session.interrupted else None
 
 
 def _draw_frame(put, th, lay, focus):
@@ -2170,7 +2289,7 @@ def _draw_scopes(put, th, lay, scope, focus):
 
 
 def _draw_rows(put, th, lay, found, sel, selected, filt, focus,
-               describe, categories, installed_names, copies=None,
+               describe, categories, installed, copies=None,
                status=None, scope="all", hidden=0, filters=None):
     """The result list. Returns how many rows fit, for page-up/down.
 
@@ -2219,8 +2338,8 @@ def _draw_rows(put, th, lay, found, sel, selected, filt, focus,
             row_attr or th["check"])
         # The state mark carries the whole install lifecycle (◐ / ✗ / ●),
         # from the same glyph table the detail pane reports with.
-        st = (status or {}).get(e["name"], (None, ""))[0]
-        glyph, role = browse.state_glyph(st, e["name"] in installed_names)
+        st = (status or {}).get(_desc_key(e), (None, ""))[0]
+        glyph, role = browse.state_glyph(st, _row_installed(e, installed))
         put(y, x + 1, glyph, row_attr or th[role])
         nx = lay.list_x + _NAME_X
         namew = max(4, min(len(e["name"]), lw - _NAME_X - 2))
@@ -2323,14 +2442,14 @@ def _draw_picker(put, th, lay, p):
 _DETAIL_ROLE_KEYS = {"title": "detail_name", "desc": "value", "ok": "ok_line"}
 
 
-def _draw_detail(put, th, lay, entry, dscroll, focus, installed_names,
+def _draw_detail(put, th, lay, entry, dscroll, focus, installed,
                  status=None, install_to=None, categories=None):
     """The right-hand panel. Returns the clamped scroll offset."""
-    st, msg = (status or {}).get(entry["name"], (None, ""))
+    st, msg = (status or {}).get(_desc_key(entry), (None, ""))
     # -3, not -2: one column of left padding, and one on the right reserved for
     # the scrollbar. At -2 a wrapped sentence ran into the thumb.
     lines = browse.detail_lines(entry, width=max(8, lay.detail_w - 3),
-                                installed=entry["name"] in installed_names,
+                                installed=_row_installed(entry, installed),
                                 state=st, message=msg, install_to=install_to,
                                 categories=categories)
     visible = max(0, lay.body_h)
@@ -2347,7 +2466,9 @@ def _draw_detail(put, th, lay, entry, dscroll, focus, installed_names,
         for role, text in line:
             key = _DETAIL_ROLE_KEYS.get(role, role)
             put(y, x, text, th[key] if key in th else th["field"])
-            x += len(text)
+            # Columns, not codepoints: after a CJK label span the next span
+            # started inside it, half a line to the left of where it drew.
+            x += out.visible_len(text)
     if len(lines) > visible and visible > 0:
         bar = _scrollbar(len(lines), visible, dscroll)
         if bar:
@@ -2380,12 +2501,48 @@ def _print_categories(entries, categories, by_count=False) -> int:
     return 0
 
 
+def _report_browse_session(session: browse.InstallSession) -> int:
+    """What the browser's in-place installs did, said once the curses screen
+    is gone, in ``boost install``'s words.
+
+    Each landed item gets the canonical install report
+    (:func:`pkg._report_result`) — the injection and secret scan, and the MCP
+    offer, which prompts and so could not run under curses. A refused or
+    failed pick is named on stderr with its hint and makes the exit 1, as
+    ``boost install`` does; before this the refusal lived only in a pane that
+    had already closed, and the exit was 0. An interrupt names what it
+    cancelled, then re-raises so the exit code stays the interrupt's.
+    """
+    from .pkg import _report_prerequisites, _report_result
+    for role, text in dict.fromkeys(session.notes):
+        (out.warn if role == "warn" else out.info)(text, wrap=True)
+    for entry, res in session.installed:
+        out.ok("installed %s v%s (%s)" % (entry["name"],
+                                          out.plain(entry.get("version", "?")),
+                                          entry.get("tap", "")))
+        _report_result(res)
+    if session.installed:
+        _report_prerequisites(session.landed())
+    for entry, message, hint in session.failed:
+        out.warn("%s: %s" % (entry["name"], message), stream=sys.stderr,
+                 wrap=True)
+        if hint:
+            out.info("  " + hint, stream=sys.stderr, wrap=True)
+    if session.cancelled:
+        out.warn("interrupted — not installed: %s"
+                 % ", ".join(e["name"] for e in session.cancelled),
+                 stream=sys.stderr, wrap=True)
+    if session.interrupted is not None:
+        raise session.interrupted
+    return session.exit_code()
+
+
 def cmd_browse(argv):
     """Full-screen fuzzy browser over every catalog entry."""
     p = cliparse.parser(
         prog="boost browse",
         description="Interactive full-screen TUI with fuzzy search")
-    p.add_argument("--category", default="",
+    p.add_argument("--category", type=util.nonempty_str,
                    help="open on one category (case-insensitive); ^G switches")
     p.add_argument("--categories", action="store_true",
                    help="list the categories and how many items each holds, A–Z")
@@ -2420,7 +2577,7 @@ def cmd_browse(argv):
     try:
         # The whole catalogue, not `narrowed`: the category is a filter the
         # browser can lift, so it needs the rows outside it too.
-        picked = _browse_tui(curses, entries, category=args.category)
+        session = _browse_tui(curses, entries, category=args.category or "")
     except curses.error as e:
         # An fd that claims isatty() but isn't a real pty (IDE run consoles,
         # `script`, TERM=dumb) can fail deep inside curses.wrapper's own
@@ -2430,45 +2587,9 @@ def cmd_browse(argv):
         # normal terminal, not a hosed one.
         return _browse_plain(narrowed,
                              "the terminal does not support curses (%s)" % e)
-    if not picked:
+    if session is None:
         return 0
-    # The browser installs in place now, so anything it hands back is usually
-    # already on disk. Install only what still needs it — that keeps this path
-    # correct whether the TUI did the work or merely picked.
-    settled = set(store.installed())
-    staged = [e for e in picked if e["name"] in settled]
-    for entry in staged:
-        out.ok("installed %s v%s" % (entry["name"], entry.get("version", "?")))
-    for entry in [e for e in picked if e["name"] not in settled]:
-        try:
-            res = store.install(entry)
-        except BoostError as e:
-            # browse lists every catalog kind (skills, rules, workflows), but
-            # only skills install; a rule/workflow pick — or an already-
-            # installed/pinned skill — must not abort the rest of the batch.
-            out.warn(e.message)
-            if e.hint:
-                out.info(out.c(e.hint, out.DIM))
-            continue
-        out.ok("installed %s v%s → %s"
-               % (entry["name"], entry["version"], _tilde(res.dest)))
-        if res.linked:
-            out.info("linked into: "
-                     + ", ".join(agents.display_name(a) for a in res.linked))
-        for conflict in res.conflicts:
-            out.warn("conflict: %s exists and is not a symlink" % _tilde(conflict))
-        for adir in res.unwritable:
-            out.warn("not %s: %s — %s, then `boost sync`"
-                     % ("linked" if res.kind == "skill" else "written",
-                        *store.unwritable_refusal(adir)), wrap=True)
-        for adir, block in res.blocked:
-            out.warn("not %s: %s — %s, then `boost sync`"
-                     % ("linked" if res.kind == "skill" else "written",
-                        *store.link_refusal(adir, block)), wrap=True)
-        for adir in res.unlinkable:
-            out.warn("not linked: %s — %s, then `boost sync`"
-                     % store.symlink_refusal(adir), wrap=True)
-    return 0
+    return _report_browse_session(session)
 
 
 def cmd_trending(argv):
@@ -2569,7 +2690,7 @@ def cmd_stats(argv):
     p = cliparse.parser(
         prog="boost stats",
         description="Install statistics & trend for a single skill")
-    p.add_argument("name", help="skill name")
+    p.add_argument("name", type=util.nonempty_str, help="skill name")
     p.add_argument("--json", action="store_true", dest="as_json",
                    help="machine-readable output")
     args = p.parse_args(argv)
@@ -2603,9 +2724,8 @@ def cmd_stats(argv):
         raise BoostError("no skill named %r installed or in any tap" % args.name,
                         hint=catalog.join_hints(catalog.search_hint(name),
                                                 catalog.stale_commit_hint()))
-    acts = {a: len(catalog.events_for_tap(
-                journal.events(action=a, subject=name), qualifier, lock))
-            for a in ("install", "update", "uninstall")}
+    acts = journal.activity_counts(catalog.events_for_tap(
+        journal.events(subject=name), qualifier, lock))
     latest = cat["version"] if cat else None
     upstream = None
     if cat:
@@ -2674,8 +2794,10 @@ def cmd_stats(argv):
         # all, where the qualified spelling just resolved to this one.
         out.info(out.role("not installed — `boost install %s`"
                           % out.plain(args.name), "muted"))
-    out.kv("activity", "%d installs · %d updates · %d uninstalls"
-           % (acts["install"], acts["update"], acts["uninstall"]))
+    out.kv("activity", "%d installs · %d updates · %d reinstalls · "
+           "%d uninstalls" % (acts["install"], acts["update"],
+                              acts["reinstall"], acts["uninstall"]),
+           wrap=True)
     if lock and latest:
         if newer:
             out.kv("latest", "%s %s" % (latest, out.role("(update available)", "warn")))

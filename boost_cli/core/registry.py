@@ -6,7 +6,6 @@ from __future__ import annotations
 import difflib
 import os
 import re
-import shlex
 import sys
 import time
 import urllib.parse
@@ -148,6 +147,15 @@ def parse_spec(spec: str):
     Accepts: owner/repo | full git URL | existing local path.
     """
     spec = spec.strip().rstrip("/")
+    # An empty spec is Path(""), which is the current directory: `boost tap
+    # "$REPO"` with REPO unset tapped whatever repo the script ran in, rc 0.
+    # The CLI refuses "" at parse time; this covers every other caller
+    # (add_many, a Boostfile line), and the whitespace-only and bare-"/"
+    # spellings that strip down to nothing here.
+    if not spec:
+        raise BoostError(
+            "tap spec is empty",
+            hint="use owner/repo, a git URL, or a local directory")
     # Reject control characters HERE, at the parse boundary, rather than letting
     # them travel. A NUL cannot appear in a GitHub owner/repo, a git URL or a
     # usable directory name, so nothing legitimate is turned away — but accepted,
@@ -173,7 +181,7 @@ def parse_spec(spec: str):
     if local is not None and _looks_like_a_directory(local):
         p = local
     if _looks_like_a_directory(p):
-        if not gitutil.is_repo(p):
+        if not gitutil.is_repo_root(p):
             # The dir exists, so git's own "repository '...' does not exist"
             # (which is what `clone_shallow` would raise next) is a false
             # statement about the very thing this branch just confirmed.
@@ -185,7 +193,12 @@ def parse_spec(spec: str):
         # in a Boostfile line, so `boost tap "my tap"` named it `my tap` and
         # `bundle dump` wrote a `tap my tap …` line that its own `bundle
         # install` read as a tap called `my`.
-        return _checked(_WHITESPACE.sub("-", p.resolve().name),
+        # A bare repo's directory conventionally ends in `.git`, which the
+        # URL branch below already drops from a name — `fx.git` and
+        # `file://…/fx.git` and `https://…/fx.git` are all tap `fx`.
+        dirname = p.resolve().name
+        return _checked(_WHITESPACE.sub("-", dirname.removesuffix(".git")
+                                        or dirname),
                         str(p.resolve()), spec)
     # A spec shaped like a path (starts with ./, ../, ~, or a root separator,
     # or is absolute) that is not an actual directory must not fall through to
@@ -483,6 +496,47 @@ def unfinished_clones() -> list[Path]:
                   and not gitutil.head_commit(d))
 
 
+#: The staging dir a re-clone fills beside the tap (see `_reclone`). Not a
+#: tap of its own, so a killed run's leftover is never offered `boost tap`.
+RECLONE_SUFFIX = ".boost-reclone"
+
+
+def unlisted_clones() -> list[tuple[Path, str]]:
+    """Real clones under `repos/` that no configured tap lists, with origin URL.
+
+    The complement of :func:`unfinished_clones`: a dir whose HEAD resolves is
+    someone's clone, left serving nothing once config.json lost its row. With
+    the file corrupt every clone is one, and doctor counted them without
+    naming any; after the user re-added the one they remembered, it called
+    the machine healthy over the rest. Empty without git.
+    """
+    root = paths.repos_dir()
+    if not root.is_dir() or not gitutil.has_git():
+        return []
+    listed = {t.path for t in list_taps()}
+    return [(d, gitutil.remote_url(d)) for d in sorted(root.iterdir())
+            if d.is_dir() and d not in listed
+            and not d.name.endswith(RECLONE_SUFFIX) and gitutil.head_commit(d)]
+
+
+def readd_hint(clone: Path, url: str) -> str:
+    """The quoted command that re-adds the unlisted ``clone``, or words for one.
+
+    :func:`retap_hint` with the clone's dir name mapped back to a tap name, so
+    a clone with no origin still gets an honest sentence rather than a
+    command that fails.
+    """
+    hint = retap_hint(clone.name.replace("__", "/"), url)
+    return "`%s`" % hint if hint.startswith("boost tap ") else hint
+
+
+def unlisted_clone_line(clone: Path, url: str) -> str:
+    """The one line doctor and heal print for a :func:`unlisted_clones` row."""
+    return ("%s is a tap clone no configured tap lists, so boost reads "
+            "nothing from it — re-add it with %s, or delete the directory"
+            % (paths.tilde(clone), readd_hint(clone, url)))
+
+
 def broken_clone_line(name: str) -> str:
     """The one line doctor and heal print for a `Tap.is_broken_clone` tap.
 
@@ -492,15 +546,6 @@ def broken_clone_line(name: str) -> str:
     """
     return ("tap %s is not a git repository (its .git is missing) — run "
             "`boost update %s` to re-clone it" % (name, name))
-
-
-def _shell_arg(arg: str) -> str:
-    """`arg` as one argument a user can paste into their shell."""
-    if sys.platform == "win32":
-        # cmd.exe and PowerShell both take double quotes; neither takes the
-        # single quotes `shlex.quote` emits.
-        return '"%s"' % arg if any(c.isspace() for c in arg) else arg
-    return shlex.quote(arg)
 
 
 def retap_hint(name: str, url: str = "") -> str:
@@ -515,7 +560,7 @@ def retap_hint(name: str, url: str = "") -> str:
     command, and anything else gets words rather than a command that fails.
     """
     if url and not url.startswith(WHEEL_SCHEME):
-        return "boost tap %s" % _shell_arg(url)
+        return "boost tap %s" % util.shell_arg(url)
     if url.startswith(WHEEL_SCHEME) or "/" not in name or " " in name:
         return "re-tap %s from its original source (its URL was not recorded)" % name
     return "boost tap %s" % name
@@ -653,6 +698,34 @@ def _append_rows(cfg: dict, rows: list[dict]) -> bool:
             have.add(name_key(row["name"]))
             added = True
     return added
+
+
+#: In every message :func:`pin_missing` builds, so `cmd_update` can tell a tap
+#: whose pin is gone upstream from a dead tap in a sweep's failures -- the
+#: same substring contract as :data:`POLICY_REFUSAL`. `boost untap` is the
+#: wrong advice for it: the repository is alive, only the commit is gone.
+PIN_MISSING = "which is no longer on"
+
+
+def pin_missing_remedy(name: str) -> str:
+    """The two ways out of a pin whose commit upstream no longer has."""
+    return ("`boost update --force %s` re-clones its default branch and drops "
+            "the pin, or re-tap it with `--at <sha>` to pin a commit that "
+            "exists there" % name)
+
+
+def pin_missing(tap: Tap, pin: str, url: str = "") -> BoostError:
+    """The error for a tap pinned at a commit its remote no longer serves.
+
+    git says "not our ref <sha>", and the sweep then advised `boost untap`
+    -- discarding a live tap -- while `boost doctor` sent the user back to
+    the `boost update` that had just failed. `--force`, which works, was
+    never named.
+    """
+    return BoostError(
+        "tap %s is pinned at %s, %s %s (history rewritten upstream?)"
+        % (tap.name, pin[:7], PIN_MISSING, url or tap.url),
+        hint=pin_missing_remedy(tap.name), wrap=True)
 
 
 def _already_configured(name: str, spec: str, at: str | None) -> BoostError:
@@ -802,12 +875,15 @@ def _reclone(tap: Tap, pin: str | None) -> None:
     cannot be checked out still never lands as a tree on HEAD with a stale pin
     beside it: the staging copy is discarded with it.)
     """
-    staging = tap.path.with_name(tap.path.name + ".boost-reclone")
+    staging = tap.path.with_name(tap.path.name + RECLONE_SUFFIX)
     _clear_path(staging)
     try:
         gitutil.clone_shallow(tap.url, staging)
         if pin:
-            gitutil.checkout_commit(staging, pin)
+            try:
+                gitutil.checkout_commit(staging, pin)
+            except gitutil.CommitNotUpstream as err:
+                raise pin_missing(tap, pin, err.url) from err
         # Checked on the staging tree, before it replaces anything: a
         # re-clone is a fresh download, so it gets the same provenance gate
         # `boost tap` applies — or a tap whose clone went missing would come
@@ -1337,8 +1413,11 @@ def update(name: str | None = None,
             # move, so the caller rescans the catalog and resyncs vectors.
             head = off_pin(tap)
             if head:
-                gitutil.checkout_commit(tap.path, tap.pin,
-                                        verify=_signing_guard(tap))
+                try:
+                    gitutil.checkout_commit(tap.path, tap.pin,
+                                            verify=_signing_guard(tap))
+                except gitutil.CommitNotUpstream as err:
+                    raise pin_missing(tap, tap.pin, err.url) from err
                 return ("%s → %s (back on its pin)"
                         % (head[:7], tap.pin[:7]), False)
             return "pinned at %s (skipped)" % tap.pin[:7], False

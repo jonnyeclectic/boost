@@ -4,10 +4,11 @@
 from __future__ import annotations
 
 import json
+import subprocess
 
 import pytest
 
-from boost_cli.core import projectlock
+from boost_cli.core import gitutil, projectlock, util
 from boost_cli.errors import BoostError
 
 
@@ -128,7 +129,9 @@ def test_a_corrupt_lock_is_left_in_place_not_silently_emptied(tmp_path, capsys):
     err = _err(capsys)
     assert "%s: invalid JSON" % p in err
     assert "boost sees no project skills here and will not write over it" in err
-    assert "`git checkout -- .boost/skill-lock.json`" in err
+    # Not a repo, so no checkout is offered: there is nothing for git to restore.
+    assert "git does not track it" in err
+    assert "git -C" not in err
 
 
 def test_a_corrupt_lock_warns_once_per_lock(tmp_path, capsys):
@@ -164,9 +167,8 @@ def test_write_refuses_over_a_corrupt_lock(tmp_path):
         "project lock is corrupt — boost will not write over it (%s)"
         % projectlock.check(tmp_path))
     assert exc.value.hint == (
-        "it is tracked by the repo, so `git checkout -- "
-        ".boost/skill-lock.json` restores the committed copy; or repair the "
-        "JSON by hand")
+        "git does not track it, so there is no committed copy to restore — "
+        "repair the JSON by hand")
     assert p.read_bytes() == b'{"skills": {"a": {}, "b": {}'
     with pytest.raises(BoostError):
         projectlock.remove_skill(tmp_path, "a")
@@ -203,3 +205,56 @@ def test_a_lock_that_is_not_utf8_is_preserved_not_a_crash(tmp_path, capsys):
     assert projectlock.read(tmp_path)["skills"] == {}
     assert p.read_bytes() == b"\xff\xfe"
     assert "%s: not valid UTF-8" % p in _err(capsys)
+
+
+def _git(cwd, *args):
+    subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t",
+                    "-c", "commit.gpgsign=false", *args], cwd=cwd, check=True,
+                   capture_output=True)
+
+
+@pytest.mark.skipif(not gitutil.has_git(), reason="needs git")
+class TestRecoverHint:
+    """The printed checkout must work from wherever it was printed."""
+
+    def test_an_uncommitted_lock_is_not_offered_a_checkout(self, tmp_path):
+        _git(tmp_path, "init", "-q")
+        _corrupt(tmp_path, b"{")
+        assert projectlock.recover_hint(tmp_path) == (
+            "git does not track it, so there is no committed copy to restore "
+            "— repair the JSON by hand")
+
+    def test_a_committed_lock_gets_a_checkout_that_runs_from_a_subdir(
+            self, tmp_path):
+        repo = tmp_path / "rh repo"          # a space, so the path is quoted
+        repo.mkdir()
+        _git(repo, "init", "-q")
+        projectlock.set_skill(repo, "a", _entry())
+        good = projectlock.lock_path(repo).read_bytes()
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "lock")
+        _corrupt(repo, b"{")
+        hint = projectlock.recover_hint(repo)
+        cmd = "git -C %s checkout -- .boost/skill-lock.json" % util.shell_arg(
+            str(repo))
+        assert hint == ("it is tracked by the repo, so `%s` restores the "
+                        "committed copy; or repair the JSON by hand" % cmd)
+        deep = repo / "src" / "deep"
+        deep.mkdir(parents=True)
+        subprocess.run(["git", "-C", str(repo), "checkout", "--",
+                        ".boost/skill-lock.json"], cwd=deep, check=True,
+                       capture_output=True)
+        # Compared parsed: under core.autocrlf (Git for Windows' default) the
+        # checkout writes CRLF, which is whitespace to the JSON reader.
+        assert json.loads(projectlock.lock_path(repo).read_bytes()) == \
+            json.loads(good)
+
+    def test_without_git_nothing_is_offered(self, tmp_path, monkeypatch):
+        _git(tmp_path, "init", "-q")
+        projectlock.set_skill(tmp_path, "a", _entry())
+        _git(tmp_path, "add", "-A")
+        assert gitutil.tracks(tmp_path, projectlock.LOCK_REL)
+        monkeypatch.setattr(gitutil, "has_git", lambda: False)
+        assert not gitutil.tracks(tmp_path, projectlock.LOCK_REL)
+        assert projectlock.recover_hint(tmp_path).startswith(
+            "git does not track it")

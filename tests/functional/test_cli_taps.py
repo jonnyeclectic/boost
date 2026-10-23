@@ -616,9 +616,12 @@ class TestOutdated:
         boost("untap", "gone-tap", "--force")
 
         r = boost("outdated")
-        assert "2 outdated" in r.out
+        # jira-integration's `requires: [commit-messages]` resolves in the
+        # tap that declared it, so its dependency came from gone-tap too and
+        # is the second row whose source went with it.
+        assert "3 outdated" in r.out
         assert "1 upstream" in r.out
-        assert "1 source missing" in r.out
+        assert "2 source missing" in r.out
 
     def test_entry_dropped_after_update_is_removed_upstream(
             self, boost, fixture_tap_src, tmp_path):

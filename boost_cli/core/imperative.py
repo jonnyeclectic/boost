@@ -31,6 +31,35 @@ LIST_RE = re.compile(r"^([-*+]|\d+[.)])\s+")
 
 _NUMBERED_RE = re.compile(r"^\d+[.)]\s+")
 
+# A fenced-code delimiter: up to three spaces of indent, then a run of three
+# or more backticks or tildes (CommonMark).
+_FENCE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
+
+
+def prose_lines(body: str) -> list[str]:
+    """The lines of ``body`` outside fenced code blocks, fences excluded.
+
+    A shell ``# comment`` in a ```` ```bash ```` block is not a heading, and a
+    heredoc's ``1. …`` is not a step: read raw, both surfaced in ``explain``'s
+    outline and as ``simulate``'s ``follow:`` rules. A block closes on a run
+    of its own character at least as long as the one that opened it, with
+    nothing after it; an unclosed block runs to the end of ``body``.
+    """
+    kept: list[str] = []
+    fence = ""
+    for line in body.splitlines():
+        m = _FENCE_RE.match(line)
+        if fence:
+            if (m and m.group(1)[0] == fence[0]
+                    and len(m.group(1)) >= len(fence) and not m.group(2).strip()):
+                fence = ""
+            continue
+        if m:
+            fence = m.group(1)
+            continue
+        kept.append(line)
+    return kept
+
 
 def match(line: str) -> Match | None:
     """Return the ``RULE_RE`` match for ``line`` (modal + rest), or ``None``."""
@@ -60,11 +89,12 @@ def imperative_rules(body: str) -> list[str]:
     """Cleaned, de-duplicated imperative rules from a skill ``body``.
 
     A line that reads as a rule is normalized; a numbered step (``1. …``) with
-    at least two words becomes ``follow: …``. Order is preserved and exact
-    duplicates are dropped.
+    at least two words becomes ``follow: …``. Fenced code is skipped
+    (:func:`prose_lines`). Order is preserved and exact duplicates are
+    dropped.
     """
     rules: list[str] = []
-    for raw in body.splitlines():
+    for raw in prose_lines(body):
         line = raw.strip()
         stripped = LIST_RE.sub("", line)
         numbered = bool(_NUMBERED_RE.match(line))

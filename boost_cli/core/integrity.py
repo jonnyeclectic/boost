@@ -132,13 +132,27 @@ def skill_modified(name: str, entry: dict | None) -> bool:
     The one test both doctors ask, so the CLI and the MCP surface cannot
     disagree about it again: ``boost_doctor`` once checked rules and
     workflows only, and called a hand-edited skill "healthy" while ``boost
-    doctor`` flagged it on the same machine. A quarantined skill is not
-    asked — quarantine is its own report — and :func:`status` already keeps
-    a self-sourced skill, a missing store dir and an unlocked row out.
+    doctor`` flagged it on the same machine. A quarantined skill is asked
+    too, of its held copy (:func:`copy_dir`): `boost verify` failed an edited
+    one while doctor called the machine healthy. :func:`status` already
+    keeps a self-sourced skill, a missing copy and an unlocked row out.
     """
-    if not entry or entry.get("quarantined"):
+    if not entry:
         return False
     return status(name, entry) == STATUS_MODIFIED
+
+
+def held_status(name: str, entry: dict | None) -> str:
+    """:func:`status`, with an intact quarantined skill reading
+    ``STATUS_QUARANTINED`` — the word a quarantined rule or workflow already
+    gets (:func:`materialized_status`), so `verify` labels all three kinds
+    alike. Anything wrong with the held copy keeps its failing status: the
+    quarantine does not launder an edit into a pass.
+    """
+    st = status(name, entry)
+    if (entry or {}).get("quarantined") and st == STATUS_OK:
+        return STATUS_QUARANTINED
+    return st
 
 
 def modified_remedy(name: str, kind: str = "skill",
@@ -166,9 +180,9 @@ def modified_remedy(name: str, kind: str = "skill",
     sidelined skill with "nothing to heal". ``boost reinstall`` refreshes the
     held copy and keeps it aside. ``entry`` defaults to the lock row.
 
-    Except a quarantined one: a reinstall clears ``quarantined`` and relinks
-    the skill, so naming it as the fix for an edited quarantined copy would
-    walk the user out of the quarantine. Its remedy is to review it there.
+    Except a quarantined one: a reinstall refuses it
+    (``store.quarantine_refusal``), and lifting the quarantine is not the fix
+    for an edited held copy. Its remedy is to review it there.
     """
     if scope == scopes.SCOPE_PROJECT:
         return "boost reinstall %s --local" % name, "to discard local edits"
@@ -177,8 +191,8 @@ def modified_remedy(name: str, kind: str = "skill",
             entry = lockfile.get_skill(name)
         if (entry or {}).get("quarantined"):
             return ("boost quarantine --list",
-                    "to review it — it is quarantined, and a reinstall "
-                    "would release it")
+                    "to review it — it is quarantined, so a reinstall "
+                    "waits for `boost quarantine --release`")
         if (not (entry or {}).get("held_at")
                 and not (_store_dir(name) / "SKILL.md").is_file()):
             return "boost heal", "to restore its missing SKILL.md"
@@ -302,12 +316,27 @@ def materialized_status(name: str, entry: dict,
         if not agents.materialization_is_written(kind, entry.get("base"),
                                                  m.get("agent")):
             continue
+        # Written where the agent's dir used to be: the file may be intact,
+        # but the agent reads the new dir, so from where it looks it is gone.
+        if agents.relocated_to(kind, name, entry, m) is not None:
+            return STATUS_MISSING
         p = Path(m.get("path", ""))
         if m.get("mode") == rules.MODE_CLAUDE:
             try:
-                content = rules.read_block(p.read_text(encoding="utf-8"), name)
+                text = p.read_text(encoding="utf-8")
             except OSError:
-                content = None
+                text = None
+            except UnicodeDecodeError:
+                # Bytes that are not UTF-8 are not the text boost wrote, and
+                # the one remedy `verify` names for MODIFIED, a reinstall,
+                # stops at the file with the reason (`util.NotUTF8Error`)
+                # rather than rewriting it. A crash said neither.
+                return STATUS_MODIFIED
+            content = rules.read_block(text, name) if text is not None else None
+            # A second copy of the block is not what boost wrote, whatever the
+            # first one hashes to: the agent reads both, and `verify` said ok.
+            if text is not None and len(rules.block_spans(text, name)) > 1:
+                return STATUS_MODIFIED
         else:
             try:
                 content = p.read_text(encoding="utf-8")
@@ -370,6 +399,8 @@ def locally_edited(kind: str, name: str, entry: dict, base=None) -> bool:
             text = Path(m.get("path", "")).read_text(encoding="utf-8")
         except OSError:
             continue
+        except UnicodeDecodeError:
+            return True  # not what boost wrote: an update must not rewrite it
         content = (rules.read_block(text, name)
                    if m.get("mode") == rules.MODE_CLAUDE else text)
         if content is not None and hashlib.sha256(

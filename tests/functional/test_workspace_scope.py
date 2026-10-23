@@ -1354,11 +1354,18 @@ def test_heal_restores_only_the_missing_copy(boost, tapped, repo):
 def test_heal_exits_1_when_a_project_copy_cannot_be_restored(boost, tapped, repo):
     boost("install", "brainstorming", "--local")
     rows = _copies(repo, "brainstorming")
-    shutil.rmtree(repo / rows[0])
     # Point the row at a tap boost does not have, so nothing can restore it.
     entry = projectlock.get_skill(repo, "brainstorming")
     projectlock.set_skill(repo, "brainstorming",
                           entry | {"tap": "no-such-tap-heal"})
+    # While an intact copy stands it is the locked content, tap or no tap.
+    shutil.rmtree(repo / rows[0])
+    res = boost("heal")
+    assert ("re-materialized brainstorming from its %s copy" % rows[1]
+            in res.out)
+    assert (repo / rows[0] / "SKILL.md").is_file()
+    for row in rows:
+        shutil.rmtree(repo / row)
     res = boost("heal", expect=1)
     assert "is missing from the project but its source is gone" in res.out + res.err
 
@@ -1368,7 +1375,8 @@ def test_heal_dry_run_warns_and_exits_1_over_an_unrestorable_copy(boost, tapped,
     """A preview must not promise a repair the run then reports as gone."""
     boost("install", "brainstorming", "--local")
     rows = _copies(repo, "brainstorming")
-    shutil.rmtree(repo / rows[0])
+    for row in rows:              # no intact copy to restore from either
+        shutil.rmtree(repo / row)
     entry = projectlock.get_skill(repo, "brainstorming")
     projectlock.set_skill(repo, "brainstorming",
                           entry | {"tap": "no-such-tap-dry"})

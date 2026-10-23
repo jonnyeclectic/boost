@@ -28,6 +28,12 @@ that keep a snapshot honest:
 * **The archived lock is checked before it replaces the live one.** A lock
   that does not parse, or is another schema, emptied every install; one
   written under another ``$HOME`` is rehomed (:func:`lockfile.rehome`).
+  Save applies the same check to the live store (:func:`lock_problem`), so a
+  snapshot save reports as saved is one restore accepts.
+* **A restore replaces skills, not what boost kept for the user.** Store
+  children the caller names in ``carry`` — the lock's ``.corrupt`` backups,
+  a dir the live lock does not record — are carried across the swap. One the
+  archive also holds is moved to ``backup_dir`` and named, never deleted.
 """
 from __future__ import annotations
 
@@ -37,7 +43,7 @@ import os
 import shutil
 import tarfile
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -146,8 +152,10 @@ def archive(root: Path, tar_path: Path,
     back as a real copy); a dangling one is skipped. ``held`` maps a skill name
     to its held copy, archived under :data:`HELD_ARC`; one not on disk is
     skipped. Raises BoostError, and leaves no archive behind, when a member
-    would be refused on restore.
+    would be refused on restore, or when the store's lock would
+    (:func:`check_save`).
     """
+    check_save(root)
     res = ArchiveResult()
     # Checked against an empty directory — what restore extracts into — not
     # the live store: `data_filter` realpaths each member's destination, and
@@ -260,54 +268,166 @@ def _put_held(src: Path, held_root: Path | None) -> list[str]:
 LOCK_NAME = ".skill-lock.json"
 
 
-def check_lock(staging: Path, snap_id: str) -> None:
-    """Refuse an extracted archive whose lock file would empty the store.
+@dataclass
+class RestoreResult:
+    """What :func:`restore` did besides swapping the archive in."""
+
+    #: Held copies put back in the held dir, by skill name.
+    held: list[str] = field(default_factory=list)
+    #: Store children carried across the swap, by name.
+    carried: list[str] = field(default_factory=list)
+    #: Where each carried child the archive also held was moved to.
+    backed_up: list[Path] = field(default_factory=list)
+
+
+def _free_name(d: Path, name: str) -> Path:
+    """``d/name``, or ``d/name.2``, ``.3``, … — the first that is free."""
+    dest, n = d / name, 2
+    while os.path.lexists(dest):
+        dest, n = d / ("%s.%d" % (name, n)), n + 1
+    return dest
+
+
+def _held_back(p: Path) -> bool:
+    """Whether ``p`` is something :func:`_carry` would carry: present, and
+    not a dangling symlink, which holds nothing."""
+    return os.path.lexists(p) and not (p.is_symlink() and not p.exists())
+
+
+def _stranded(scratch: Path, names: Collection[str]) -> list[str]:
+    """The names in ``names`` still parked in ``scratch``."""
+    return [n for n in sorted(names) if _held_back(scratch / n)]
+
+
+def _carry(scratch: Path, root: Path, carry: Collection[str],
+           keep_live: Collection[str], set_aside: Collection[str],
+           backup_dir: Path | None, res: RestoreResult) -> None:
+    """Bring each parked child named in ``carry`` back into ``root``, and
+    move each one in ``set_aside`` to ``backup_dir``.
+
+    A carried child the archive did not hold goes back as it was. One it did
+    is the archive's to fill, unless it is in ``keep_live`` (the live copy
+    wins and the archive's, still in the tarball, is dropped); the live one
+    is then set aside too. A dangling symlink holds nothing and is not kept.
+    Without ``backup_dir`` nothing is set aside: it stays parked.
+    """
+    for name in sorted({*carry, *set_aside}):
+        src = scratch / name
+        if not _held_back(src):
+            continue
+        dst = root / name
+        clash = os.path.lexists(dst)
+        if clash and name in keep_live and name not in set_aside:
+            util.remove_path(dst)
+        elif clash or name in set_aside:
+            if backup_dir is not None:
+                backup_dir.mkdir(parents=True, exist_ok=True)
+                dest = _free_name(backup_dir, name)
+                shutil.move(str(src), str(dest))
+                res.backed_up.append(dest)
+            continue
+        os.replace(src, dst)
+        res.carried.append(name)
+
+
+def lock_problem(root: Path) -> tuple[str, lockfile.Integrity] | None:
+    """Why the lock in ``root`` would empty the store it describes, or None.
 
     A lock that does not parse, has sections that are not maps, or is a
-    schema this boost does not read replaced a good lock, and every install
-    vanished from it: links swept, the restore reported success. So did an
-    archive holding store dirs and no lock at all. An archive with nothing
-    but held copies, or nothing, is a snapshot of an empty store.
+    schema this boost does not read; or no lock at all beside store entries.
+    A dir holding nothing but held copies, or nothing, is an empty store.
+    Returns the reason, worded to follow "it", and the lock's integrity.
     """
-    lock = staging / LOCK_NAME
-    integ = lockfile.check(lock)
+    integ = lockfile.check(root / LOCK_NAME)
     if integ.ok:
-        return
+        return None
     if integ.problem == "missing":
-        if not any(c.name != HELD_ARC for c in staging.iterdir()):
-            return
+        if not any(c.name != HELD_ARC for c in root.iterdir()):
+            return None
         why = "holds skills but no lock file to say which are installed"
     elif integ.problem == "schema":
         why = "has a lock file in schema %r, which this boost does not read" % (
             integ.version,)
     else:
         why = "has a corrupt lock file"
-    raise BoostError("snapshot %s cannot be restored: it %s" % (snap_id, why),
-                     hint=UNTOUCHED_HINT)
+    return why, integ
+
+
+def check_lock(staging: Path, snap_id: str) -> None:
+    """Refuse an extracted archive whose lock file would empty the store.
+
+    A bad lock (:func:`lock_problem`) replaced a good one, and every install
+    vanished from it: links swept, the restore reported success. So did an
+    archive holding store dirs and no lock at all.
+    """
+    problem = lock_problem(staging)
+    if problem is not None:
+        raise BoostError("snapshot %s cannot be restored: it %s"
+                         % (snap_id, problem[0]), hint=UNTOUCHED_HINT)
+
+
+def check_save(root: Path) -> None:
+    """Refuse to archive a store whose lock :func:`check_lock` would refuse.
+
+    The save and restore contracts are one rule: a save over a corrupt or
+    missing lock reported "saved" and how to restore it, and the restore
+    then refused that same snapshot.
+    """
+    problem = lock_problem(root)
+    if problem is not None:
+        why, integ = problem
+        raise BoostError("cannot snapshot the store: it %s" % why,
+                         hint="%s, then save again — a snapshot of it could "
+                              "not be restored" % lockfile.remedy(integ),
+                         wrap=True)
 
 
 def _vet_lock(staging: Path, snap_id: str,
               rehome: Callable[[dict], bool] | None) -> None:
-    """:func:`check_lock`, then ``rehome`` over the staged lock; rewritten in
-    staging when ``rehome`` says it changed something."""
+    """:func:`check_lock`, then ``rehome`` over the staged lock, which is
+    restamped ``updated`` now and rewritten in staging.
+
+    The restamp is what keeps lock history chronological: the next write
+    archives this lock under its ``updated`` (``lockfile._archive_stamp``),
+    and the archive's own, older stamp put the restored state in history
+    beside the state it was saved from, under a colliding id, sorted above
+    entries written after it.
+    """
     check_lock(staging, snap_id)
     lock = staging / LOCK_NAME
-    if rehome is None or not lock.exists():
+    if not lock.exists():
         return
     data = json.loads(lock.read_text(encoding="utf-8-sig"))
-    if rehome(data):
-        util.atomic_write_text(lock, json.dumps(data, indent=2) + "\n")
+    if rehome is not None:
+        rehome(data)
+    data["updated"] = util.now_iso()
+    # Staging is boost's own scratch dir, swapped in whole or not at all, so
+    # a plain write is as safe here as an atomic one.
+    lock.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
 
 def restore(tar_path: Path, root: Path, snap_id: str,
             held_root: Path | None = None,
-            rehome: Callable[[dict], bool] | None = None) -> list[str]:
+            rehome: Callable[[dict], bool] | None = None,
+            before_swap: Callable[[], object] | None = None,
+            carry: Collection[str] = (), keep_live: Collection[str] = (),
+            set_aside: Collection[str] = (),
+            backup_dir: Path | None = None) -> RestoreResult:
     """Replace the contents of ``root`` with the archive at ``tar_path``.
 
     Held copies in the archive go to ``held_root`` once the store swap has
-    succeeded, never into ``root``; returns their names. ``rehome`` is given
+    succeeded, never into ``root``. The children of ``root`` named in
+    ``carry`` are carried across the swap (:func:`_carry`), into
+    ``backup_dir`` when the archive holds that name too; those named in
+    ``set_aside`` always go there. ``rehome`` is given
     the archived lock, parsed, before the swap: it may rewrite it in place
-    (returning True to have it saved) or raise BoostError to refuse.
+    or raise BoostError to refuse. The staged lock is stamped ``updated``
+    now. ``before_swap`` runs once the archive has been vetted, just before
+    ``root`` changes: `snapshot restore` passes
+    :func:`lockfile.record_history`, so the lock it replaces stays in lock
+    history like every other lock change's. It is a parameter, not a call
+    made here, because lock history is the real store's and ``root`` need
+    not be.
 
     Raises — with ``root`` exactly as it was — when the archive cannot be
     opened, is corrupt, holds an entry the ``data`` filter refuses or a lock
@@ -324,6 +444,7 @@ def restore(tar_path: Path, root: Path, snap_id: str,
     scratch = Path(tempfile.mkdtemp(dir=str(parent), prefix=PARKED_PREFIX))
     parked = Path(tempfile.mkdtemp(dir=str(parent), prefix=HELD_PREFIX))
     swapped = False
+    done = False
     try:
         with tf:
             try:
@@ -340,9 +461,23 @@ def restore(tar_path: Path, root: Path, snap_id: str,
         # Out of staging first: everything left there is swapped into the store.
         if os.path.lexists(staging / HELD_ARC):
             os.replace(staging / HELD_ARC, parked / HELD_ARC)
+        # Last thing before the swap, once the archive is known good: the
+        # caller keeps the lock about to be replaced in history here.
+        if before_swap is not None:
+            before_swap()
         _swap_in(staging, root, scratch)
         swapped = True
-        return _put_held(parked / HELD_ARC, held_root)
+        res = RestoreResult(held=_put_held(parked / HELD_ARC, held_root))
+        try:
+            _carry(scratch, root, carry, keep_live, set_aside, backup_dir,
+                   res)
+        except OSError as e:
+            raise BoostError(
+                "restored %s, but could not carry everything boost kept "
+                "beside the skills back into the store: %s" % (snap_id, e),
+                hint="what was not carried is still in %s" % scratch) from e
+        done = not _stranded(scratch, {*carry, *set_aside})
+        return res
     finally:
         for d in (staging, parked):
             with contextlib.suppress(OSError):
@@ -350,8 +485,10 @@ def restore(tar_path: Path, root: Path, snap_id: str,
         # The previous store, until the swap is done: removed whole only
         # then, and otherwise only when empty — a rollback that was itself
         # cut short leaves the user's skills here, not in a deleted dir.
+        # A carry that failed or was declined leaves its child parked: the
+        # parked dir goes whole only once nothing asked for is still in it.
         with contextlib.suppress(OSError):
-            if swapped:
+            if swapped and done:
                 util.rmtree(scratch)
             else:
                 scratch.rmdir()

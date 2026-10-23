@@ -360,3 +360,36 @@ class TestTheKindLabelIsTrueBeforeInstall:
             lambda n: (path, {"tap": "t"}, {"kind": "rule", "tap": "t"}))
         # Installed as a skill, catalog says rule: the lock wins.
         assert info._resolve_text("thing")[1] == "skill"
+
+
+class TestHeldItemsAreMarked:
+    """A quarantined item read as installed and usable on the MCP surface."""
+
+    def test_state_marks(self):
+        assert mcp.state_marks(None) == ""
+        assert mcp.state_marks({}) == ""
+        assert mcp.state_marks({"pinned": True}) == " [pinned]"
+        assert mcp.state_marks({"quarantined": True}) == " [quarantined]"
+        assert mcp.state_marks({"sidelined_by": "focus"}) == " [sidelined]"
+        assert mcp.state_marks({"pinned": True, "quarantined": True,
+                                "sidelined_by": "focus"}) == (
+            " [pinned] [quarantined]")
+
+    def test_held_line(self):
+        assert mcp.held_line("x", None) is None
+        assert mcp.held_line("x", {"quarantined": False}) is None
+        assert mcp.held_line("x", {"quarantined": True}) == (
+            "quarantined: yes — no agent loads it; `boost quarantine "
+            "--release x` puts it back")
+        assert mcp.held_line("x", {"sidelined_by": "focus"}) == (
+            "sidelined: yes (by `boost focus`) — no agent loads it")
+
+    def test_read_reply_header_carries_it(self):
+        held = mcp.held_line("x", {"quarantined": True})
+        text = mcp.read_reply("x", "body", installed=True, held=held)
+        assert text.split("\n\n")[0] == (
+            "name: x\ninstalled: yes\n%s" % held)
+        # Only an installed item can be held.
+        assert "quarantined" not in mcp.read_reply("x", "body", held=held)
+        assert mcp.read_reply("x", "body", installed=True).split(
+            "\n\n")[0] == "name: x\ninstalled: yes"

@@ -181,3 +181,117 @@ class TestCli:
         boost("clean")
         assert not stage.exists()
         assert (old / "SKILL.md").read_text(encoding="utf-8") == "x"
+
+
+def _write_temp(d, name=".boost-xa4ws0pm.tmp", mtime=OLD):
+    d.mkdir(parents=True, exist_ok=True)
+    p = d / name
+    p.write_text("my notes\n", encoding="utf-8")
+    os.utime(p, (mtime, mtime))
+    return p
+
+
+def _record_rule(path):
+    """A lock row for a rule whose block lives in ``path``."""
+    from boost_cli.core import lockfile
+    lockfile.set_rule("strict-types", {
+        "version": "1.0.0", "tap": "t", "materializations": [
+            {"agent": "claude-code", "mode": "claude", "path": str(path)}]})
+
+
+class TestBesideAtomicWrites:
+    """A kill inside ``_replace_atomically`` leaves its temp beside the
+    target, not in the store: next to config.json, a tap cache, CLAUDE.md."""
+
+    def test_one_beside_config_and_one_in_the_cache_are_found(self, sandbox):
+        cfg = _write_temp(paths.boost_home(), ".boost-uw0p55pp.tmp")
+        cache = _write_temp(paths.cache_dir(), ".boost-big12345.tmp")
+        assert store.stale_temps(NOW) == sorted(
+            [(cfg, "stale temp file"), (cache, "stale temp file")])
+        assert store.STALE_TEMP_FILE == "stale temp file"
+
+    def test_one_beside_a_recorded_context_file_is_found(self, sandbox):
+        claude_md = paths.home() / ".claude" / "CLAUDE.md"
+        tmp = _write_temp(claude_md.parent)
+        assert store.stale_temps(NOW) == []        # nothing records the dir
+        _record_rule(claude_md)
+        assert store.stale_temps(NOW) == [(tmp, "stale temp file")]
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privilege")
+    def test_one_beside_a_symlinked_context_files_target(self, sandbox):
+        real = paths.home() / "dotfiles" / "CLAUDE.md"
+        real.parent.mkdir()
+        real.write_text("x\n", encoding="utf-8")
+        link = paths.home() / ".claude" / "CLAUDE.md"
+        link.parent.mkdir()
+        link.symlink_to(real)
+        _record_rule(link)
+        tmp = _write_temp(real.parent)
+        assert store.stale_temps(NOW) == [(tmp, "stale temp file")]
+
+    def test_same_gates_as_the_store(self, sandbox):
+        d = paths.boost_home()
+        _write_temp(d, ".boost-aaaaaaaa.tmp", mtime=NOW - store.STALE_TEMP_AGE)
+        _write_temp(d, ".boost-abcdefg.tmp")             # 7 chars
+        _write_temp(d, "notes.tmp")                      # the user's
+        (d / ".boost-abcdefgh.tmp.d").mkdir()
+        (d / ".boost-zzzzzzzz").mkdir()                  # staging: store only
+        os.utime(d / ".boost-zzzzzzzz", (OLD, OLD))
+        assert store.stale_temps(NOW) == []
+        old = d / ".boost-bbbbbbbb.tmp"
+        old.mkdir()                                      # a dir, not a file
+        os.utime(old, (OLD, OLD))
+        assert store.stale_temps(NOW) == []
+
+    def test_the_store_is_scanned_once(self, sandbox):
+        p = _make(".boost-lcfrfiee.tmp")
+        _record_rule(paths.store_dir() / "CLAUDE.md")   # a row in the store
+        assert store.stale_temps(NOW) == [(p, "stale temp file")]
+        assert paths.store_dir() not in store.atomic_write_dirs()
+
+    def test_the_dirs_are_boosts_own_then_each_rows(self, sandbox):
+        claude_md = paths.home() / ".claude" / "CLAUDE.md"
+        _record_rule(claude_md)
+        dirs = store.atomic_write_dirs()
+        assert dirs == [d for d in paths.boost_dirs()
+                        if d != paths.store_dir()] + [claude_md.parent]
+
+    @pytest.mark.parametrize("recorded", ["", "CLAUDE.md"])
+    def test_a_relative_row_names_no_dir(self, sandbox, recorded,
+                                         monkeypatch):
+        # Its parent is ``.``: clean would delete from wherever it ran.
+        cwd = paths.home() / "somewhere"
+        tmp = _write_temp(cwd)
+        monkeypatch.chdir(cwd)
+        _record_rule(recorded)
+        assert store.atomic_write_dirs() == [
+            d for d in paths.boost_dirs() if d != paths.store_dir()]
+        assert tmp not in [p for p, _kind in store.stale_temps(NOW)]
+
+
+class TestBesideAtomicWritesCli:
+    def test_doctor_names_each_dir_heal_names_them_clean_removes_them(
+            self, boost, installed):
+        cfg = _write_temp(paths.boost_home(), ".boost-uw0p55pp.tmp",
+                          mtime=1_000_000_000.0)
+        claude_md = paths.home() / ".claude" / "CLAUDE.md"
+        _record_rule(claude_md)
+        ctx = _write_temp(claude_md.parent, mtime=1_000_000_000.0)
+        flat = " ".join(boost("doctor", expect=1).out.split())
+        assert ("1 stale temp file a killed boost left in ~/.boost "
+                "(.boost-uw0p55pp.tmp) — `boost clean` removes it") in flat
+        assert ("1 stale temp file a killed boost left in ~/.claude "
+                "(.boost-xa4ws0pm.tmp) — `boost clean` removes it") in flat
+        r = boost("heal", "--dry-run", expect=None)
+        assert ("2 stale temp files or staging dirs a killed boost left "
+                "(~/.boost/.boost-uw0p55pp.tmp, ~/.claude/.boost-xa4ws0pm.tmp)"
+                " — `boost clean` removes them") in " ".join(r.err.split()
+                                                             + r.out.split())
+        r = boost("clean", "--dry-run")
+        assert ("would remove ~/.boost/.boost-uw0p55pp.tmp (stale temp file)"
+                in r.out)
+        assert ("would remove ~/.claude/.boost-xa4ws0pm.tmp (stale temp file)"
+                in r.out)
+        boost("clean")
+        assert not cfg.exists() and not ctx.exists()
+        assert "stale temp" not in boost("doctor", expect=None).out

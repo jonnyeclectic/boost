@@ -473,7 +473,13 @@ def materialize(repo: Path, rel_dir: str) -> None:
 
     Uses `add`, never `set`: `set` replaces the pattern list and would un-fetch
     every previously materialized skill. A no-op on full clones (including every
-    clone made before taps went sparse) and when `rel_dir` is the repo root.
+    clone made before taps went sparse).
+
+    A skill at the repo root (``rel_dir`` ``"."``) owns the whole tree, so the
+    cone widens to ``/*``. This was once a no-op on the theory that the root
+    needs no narrowing, but a sparse clone's root holds only Markdown: the
+    skill's ``scripts/`` installed as nothing while verify, drift and doctor
+    all called the copy healthy.
 
     An unreadable sparse-checkout file falls through to the git-config check
     rather than returning early: degrading to slower-but-correct is fine, and
@@ -481,9 +487,11 @@ def materialize(repo: Path, rel_dir: str) -> None:
     prevent.
     """
     rel = rel_dir.strip("/")
-    if not rel or rel == ".":
-        return
-    patterns = ["/%s/*" % sparse_escape(form) for form in _spellings(rel)]
+    if rel in ("", "."):
+        rel = "."
+        patterns = ["/*"]
+    else:
+        patterns = ["/%s/*" % sparse_escape(form) for form in _spellings(rel)]
     have = _sparse_list(repo)
     if have is not None and all(p in have for p in patterns):
         return
@@ -531,19 +539,55 @@ def _require_checked_out(repo: Path, rel: str) -> None:
     # Normalization only, never case: on a case-sensitive clone
     # ``skills/Lint`` is another skill, rightly left outside the checkout
     # that widened ``skills/lint``.
-    want = unicodedata.normalize("NFC", rel) + "/"
+    # The root (``"."``) owns every path, so any skip-worktree file fails it.
+    # ``rel`` itself matches too: a link may lead to a file.
+    want = unicodedata.normalize("NFC", rel)
+
+    def under(path: str) -> bool:
+        path = unicodedata.normalize("NFC", path)
+        return rel == "." or path == want or path.startswith(want + "/")
+
     skipped = [rec[2:] for rec in (proc.stdout or "").split("\0")
-               if rec.startswith("S ")
-               and unicodedata.normalize("NFC", rec[2:]).startswith(want)]
+               if rec.startswith("S ") and under(rec[2:])]
     if skipped:
         raise BoostError(
             "could not check out %d file%s of %s from the %s tap (%s), so "
             "installing it would copy a partial skill"
-            % (len(skipped), "" if len(skipped) == 1 else "s", rel, repo.name,
+            % (len(skipped), "" if len(skipped) == 1 else "s",
+               "the repo root" if rel == "." else rel, repo.name,
                ", ".join(sorted(skipped)[:5])),
             hint="`boost update %s` and try again; if it persists, the tap's "
                  "sparse checkout cannot match this path" % repo.name,
             wrap=True)
+
+
+#: The index mode of a gitlink: a submodule's commit, not a tree or a blob.
+GITLINK_MODE = "160000"
+
+
+def gitlinks(repo: Path, rel_dir: str) -> list[str]:
+    """Repo-relative paths under ``rel_dir`` that are git submodules.
+
+    boost never runs ``submodule update`` — a tap is a shallow clone of one
+    repo — so a submodule checks out as an empty directory, and a skill whose
+    ``scripts/`` is one installed as nothing, reported as a success. Read from
+    the index (``ls-files -s``, mode ``160000``), which knows a gitlink
+    whether or not the sparse cone holds its path. Empty when ``repo`` is not
+    a git checkout git can read: nothing can be said about it, and the
+    install that follows reports its own failures.
+    """
+    rel = rel_dir.strip("/")
+    spec = [] if rel in ("", ".") else ["--", rel]
+    proc = run([*_RAW_PATHS, "-C", str(repo), "ls-files", "-s", "-z", *spec],
+               check=False)
+    if proc.returncode != 0:
+        return []
+    found: list[str] = []
+    for rec in (proc.stdout or "").split("\0"):
+        meta, _tab, path = rec.partition("\t")
+        if path and meta.split(" ", 1)[0] == GITLINK_MODE:
+            found.append(path)
+    return sorted(found)
 
 
 def materialize_paths(repo: Path, rels: list[str]) -> None:
@@ -555,6 +599,10 @@ def materialize_paths(repo: Path, rels: list[str]) -> None:
     to a file the cone never fetched. Each path is added as itself and as a
     directory (``/p`` and ``/p/*``), since a link may name either. One `add`
     for all of them, never `set`, and a no-op on a full clone.
+
+    Each path is then checked as :func:`materialize` checks a skill's dir: a
+    pattern git stored but did not match would leave the target
+    skip-worktree, and the copy would hold whatever happened to be on disk.
     """
     patterns: list[str] = []
     for rel in rels:
@@ -568,6 +616,10 @@ def materialize_paths(repo: Path, rels: list[str]) -> None:
     if not patterns or not is_sparse(Path(repo)):
         return
     _sparse_add(Path(repo), patterns, ", ".join(rels))
+    for rel in rels:
+        rel = rel.strip("/")
+        if rel and rel != ".":
+            _require_checked_out(Path(repo), rel)
 
 
 _CORE_IGNORECASE = re.compile(
@@ -847,6 +899,31 @@ def head_commit(repo: Path) -> str:
     return proc.stdout.strip() if proc.returncode == 0 else ""
 
 
+#: git's words, lowercased, for a fetch by SHA of a commit the remote does not
+#: serve: `upload-pack` over file/ssh ("not our ref"), the smart-HTTP protocol
+#: ("unadvertised object") and a protocol-v2 server ("couldn't find remote
+#: ref"). After a force-push and gc upstream, a pinned commit is simply gone.
+_MISSING_COMMIT = ("not our ref", "unadvertised object",
+                   "couldn't find remote ref")
+
+
+class CommitNotUpstream(BoostError):
+    """A commit asked for by SHA is not on the remote any more (or never was).
+
+    Its own type so a caller that knows *why* it wanted the commit -- a tap's
+    pin -- can say so and name the remedy that works, rather than relaying
+    git's "fatal: git upload-pack: not our ref <sha>".
+    """
+
+    def __init__(self, sha: str, url: str):
+        self.sha, self.url = sha, url
+        super().__init__(
+            "commit %s is not on %s (history rewritten upstream?)"
+            % (sha[:7], url),
+            hint="pin a commit that exists there, or tap without `--at` to "
+                 "follow its default branch", wrap=True)
+
+
 def checkout_commit(repo: Path, sha: str,
                     verify: Callable[[str], None] | None = None) -> None:
     """Detach `repo` at `sha`, fetching that commit first if it is absent.
@@ -868,8 +945,13 @@ def checkout_commit(repo: Path, sha: str,
     have = run(["-C", str(repo), "cat-file", "-e", sha + "^{commit}"],
                check=False)
     if have.returncode != 0:
-        run(["-C", str(repo), "fetch", "--quiet", *_depth(repo),
-             "--filter=blob:none", "origin", sha])
+        fetched = run(["-C", str(repo), "fetch", "--quiet", *_depth(repo),
+                       "--filter=blob:none", "origin", sha], check=False)
+        if fetched.returncode != 0:
+            text = fetched.stderr or fetched.stdout or ""
+            if any(m in text.lower() for m in _MISSING_COMMIT):
+                raise CommitNotUpstream(sha, remote_url(repo) or "its remote")
+            raise BoostError("git fetch failed: %s" % _git_error(text))
     if verify is not None:
         # As in `pull`: the commit is checked while the tree is still on the
         # old one, so a refusal moves nothing.
@@ -889,6 +971,19 @@ def _is_sha(value: str) -> bool:
     then refuse with a confusing commit mismatch.
     """
     return len(value) == 40 and all(c in "0123456789abcdef" for c in value.lower())
+
+
+def tracks(repo: Path, rel: str) -> bool:
+    """Whether git at ``repo`` tracks ``rel``, so `git checkout -- rel` restores it.
+
+    False without git or outside a work tree, never raising: it decides which
+    remedy a message offers, and a checkout git cannot do is no remedy.
+    """
+    if not has_git():
+        return False
+    proc = run(["-C", str(repo), "ls-files", "--error-unmatch", "--", rel],
+               check=False)
+    return proc.returncode == 0
 
 
 def remote_url(repo: Path) -> str:
@@ -1040,3 +1135,27 @@ def log_entries(repo: Path, rel_path: str = ".", n: int = 20) -> list[dict]:
 def is_repo(path: Path) -> bool:
     """Return True when `path` contains a `.git` entry."""
     return (Path(path) / ".git").exists()
+
+
+def is_repo_root(path: Path) -> bool:
+    """True when `path` is itself a git repository, bare or with a worktree.
+
+    :func:`is_repo` asks for a ``.git`` entry, which every bare repository
+    (``git clone --bare``, the usual shape of a local or self-hosted remote)
+    lacks — so `boost tap <dir>.git` called a valid repo "not a git
+    repository" and suggested `git init` on it. ``rev-parse --git-dir`` alone
+    over-accepts: run from a subdirectory of a repo it answers with the
+    parent's git dir, and that subdirectory is not something git can clone.
+    So the git dir must be ``path`` itself (bare) or ``path/.git``. Both sides
+    are resolved: on macOS a ``/var/folders`` path resolves to ``/private/var``.
+    """
+    p = Path(path)
+    if (p / ".git").exists():
+        return True
+    proc = run(["-C", str(p), "rev-parse", "--absolute-git-dir"], check=False)
+    if proc.returncode != 0:
+        return False
+    try:
+        return Path(proc.stdout.strip()).resolve() == p.resolve()
+    except OSError:
+        return False

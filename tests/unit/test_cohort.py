@@ -127,3 +127,25 @@ class TestLoad:
         data, err = cohort.load(p)
         assert data == {}
         assert err.startswith("%s: " % p)
+
+
+class TestFailedMembers:
+    def test_summary_names_failures_last(self):
+        assert cohort.apply_summary(1, 2, 3, 4) == (
+            "applied: 1 installed, 2 already present, 3 not found, 4 failed")
+
+    def test_summary_without_failures_is_unchanged(self):
+        assert cohort.apply_summary(1, 0, 0, 0) == (
+            "applied: 1 installed, 0 already present")
+
+    def test_summary_failure_without_missing(self):
+        assert cohort.apply_summary(0, 0, 0, 1) == (
+            "applied: 0 installed, 0 already present, 1 failed")
+
+    def test_any_failure_is_one_even_beside_installs(self):
+        assert cohort.apply_exit_code(5, 5, 0, 1) == 1
+        assert cohort.apply_exit_code(0, 0, 0, 1) == 1
+
+    def test_no_failure_keeps_the_old_rule(self):
+        assert cohort.apply_exit_code(1, 0, 1, 0) == 0
+        assert cohort.apply_exit_code(0, 0, 1, 0) == 1

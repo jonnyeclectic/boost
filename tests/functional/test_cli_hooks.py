@@ -257,9 +257,11 @@ class TestHooksRobustness:
 
     def test_an_all_whitespace_name_is_refused(self, boost, sandbox):
         r = boost("hooks", "add", "Stop", "-c", "x", "-n", "   ",
-                  "-s", "global", expect=None)
-        assert r.rc != 0
-        assert "needs --name" in r.out + r.err
+                  "-s", "global", expect=2)
+        # Refused at parse time now, by the shared `util.nonempty_str` type,
+        # before the handler's own "needs --name" check is reached.
+        assert r.err.splitlines()[0] == ("Error: argument -n/--name: "
+                                         "must not be empty")
         assert not cs.settings_path("global").exists()
 
     def test_doctor_list_and_remove_survive_a_string_hook_entry(

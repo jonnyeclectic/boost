@@ -279,6 +279,63 @@ class TestScanRulesAndWorkflows:
         assert e["kind"] == "workflow"
         assert e["name"] == "review"
 
+    def test_a_commands_frontmatter_name_does_not_rename_it(self, tmp_path):
+        # Claude Code names a command after its file and ignores `name` on
+        # one; installing this as `code-review-helper` left no `/review`.
+        root = tmp_path / "tap"
+        (root / "commands").mkdir(parents=True)
+        (root / "commands" / "review.md").write_text(
+            "---\nname: Code Review Helper\ndescription: Review code\n---\nX\n",
+            encoding="utf-8")
+        (e,) = catalog.scan_dir(root)
+        assert e["name"] == "review"
+        assert e["meta"]["name"] == "Code Review Helper"
+
+    def test_a_namespaced_command_keeps_its_namespace(self, tmp_path):
+        root = tmp_path / "tap"
+        for ns in ("frontend", "backend"):
+            (root / "commands" / ns).mkdir(parents=True)
+            (root / "commands" / ns / "test.md").write_text(
+                "---\ndescription: %s tests\n---\nX\n" % ns, encoding="utf-8")
+        (root / "commands" / "a" / "b").mkdir(parents=True)
+        (root / "commands" / "a" / "b" / "deep.md").write_text(
+            "---\ndescription: d\n---\nX\n", encoding="utf-8")
+        names = sorted(e["name"] for e in catalog.scan_dir(root))
+        assert names == ["a/b/deep", "backend/test", "frontend/test"]
+
+    def test_namespace_parts_are_slugged_one_by_one(self, tmp_path):
+        root = tmp_path / "tap"
+        (root / "commands" / "My Space").mkdir(parents=True)
+        (root / "commands" / "My Space" / "do it.md").write_text(
+            "---\ndescription: d\n---\nX\n", encoding="utf-8")
+        (e,) = catalog.scan_dir(root)
+        assert e["name"] == "my-space/do-it"
+
+    @pytest.mark.parametrize("rel, want", [
+        ("commands/review.md", "review"),
+        ("commands/frontend/test.md", "frontend/test"),
+        ("plugins/x/commands/test.md", "test"),
+        ("workflows/ci/run.md", "ci/run"),
+        ("Commands/Front/t.md", "Front/t"),
+        ("loose.md", "loose"),
+        ("agents/helper.md", None),
+        ("commands/agents/helper.md", None),
+    ])
+    def test_command_name(self, rel, want):
+        assert catalog.command_name(rel) == want
+
+    def test_a_subagent_still_takes_its_frontmatter_name(self, tmp_path):
+        root = tmp_path / "tap"
+        (root / "agents" / "team").mkdir(parents=True)
+        (root / "agents" / "team" / "b.md").write_text(
+            "---\nname: backend-architect\ndescription: d\n---\nX\n",
+            encoding="utf-8")
+        (e,) = catalog.scan_dir(root)
+        assert e["name"] == "backend-architect"
+
+    def test_the_cache_format_moved_so_old_caches_rescan(self):
+        assert catalog.CACHE_FORMAT >= 8
+
     def test_workflow_under_claude_agents_dir(self, tmp_path):
         root = tmp_path / "tap"
         (root / ".claude" / "agents").mkdir(parents=True)
@@ -1015,6 +1072,15 @@ class TestResolveOne:
         assert "--path" in ei.value.hint
         assert ("boost install MemPalace/mempalace:mempalace --path "
                 "skills/mempalace") in ei.value.hint
+
+    def test_a_namespaced_typo_is_a_miss_not_the_path_grammar(self, sandbox):
+        # `frontend/test` is a real name now (a namespaced command), so a
+        # slash in the tail is only the grammar misread when its leaf exists.
+        _fake_taps(("t", [_entry("frontend/test", "t", rel_dir="commands/frontend")]))
+        with pytest.raises(BoostError) as ei:
+            catalog.resolve_one("t:frontend/tset")
+        assert "not a path" not in ei.value.message
+        assert catalog.resolve_one("t:frontend/test")["name"] == "frontend/test"
 
     def test_the_suggested_command_actually_resolves(self, sandbox):
         """Run the hint, do not just match its text.

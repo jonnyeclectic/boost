@@ -41,7 +41,8 @@ REUSABLE = re.compile(r"^    uses: ", re.M)
 # guessed — over the last 40 ci runs (every attempt, 2026-09-28) the slowest
 # *successful* job of each kind was mutation-shard 55.7m against a cap of 75,
 # tests 24.6m on windows against 45 (raised to 60 on 2026-10-21, when a
-# 15k-test suite passed at 44.9m) and 10.3m on macOS against 30,
+# 15k-test suite passed at 44.9m, and to 80 on 2026-10-23, when a 17.5k one
+# finished at 58) and 10.3m on macOS against 30,
 # patch-coverage 6.0m against 15 (raised to 30 on 2026-10-22, when a
 # train's suite was still running at 93% of 15m), and everything else under 3m — but the
 # assertion here is only that nobody sets a number so large it defeats the
@@ -289,7 +290,7 @@ def test_the_parser_reads_the_matrix_expression():
     """
     body = dict(jobs_in(CI))["tests"]
     assert expression_of(timeout_value(body)) is not None, timeout_value(body)
-    assert sorted(job_timeouts(body, "ci.yml / tests")) == [30, 60]
+    assert sorted(job_timeouts(body, "ci.yml / tests")) == [30, 80]
 
 
 @pytest.mark.parametrize("value, expected", [

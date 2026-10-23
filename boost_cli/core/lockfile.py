@@ -609,6 +609,63 @@ def _snapshot(p) -> None:
                         stream=sys.stderr, wrap=True)
 
 
+def record_history(p=None) -> bool:
+    """Keep the live lock (or ``p``) in history before something replaces it.
+
+    :func:`write` does this for every change it makes; a wholesale
+    replacement that does not go through it (`snapshot restore` swaps in an
+    archived store, lock and all) calls this first, so `boost replay` can
+    still get back to the state it replaced. A lock that is missing or does
+    not parse is not recorded: a history entry nothing can read is no way
+    back. Returns whether one was kept.
+    """
+    p = paths.lockfile_path() if p is None else Path(p)
+    with exclusive():
+        if not check(p).ok:
+            return False
+        _snapshot(p)
+    return True
+
+
+#: Skill-row fields `replay rollback` can put back on a row present in both
+#: the snapshot and the live lock: the user's holds and agent scope.
+HOLD_FIELDS = ("pinned", "commit_pin", "only_agents")
+#: Skill-row fields that mark a different install. A tap carries only its
+#: current state, so rollback can name these but not restore them.
+CONTENT_FIELDS = ("version", "commit", "sha256")
+
+
+def _row_value(field: str, value):
+    """``value`` normalized so an absent flag and a false one compare equal."""
+    if field == "version":
+        return str(value)
+    if field == "pinned":
+        return bool(value)
+    if field == "only_agents":
+        return sorted(str(a) for a in value) if value else None
+    return value or None
+
+
+def row_differences(recorded: dict, current: dict) -> dict[str, tuple]:
+    """``{field: (recorded, current)}`` for each field the two rows disagree on.
+
+    Every field in :data:`CONTENT_FIELDS` and :data:`HOLD_FIELDS`, not only
+    ``version``: a pin flip, or a tap that changed a skill's content without
+    bumping its version, is a different state, and `replay show` called it
+    "matches" while comparing versions alone. A ``commit`` or ``sha256`` one
+    side does not record (an older lock) is no evidence either way.
+    """
+    diffs: dict[str, tuple] = {}
+    for field in CONTENT_FIELDS + HOLD_FIELDS:
+        want = _row_value(field, recorded.get(field))
+        have = _row_value(field, current.get(field))
+        if field in ("commit", "sha256") and not (want and have):
+            continue
+        if want != have:
+            diffs[field] = (want, have)
+    return diffs
+
+
 def _history_files() -> list:
     """History snapshots oldest→newest (mtime, then name — '-2' suffixed
     same-second snapshots would sort before their base name otherwise)."""

@@ -157,6 +157,47 @@ class TestWorkflowTarget:
         ) == Path("/repo/.claude/commands/ship.md")
 
 
+class TestNamespacedCommands:
+    """``commands/frontend/test.md`` is ``/frontend:test`` in Claude Code and
+    Gemini CLI, and Cursor's command loader recurses into subdirectories too
+    (its ``loadCommandsFromDirectory``), so every agent keeps the subdir."""
+
+    @pytest.mark.parametrize("agent, skills, want", [
+        ("claude-code", "/h/.claude/skills", "/h/.claude/commands/frontend/test.md"),
+        ("cursor", "/h/.cursor/skills", "/h/.cursor/commands/frontend/test.md"),
+        ("gemini", "/h/.gemini/skills", "/h/.gemini/commands/frontend/test.toml"),
+    ])
+    def test_the_namespace_is_a_subdir(self, agent, skills, want):
+        p = workflows.workflow_target(Path(skills), "commands", "frontend/test",
+                                      agent=agent)
+        assert p.as_posix() == want
+
+    def test_project_scope_and_depth(self):
+        p = workflows.workflow_target(Path("/h/.claude/skills"), "commands",
+                                      "a/b/c", base=Path("/repo"))
+        assert p.as_posix() == "/repo/.claude/commands/a/b/c.md"
+
+    @pytest.mark.parametrize("rel, want", [
+        ("commands/test.md", ()),
+        ("commands/frontend/test.md", ("frontend",)),
+        ("commands/a/b/t.md", ("a", "b")),
+        ("x/commands/y/commands/z/t.md", ("z",)),
+        ("WORKFLOWS/ci/t.md", ("ci",)),
+        ("loose.md", ()),
+        ("docs/t.md", ()),
+    ])
+    def test_command_namespace(self, rel, want):
+        assert workflows.command_namespace(rel) == want
+
+    def test_name_parts(self):
+        assert workflows.name_parts("a/b", "commands") == ["a", "b"]
+        assert workflows.name_parts("ship", "agents") == ["ship"]
+        with pytest.raises(BoostError, match="invalid workflow name"):
+            workflows.name_parts("a/b", "agents")
+        with pytest.raises(BoostError, match="invalid workflow name"):
+            workflows.name_parts("a/..", "commands")
+
+
 class TestWorkflowNameTraversal:
     """Same tap-controlled-name exposure as rules: workflow_target joins the
     name straight onto the agent's commands/ or agents/ dir."""
@@ -172,10 +213,16 @@ class TestWorkflowNameTraversal:
             workflows.workflow_target(Path("/x/.claude/skills"), "agents", self.EVIL,
                                       base=Path("/home/v/myrepo"))
 
-    @pytest.mark.parametrize("name", ["..", ".", "a/b", "with space", ""])
+    @pytest.mark.parametrize("name", ["..", ".", "with space", "", "a/../b",
+                                      "a//b", "/a", "a/", "../a", "a/.."])
     def test_refuses_other_non_components(self, name):
         with pytest.raises(BoostError):
             workflows.workflow_target(Path("/home/v/.claude/skills"), "commands", name)
+
+    def test_only_a_command_may_be_namespaced(self):
+        # `a/b` is a namespaced command (`/a:b`); a subagent has no namespace.
+        with pytest.raises(BoostError, match="invalid workflow name 'a/b'"):
+            workflows.workflow_target(Path("/home/v/.claude/skills"), "agents", "a/b")
 
     def test_ordinary_name_still_lands_in_the_slot(self):
         p = workflows.workflow_target(Path("/home/v/.claude/skills"), "commands",

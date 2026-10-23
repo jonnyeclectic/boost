@@ -386,22 +386,55 @@ def _redact(name: str, value: str) -> str:
 #: ``scheme://user:pass@`` — greedy up to the last ``@`` before the path, so a
 #: password that itself contains ``@`` is withheld whole. Not anchored: argv
 #: tokens carry URLs after a ``--flag=``.
-_URL_USERINFO = re.compile(r"([a-z][a-z0-9+.-]*://)[^/\s]+@", re.IGNORECASE)
-#: A query parameter whose name says it carries a credential (``?token=``,
+#:
+#: The lookbehind is what keeps this linear. Without it a scheme may start at
+#: *every* letter of a run, and each start scans the rest of the run looking
+#: for ``://`` — ``boost search <200,000 x's>`` spent minutes here, twice per
+#: command, before the search itself had run. A scheme now starts only where
+#: the previous character could not have continued one, so each character is
+#: scanned by one start. A run may open with digits or ``+.-``, which cannot
+#: start a scheme but did not stop one starting at the next letter: the
+#: leading ``[0-9+.-]*`` keeps that match (``1https://u:p@h`` leaked its
+#: password through a bare lookbehind) and is carried through verbatim.
+_URL_USERINFO = re.compile(
+    r"(?<![a-z0-9+.-])([0-9+.-]*[a-z][a-z0-9+.-]*://)[^/\s]+@", re.IGNORECASE)
+#: A query parameter's ``?name=`` / ``&name=``. The name may not contain the
+#: next ``?`` or ``&``, so every start scans only to the next delimiter — the
+#: old single pattern let one name run across every ``?`` and backtracked
+#: through an alternation at each, quadratic on ``?a?a?a…``.
+_QUERY_NAME = re.compile(r"[?&][^=&#?\s]*=")
+_QUERY_VALUE = re.compile(r"[^&#\s]*")
+#: A parameter name that says it carries a credential (``?token=``,
 #: ``&api_key=``, ``&X-Amz-Signature=``).
-_URL_QUERY_SECRET = re.compile(
-    r"([?&][^=&#\s]*(?:key|token|secret|password|passwd|auth|sig)[^=&#\s]*=)"
-    r"[^&#\s]*", re.IGNORECASE)
+_MASKED_NAME = re.compile(r"key|token|secret|password|passwd|auth|sig",
+                           re.IGNORECASE)
+
+
+def _mask_query_params(value: str) -> str:
+    """``value`` with the value of every credential-named query parameter
+    withheld. A secret's value runs to the next ``&``, ``#`` or space, and a
+    parameter that starts inside it is part of what was withheld."""
+    parts: list[str] = []
+    pos = 0
+    for m in _QUERY_NAME.finditer(value):
+        if m.start() < pos or not _MASKED_NAME.search(m.group()):
+            continue
+        end = _QUERY_VALUE.match(value, m.end())
+        parts += [value[pos:m.end()], REDACTED]
+        pos = end.end() if end else m.end()
+    parts.append(value[pos:])
+    return "".join(parts)
 
 
 def redact_url(value: str) -> str:
     """``value`` with URL userinfo and credential query parameters withheld.
 
     Host and path survive: they are what a bug report needs, and the
-    credential is what it must not carry.
+    credential is what it must not carry. Linear in ``len(value)``: it runs
+    over every argv token, and a token is whatever the user typed.
     """
     value = _URL_USERINFO.sub(r"\1" + REDACTED + "@", value)
-    return _URL_QUERY_SECRET.sub(r"\1" + REDACTED, value)
+    return _mask_query_params(value)
 
 
 def redact_argv(argv: list[str]) -> list[str]:
