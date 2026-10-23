@@ -887,14 +887,10 @@ jobs:
         env:
           SHARD: ${{ matrix.index }}
         run: |
-          # mutmut bounds CPU per mutant and nothing else, and runs four
-          # workers on a 16 GB runner: one mutant that allocates or forks
-          # without bound starves the runner agent itself, which is what
-          # "lost communication" means. These caps are per process and
-          # inherited by every fork, so such a mutant dies alone and counts
-          # as killed, not as a lost job.
-          ulimit -v 4194304
-          ulimit -u 4096
+          # No per-process `ulimit -v` here: a 4 GiB address-space cap was
+          # tried on 2026-10-23 and raised MemoryError inside the clean-test
+          # run of mutmut (shards 0, 7 and 16 of run 40010598954), while
+          # runners kept being lost with it in place, so it bought nothing.
           PATTERNS="$(python3 scripts/mutation_shards.py plan --shards 24 --index "$SHARD")"
           echo "shard $SHARD patterns: $PATTERNS"
           # `mutmut run` with no arguments runs EVERY mutant. An empty plan must
