@@ -14,6 +14,7 @@ import math
 import os
 import re
 import sqlite3
+import sys
 from pathlib import Path
 from unittest import mock
 
@@ -570,6 +571,30 @@ class TestAnIndexBoostCannotSave:
         assert ei.value.hint == "run `chmod u+w %s`" \
             % where
         assert isinstance(ei.value.__cause__, PermissionError)
+
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="chmod can't make a directory unsearchable "
+                               "on Windows")
+    @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                        reason="root ignores mode bits")
+    def test_an_unsearchable_cache_dir_is_told_to_add_the_search_bit(
+            self, corpus, monkeypatch):
+        # At 0o600 `chmod u+w` changes nothing — measured, the same error and
+        # hint came back after running it. The missing bit is search.
+        _root, entries = corpus
+        cache = paths.cache_dir()
+        self._refuse(monkeypatch, PermissionError(
+            13, "Permission denied", str(cache / ".rag_postings.sqlite.x.tmp")))
+        cache.mkdir(parents=True, exist_ok=True)
+        cache.chmod(0o600)
+        try:
+            with pytest.raises(BoostError) as ei:
+                rag.build(entries=entries, force=True)
+        finally:
+            cache.chmod(0o700)
+        assert ei.value.message == ("could not save the search index in %s "
+                                    "(Permission denied)" % paths.tilde(cache))
+        assert ei.value.hint == "run `chmod u+wx %s`" % paths.tilde(cache)
 
     def test_search_still_degrades_rather_than_raising(self, corpus,
                                                        monkeypatch):
