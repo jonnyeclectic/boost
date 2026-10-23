@@ -3118,7 +3118,7 @@ def cmd_pin(argv: list[str]) -> int:
     _add_pin_scope(ap, "pin")
     args = ap.parse_args(argv)
     args.name = store.installed_name(args.name, args.scope)
-    row = _pin_target(args.name, args.scope, "pin")
+    row = _pin_target(args.name, args.scope, "pin", commit=args.commit)
     if args.commit and row is not None:
         # `verify` never grades a project row's commit pin, so writing one
         # would promise a check that does not exist.
@@ -3177,13 +3177,16 @@ def _add_pin_scope(ap, verb: str) -> None:
         global_help="the copy in your user config (= --scope user)")
 
 
-def _pin_target(name: str, scope: str | None,
-                verb: str) -> integrity.InstalledSkill | None:
+def _pin_target(name: str, scope: str | None, verb: str,
+                commit: bool = False) -> integrity.InstalledSkill | None:
     """The project row ``pin``/``unpin`` acts on, or None for the user lock.
 
     Unscoped, a name only this repo holds is the project row, as before. A
     name both scopes hold is refused: acting on the user row alone pinned it
     while `boost update` moved the repo's copy, with nothing said about it.
+    ``commit`` is ``pin --commit``, which the hint must keep: dropped, the
+    suggested command set a version pin and no commit pin. It offers no
+    ``--local`` form then, because ``--commit`` is refused at project scope.
     """
     base, project = integrity.project_skills()
     prow = project.get(name)
@@ -3207,8 +3210,11 @@ def _pin_target(name: str, scope: str | None,
     if lockfile.find_any(name) is not None:
         raise BoostError("%s is installed in your user config and in this "
                          "repo — say which to %s" % (name, verb),
-                         hint="`boost %s %s --global` or `boost %s %s --local`"
-                              % (verb, name, verb, name))
+                         hint=("`boost %s %s --commit --global` — --commit "
+                               "applies to user-scope installs" % (verb, name)
+                               if commit else
+                               "`boost %s %s --global` or `boost %s %s --local`"
+                               % (verb, name, verb, name)))
     return integrity.InstalledSkill(name, prow, scopes.SCOPE_PROJECT, base, None)
 
 
