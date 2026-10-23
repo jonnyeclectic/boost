@@ -4,11 +4,13 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
+import sys
 
 import pytest
 
-from boost_cli.core import gitutil, projectlock, util
+from boost_cli.core import gitutil, paths, projectlock, util
 from boost_cli.errors import BoostError
 
 
@@ -258,3 +260,64 @@ class TestRecoverHint:
         assert not gitutil.tracks(tmp_path, projectlock.LOCK_REL)
         assert projectlock.recover_hint(tmp_path).startswith(
             "git does not track it")
+
+
+_NOT_WINDOWS = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="chmod can't make a directory read-only on Windows")
+_NOT_ROOT = pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                               reason="root ignores mode bits")
+
+
+class TestAReadOnlyDotBoost:
+    """A refused write names the lock, the dir and the chmod — never exit 70."""
+
+    @pytest.fixture()
+    def ro(self, sandbox, tmp_path):
+        projectlock.set_skill(tmp_path, "a", _entry())
+        d = projectlock.lock_path(tmp_path).parent
+        d.chmod(0o555)
+        yield d
+        d.chmod(0o755)
+
+    @_NOT_WINDOWS
+    @_NOT_ROOT
+    def test_write_raises_save_refused(self, ro, tmp_path):
+        p = projectlock.lock_path(tmp_path)
+        before = p.read_bytes()
+        with pytest.raises(BoostError) as ei:
+            projectlock.set_skill(tmp_path, "b", _entry())
+        assert ei.value.message == (
+            "could not save %s (Permission denied): %s is not writable"
+            % (paths.tilde(p), paths.tilde(ro)))
+        assert ei.value.hint == "run `chmod u+w %s`, then re-run" \
+            % paths.tilde(ro)
+        assert isinstance(ei.value.__cause__, PermissionError)
+        assert p.read_bytes() == before
+
+    @_NOT_WINDOWS
+    @_NOT_ROOT
+    def test_refuse_unwritable_names_the_verb_and_dir(self, ro, tmp_path):
+        with pytest.raises(BoostError) as ei:
+            projectlock.refuse_unwritable(tmp_path, "uninstall", "a")
+        assert ei.value.message == ("cannot uninstall a: %s is not writable"
+                                    % paths.tilde(ro))
+        assert ei.value.hint == "run `chmod u+w %s`, then re-run" \
+            % paths.tilde(ro)
+
+    @_NOT_WINDOWS
+    @_NOT_ROOT
+    def test_an_unsearchable_dot_boost_needs_the_search_bit(self, ro,
+                                                             tmp_path):
+        ro.chmod(0o600)
+        with pytest.raises(BoostError) as ei:
+            projectlock.refuse_unwritable(tmp_path, "install", "b")
+        assert ei.value.message == ("cannot install b: %s is not searchable"
+                                    % paths.tilde(ro))
+        assert ei.value.hint == "run `chmod u+wx %s`, then re-run" \
+            % paths.tilde(ro)
+
+    def test_a_writable_or_missing_dot_boost_passes(self, sandbox, tmp_path):
+        assert projectlock.refuse_unwritable(tmp_path, "install", "a") is None
+        projectlock.set_skill(tmp_path, "a", _entry())
+        assert projectlock.refuse_unwritable(tmp_path, "install", "a") is None

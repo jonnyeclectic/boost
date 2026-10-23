@@ -27,7 +27,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from ..errors import BoostError
-from . import gitutil, jsonstate, output, util
+from . import gitutil, jsonstate, output, paths, util
 
 SCHEMA_VERSION = 1
 LOCK_DIRNAME = ".boost"
@@ -184,10 +184,33 @@ def write(base, lock: dict) -> None:
     """
     refuse_corrupt(base)
     p = lock_path(base)
-    p.parent.mkdir(parents=True, exist_ok=True)
     lock["version"] = SCHEMA_VERSION
     lock["updated"] = util.now_iso()
-    util.atomic_write_text(p, json.dumps(lock, indent=2, sort_keys=True) + "\n")
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        util.atomic_write_text(
+            p, json.dumps(lock, indent=2, sort_keys=True) + "\n")
+    except OSError as e:
+        # A read-only `.boost/` was exit 70 and a crash report naming a temp
+        # file; the user lock has said which dir and which chmod for a while.
+        raise paths.save_refused(p, e) from e
+
+
+def refuse_unwritable(base, verb: str, name: str) -> None:
+    """Raise unless the project lock for ``base`` can be written.
+
+    Asked before an install copies or an uninstall deletes anything: the
+    lock write comes last, so a ``.boost/`` that refuses it used to leave
+    unrecorded copies behind (and a rerun refused over them), or copies gone
+    with the row still listed. Same wording as the user scope's
+    ``store._require_writable``.
+    """
+    d = lock_path(base).parent
+    block = paths.refuses_writes(d)
+    if block is not None:
+        raise BoostError("cannot %s %s: %s"
+                         % (verb, name, paths.not_writable(d, block)),
+                         hint="%s, then re-run" % paths.write_remedy(block))
 
 
 def installed(base) -> dict:

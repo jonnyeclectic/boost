@@ -3643,6 +3643,7 @@ def _install_project_skill(entry: dict, force: bool = False,
     # Before anything is copied: projectlock.write refuses a corrupt lock too,
     # but by then the copies would be on disk unrecorded.
     projectlock.refuse_corrupt(resolved_base)
+    projectlock.refuse_unwritable(resolved_base, "install", name)
 
     existing = check_existing(entry, force=force, scope=scopes.SCOPE_PROJECT,
                               base=resolved_base, kind="skill")
@@ -3978,6 +3979,9 @@ def uninstall_project(name: str, base=None) -> dict:
             return (_uninstall_rule if owned_kind == "rule"
                     else _uninstall_workflow)(name, owned_entry)
         raise _not_in_this_project(name)
+    # After the rule/workflow fall-through, which records in the user lock:
+    # only a skill's row lives in `.boost/`, so only it can be stranded there.
+    projectlock.refuse_unwritable(resolved_base, "uninstall", name)
     removed: list[str] = []
     refused: list[str] = []
     redirected: list[str] = []
