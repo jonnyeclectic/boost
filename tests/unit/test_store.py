@@ -7,6 +7,7 @@ import errno
 import inspect
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -7217,11 +7218,30 @@ class TestSourceMissingMessage:
         assert store.tap_configured(None) is False
         assert store.tap_configured("") is False
         url = str(paths.home() / "src" / "gone")
+        # The full path, not `~/src/gone`: quoted, a `~` no longer expands.
         assert store.source_missing_message(
             "x", "x", {"tap": "gone", "tap_url": url}) == (
             "x: source missing — tap gone is no longer tapped and `boost "
             "update` can't restore it; re-tap it with `boost tap "
-            "~/src/gone`, or `boost uninstall x`")
+            "%s`, or `boost uninstall x`" % util.shell_arg(url))
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX shell quoting")
+    def test_a_path_with_a_space_and_an_apostrophe_is_quoted(self, sandbox):
+        url = "/src/fix ture's \u00e9"
+        msg = store.source_missing_message(
+            "x", "x", {"tap": "fix-ture's-\u00e9", "tap_url": url})
+        assert ("re-tap it with `boost tap '/src/fix ture'\"'\"'s \u00e9'`"
+                in msg), msg
+        cmd = msg.split("re-tap it with `", 1)[1].split("`", 1)[0]
+        assert shlex.split(cmd) == ["boost", "tap", url]
+
+    def test_a_wheel_url_gets_words_not_a_command(self, sandbox):
+        # `boost tap wheel://…` does not parse; say re-tap, name no command.
+        msg = store.source_missing_message(
+            "x", "x", {"tap": "gone", "tap_url": registry.WHEEL_SCHEME + "x"})
+        assert msg == ("x: source missing — tap gone is no longer tapped and "
+                       "`boost update` can't restore it; re-tap it, or "
+                       "`boost uninstall x`")
 
     def test_no_recorded_url_still_says_what_to_do(self, sandbox):
         assert store.source_missing_message("x", "x", {"tap": "gone"}) == (

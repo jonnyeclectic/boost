@@ -1272,3 +1272,12 @@ def shell_arg(arg: str) -> str:
         # single quotes `shlex.quote` emits.
         return '"%s"' % arg if any(c.isspace() for c in arg) else arg
     return shlex.quote(arg)
+
+
+def shell_join(argv: list[str]) -> str:
+    """``argv`` as one command line a user can paste into their shell.
+
+    Each word goes through :func:`shell_arg`, so on POSIX this is
+    ``shlex.join`` and on Windows it keeps that function's double quotes.
+    """
+    return " ".join(shell_arg(a) for a in argv)

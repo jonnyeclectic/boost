@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import io
 import json
+import shlex
 import sys
 import types
 from pathlib import Path
@@ -275,6 +276,76 @@ class TestInstallerFailures:
         monkeypatch.setattr(bmad.subprocess, "run", boom)
         r = boost("bmad", "install", expect=1)
         assert "bmad install failed" in r.err
+
+
+class TestInstallerFailureHint:
+    """The "run it yourself" command pastes as one command that does the job."""
+
+    @staticmethod
+    def _failing_npx(monkeypatch):
+        calls = []
+
+        def fail(cmd, **kw):
+            calls.append(cmd)
+            return types.SimpleNamespace(returncode=1, stdout="",
+                                         stderr="npm ERR! network")
+        monkeypatch.setattr(bmad.shutil, "which", lambda _n: "/usr/bin/npx")
+        monkeypatch.setattr(bmad.subprocess, "run", fail)
+        monkeypatch.setattr(bmad, "_whoami", lambda: "o'b")
+        return calls
+
+    @staticmethod
+    def _hint(err: str) -> str:
+        flat = " ".join(err.split())
+        return flat.split("hint: ", 1)[1]
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX shell quoting")
+    def test_a_project_dir_with_a_space_stays_one_argument(
+            self, boost, sandbox, monkeypatch, tmp_path):
+        p = tmp_path / "my proj"
+        p.mkdir()
+        monkeypatch.chdir(p)
+        self._failing_npx(monkeypatch)
+        r = boost("bmad", "install", expect=1)
+        assert "bmad install failed: npm ERR! network" in r.err
+        hint = self._hint(r.err)
+        want = ["npx", "--yes", "bmad-method@%s" % core_bmad.BMAD_VERSION,
+                "install", "--yes", "--directory", str(p),
+                "--tools", "claude-code", "--modules", "bmm",
+                "--user-name", "o'b"]
+        assert hint == "run it yourself: " + shlex.join(want)
+        assert shlex.split(hint.split(": ", 1)[1]) == want
+
+    def test_a_global_failure_does_not_name_the_deleted_stage(
+            self, boost, sandbox, monkeypatch, proj):
+        calls = self._failing_npx(monkeypatch)
+        r = boost("bmad", "install", "--scope", "global", expect=1)
+        stage = calls[0][calls[0].index("--directory") + 1]
+        assert not Path(stage).exists()
+        hint = self._hint(r.err)
+        assert hint == ("once npx works, re-run "
+                        "`boost bmad install --scope global`")
+        assert stage not in r.err
+
+    def test_a_global_failure_keeps_the_modules_asked_for(
+            self, boost, sandbox, monkeypatch, proj):
+        self._failing_npx(monkeypatch)
+        r = boost("bmad", "install", "--scope", "global",
+                  "--modules", "bmm,cis", expect=1)
+        assert self._hint(r.err) == (
+            "once npx works, re-run "
+            "`boost bmad install --scope global --modules bmm,cis`")
+
+    def test_a_global_oserror_gets_the_same_hint(
+            self, boost, sandbox, monkeypatch, proj):
+        def boom(*a, **k):
+            raise OSError("no exec")
+        monkeypatch.setattr(bmad.shutil, "which", lambda _n: "/usr/bin/npx")
+        monkeypatch.setattr(bmad.subprocess, "run", boom)
+        r = boost("bmad", "install", "--scope", "global", expect=1)
+        assert "bmad install failed: no exec" in r.err
+        assert self._hint(r.err) == ("once npx works, re-run "
+                                     "`boost bmad install --scope global`")
 
 
 class TestUninstallGlobalAndAbort:

@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import sys
 import threading
 from pathlib import Path
@@ -1330,6 +1331,36 @@ class TestResolveOneVendoredCopies:
         assert excinfo.value.qualified == "t:dbg"
         got = catalog.resolve_one(excinfo.value.qualified, path="a/dbg")
         assert (got["tap"], got["description"]) == ("t", "python")
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX shell quoting")
+    def test_the_ambiguity_hint_quotes_a_tap_name_with_an_apostrophe(
+            self, sandbox):
+        tap = "fix-ture's-\u00e9"
+        _fake_taps((tap, [_entry("dbg", tap, desc="python", rel_dir="a/dbg"),
+                          _entry("dbg", tap, desc="rust", rel_dir="b/dbg")]))
+        with pytest.raises(catalog.SameTapAmbiguity) as excinfo:
+            catalog.resolve_one("dbg")
+        assert excinfo.value.hint == (
+            "that registry ships one name twice — install one with `boost "
+            "install 'fix-ture'\"'\"'s-\u00e9:dbg' --path <one of the above>`, "
+            "then retry; raise it with the tap")
+        cmd = excinfo.value.hint.split("`")[1].split(" --path")[0]
+        assert shlex.split(cmd) == ["boost", "install", "%s:dbg" % tap]
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX shell quoting")
+    def test_the_path_grammar_hint_quotes_tap_and_path(self, sandbox):
+        # `tap:dir/skill` misreads the grammar; the suggested `--path` form
+        # must paste as-is when the tap name carries an apostrophe.
+        tap = "o'tap"
+        _fake_taps((tap, [_entry("dbg", tap, rel_dir="a b/dbg")]))
+        with pytest.raises(BoostError) as excinfo:
+            catalog.resolve_one("%s:a b/dbg" % tap)
+        hint = excinfo.value.hint or ""
+        assert hint == (
+            "`tap:skill` picks the registry; to pick a copy inside one, use "
+            "--path: `boost install 'o'\"'\"'tap:dbg' --path 'a b/dbg'`")
+        assert shlex.split(hint.split("`")[3]) == [
+            "boost", "install", "o'tap:dbg", "--path", "a b/dbg"]
 
     def test_the_ambiguity_message_names_the_entry_s_own_kind(self, sandbox):
         """A workflow sharing a name inside one tap was still reported as

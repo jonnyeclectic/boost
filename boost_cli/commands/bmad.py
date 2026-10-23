@@ -579,7 +579,14 @@ def _require_npx() -> None:
             hint="install Node.js 20.12+ (e.g. `brew install node`), then retry")
 
 
-def _run_installer(directory: Path, modules: str) -> subprocess.CompletedProcess:
+def _run_installer(directory: Path, modules: str,
+                   hint: str | None = None) -> subprocess.CompletedProcess:
+    """Run the BMAD installer into `directory`.
+
+    ``hint`` replaces the default "run it yourself" one: a global install
+    stages into a temp dir that is deleted before the error is printed, so a
+    command naming it would install into nothing the user keeps.
+    """
     cmd = ["npx", "--yes", "bmad-method@%s" % core.BMAD_VERSION, "install",
            "--yes", "--directory", str(directory),
            "--tools", "claude-code", "--modules", modules,
@@ -592,13 +599,26 @@ def _run_installer(directory: Path, modules: str) -> subprocess.CompletedProcess
                               timeout=900)
     except (OSError, subprocess.TimeoutExpired) as e:
         raise BoostError("bmad install failed: %s" % e,
-                         hint="run it yourself: " + " ".join(cmd)) from e
+                         hint=hint or _run_it_yourself(cmd)) from e
     if proc.returncode != 0:
         tail = (proc.stderr or proc.stdout or "").strip().splitlines()
         raise BoostError(
             "bmad install failed: %s" % (tail[-1] if tail else "unknown error"),
-            hint="run it yourself: " + " ".join(cmd))
+            hint=hint or _run_it_yourself(cmd))
     return proc
+
+
+def _run_it_yourself(cmd: list[str]) -> str:
+    """The hint naming the installer argv, quoted so it pastes as one command."""
+    return "run it yourself: " + util.shell_join(cmd)
+
+
+def _global_retry_hint(modules: str) -> str:
+    """What to re-run after a failed global install, whose stage is gone."""
+    argv = ["boost", "bmad", "install", "--scope", "global"]
+    if modules != DEFAULT_MODULES:
+        argv += ["--modules", modules]
+    return "once npx works, re-run `%s`" % util.shell_join(argv)
 
 
 def _whoami() -> str:
@@ -671,7 +691,8 @@ def _copy_global_skills(modules) -> tuple[str, list[str]]:
     """
     stage = Path(tempfile.mkdtemp(prefix="boost-bmad-"))
     try:
-        proc = _run_installer(stage, modules)
+        proc = _run_installer(stage, modules,
+                              hint=_global_retry_hint(modules))
         ver = _parse_version((proc.stdout or "") + (proc.stderr or ""))
         src = stage / ".claude" / "skills"
         dest = _skills_dir("global")

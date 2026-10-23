@@ -19,8 +19,10 @@ from __future__ import annotations
 
 import ast
 import re
+import shlex
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -105,23 +107,72 @@ class TestOneCommand:
         assert dense.install_extra() == want
         assert "`%s`" % want in dense.fix_hint("no-backend")
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX shell quoting")
     def test_a_checkout_installs_its_own_extra_editable(
             self, installed_with, monkeypatch):
         monkeypatch.setattr(dense.sys, "executable", "/opt/py/bin/python3")
         monkeypatch.setattr(dense.paths, "repo_root",
                             lambda: Path("/src/boost"))
         installed_with(selfupdate.GIT)
+        # `[` is a glob character, so the editable target is always quoted.
         assert dense.install_extra() == (
-            '/opt/py/bin/python3 -m pip install -e "%s[rag]"'
+            "/opt/py/bin/python3 -m pip install -e '%s[rag]'"
             % Path("/src/boost"))
 
+    def test_a_checkout_on_windows_keeps_double_quotes(
+            self, installed_with, monkeypatch):
+        monkeypatch.setattr(dense.sys, "platform", "win32")
+        monkeypatch.setattr(dense.sys, "executable", r"C:\py\python.exe")
+        monkeypatch.setattr(dense.paths, "repo_root",
+                            lambda: Path("/src/boost"))
+        installed_with(selfupdate.GIT)
+        assert dense.install_extra() == (
+            r'C:\py\python.exe -m pip install -e "%s[rag]"'
+            % Path("/src/boost"))
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX shell quoting")
     def test_an_interpreter_path_with_a_space_is_quoted(
             self, installed_with, monkeypatch):
         monkeypatch.setattr(dense.sys, "executable",
                             "/Program Files/py/python")
         installed_with(selfupdate.PIP)
         assert dense.install_extra() == (
-            '"/Program Files/py/python" -m pip install "boost-skill-cli[rag]"')
+            "'/Program Files/py/python' -m pip install \"boost-skill-cli[rag]\"")
+
+    def test_an_interpreter_path_with_a_space_on_windows(
+            self, installed_with, monkeypatch):
+        # cmd.exe and PowerShell take double quotes, never single ones.
+        monkeypatch.setattr(dense.sys, "platform", "win32")
+        monkeypatch.setattr(dense.sys, "executable",
+                            r"C:\Program Files\py\python.exe")
+        installed_with(selfupdate.PIP)
+        assert dense.install_extra() == (
+            r'"C:\Program Files\py\python.exe" -m pip install '
+            '"boost-skill-cli[rag]"')
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX shell quoting")
+    def test_an_apostrophe_and_a_dollar_survive_the_shell(
+            self, installed_with, monkeypatch):
+        # Quoting only on whitespace left `o'brien` an unmatched quote, and
+        # double quotes around the checkout let `$HOME` expand.
+        python = "/x/o'brien/venv/bin/python"
+        root = Path("/src/$HOME/boost")
+        monkeypatch.setattr(dense.sys, "executable", python)
+        monkeypatch.setattr(dense.paths, "repo_root", lambda: root)
+        installed_with(selfupdate.GIT)
+        cmd = dense.install_extra()
+        assert cmd == ("'/x/o'\"'\"'brien/venv/bin/python' -m pip install "
+                       "-e '/src/$HOME/boost[rag]'")
+        assert shlex.split(cmd) == [python, "-m", "pip", "install", "-e",
+                                    "%s[rag]" % root]
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX shell quoting")
+    def test_uv_pip_quotes_its_interpreter(self, installed_with, monkeypatch):
+        python = "/x/o'brien/bin/python"
+        monkeypatch.setattr(dense.sys, "executable", python)
+        installed_with(selfupdate.UV_PIP)
+        assert shlex.split(dense.install_extra()) == [
+            "uv", "pip", "install", "--python", python, "boost-skill-cli[rag]"]
 
     def test_a_pipx_install_is_told_to_inject_it(self, installed_with):
         # `pip install` under pipx lands the extra in some other Python.

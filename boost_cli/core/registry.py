@@ -188,7 +188,7 @@ def parse_spec(spec: str):
             raise BoostError(
                 "%s is not a git repository" % p,
                 hint="`git init` it, or `boost import %s` to copy it in "
-                     "without a tap" % spec)
+                     "without a tap" % util.shell_arg(spec))
         # Whitespace folded to `-`: a tap name is one token in `tap:skill` and
         # in a Boostfile line, so `boost tap "my tap"` named it `my tap` and
         # `bundle dump` wrote a `tap my tap …` line that its own `bundle
@@ -462,7 +462,8 @@ def _taken(name: str, url: str, existing: str) -> BoostError:
     """The error for `name` already belonging to a different repository."""
     return BoostError(
         "tap name %s is already used by %s" % (name, existing),
-        hint="`boost untap %s` first to tap %s in its place" % (name, url))
+        hint="`boost untap %s` first to tap %s in its place"
+             % (util.shell_arg(name), util.shell_arg(url)))
 
 
 def is_tapped(name: str) -> bool:
@@ -545,7 +546,7 @@ def broken_clone_line(name: str) -> str:
     fine, only the local clone is damaged, and `update` re-clones it.
     """
     return ("tap %s is not a git repository (its .git is missing) — run "
-            "`boost update %s` to re-clone it" % (name, name))
+            "`boost update %s` to re-clone it" % (name, util.shell_arg(name)))
 
 
 def retap_hint(name: str, url: str = "") -> str:
@@ -563,7 +564,7 @@ def retap_hint(name: str, url: str = "") -> str:
         return "boost tap %s" % util.shell_arg(url)
     if url.startswith(WHEEL_SCHEME) or "/" not in name or " " in name:
         return "re-tap %s from its original source (its URL was not recorded)" % name
-    return "boost tap %s" % name
+    return "boost tap %s" % util.shell_arg(name)
 
 
 def add(spec: str, curated: bool = False, at: str | None = None) -> Tap:
@@ -711,7 +712,7 @@ def pin_missing_remedy(name: str) -> str:
     """The two ways out of a pin whose commit upstream no longer has."""
     return ("`boost update --force %s` re-clones its default branch and drops "
             "the pin, or re-tap it with `--at <sha>` to pin a commit that "
-            "exists there" % name)
+            "exists there" % util.shell_arg(name))
 
 
 def pin_missing(tap: Tap, pin: str, url: str = "") -> BoostError:
@@ -739,9 +740,11 @@ def _already_configured(name: str, spec: str, at: str | None) -> BoostError:
         return BoostError(
             "tap %s is already configured" % name,
             hint="`boost untap %s`, then `boost tap %s --at %s` to move it "
-                 "to that commit" % (name, spec, at))
+                 "to that commit" % (util.shell_arg(name), util.shell_arg(spec),
+                                     util.shell_arg(at)))
     return BoostError("tap %s is already configured" % name,
-                      hint="`boost update %s` to refresh it" % name)
+                      hint="`boost update %s` to refresh it"
+                           % util.shell_arg(name))
 
 
 #: Marks a ★ the user asked for (`--curated`, the defaults), as opposed to one
@@ -906,7 +909,7 @@ def _reclone(tap: Tap, pin: str | None) -> None:
     except OSError as exc:
         raise BoostError(
             "could not move the new clone into %s" % paths.tilde(tap.path),
-            hint="retry `boost update %s`" % tap.name) from exc
+            hint="retry `boost update %s`" % util.shell_arg(tap.name)) from exc
 
 
 def ensure_cloned(tap: Tap) -> bool:
