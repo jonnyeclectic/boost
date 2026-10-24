@@ -2625,7 +2625,7 @@ def _seed_catalog_for_mcp(force: bool) -> None:
 
 #: Escape hatch, same shape as BOOST_NO_MCP_OFFER and BOOST_NO_SEED. It is
 #: checked BEFORE `out.confirm`, which is load-bearing: confirm returns True
-#: under BOOST_ASSUME_YES or a bare `--yes` anywhere in argv, and the test
+#: under BOOST_ASSUME_YES (and the offer under `mcp register -y`), and the test
 #: fixtures set BOOST_ASSUME_YES=1 — so without this guard every existing
 #: `boost mcp register` test, and every provisioning script, would silently
 #: write a standing block into a real CLAUDE.md.
