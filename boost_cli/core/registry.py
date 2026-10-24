@@ -182,6 +182,16 @@ def parse_spec(spec: str):
         p = local
     if _looks_like_a_directory(p):
         if not gitutil.is_repo_root(p):
+            top = gitutil.enclosing_toplevel(p)
+            if top is not None:
+                # A subdirectory of a work tree: `git init` there would nest
+                # a repo inside the user's, which then fails as "no commits".
+                raise BoostError(
+                    "%s is inside the git repository at %s; boost taps a "
+                    "whole repository" % (p, top),
+                    hint="`boost tap %s`, or `boost import %s` to copy just "
+                         "this directory in without a tap"
+                         % (util.shell_arg(str(top)), util.shell_arg(spec)))
             # The dir exists, so git's own "repository '...' does not exist"
             # (which is what `clone_shallow` would raise next) is a false
             # statement about the very thing this branch just confirmed.

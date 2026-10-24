@@ -542,9 +542,11 @@ class TestSparseLock:
         assert len(calls) == 2
         assert err.value.message == ("could not fetch skills/a from the repo "
                                      "tap: " + self.BUSY)
+        # The lock git names, not one boost reconstructs: git's is the path
+        # that exists (a /var/folders HOME resolves to /private/var).
         assert err.value.hint == (
             "another git process is working in this tap's clone; if none is, "
-            "remove %s" % (repo / ".git" / "info" / "sparse-checkout.lock"))
+            "remove /x/.git/info/sparse-checkout.lock")
 
     def test_a_lock_named_without_file_exists_is_not_retried(self, monkeypatch,
                                                               tmp_path):

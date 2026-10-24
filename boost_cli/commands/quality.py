@@ -756,6 +756,14 @@ def cmd_doctor(argv):
                 % (tap.name, tap.pin[:7], head[:7], util.shell_arg(tap.name),
                    util.shell_arg(tap.name)),
                 wrap=True)
+        elif locks := gitutil.stale_locks(tap.path):
+            # A killed git's lock fails every update and install in this
+            # clone, and nothing else here reads `.git` closely enough to see.
+            bad("tap", "tap %s has %s in its clone — %s"
+                % (tap.name, "git lock files" if len(locks) > 1
+                   else "a git lock file",
+                   gitutil.lock_hint(", ".join(_tilde(p) for p in locks))),
+                wrap=True)
         elif not tap.cache_file.exists():
             bad("tap", "tap %s has no catalog cache — run `boost update %s`%s"
                 % (tap.name, util.shell_arg(tap.name), " once %s is %s"
