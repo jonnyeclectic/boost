@@ -334,6 +334,46 @@ def _tap_commits() -> dict[str, str]:
     return commits
 
 
+def _tap_formats() -> dict[str, int]:
+    """Map safe tap name -> the ``CACHE_FORMAT`` its catalog cache was scanned at.
+
+    Reuse in :func:`build` was keyed on the commit alone, but a scanner fix
+    rescans a cache at the *same* commit (``load_tap`` backfills a stale
+    ``format``), so the fixed entries reached ``boost info`` while the index
+    kept the old documents: 11c4e7b1 (format 7) and 3b249ecc (format 8) both
+    shipped at one INDEX_VERSION, and the text they restored stayed
+    unsearchable until upstream moved or the user ran ``reindex --force``.
+    A tap whose cache is missing or carries no integer format is left out.
+    Kept apart from :func:`_tap_commits` so a caller faking one still gets
+    the other, as with :func:`_tap_stamps`.
+    """
+    formats: dict[str, int] = {}
+    for t in registry.list_taps():
+        with contextlib.suppress(OSError, ValueError):
+            data = json.loads(t.cache_file.read_text(encoding="utf-8"))
+            fmt = data.get("format") if isinstance(data, dict) else None
+            if isinstance(fmt, int) and not isinstance(fmt, bool):
+                formats[t.safe_name] = fmt
+    return formats
+
+
+def _reusable(safe: str, commit: str, old: dict,
+              formats: dict[str, int]) -> bool:
+    """Whether ``safe``'s documents in index ``old`` still describe its cache.
+
+    Same commit, and — when the old index recorded one — the same cache
+    format. A tap the old index recorded no format for (an index written
+    before formats were, or a shard import that could not vouch) is judged
+    by commit alone, so upgrading does not discard every reused tap at once.
+    """
+    if not commit or (old.get("commits") or {}).get(safe) != commit:
+        return False
+    old_formats = old.get("formats")
+    if not isinstance(old_formats, dict) or safe not in old_formats:
+        return True
+    return old_formats[safe] == formats.get(safe)
+
+
 def _stamp_of(path: Path) -> list[int] | None:
     """A cache file's ``[st_mtime_ns, st_size]``, or None when it cannot be stat'd.
 
@@ -589,6 +629,7 @@ def build(entries: list[dict] | None = None, force: bool = False) -> dict:
     # cache while loading it, and a stamp taken earlier would then call this
     # index stale on the very next search.
     stamps = _tap_stamps()
+    formats = _tap_formats()
 
     old = _load_raw()
     reused_safe: set = set()
@@ -600,10 +641,8 @@ def build(entries: list[dict] | None = None, force: bool = False) -> dict:
     if old is not None and "postings" not in old and not postings_readable():
         old = None
     if old is not None and not force:
-        old_commits = old.get("commits", {})
-        for safe, commit in commits.items():
-            if commit and old_commits.get(safe) == commit:
-                reused_safe.add(safe)
+        reused_safe = {safe for safe, commit in commits.items()
+                       if _reusable(safe, commit, old, formats)}
 
     kept = _kept_docs(old, reused_safe) if old is not None and reused_safe else []
     if kept is None:
@@ -613,7 +652,7 @@ def build(entries: list[dict] | None = None, force: bool = False) -> dict:
              if e["tap"].replace("/", "__") not in reused_safe]
     docs = kept + _make_docs(fresh, tap_paths)
 
-    saved = _save(docs, commits, stamps)
+    saved = _save(docs, commits, stamps, formats)
     reindexed = sorted({e["tap"] for e in fresh})
     # `reindexed` names taps by their real name ("owner/repo"); `reused_safe`
     # is keyed by the safe name ("owner__repo") that `_tap_commits` uses to
@@ -956,7 +995,8 @@ def postings_fault() -> str | None:
 
 
 def _save(docs: list[dict], commits: dict[str, str],
-          stamps: dict[str, list[int]] | None = None) -> dict:
+          stamps: dict[str, list[int]] | None = None,
+          formats: dict[str, int] | None = None) -> dict:
     """Persist the index and return the ``stats`` block it wrote.
 
     Returning the stats rather than recomputing them in :func:`build` keeps one
@@ -1006,6 +1046,10 @@ def _save(docs: list[dict], commits: dict[str, str],
         # the index falls back to the mtime rule instead of being called
         # stale on every search.
         payload["stamps"] = stamps
+    if formats is not None:
+        # Each tap's cache format at build time, which `build` compares
+        # before reusing that tap's documents (see `_tap_formats`).
+        payload["formats"] = formats
     p = index_path()
     # Atomic swap: a bare write_text here can leave a truncated/corrupt index
     # on disk if the process dies mid-write or a query reads concurrently.
@@ -1210,9 +1254,13 @@ def import_shards(batch: Sequence[tuple[dict, str]]
     # so `stale()` keeps judging it by mtime rather than by an empty map that
     # would call every cached tap changed on every search.
     stamps: dict[str, list[int]] | None = None
+    formats: dict[str, int] = {}
     if old is not None:
         commits = {k: v for k, v in (old.get("commits") or {}).items()
                    if k not in new_safe}
+        old_formats = old.get("formats")
+        if isinstance(old_formats, dict):
+            formats = dict(old_formats)
         old_stamps = old.get("stamps")
         if isinstance(old_stamps, dict):
             stamps = dict(old_stamps)
@@ -1229,10 +1277,16 @@ def import_shards(batch: Sequence[tuple[dict, str]]
         current = _tap_stamps()
         stamps = {k: v for k, v in stamps.items() if k in commits}
         stamps |= {k: current[k] for k in new_safe if k in current}
+    # Kept taps keep the format their docs were built against; an imported
+    # tap is recorded at its cache's format now, so the next build does not
+    # throw the import away. A tap with no readable cache stays unrecorded.
+    current_formats = _tap_formats()
+    formats = {k: v for k, v in formats.items() if k in commits}
+    formats |= {k: current_formats[k] for k in new_safe if k in current_formats}
     for tap, shard in accepted.items():
         commits[tap.replace("/", "__")] = str(shard["commit"])
         docs.extend({**d, "c": 0} for d in shard["docs"])
-    _save(docs, commits, stamps)
+    _save(docs, commits, stamps, formats)
     return results
 
 

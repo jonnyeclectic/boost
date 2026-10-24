@@ -235,6 +235,23 @@ class TestImport:
         # a stamp for a tap the index no longer records is dropped.
         assert rag._load_raw()["stamps"] == {"o__b": [1, 2], "o__a": [5, 6]}
 
+    def test_an_import_carries_kept_formats_and_records_the_imported_tap(
+            self, sandbox, monkeypatch):
+        rag._save([], {"o__b": B}, None, {"o__b": 8, "gone": 7})
+        monkeypatch.setattr(rag, "_tap_formats",
+                            lambda: {"o__a": 9, "o__b": 9})
+        rag.import_shards([(_shard(), A)])
+        # o__b keeps the format its docs were built against, so the next
+        # build still re-indexes it; the imported tap is recorded at today's
+        # format, so that build does not throw the import away.
+        assert rag._load_raw()["formats"] == {"o__b": 8, "o__a": 9}
+
+    def test_an_import_into_no_index_records_only_the_imported_format(
+            self, sandbox, monkeypatch):
+        monkeypatch.setattr(rag, "_tap_formats", lambda: {"o__z": 9})
+        rag.import_shards([(_shard(), A)])
+        assert rag._load_raw()["formats"] == {}
+
     def test_import_shard_is_the_one_shard_form(self, sandbox):
         assert rag.import_shard(_shard(), A) == (True, "1 documents")
         ok, why = rag.import_shard(_shard(), B)
