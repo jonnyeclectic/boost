@@ -813,23 +813,35 @@ def _status(scope) -> int:
 
 def _uninstall(scope, yes, force: bool = False) -> int:
     scope = scope or "project"
-    if not (yes or out.confirm(
-            "Remove BMAD (%s)? deletes bmad-* skills%s" % (
-                scope, " + _bmad/, _bmad-output/" if scope == "project" else ""))):
+    skills, kept = core.skill_dirs(_skills_dir(scope))
+    extras = [Path.cwd() / extra for extra in ("_bmad", "_bmad-output")
+              if scope == "project" and (Path.cwd() / extra).is_dir()]
+    # The confirm names what it deletes: "deletes bmad-* skills" was all a
+    # user approved, which hid both a count of nothing and a symlink the run
+    # then could not remove.
+    doomed = [*skills, *extras]
+    what = ("deletes %s" % ", ".join(paths.tilde(p) for p in doomed)
+            if doomed else "no bmad-* skills to delete")
+    if not (yes or out.confirm("Remove BMAD (%s)? %s" % (scope, what))):
         out.info("aborted")
         return 1
-    _remove_hook_everywhere(scope, _ORIENT_HOOK, _ROUTE_HOOK, force=force)
-    removed = _rm_skills(_skills_dir(scope))
+    hooks = _remove_hook_everywhere(scope, _ORIENT_HOOK, _ROUTE_HOOK,
+                                    force=force)
+    removed = len(core.remove_dirs(skills))
     removed += len(core.remove_personas(_agents_dir(scope)))
-    if scope == "project":
-        for extra in ("_bmad", "_bmad-output"):
-            pth = Path.cwd() / extra
-            if pth.exists():
-                shutil.rmtree(pth, ignore_errors=True)
-                removed += 1
+    removed += len(core.remove_dirs(extras))
+    for entry in kept:
+        out.info(out.role("kept %s — not a BMAD install (a %s); `boost "
+                          "uninstall %s` removes one boost installed"
+                          % (paths.tilde(entry), "symlink" if entry.is_symlink()
+                             else "file", entry.name), "muted"), wrap=True)
     _clear_scope_state(scope)
+    if not (removed or hooks):
+        out.info("nothing of BMAD's to remove (%s)" % scope)
+        return 0
     journal.log("bmad-uninstall", scope, count=removed)
-    out.ok("removed BMAD (%s): %d item(s)" % (scope, removed))
+    out.ok("removed BMAD (%s): %d item(s)%s" % (
+        scope, removed, ", %d hook(s)" % hooks if hooks else ""))
     return 0
 
 
@@ -953,15 +965,6 @@ def _count_skills(skills_dir: Path) -> int:
     return sum(1 for d in skills_dir.glob("bmad-*") if d.is_dir())
 
 
-def _rm_skills(skills_dir: Path) -> int:
-    n = 0
-    if skills_dir.exists():
-        for d in sorted(skills_dir.glob("bmad-*")):
-            shutil.rmtree(d, ignore_errors=True)
-            n += 1
-    return n
-
-
 def _quarantine_dir(scope) -> Path:
     key = "global" if scope == "global" else _fs_slug(str(Path.cwd().resolve()))
     return paths.state_dir() / "bmad-quarantine" / key
@@ -1071,9 +1074,17 @@ def _set_scope_state(scope, **patch) -> None:
 
 
 def _clear_scope_state(scope) -> None:
-    d = _state_read()
+    """Forget ``scope``'s BMAD state, writing nothing when there is none.
+
+    An uninstall on a machine BMAD never touched used to create
+    ``bmad.json`` just to record that nothing was there. A corrupt file is
+    still written through, which is what quarantines it.
+    """
+    d, err = _state_load()
     if scope == "global":
+        held = bool(d["global"])
         d["global"] = {}
     else:
-        d["projects"].pop(_proj_key(), None)
-    _state_write(d)
+        held = d["projects"].pop(_proj_key(), None) is not None
+    if held or err is not None:
+        _state_write(d)
