@@ -7123,6 +7123,13 @@ def uninstall(name: str, *, project_fallback: bool = True,
                 hint="it was installed into %s — `boost uninstall --local %s` "
                      "from there" % (paths.tilde(Path(str(rec.get("base") or
                                                           "a repo"))), name))
+        if rec:
+            # The lock lives in the store dir, and so does a workflow's skill
+            # copy: under a read-only store the files went first and the lock
+            # save failed after, so `list` still showed the item installed
+            # with every file of it gone. The skill branch's refusal, asked
+            # before anything is removed.
+            _check_store_removable(name)
         if rule:
             return _uninstall_rule(name, rule)
         if workflow:
