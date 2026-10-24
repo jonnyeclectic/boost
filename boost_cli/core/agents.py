@@ -497,9 +497,14 @@ def remembered_native_dirs() -> list[tuple[str, Path]]:
     readers of this list remove only a link to one named skill's store dir, or
     one that dangles into the store, never a live link named for no skill.
     """
-    remembered = _remembered_link_dirs()
+    # By identity, as :func:`former_link_dirs` compares: a dir remembered as
+    # ``/private/tmp/...`` and read now as ``/tmp/...`` is one dir, and an
+    # exact-string test left that agent's links dangling after uninstall.
+    remembered = {n: {dir_identity(Path(d)) for d in dirs}
+                  for n, dirs in _remembered_link_dirs().items()}
     return [(n, s["dir"]) for n, s in known_agents().items()
-            if not s["links_skills"] and str(s["dir"]) in remembered.get(n, ())
+            if not s["links_skills"]
+            and dir_identity(s["dir"]) in remembered.get(n, set())
             and not aliases_store(s["dir"])]
 
 
