@@ -155,26 +155,65 @@ class TestParseSpec:
         assert registry.parse_spec(bare.as_uri()) == ("fx", str(bare.resolve()))
 
 
-class TestParseSpecs:
-    """`tap --dry-run` previews via this — must stay a pure read, no clone."""
+class TestPlanSpecs:
+    """`tap --dry-run` previews via this, and `add_many` clones from it."""
 
-    def test_maps_each_spec_in_order(self):
-        assert registry.parse_specs(["owner/repo", "other/thing"]) == [
-            ("owner/repo", "https://github.com/owner/repo"),
-            ("other/thing", "https://github.com/other/thing"),
+    def _held(self, monkeypatch, *taps):
+        monkeypatch.setattr(registry, "list_taps", lambda: [
+            registry.Tap(name=n, url=u) for n, u in taps])
+
+    def test_maps_each_spec_in_order(self, sandbox):
+        assert registry.plan_specs(["owner/repo", "other/thing"]) == [
+            {"spec": "owner/repo", "name": "owner/repo",
+             "url": "https://github.com/owner/repo", "todo": True},
+            {"spec": "other/thing", "name": "other/thing",
+             "url": "https://github.com/other/thing", "todo": True},
         ]
 
-    def test_empty_list(self):
-        assert registry.parse_specs([]) == []
+    def test_empty_list(self, sandbox):
+        assert registry.plan_specs([]) == []
 
     def test_does_not_touch_config_or_disk(self, sandbox):
-        registry.parse_specs(["owner/repo", "another/one"])
+        registry.plan_specs(["owner/repo", "another/one"])
         assert registry.list_taps() == []
-        assert not (sandbox / ".boost" / "repos").exists()
+        assert not (sandbox / ".boost").exists()
 
-    def test_one_bad_spec_raises(self):
-        with pytest.raises(BoostError):
-            registry.parse_specs(["owner/repo", "not a tap spec"])
+    def test_an_already_tapped_registry_is_skipped(self, sandbox,
+                                                   monkeypatch):
+        self._held(monkeypatch, ("owner/repo", "https://github.com/owner/repo"))
+        assert registry.plan_specs(["owner/repo", "new/one"]) == [
+            {"spec": "owner/repo", "name": "owner/repo", "ok": False,
+             "skipped": True, "error": "already tapped"},
+            {"spec": "new/one", "name": "new/one",
+             "url": "https://github.com/new/one", "todo": True},
+        ]
+
+    def test_a_name_held_by_another_source_is_refused(self, sandbox,
+                                                      monkeypatch):
+        self._held(monkeypatch, ("owner/repo", "https://example.com/x.git"))
+        (row,) = registry.plan_specs(["owner/repo"])
+        assert row["ok"] is False and "skipped" not in row
+        assert "https://example.com/x.git" in row["error"]
+
+    def test_a_repeat_in_the_batch_is_skipped_and_a_clash_refused(
+            self, sandbox, tmp_path):
+        rows = registry.plan_specs(["owner/repo", "owner/repo",
+                                    "https://github.com/owner/repo.git"])
+        assert [r.get("todo", False) for r in rows] == [True, False, False]
+        assert rows[1]["skipped"] is True and rows[2]["skipped"] is True
+        one = _make_repo(tmp_path / "a" / "repo")
+        two = _make_repo(tmp_path / "b" / "repo")
+        rows = registry.plan_specs([str(one), str(two)])
+        assert rows[0]["todo"] is True
+        assert "skipped" not in rows[1]
+        assert rows[1]["error"].startswith(
+            "two specs in this batch both name repo: ")
+
+    def test_a_bad_spec_is_a_refusal_not_a_raise(self, sandbox):
+        rows = registry.plan_specs(["owner/repo", "not a tap spec"])
+        assert rows[0]["todo"] is True
+        assert rows[1]["ok"] is False and rows[1]["name"] == "not a tap spec"
+        assert "skipped" not in rows[1]
 
 
 class TestListAndGet:

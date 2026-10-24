@@ -62,6 +62,16 @@ def _skill(d: Path, body: str = "# s\n", when: float | None = None) -> Path:
     return d
 
 
+def _links() -> dict[str, str]:
+    """Every agent skills-dir entry, mapped to its link target or its kind."""
+    found = {}
+    for agent, adir in agents.linking_agents().items():
+        for p in sorted(adir.iterdir()) if adir.is_dir() else ():
+            found["%s/%s" % (agent, p.name)] = (
+                os.readlink(p) if p.is_symlink() else "dir")
+    return found
+
+
 def _mine(name: str, body: str = "# mine\n", when: float | None = None) -> Path:
     return _skill(paths.store_dir() / name, body, when)
 
@@ -1140,11 +1150,53 @@ class TestAdoption:
     def test_the_preview_weighs_only_the_agents_the_run_links(self, installed):
         # Linked by hand from Cursor alone, it is recorded for Cursor alone,
         # so what sits in Windsurf's dir is no part of the run.
+        # Nor is anything left to link there: "and link it" promised a link
+        # the run never made.
         mine = _mine("mine-x")
         (agents.linking_agents()["cursor"] / "mine-x").symlink_to(mine)
         (agents.linking_agents()["windsurf"] / "mine-x").mkdir()
         assert store.sync_preview(store.sync_plan()) == [
-            "would record mine-x, which boost did not install, and link it"]
+            "would record mine-x, which boost did not install, and keep it to "
+            "cursor, where it is already linked (nothing to link)"]
+
+    def test_the_preview_of_a_narrowed_skill_is_what_the_run_does(
+            self, installed):
+        mine = _mine("handmade")
+        claude = agents.linking_agents()["claude-code"] / "handmade"
+        claude.symlink_to(mine)
+        before = _links()
+        assert store.sync_preview(store.sync_plan()) == [
+            "would record handmade, which boost did not install, and keep it "
+            "to claude-code, where it is already linked (nothing to link)"]
+        assert _links() == before
+        assert store.adopt_unrecorded("handmade") == [
+            "recorded handmade as a local skill"]
+        assert _links() == before
+        assert lockfile.get_skill("handmade")["only_agents"] == ["claude-code"]
+
+    def test_the_preview_of_a_skill_linked_everywhere_links_nothing(
+            self, installed):
+        mine = _mine("everywhere")
+        for adir in agents.linking_agents().values():
+            (adir / "everywhere").symlink_to(mine)
+        before = _links()
+        assert store.sync_preview(store.sync_plan()) == [
+            "would record everywhere, which boost did not install, and leave "
+            "its links as they are (already linked into %s, nothing to link)"
+            % ", ".join(agents.linking_agents())]
+        assert store.adopt_unrecorded("everywhere") == [
+            "recorded everywhere as a local skill"]
+        assert _links() == before
+        assert lockfile.get_skill("everywhere")["only_agents"] is None
+
+    def test_the_preview_of_an_orphan_links_it_everywhere_as_the_run_does(
+            self, installed):
+        _mine("orphan")
+        assert store.sync_preview(store.sync_plan()) == [
+            "would record orphan, which boost did not install, and link it"]
+        lines = store.adopt_unrecorded("orphan")
+        assert lines == ["recorded orphan as a local skill"] + [
+            "linked orphan → %s" % a for a in agents.linking_agents()]
 
     def test_the_preview_names_what_is_in_the_way(self, installed):
         _mine("pr-me")

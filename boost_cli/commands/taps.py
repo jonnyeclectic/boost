@@ -41,16 +41,22 @@ def _tap_catalog(args, tapped: list[tuple[str, int]] | None = None) -> int:
         out.warn("no catalog registries match that filter")
         return 1
     if args.dry_run:
-        rows = [(e["name"], e["type"], e.get("category", ""),
-                 "~%d" % (e.get("est_items") or 0),
-                 out.role(e.get("focus", ""), "muted")) for e in selection]
-        # NAME is the owner/repo `boost tap` takes.
-        out.table(rows, headers=("NAME", "TYPE", "CATEGORY", "EST", "FOCUS"),
-                  whole=("NAME",))
-        print()
-        out.dim("%d registries · ~%d items (dry run — nothing tapped)"
-                % (len(selection), sum(e.get("est_items") or 0 for e in selection)))
-        return 0
+        plan = registry.plan_specs([str(e["url"]) for e in selection])
+        todo = [e for e, row in zip(selection, plan, strict=True)
+                if row.get("todo")]
+        if todo:
+            rows = [(e["name"], e["type"], e.get("category", ""),
+                     "~%d" % (e.get("est_items") or 0),
+                     out.role(e.get("focus", ""), "muted")) for e in todo]
+            # NAME is the owner/repo `boost tap` takes.
+            out.table(rows, headers=("NAME", "TYPE", "CATEGORY", "EST",
+                                     "FOCUS"), whole=("NAME",))
+            print()
+        rc = _print_held(plan)
+        out.dim("%s · ~%d items (dry run — nothing tapped)"
+                % (_dry_run_counts(plan),
+                   sum(e.get("est_items") or 0 for e in todo)))
+        return rc
     focus = {str(e["name"]): e.get("focus", "") for e in selection}
     # The ★ follows the catalogue's own `curated` column, not the whole batch:
     # stamping every row is what made it mark 463 registries. `--curated` still
@@ -61,16 +67,60 @@ def _tap_catalog(args, tapped: list[tuple[str, int]] | None = None) -> int:
                                             if e.get("curated")))
 
 
-def _print_dry_run(pairs: list[tuple[str, str]]) -> int:
-    """Print what `--defaults`/SPEC would tap and return 0, tapping nothing.
+def _print_dry_run(specs: list[str], at: str | None = None) -> int:
+    """Print what `--defaults`/SPEC would tap; 1 if the run would refuse one.
 
-    Shares the format of the `--catalog --dry-run` table above so the flag
-    reads the same regardless of which branch of `cmd_tap` it modifies.
+    Built from :func:`registry.plan_specs`, the split the real run makes, so
+    a registry already tapped is named as skipped rather than listed among
+    the ones to clone. Shares the format of the `--catalog --dry-run` table
+    above so the flag reads the same regardless of which branch of `cmd_tap`
+    it modifies.
     """
-    out.table(pairs, headers=("NAME", "URL"), whole=("NAME",))
-    print()
-    out.dim("%d registries (dry run — nothing tapped)" % len(pairs))
-    return 0
+    plan = registry.plan_specs(specs)
+    if at:
+        # `--at` never skips: a tap already configured is an error there
+        # (see cmd_tap), so the preview says so instead of "already tapped".
+        for row in plan:
+            if row.get("skipped"):
+                row.pop("skipped")
+                row["error"] = "already tapped, and --at does not move it"
+    todo = [(row["name"], row["url"]) for row in plan if row.get("todo")]
+    if todo:
+        out.table(todo, headers=("NAME", "URL"), whole=("NAME",))
+        print()
+    rc = _print_held(plan)
+    out.dim("%s (dry run — nothing tapped)" % _dry_run_counts(plan))
+    return rc
+
+
+def _print_held(plan: list[dict]) -> int:
+    """Name each planned spec the run would not clone; 1 if one would fail.
+
+    Worded as `_tap_all` words the same row, so a preview and its run read
+    alike line for line.
+    """
+    rc = 0
+    for row in plan:
+        if row.get("skipped"):
+            out.info(out.role("%s already tapped" % row["name"], "muted"))
+        elif not row.get("todo"):
+            out.warn("would not tap %s: %s" % (row["name"], row["error"]),
+                     wrap=True)
+            rc = 1
+    return rc
+
+
+def _dry_run_counts(plan: list[dict]) -> str:
+    """"2 registries to tap, 1 already tapped" — the split the run will make."""
+    todo = sum(1 for row in plan if row.get("todo"))
+    held = sum(1 for row in plan if row.get("skipped"))
+    bad = len(plan) - todo - held
+    parts = ["%d %s to tap" % (todo, "registry" if todo == 1 else "registries")]
+    if held:
+        parts.append("%d already tapped" % held)
+    if bad:
+        parts.append("%d refused" % bad)
+    return ", ".join(parts)
 
 
 def _skip_if_already_tapped(spec: str) -> bool:
@@ -216,8 +266,7 @@ def cmd_tap(argv) -> int:
         rc |= _tap_catalog(args, tapped)
     if args.defaults:
         if args.dry_run:
-            rc |= _print_dry_run([(str(d["name"]), str(d["url"]))
-                                  for d in config.DEFAULT_TAPS])
+            rc |= _print_dry_run([str(d["url"]) for d in config.DEFAULT_TAPS])
         else:
             # "items", not "skills": the defaults now carry rules and
             # workflows, so a pure rules registry reported "257 skills"
@@ -229,7 +278,7 @@ def cmd_tap(argv) -> int:
                                   for d in config.DEFAULT_TAPS},
                            tapped=tapped)
     if args.spec and args.dry_run:
-        rc |= _print_dry_run(registry.parse_specs(list(args.spec)))
+        rc |= _print_dry_run(list(args.spec), at=args.at)
     elif args.spec and args.at:
         # --at pins one commit, which cannot describe "skip, already tapped"
         # — a tap already sitting on a different commit must fail loudly, not

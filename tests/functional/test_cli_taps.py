@@ -244,6 +244,85 @@ class TestTap:
         assert "dry run — nothing tapped" in r.out
         assert registry.list_taps() == []
 
+    def test_dry_run_marks_a_tapped_spec_as_skipped_like_the_run(
+            self, boost, fixture_tap_src, tmp_path):
+        other = _copy_tap(fixture_tap_src, tmp_path / "other-tap")
+        boost("tap", fixture_tap_src)
+        before = _disk()
+        r = boost("tap", "--dry-run", fixture_tap_src)
+        assert _disk() == before
+        assert "fixture-tap already tapped" in r.out
+        assert "0 registries to tap, 1 already tapped (dry run — nothing " \
+               "tapped)" in r.out
+        assert "NAME" not in r.out                # no table of nothing
+        assert "fixture-tap already tapped" in boost("tap",
+                                                     fixture_tap_src).out
+        assert _disk() == before
+        r = boost("tap", "--dry-run", fixture_tap_src, str(other))
+        assert "1 registry to tap, 1 already tapped" in r.out
+        assert "other-tap" in r.out
+        r = boost("tap", fixture_tap_src, str(other))
+        assert "fixture-tap already tapped" in r.out
+        assert "tapped other-tap (5 items)" in r.out
+
+    def test_dry_run_defaults_counts_only_what_the_run_clones(
+            self, boost, sandbox, fixture_tap_src, monkeypatch):
+        monkeypatch.setattr(
+            "boost_cli.core.gitutil.clone_shallow",
+            lambda url, dest: shutil.copytree(fixture_tap_src, dest))
+        boost("tap", "--defaults")
+        before = _disk()
+        r = boost("tap", "--defaults", "--dry-run")
+        assert _disk() == before
+        n = len(config.DEFAULT_TAPS)
+        assert "0 registries to tap, %d already tapped" % n in r.out
+        for d in config.DEFAULT_TAPS:
+            assert "%s already tapped" % d["name"] in r.out
+
+    def test_dry_run_names_a_refusal_and_exits_1(self, boost, sandbox,
+                                                 fixture_tap_src, tmp_path):
+        boost("tap", fixture_tap_src)
+        # Same name, different repository: the real run refuses it.
+        clash = _copy_tap(fixture_tap_src, tmp_path / "x" / "fixture-tap")
+        r = boost("tap", "--dry-run", str(clash), expect=1)
+        assert "would not tap fixture-tap: " in r.out
+        assert "0 registries to tap, 1 refused" in r.out
+        boost("tap", str(clash), expect=1)
+
+    def test_dry_run_with_at_does_not_call_a_held_tap_skipped(
+            self, boost, fixture_tap_src):
+        boost("tap", fixture_tap_src)
+        r = boost("tap", "--dry-run", fixture_tap_src, "--at", "a" * 40,
+                  expect=1)
+        assert ("would not tap fixture-tap: already tapped, and --at does "
+                "not move it") in " ".join(r.out.split())
+        assert "fixture-tap already tapped" not in r.out
+
+
+def _disk():
+    """Every file and link under the sandbox HOME, with its bytes or target.
+
+    What a preview is held to. The diagnostic log is left out — every run
+    appends to it — and so are bare directories, which its creation adds.
+    """
+    home = paths.home()
+    logs = paths.logs_dir()
+    seen = {}
+    for root, dirs, files in os.walk(home):
+        if os.path.abspath(root) == os.path.abspath(logs):
+            dirs[:] = []
+            continue
+        for name in dirs + files:
+            p = os.path.join(root, name)
+            rel = os.path.relpath(p, home).replace(os.sep, "/")
+            if os.path.islink(p):
+                seen[rel] = ("link", os.readlink(p))
+            elif os.path.isfile(p):
+                with open(p, "rb") as fh:
+                    seen[rel] = ("file", fh.read())
+    return seen
+
+
 
 class TestTapCatalog:
     def test_dry_run_lists_without_tapping(self, boost, sandbox):
@@ -252,6 +331,26 @@ class TestTapCatalog:
         assert "dry run — nothing tapped" in r.out
         assert "3 registries" in r.out
         assert registry.list_taps() == []
+
+    def test_dry_run_leaves_a_tapped_registry_out_of_the_table(
+            self, boost, sandbox, monkeypatch):
+        from boost_cli.core import registry
+        sel = sorted(config.load_registry_catalog(),
+                     key=lambda e: (-int(e.get("est_items") or 0),
+                                    e["name"].lower()))
+        sel = [e for e in sel if e.get("type") == "skill"
+               and not e.get("list_only")][:3]
+        first = sel[0]
+        monkeypatch.setattr(registry, "list_taps", lambda: [registry.Tap(
+            name=first["name"], url=first["url"])])
+        r = boost("tap", "--catalog", "--type", "skill", "--limit", "3",
+                  "--dry-run")
+        assert "%s already tapped" % first["name"] in r.out
+        assert ("2 registries to tap, 1 already tapped · ~%d items (dry run "
+                "— nothing tapped)" % sum(int(e.get("est_items") or 0)
+                                          for e in sel[1:])) in r.out
+        table = r.out.split("%s already tapped" % first["name"])[0]
+        assert sel[1]["name"] in table and first["name"] not in table
 
     def test_type_filter_restricts_selection(self, boost, sandbox):
         r = boost("tap", "--catalog", "--type", "rule", "--dry-run")

@@ -1136,7 +1136,7 @@ _PLAN_LABELS = [
     ("missing_links", "missing agent links"),
     ("blocked_links", "agent links blocked by a foreign file"),
     ("stale_links", "stale links"),
-    ("adoptable_store", "skills added outside boost, to record and link"),
+    ("adoptable_store", "skills added outside boost, to record"),
     ("older_copies", "older copies of those, left alone"),
     ("foreign_store", "store dirs copying another tool's skills (--prune removes)"),
     ("not_skill_store", "store dirs that are not skills, left alone"),
@@ -1270,6 +1270,10 @@ def cmd_sync(argv: list[str]) -> int:
                 elif key == "unreadable_store":
                     name, path = item
                     out.info("%s — %s cannot be read" % (name, _tilde(Path(path))))
+                elif key == "adoptable_store":
+                    # The same per-skill line `heal --dry-run` prints: which
+                    # agents the record keeps it to, and which it links.
+                    out.info(store.adoption_preview(item), wrap=True)
                 elif key == "plugin_duplicates":
                     name, plugin_id, _path, how = item
                     out.info("%s — plugin %s (%s)" % (name, plugin_id, how))
