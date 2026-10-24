@@ -227,7 +227,9 @@ def cmd_clean(argv) -> int:
         )
 
     if paths.lock_history_dir().is_dir():
-        snaps = sorted(paths.lock_history_dir().glob("lock-*.json"))
+        # The order lock history prunes by, so this never names the newer
+        # of two same-second snapshots as the old one.
+        snaps = util.sorted_history(paths.lock_history_dir().glob("lock-*.json"))
         items.extend(
             (old, "old lock history", old.stat().st_size)
             for old in snaps[:-50]

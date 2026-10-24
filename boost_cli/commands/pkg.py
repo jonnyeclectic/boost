@@ -3379,10 +3379,9 @@ def _snapshot_save(label: str | None) -> int:
 def _snapshot_list(as_json: bool) -> int:
     paths.ensure_dirs()
     snaps = []
-    # newest first; file mtime keeps same-second saves (snap-...-2) in order
-    for tar_path in sorted(paths.snapshots_dir().glob("snap-*.tar.gz"),
-                           key=lambda p: (p.stat().st_mtime, p.name),
-                           reverse=True):
+    # newest first, by the id's stamp and same-second serial (snap-...-2)
+    for tar_path in util.sorted_history(
+            paths.snapshots_dir().glob("snap-*.tar.gz"), newest_first=True):
         snap_id = tar_path.name[:-len(".tar.gz")]
         side = tar_path.parent / (snap_id + ".json")
         meta = {}
