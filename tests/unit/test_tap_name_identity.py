@@ -333,12 +333,17 @@ class TestRemoveToleratesMalformedRows:
         _rows(nameless, "junk", 7, _gh("idbad/real"))
         tap = registry.remove("idbad/real")
         assert tap.name == "idbad/real"
-        assert config.load()["taps"] == [nameless, "junk", 7]
+        # On disk, as the user left them; the merged view skips them.
+        on_disk = json.loads(paths.config_path().read_text(encoding="utf-8"))
+        assert on_disk["taps"] == [nameless, "junk", 7]
+        assert config.load()["taps"] == []
 
     def test_only_the_named_row_goes(self, sandbox):
         _rows(_gh("idbad/a"), {"name": None}, _gh("idbad/b"))
         registry.remove("idbad/a")
-        assert config.load()["taps"] == [{"name": None}, _gh("idbad/b")]
+        on_disk = json.loads(paths.config_path().read_text(encoding="utf-8"))
+        assert on_disk["taps"] == [{"name": None}, _gh("idbad/b")]
+        assert config.load()["taps"] == [_gh("idbad/b")]
 
     def test_config_on_disk_is_the_one_written(self, sandbox):
         _rows({"url": "u"}, _gh("idbad/c"))

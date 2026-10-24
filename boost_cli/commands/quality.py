@@ -656,6 +656,10 @@ def cmd_doctor(argv):
         bad("config", "%s — boost is running on defaults, so %s. Repair the "
             "file, or %s; the next write moves the bad file to "
             "config.json.corrupt" % (cfg_err, unread, re_add), wrap=True)
+    # Parsed, but a tap row or agent the read leaves out: every other check
+    # runs on the rest, and nothing else would name the one that is gone.
+    for issue in config.shape_issues():
+        bad("config", issue, wrap=True)
 
     # Same for policy.json: unreadable, it reads as defaults, and the
     # verdict was "healthy" while every rule in it went unenforced.
