@@ -766,7 +766,8 @@ def cmd_doctor(argv):
             bad("tap", "tap %s has %s in its clone — %s"
                 % (tap.name, "git lock files" if len(locks) > 1
                    else "a git lock file",
-                   gitutil.lock_hint(", ".join(_tilde(p) for p in locks))),
+                   gitutil.lock_hint(", ".join(_tilde(p) for p in locks),
+                                     gitutil.TAP_CLONE)),
                 wrap=True)
         elif not tap.cache_file.exists():
             bad("tap", "tap %s has no catalog cache — run `boost update %s`%s"

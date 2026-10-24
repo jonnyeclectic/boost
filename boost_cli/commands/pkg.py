@@ -2150,7 +2150,7 @@ def cmd_update(argv: list[str]) -> int:
     locked = {t: lock for t, e in failures.items()
               if t not in unpinnable and (lock := gitutil.git_lock_path(e))}
     for tname, lock in locked.items():
-        out.info(out.role("%s: %s" % (tname, gitutil.lock_hint(lock)),
+        out.info(out.role("%s: %s" % (tname, gitutil.lock_hint(lock, gitutil.TAP_CLONE)),
                           "muted"))
     if refused:
         out.info(out.role(

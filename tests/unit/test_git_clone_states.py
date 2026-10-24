@@ -94,8 +94,14 @@ class TestGitLockPath:
         assert gitutil.git_lock_path(text) is None
 
     def test_hint_names_the_path_and_never_untap(self):
-        assert gitutil.lock_hint("/r/.git/index.lock") == (
+        assert gitutil.lock_hint("/r/.git/index.lock", gitutil.TAP_CLONE) == (
             "another git process is working in this tap's clone; if none is, "
+            "remove /r/.git/index.lock")
+
+    def test_hint_is_neutral_unless_told_it_is_a_tap(self):
+        # gitutil.run serves the user's own repo too (`boost onboard --pr`).
+        assert gitutil.lock_hint("/r/.git/index.lock") == (
+            "another git process is working in this repository; if none is, "
             "remove /r/.git/index.lock")
 
     def test_run_attaches_the_hint_from_real_git(self, owned):
@@ -108,6 +114,7 @@ class TestGitLockPath:
         assert named is not None
         assert Path(named).resolve() == lock.resolve()
         assert err.value.hint == gitutil.lock_hint(named)
+        assert "working in this repository;" in err.value.hint
 
     def test_run_gives_no_hint_for_other_failures(self, tmp_path):
         with pytest.raises(BoostError) as err:
@@ -136,7 +143,8 @@ class TestGitLockPath:
         assert sparse_lock.exists()
         assert err.value.message == ("could not fetch skills/a from the repo "
                                      "tap: " + busy)
-        assert err.value.hint == gitutil.lock_hint("/x/.git/index.lock")
+        assert err.value.hint == gitutil.lock_hint("/x/.git/index.lock",
+                                                   gitutil.TAP_CLONE)
 
 
 class TestStaleLocks:
@@ -336,7 +344,7 @@ class TestCommandsNameTheLock:
         r = boost("update", expect=1)
         named = gitutil.git_lock_path(r.out)
         assert named is not None and Path(named).resolve() == lock.resolve()
-        assert "lk: %s" % gitutil.lock_hint(named) in r.out
+        assert "lk: %s" % gitutil.lock_hint(named, gitutil.TAP_CLONE) in r.out
         assert "boost untap" not in r.out
         assert "could not be refreshed" not in r.out
 
@@ -347,7 +355,8 @@ class TestCommandsNameTheLock:
         issues = [c["message"] for c in json.loads(r.out)["checks"]
                   if c["name"] == "tap" and c["status"] != "ok"]
         assert issues == ["tap lk has a git lock file in its clone — %s"
-                          % gitutil.lock_hint(paths.tilde(lock))]
+                          % gitutil.lock_hint(paths.tilde(lock),
+                                              gitutil.TAP_CLONE)]
 
     def test_doctor_is_quiet_once_it_is_gone(self, boost, locked):
         _clone, lock = locked
@@ -359,4 +368,6 @@ class TestCommandsNameTheLock:
         _clone, _lock = locked
         r = boost("compact", "lk", expect=1)
         assert "could not compact lk" in r.out
-        assert "another git process is working in this tap's clone" in r.out
+        # narrow's failure comes through gitutil.run, which cannot know
+        # the repo is a tap, so it words the repo neutrally.
+        assert "another git process is working in this repository" in r.out
