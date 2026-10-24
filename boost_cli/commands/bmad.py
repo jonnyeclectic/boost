@@ -815,10 +815,11 @@ def _uninstall(scope, yes, force: bool = False) -> int:
     scope = scope or "project"
     skills, kept = core.skill_dirs(_skills_dir(scope))
     extras: list[Path] = []
+    linked_extras: list[Path] = []
     for extra in ("_bmad", "_bmad-output") if scope == "project" else ():
         pth = Path.cwd() / extra
         if pth.is_symlink():
-            kept.append(pth)    # remove_dirs never follows a link
+            linked_extras.append(pth)    # remove_dirs never follows a link
         elif pth.is_dir():
             extras.append(pth)
     # The confirm names what it deletes: "deletes bmad-* skills" was all a
@@ -840,6 +841,12 @@ def _uninstall(scope, yes, force: bool = False) -> int:
                           "uninstall %s` removes one boost installed"
                           % (paths.tilde(entry), "symlink" if entry.is_symlink()
                              else "file", entry.name), "muted"), wrap=True)
+    for entry in linked_extras:
+        # Not a skill, so `boost uninstall <name>` is no answer for it: the
+        # link may well lead to the user's real BMAD runtime elsewhere.
+        out.info(out.role("kept %s — a symlink, and uninstall never deletes "
+                          "through one; remove it yourself if it is BMAD's"
+                          % paths.tilde(entry), "muted"), wrap=True)
     _clear_scope_state(scope)
     if not (removed or hooks):
         out.info("nothing of BMAD's to remove (%s)" % scope)

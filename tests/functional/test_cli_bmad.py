@@ -312,8 +312,10 @@ class TestUninstall:
                          % bmad.paths.tilde(proj / "_bmad-output")]
         flat = " ".join(r.out.split())
         assert "removed BMAD (project): 1 item(s)" in flat
-        assert ("kept %s — not a BMAD install (a symlink)"
-                % bmad.paths.tilde(proj / "_bmad")) in flat
+        assert ("kept %s — a symlink, and uninstall never deletes through "
+                "one" % bmad.paths.tilde(proj / "_bmad")) in flat
+        # Not a skill: the `boost uninstall <name>` hint would not run.
+        assert "boost uninstall _bmad" not in flat
         assert (proj / "_bmad").is_symlink() and elsewhere.is_dir()
         assert not (proj / "_bmad-output").exists()
 
