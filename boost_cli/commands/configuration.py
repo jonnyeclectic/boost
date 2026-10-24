@@ -952,7 +952,7 @@ def _onboard_unchanged(dest: Path, content: str) -> bool:
         return False
 
 
-def _write_onboard_file(dest: Path, content: str, force: bool) -> bool:
+def _write_onboard_file(dest: Path, content: str, force: bool) -> str:
     """Write one generated onboard file; confirm first if it already exists.
 
     ``boost onboard`` is routinely re-run on a repo that already has its own
@@ -961,24 +961,26 @@ def _write_onboard_file(dest: Path, content: str, force: bool) -> bool:
     still reporting "created". Existence has to be checked *before* the write,
     the same way :func:`intelligence._write_generated` already does.
 
-    Returns True when the file was written.
+    Returns ``"written"``, ``"unchanged"`` or ``"skipped"`` — the last two
+    are different answers: an unchanged file is onboarded, a skipped one is a
+    file that differs from boost's and that the user declined to overwrite.
     """
     if not dest.exists():
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_text(content, encoding="utf-8")
         out.ok("created %s" % _tilde(dest))
-        return True
+        return "written"
     if _onboard_unchanged(dest, content):
         # Re-running onboard regenerates the workflow byte-for-byte. Prompting
         # to overwrite a file with its own contents is noise, not safety.
         out.info("unchanged %s" % _tilde(dest))
-        return False
+        return "unchanged"
     if not force and not out.confirm("overwrite %s?" % _tilde(dest)):
         out.info("skipped %s" % _tilde(dest))
-        return False
+        return "skipped"
     dest.write_text(content, encoding="utf-8")
     out.ok("updated %s" % _tilde(dest))
-    return True
+    return "written"
 
 
 def _telemetry_created(dest: Path) -> str:
@@ -1093,9 +1095,21 @@ def cmd_onboard(argv) -> int:
                      % _PR_BRANCH)
         return 0
 
-    written = [rel for rel, content in files
-               if _write_onboard_file(repo / rel, content,
-                                      args.force or args.yes)]
+    outcome = {rel: _write_onboard_file(repo / rel, content,
+                                        args.force or args.yes)
+               for rel, content in files}
+    written = [rel for rel, how in outcome.items() if how == "written"]
+    skipped = [rel for rel, how in outcome.items() if how == "skipped"]
+    if skipped:
+        # A declined overwrite is not "already onboarded": the file is not
+        # boost's version, and the user just said no to making it so. Same
+        # rule as `clean`'s decline, and the same rc as every other "no".
+        out.warn("%s left unchanged — `boost onboard -f` to overwrite"
+                 % ("1 file differs and was" if len(skipped) == 1
+                    else "%d files differ and were" % len(skipped)),
+                 wrap=True)
+        if not written:
+            return 1
     if not written:
         # Nothing changed, so there is nothing to journal — and nothing for
         # --pr to commit. Branching here would leave an empty branch behind
@@ -1125,7 +1139,7 @@ def cmd_onboard(argv) -> int:
                             hint="branch %s is committed — push it and run `gh pr create --fill`" % branch)
         url = (proc.stdout or "").strip().splitlines()
         out.ok("opened PR%s" % ((" " + url[-1]) if url else ""))
-    return 0
+    return 1 if skipped else 0
 
 
 # ---------------------------------------------------------------- completions
