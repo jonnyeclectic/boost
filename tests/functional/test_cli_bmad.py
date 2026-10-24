@@ -251,6 +251,101 @@ class TestUninstall:
         assert not cs.has_hook("project", "SessionStart", "bmad", project_dir=proj)
         assert bmad._get_scope_state("project") == {}
 
+    def test_the_count_is_what_was_removed_not_what_was_tried(
+            self, boost, sandbox):
+        # boost's own install of a skill named bmad-notes: a store dir with a
+        # symlink in ~/.claude/skills. rmtree refuses the link, the refusal
+        # was swallowed, and "removed BMAD (global): 1 item(s)" reported it.
+        store = sandbox / ".agents" / "skills" / "bmad-notes"
+        store.mkdir(parents=True)
+        (store / "SKILL.md").write_text("---\nname: bmad-notes\n---\n",
+                                        encoding="utf-8")
+        link = sandbox / ".claude" / "skills" / "bmad-notes"
+        link.parent.mkdir(parents=True, exist_ok=True)
+        link.symlink_to(store)
+        before = _disk(sandbox)
+        r = boost("bmad", "uninstall", "--scope", "global", "-y")
+        flat = " ".join(r.out.split())
+        assert "removed BMAD" not in flat
+        assert "nothing of BMAD's to remove (global)" in flat
+        assert ("kept ~/.claude/skills/bmad-notes — not a BMAD install (a "
+                "symlink); `boost uninstall bmad-notes` removes one boost "
+                "installed") in flat
+        assert link.is_symlink() and (store / "SKILL.md").is_file()
+        # Nor does a no-op leave BMAD state behind where there was none.
+        assert _disk(sandbox) == before
+        assert not bmad._state_path().exists()
+
+    def test_the_prompt_names_what_it_deletes(self, boost, sandbox,
+                                              monkeypatch):
+        skills = sandbox / ".claude" / "skills"
+        for name in ("bmad-a", "bmad-b"):
+            (skills / name).mkdir(parents=True)
+        asked = []
+        monkeypatch.setattr(bmad.out, "confirm",
+                            lambda q, **kw: asked.append(q) or False)
+        r = boost("bmad", "uninstall", "--scope", "global", expect=1)
+        assert asked == ["Remove BMAD (global)? deletes "
+                         "~/.claude/skills/bmad-a, ~/.claude/skills/bmad-b"]
+        assert "aborted" in r.out
+        assert (skills / "bmad-a").is_dir()
+        r = boost("bmad", "uninstall", "--scope", "global", "-y")
+        assert "removed BMAD (global): 2 item(s)" in r.out
+        assert not list(skills.glob("bmad-*"))
+        assert not bmad._state_path().exists()
+        asked.clear()
+        boost("bmad", "uninstall", "--scope", "global", expect=1)
+        assert asked == ["Remove BMAD (global)? no bmad-* skills to delete"]
+
+    def test_a_symlinked_runtime_dir_is_kept_and_named(
+            self, boost, sandbox, proj, tmp_path, monkeypatch):
+        elsewhere = tmp_path / "shared-bmad"
+        elsewhere.mkdir()
+        (proj / "_bmad").symlink_to(elsewhere)
+        (proj / "_bmad-output").mkdir()
+        asked = []
+        monkeypatch.setattr(bmad.out, "confirm",
+                            lambda q, **kw: asked.append(q) or True)
+        r = boost("bmad", "uninstall")
+        # The confirm lists only what the run deletes.
+        assert asked == ["Remove BMAD (project)? deletes %s"
+                         % bmad.paths.tilde(proj / "_bmad-output")]
+        flat = " ".join(r.out.split())
+        assert "removed BMAD (project): 1 item(s)" in flat
+        assert ("kept %s — a symlink, and uninstall never deletes through "
+                "one" % bmad.paths.tilde(proj / "_bmad")) in flat
+        # Not a skill: the `boost uninstall <name>` hint would not run.
+        assert "boost uninstall _bmad" not in flat
+        assert (proj / "_bmad").is_symlink() and elsewhere.is_dir()
+        assert not (proj / "_bmad-output").exists()
+
+    def test_state_that_existed_is_cleared(self, boost, sandbox):
+        bmad._set_scope_state("global", installed=True)
+        r = boost("bmad", "uninstall", "--scope", "global", "-y")
+        assert "nothing of BMAD's to remove (global)" in r.out
+        assert bmad._get_scope_state("global") == {}
+        assert json.loads(bmad._state_path().read_text(
+            encoding="utf-8"))["global"] == {}
+
+
+def _disk(home):
+    """Every file and link under ``home``, with its bytes or link target.
+
+    The diagnostic log is left out — every run appends to it.
+    """
+    from boost_cli.core import paths
+    logs = str(paths.logs_dir())
+    seen = {}
+    for p in sorted(Path(home).rglob("*")):
+        if str(p).startswith(logs):
+            continue
+        rel = p.relative_to(home).as_posix()
+        if p.is_symlink():
+            seen[rel] = ("link", str(p.readlink()))
+        elif p.is_file():
+            seen[rel] = ("file", p.read_bytes())
+    return seen
+
 
 class TestInit:
     def test_init_provisions_runtime(self, boost, sandbox, npx, proj):

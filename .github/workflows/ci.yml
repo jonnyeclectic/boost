@@ -361,7 +361,11 @@ jobs:
     # 60 ran out at a 17.5k-test suite: on 2026-10-23 windows-3.12 printed its
     # `100%` row at 58 min and was cancelled at 60.5 on two attempts (run
     # 39915231006), while 3.13 on the same commit passed in 40.
-    timeout-minutes: ${{ startsWith(matrix.os, 'windows') && 80 || 30 }}
+    # macOS then ran out of 30 at the same suite: on 2026-10-23 macos-3.13
+    # passed in 28.0 and macos-3.12 was cancelled at 30.0 (run 40037733470),
+    # passing on rerun. So the condition names the one OS that keeps 30 —
+    # Linux, the 12.7-18.3 min cells — and macOS shares Windows' cap.
+    timeout-minutes: ${{ startsWith(matrix.os, 'ubuntu') && 30 || 80 }}
     permissions:
       contents: write  # coverage badge push (main only)
     defaults:

@@ -1317,7 +1317,6 @@
       "off_pin": 9172,
       "overstarred": 62338,
       "parse_spec": 6071307,
-      "parse_specs": 226,
       "pin": 4456,
       "project_dependents": 2427,
       "refresh_age_days": 2253,
@@ -1489,7 +1488,6 @@
       "upstream_reason": 4007
     },
     "store.py": {
-      "_adoption_preview": 23764,
       "_adoption_scope": 17292,
       "_already_links": 271942,
       "_backfill_candidates": 361274,
@@ -3223,7 +3221,6 @@
       "off_pin": 13,
       "overstarred": 38,
       "parse_spec": 142,
-      "parse_specs": 1,
       "pin": 19,
       "project_dependents": 9,
       "refresh_age_days": 10,
@@ -3395,7 +3392,6 @@
       "upstream_reason": 12
     },
     "store.py": {
-      "_adoption_preview": 36,
       "_adoption_scope": 17,
       "_already_links": 8,
       "_backfill_candidates": 53,

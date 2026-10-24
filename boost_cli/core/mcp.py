@@ -483,6 +483,14 @@ def config_problem(cfg_err: str) -> str:
     the real fix while ``boost_search`` and ``boost_list`` gave that advice in
     the same session, so all three take this one sentence.
     """
+    from . import jsonstate, paths
+    if isinstance(cfg_err, jsonstate.Unreadable):
+        # Its bytes may be intact, and every config write refuses over it, so
+        # "re-add their taps" names a command that cannot succeed.
+        return ("%s — boost is running on defaults, so the user's taps are "
+                "not listed; ask the user to %s (run `boost doctor` for "
+                "details)" % (cfg_err, jsonstate.read_remedy(
+                    cfg_err, paths.tilde)))
     return ("%s — boost is running on defaults, so the user's taps are not "
             "listed; ask the user to repair the file or re-add their taps "
             "(run `boost doctor` for details)" % cfg_err)

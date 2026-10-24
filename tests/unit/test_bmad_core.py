@@ -19,7 +19,9 @@ Three things are worth pinning here, because all three are load-bearing for
 from __future__ import annotations
 
 import json
+import os
 import re
+import sys
 from pathlib import Path
 from typing import ClassVar
 
@@ -1289,3 +1291,50 @@ no code unless you were asked for a change, which then gets the contract above."
             assert "proactive" not in desc.lower(), p.slug
             assert "routing banner names %s," % p.slug in desc
             assert desc.endswith("Covers %s." % p.triggers)
+
+
+class TestSkillDirs:
+    """What `bmad uninstall` deletes: BMAD's real dirs, never a link."""
+
+    def test_splits_real_dirs_from_links_and_files(self, tmp_path):
+        skills = tmp_path / "skills"
+        (skills / "bmad-real").mkdir(parents=True)
+        (skills / "other").mkdir()
+        (skills / "bmad-file").write_text("x", encoding="utf-8")
+        target = tmp_path / "store" / "bmad-linked"
+        target.mkdir(parents=True)
+        (skills / "bmad-linked").symlink_to(target)
+        removable, kept = bmad.skill_dirs(skills)
+        assert removable == [skills / "bmad-real"]
+        assert kept == [skills / "bmad-file", skills / "bmad-linked"]
+
+    def test_a_missing_dir_holds_nothing(self, tmp_path):
+        assert bmad.skill_dirs(tmp_path / "absent") == ([], [])
+
+    def test_remove_dirs_returns_only_what_is_gone(self, tmp_path):
+        real = tmp_path / "bmad-real"
+        (real / "sub").mkdir(parents=True)
+        (real / "sub" / "f").write_text("x", encoding="utf-8")
+        target = tmp_path / "target"
+        target.mkdir()
+        link = tmp_path / "bmad-link"
+        link.symlink_to(target)
+        absent = tmp_path / "bmad-absent"
+        assert bmad.remove_dirs([real, link, absent]) == [real]
+        assert not real.exists()
+        assert link.is_symlink() and target.is_dir()
+
+    @pytest.mark.skipif(sys.platform == "win32" or getattr(os, "geteuid",
+                                                           lambda: 1)() == 0,
+                        reason="needs POSIX permissions and a non-root user")
+    def test_a_dir_rmtree_cannot_empty_is_not_counted(self, tmp_path):
+        stuck = tmp_path / "bmad-stuck"
+        inner = stuck / "locked"
+        inner.mkdir(parents=True)
+        (inner / "f").write_text("x", encoding="utf-8")
+        inner.chmod(0o500)
+        try:
+            assert bmad.remove_dirs([stuck]) == []
+            assert stuck.is_dir()
+        finally:
+            inner.chmod(0o700)

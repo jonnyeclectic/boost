@@ -76,12 +76,24 @@ def will_seed(*, force: bool = False) -> bool:
     command a first-time user was told to run, silence that long reads as a
     hang. Deliberately mirrors seed_catalog's own gates rather than guessing.
     """
+    return bool(seed_plan(force=force))
+
+
+def seed_plan(*, force: bool = False) -> list[str]:
+    """The names :func:`seed_catalog` would tap, in order; [] when it would not.
+
+    What `boost mcp register --dry-run` prints, so the preview names the
+    network work the real run does before it touches any host. The count is
+    the missing defaults, not all of them: under ``--seed`` a machine holding
+    five of seven is topped up by two.
+    """
     if not force and typedvalue.env_flag(NO_SEED_ENV, unknown=True):
-        return False
+        return []
     existing = {t.name for t in registry.list_taps()}
     if not force and existing:
-        return False
-    return any(str(d["name"]) not in existing for d in config.DEFAULT_TAPS)
+        return []
+    return [str(d["name"]) for d in config.DEFAULT_TAPS
+            if str(d["name"]) not in existing]
 
 
 def seed_catalog(*, force: bool = False) -> SeedResult:

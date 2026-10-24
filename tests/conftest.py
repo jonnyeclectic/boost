@@ -798,6 +798,7 @@ def sandbox(tmp_path, monkeypatch):
     monkeypatch.setattr(journal, "_WARNED_UNSAVED", False)
     monkeypatch.setattr(journal, "_WARNED_UNREADABLE", False)
     monkeypatch.setattr(lockfile, "_WARNED_CORRUPT", False)
+    monkeypatch.setattr(lockfile, "_WARNED_UNREADABLE", False)
     monkeypatch.setattr(policy, "_WARNED_CORRUPT", False)
     monkeypatch.setattr(projectlock, "_WARNED_CORRUPT", set())
     monkeypatch.setattr(catalog, "_UNSAVED", set())

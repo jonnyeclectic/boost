@@ -16,17 +16,17 @@ from pathlib import Path
 import pytest
 
 from boost_cli.commands import quality
+from boost_cli.core import store
 
 
 class TestNorm:
+    """`store.normalize_link_target`, the string form both sides compare as."""
+
     def test_it_folds_case_the_way_the_platform_does(self):
         # A no-op on POSIX, case-folding on Windows. Asserting against
         # os.path.normcase rather than a literal keeps this true on both.
-        assert quality._norm(Path("/A/B")) == os.path.normcase(
-            os.path.abspath("/A/B"))
-
-    def test_it_makes_a_relative_path_absolute(self):
-        assert os.path.isabs(quality._norm(Path("rel/ative")))
+        assert store.normalize_link_target(Path("/A/B")) == os.path.normcase(
+            os.path.normpath("/A/B"))
 
     @pytest.mark.parametrize("prefixed,plain", [
         ("\\\\?\\C:\\x\\y", "C:\\x\\y"),
@@ -38,32 +38,39 @@ class TestNorm:
         One location, two strings — which is how `heal` concluded it did not
         own a link it had created itself, and repaired nothing on Windows.
         """
-        got = quality._norm(Path(prefixed))
+        got = store.normalize_link_target(Path(prefixed))
         assert "?" not in got            # the prefix is gone, on any host
         assert got.endswith(os.path.normcase(plain))
 
 
 class TestWithin:
+    """`store._contains(root, target)`: containment by path component."""
+
     def test_a_path_is_within_itself(self):
-        assert quality._within("/a/b", "/a/b")
+        assert store._contains("/a/b", "/a/b")
 
     def test_a_child_is_within(self):
-        assert quality._within(os.sep.join(["", "a", "b", "c"]),
-                               os.sep.join(["", "a", "b"]))
+        assert store._contains(os.sep.join(["", "a", "b"]),
+                               os.sep.join(["", "a", "b", "c"]))
 
     def test_a_sibling_with_a_shared_prefix_is_not(self):
         # The bug a bare `startswith` would introduce: `/a/bc` is not under
         # `/a/b`, and treating it as owned would delete a stranger's link.
-        assert not quality._within(os.sep.join(["", "a", "bc"]),
-                                   os.sep.join(["", "a", "b"]))
+        assert not store._contains(os.sep.join(["", "a", "b"]),
+                                   os.sep.join(["", "a", "bc"]))
 
     def test_a_parent_is_not_within_its_child(self):
-        assert not quality._within(os.sep.join(["", "a"]),
-                                   os.sep.join(["", "a", "b"]))
+        assert not store._contains(os.sep.join(["", "a", "b"]),
+                                   os.sep.join(["", "a"]))
 
-    def test_a_trailing_separator_on_the_parent_does_not_break_it(self):
-        assert quality._within(os.sep.join(["", "a", "b", "c"]),
-                               os.sep.join(["", "a", "b"]) + os.sep)
+    def test_a_root_spelled_with_a_trailing_separator_still_contains(self):
+        root = os.sep.join(["", "a", "b"]) + os.sep
+        assert store._contains(root, os.sep.join(["", "a", "b", "c"]))
+
+    def test_no_common_root_is_outside_not_a_crash(self):
+        # commonpath raises ValueError mixing absolute and relative paths
+        # (and, on Windows, two drives): outside, never an exception.
+        assert not store._contains("/a/b", "rel")
 
 
 class TestOwnedLink:
@@ -115,7 +122,7 @@ class TestResolveAsFarAsItExists:
         real = tmp_path / "real"
         real.mkdir()
         missing = real / "gone" / "deeper"
-        got = quality._resolve_as_far_as_it_exists(missing)
+        got = store.resolve_as_far_as_it_exists(missing)
         assert got == (real.resolve() / "gone" / "deeper")
 
     def test_a_runtime_error_from_a_symlink_loop_is_swallowed_not_raised(
@@ -141,5 +148,5 @@ class TestResolveAsFarAsItExists:
             return real_resolve(self, *a, **k)
 
         monkeypatch.setattr(_Path, "resolve", loop_then_real)
-        got = quality._resolve_as_far_as_it_exists(missing)
+        got = store.resolve_as_far_as_it_exists(missing)
         assert got == real / "gone"   # fell back to the unresolved ancestor

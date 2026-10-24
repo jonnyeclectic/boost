@@ -51,6 +51,35 @@ def _proc(cmd, rc=0, out="", err=""):
     return subprocess.CompletedProcess(cmd, rc, stdout=out, stderr=err)
 
 
+def _flat(text):
+    """Output with its pane wrapping undone, so a sentence can be asserted."""
+    return " ".join(text.split())
+
+
+def _disk():
+    """Every file and link under the sandbox HOME, with its bytes or target.
+
+    What a preview is held to: it may print anything, and must leave this
+    unchanged. The diagnostic log is left out — every run appends to it — and
+    so are bare directories, which the log's own creation adds.
+    """
+    home = paths.home()
+    logs = paths.logs_dir()
+    seen = {}
+    for root, dirs, files in os.walk(home):
+        if pathlib.Path(root) == logs:
+            dirs[:] = []
+            continue
+        for name in dirs + files:
+            p = pathlib.Path(root) / name
+            rel = p.relative_to(home).as_posix()
+            if p.is_symlink():
+                seen[rel] = ("link", os.readlink(p))
+            elif p.is_file():
+                seen[rel] = ("file", p.read_bytes())
+    return seen
+
+
 # ---------------------------------------------------------------- config
 
 class TestConfig:
@@ -2591,6 +2620,89 @@ class TestMcp:
                 % shlex.join(["claude", "mcp", "remove", "--scope", "user",
                             "boost"])) in r.out
         assert "dry run — nothing was unregistered, nothing tapped" in r.out
+
+    def _fake_seed(self, monkeypatch):
+        """Let the seed run, recording what it would clone instead of cloning."""
+        from boost_cli.core import bootstrap, registry
+        monkeypatch.delenv(bootstrap.NO_SEED_ENV, raising=False)
+        cloned = []
+
+        def fake_seed(*, force=False):
+            names = bootstrap.seed_plan(force=force)
+            cloned.extend(names)
+            return bootstrap.SeedResult(tapped=[(n, 1) for n in names])
+
+        monkeypatch.setattr(bootstrap, "seed_catalog", fake_seed)
+        monkeypatch.setattr(registry, "add", lambda *a, **kw: pytest.fail(
+            "the test seed reached registry.add"))
+        return cloned
+
+    def test_dry_run_names_the_seed_the_real_run_performs(
+            self, boost, sandbox, monkeypatch):
+        cloned = self._fake_seed(monkeypatch)
+        self._fake_clis(monkeypatch)
+        before = _disk()
+        r = boost("mcp", "register", "--host", "claude", "--dry-run")
+        assert _disk() == before
+        names = [str(d["name"]) for d in config.DEFAULT_TAPS]
+        assert ("would tap %d recommended registries first (needs the "
+                "network): %s" % (len(names), ", ".join(names))) in _flat(r.out)
+        assert cloned == []
+        boost("mcp", "register", "--host", "claude", expect=1)
+        assert cloned == names
+
+    def test_dry_run_counts_only_the_missing_registries_under_seed(
+            self, boost, sandbox, monkeypatch):
+        self._fake_seed(monkeypatch)
+        self._fake_clis(monkeypatch)
+        names = [str(d["name"]) for d in config.DEFAULT_TAPS]
+        from boost_cli.core import registry
+        held = [registry.Tap(name=n, url="https://github.com/%s" % n)
+                for n in names[:-1]]
+        monkeypatch.setattr(registry, "list_taps", lambda: held)
+        r = boost("mcp", "register", "--host", "claude", "--seed", "--dry-run")
+        assert ("would tap 1 recommended registry first (needs the network): "
+                "%s" % names[-1]) in _flat(r.out)
+        r = boost("mcp", "register", "--host", "claude", "--dry-run")
+        assert "would tap" not in r.out
+
+    def test_dry_run_names_no_seed_when_seeding_is_off(
+            self, boost, sandbox, monkeypatch):
+        self._fake_seed(monkeypatch)
+        self._fake_clis(monkeypatch)
+        for argv in (("register", "--no-seed"), ("unregister",)):
+            r = boost("mcp", *argv, "--host", "claude", "--dry-run")
+            assert "would tap" not in r.out
+        from boost_cli.core import bootstrap
+        monkeypatch.setenv(bootstrap.NO_SEED_ENV, "1")
+        assert "would tap" not in boost(
+            "mcp", "register", "--host", "claude", "--dry-run").out
+
+    def test_dry_run_names_the_rule_offer_only_for_a_host_it_registers(
+            self, boost, sandbox, monkeypatch):
+        from boost_cli.commands import configuration
+        from boost_cli.core import builtin
+        monkeypatch.delenv(configuration.NO_RULE_ENV, raising=False)
+        self._fake_clis(monkeypatch, "claude")
+        before = _disk()
+        r = boost("mcp", "register", "--dry-run")
+        assert _disk() == before
+        target = configuration._boost_first_targets(["claude"])
+        assert len(target) == 1 and target[0].endswith("CLAUDE.md")
+        assert ("would then offer to add the `%s` rule to %s (asks first)"
+                % (builtin.BUILTIN_RULES[0], target[0])) in _flat(r.out)
+        # Gemini is not installed, so the real run registers nothing there
+        # and offers nothing for it.
+        assert "GEMINI.md" not in r.out
+        self._fake_clis(monkeypatch)
+        r = boost("mcp", "register", "--host", "claude", "--dry-run")
+        assert "would then offer" not in r.out
+        assert "would then offer" not in boost(
+            "mcp", "unregister", "--dry-run").out
+        monkeypatch.setenv(configuration.NO_RULE_ENV, "1")
+        self._fake_clis(monkeypatch, "claude")
+        assert "would then offer" not in boost("mcp", "register",
+                                               "--dry-run").out
 
     # ── the sandbox guard ────────────────────────────────────────────────
     # An agent CLI resolves its own configuration from the ambient

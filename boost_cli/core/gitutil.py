@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 from ..errors import BoostError
-from . import util
+from . import paths, util
 
 
 def has_git() -> bool:
@@ -106,9 +106,11 @@ def run(args: list[str], cwd: Path | None = None, check: bool = True,
                          % (" " + name if name else "", timeout)) from None
     if check and proc.returncode != 0:
         name = _subcommand(args)
+        text = proc.stderr or proc.stdout or ""
+        lock = git_lock_path(text)
         raise BoostError("git%s failed: %s"
-                         % (" " + name if name else "",
-                            _git_error(proc.stderr or proc.stdout or "")))
+                         % (" " + name if name else "", _git_error(text)),
+                         hint=lock_hint(lock) if lock else None)
     return proc
 
 
@@ -398,7 +400,88 @@ def narrow(repo: Path, patterns=SPARSE_PATTERNS) -> None:
     """
     run(["-C", str(repo), "update-index", "--refresh"], check=False)
     set_sparse_cone(repo, patterns)
-    run(["-C", str(repo), "sparse-checkout", "reapply"], check=False)
+    left = _reapply(repo)
+    if left and owned_clone(repo):
+        # A tracked file with local edits is the one thing the refresh cannot
+        # fix: git keeps it, warns on stderr, and exits 0 — so compact
+        # reported "compacted" over a file still on disk. Boost owns this
+        # clone and only ever reads it, so the edit is put back to the commit
+        # (its blob is local: the file was checked out) and the cone retried.
+        run([*_RAW_PATHS, "--literal-pathspecs", "-C", str(repo), "checkout",
+             "--", *left])
+        left = _reapply(repo)
+    if left:
+        raise BoostError(
+            "git kept %d locally modified file%s outside the sparse cone: %s"
+            % (len(left), "" if len(left) == 1 else "s", ", ".join(left)),
+            hint="discard the edits (`git -C %s checkout -- .`), then run "
+                 "`boost compact` again" % util.shell_arg(str(repo)),
+            wrap=True)
+
+
+#: The heading git prints, on stderr and with exit 0, over the tracked files it
+#: declined to remove because they differ from the index.
+_LEFT_BEHIND = "not up to date and were left despite sparse patterns"
+
+
+def _reapply(repo: Path) -> list[str]:
+    """`sparse-checkout reapply`; return the paths git left behind."""
+    # quotepath off: the names are read back as paths, not displayed.
+    proc = run([*_RAW_PATHS, "-c", "core.quotepath=false", "-C", str(repo),
+                "sparse-checkout", "reapply"], check=False)
+    left: list[str] = []
+    listing = False
+    for line in (proc.stderr or "").splitlines():
+        if _LEFT_BEHIND in line:
+            listing = True
+        elif listing and line[:1] == "\t":
+            left.append(line.strip())
+        elif listing:
+            listing = False
+    return left
+
+
+def owned_clone(repo: Path) -> bool:
+    """True when ``repo`` is a git clone boost made, under its repos dir.
+
+    The gate in front of every destructive git step (discarding edits,
+    `git clean`): those are right for a tap clone, which boost only ever
+    reads, and wrong anywhere else. Three things must hold — the path sits
+    strictly inside :func:`paths.repos_dir` (both sides resolved, so a symlink
+    out of it does not count), it has its own ``.git`` directory, and git
+    agrees it is the top of its work tree. The last is what stops a plain
+    directory there (the builtin tap) from resolving to an enclosing repo — a
+    ``$HOME`` kept in git — and cleaning *that*.
+    """
+    try:
+        root = paths.repos_dir().resolve()
+        real = Path(repo).resolve()
+    except OSError:
+        return False
+    # `parents` never holds the path itself, so the repos dir fails too.
+    if root not in real.parents:
+        return False
+    if not (real / ".git").is_dir():
+        return False
+    proc = run(["-C", str(real), "rev-parse", "--show-toplevel"], check=False)
+    if proc.returncode != 0:
+        return False
+    try:
+        return Path(proc.stdout.strip()).resolve() == real
+    except OSError:
+        return False
+
+
+def _clean(repo: Path) -> None:
+    """Remove untracked files from a boost-owned clone; never ignored ones.
+
+    `reset --hard` restores tracked files only, so a file planted in a clone
+    survived every update and was indexed and installed as if it came from
+    the commit the tap reports. ``-fd``, never ``-x``: an ignored file is not
+    scanned as content, and boost has no business deleting it.
+    """
+    if owned_clone(repo):
+        run(["-C", str(repo), "clean", "-fd", "--quiet"])
 
 
 # repo path -> is-sparse, for the lifetime of the process. `materialize` runs
@@ -681,16 +764,62 @@ NETWORK_HINT = "this needs network — the tap stores only Markdown locally"
 SPARSE_LOCK_TIMEOUT = 330.0
 
 
+#: git's wording for every lock it cannot take — ``index.lock``,
+#: ``shallow.lock``, ``HEAD.lock``, a ref's ``.lock``, the sparse cone's. A
+#: killed git leaves any of them behind, and each fails every later command in
+#: that clone the same way.
+_GIT_LOCK = re.compile(r"Unable to create '([^'\n]+?\.lock)': File exists")
+
+
+def git_lock_path(text: str) -> str | None:
+    """The lock file a git failure names, or None when it names none."""
+    m = _GIT_LOCK.search(text)
+    return m.group(1) if m else None
+
+
+def lock_hint(lock: str | Path) -> str:
+    """The remedy for a git lock: the tap is healthy, the lock is not."""
+    return ("another git process is working in this tap's clone; if none "
+            "is, remove %s" % lock)
+
+
+def stale_locks(repo: Path) -> list[Path]:
+    """git ``*.lock`` files sitting in ``repo``'s ``.git``.
+
+    Where a killed git leaves them: the top of ``.git`` (``index.lock``,
+    ``HEAD.lock``, ``shallow.lock``, ``config.lock``), ``info/`` (the sparse
+    cone's) and ``refs/``. ``objects/`` is not walked — git takes no lock there
+    and a full clone holds thousands of files. Boost's own ``boost-*.lock``
+    sidecars are OS locks that persist by design (:func:`util.file_lock`), so
+    they are never reported.
+    """
+    git_dir = Path(repo) / ".git"
+    if not git_dir.is_dir():
+        return []
+    found: list[Path] = []
+    for where, pattern in ((git_dir, "*.lock"), (git_dir / "info", "*.lock"),
+                           (git_dir / "refs", "**/*.lock")):
+        if where.is_dir():
+            found.extend(p for p in where.glob(pattern)
+                         if p.is_file() and not p.name.startswith("boost-"))
+    return sorted(found)
+
+
 def _git_lock_busy(err: BoostError) -> bool:
-    """True for git's "Unable to create '...sparse-checkout.lock': File exists"."""
-    text = str(err)
-    return "sparse-checkout.lock" in text and "File exists" in text
+    """True for git's "Unable to create '...sparse-checkout.lock': File exists".
+
+    Only the sparse cone's lock: it is the one :func:`_sparse_add` may remove
+    on its own, under boost's lock on the same cone. Any other lock belongs to
+    whichever git command takes it, and is the user's to remove.
+    """
+    lock = git_lock_path(str(err))
+    return lock is not None and lock.endswith("sparse-checkout.lock")
 
 
-def _sparse_hint(err: BoostError, git_lock: Path) -> str | None:
-    if _git_lock_busy(err):
-        return ("another git process is working in this tap's clone; if none "
-                "is, remove %s" % git_lock)
+def _sparse_hint(err: BoostError) -> str | None:
+    lock = git_lock_path(str(err))
+    if lock:
+        return lock_hint(lock)
     low = str(err).lower()
     if any(w in low for w in _TRANSPORT_ERRORS):
         return NETWORK_HINT
@@ -752,7 +881,7 @@ def _sparse_add(repo: Path, patterns: list[str], what: str) -> None:
             # the network for a lock file sent the user nowhere.
             raise BoostError(
                 "could not fetch %s from the %s tap: %s" % (what, repo.name, e),
-                hint=_sparse_hint(e, git_lock)) from None
+                hint=_sparse_hint(e)) from None
 
 
 def _depth(repo: Path) -> list[str]:
@@ -880,6 +1009,7 @@ def pull(repo: Path, verify: Callable[[str], None] | None = None) -> str:
         # Reset even when nothing moved: it is also what puts a hand-edited
         # clone back to the commit it claims to be at.
         run(["-C", str(repo), "reset", "--hard", "--quiet", target])
+        _clean(repo)
     after = head_commit(repo)
     return "already up to date" if before == after else "%s → %s" % (
         before[:7] or "(no commits)", after[:7])
@@ -957,6 +1087,7 @@ def checkout_commit(repo: Path, sha: str,
         # old one, so a refusal moves nothing.
         verify(sha)
     run(["-C", str(repo), "checkout", "--quiet", "--detach", sha])
+    _clean(repo)
     # A detached checkout leaves the sparse cone as it was, but re-applying is
     # cheap and keeps a pinned clone byte-identical to a freshly cloned one.
     run(["-C", str(repo), "sparse-checkout", "reapply"], check=False)
@@ -1159,3 +1290,22 @@ def is_repo_root(path: Path) -> bool:
         return Path(proc.stdout.strip()).resolve() == p.resolve()
     except OSError:
         return False
+
+
+def enclosing_toplevel(path: Path) -> Path | None:
+    """The top of the git work tree ``path`` sits *inside*, or None.
+
+    None when ``path`` is in no work tree, or is that top itself. It is what
+    tells "a subdirectory of a repo" from "not a repo at all", which
+    :func:`is_repo_root` answers alike — and the remedies are opposite:
+    `git init` in a subdirectory makes a nested repo inside the user's own.
+    """
+    proc = run(["-C", str(path), "rev-parse", "--show-toplevel"], check=False)
+    top = proc.stdout.strip()
+    if proc.returncode != 0 or not top:
+        return None
+    try:
+        root = Path(top).resolve()
+        return None if root == Path(path).resolve() else root
+    except OSError:
+        return None

@@ -182,6 +182,16 @@ def parse_spec(spec: str):
         p = local
     if _looks_like_a_directory(p):
         if not gitutil.is_repo_root(p):
+            top = gitutil.enclosing_toplevel(p)
+            if top is not None:
+                # A subdirectory of a work tree: `git init` there would nest
+                # a repo inside the user's, which then fails as "no commits".
+                raise BoostError(
+                    "%s is inside the git repository at %s; boost taps a "
+                    "whole repository" % (p, top),
+                    hint="`boost tap %s`, or `boost import %s` to copy just "
+                         "this directory in without a tap"
+                         % (util.shell_arg(str(top)), util.shell_arg(spec)))
             # The dir exists, so git's own "repository '...' does not exist"
             # (which is what `clone_shallow` would raise next) is a false
             # statement about the very thing this branch just confirmed.
@@ -267,16 +277,6 @@ def _checked(name: str, url: str, spec: str) -> tuple[str, str]:
             hint="the name becomes one directory under ~/.boost/repos, and "
                  "no filesystem accepts a longer component")
     return (name, url)
-
-
-def parse_specs(specs: list[str]) -> list[tuple[str, str]]:
-    """Parse each spec to (name, url) via `parse_spec`, touching nothing.
-
-    Used by `tap --dry-run` to preview targets without cloning or writing
-    config — `parse_spec` is already pure (a directory stat at worst), so the
-    only job here is applying it across a SPEC list in order.
-    """
-    return [parse_spec(spec) for spec in specs]
 
 
 def tap_summary(tapped: list[tuple[str, int]]) -> str:
@@ -583,6 +583,9 @@ def add(spec: str, curated: bool = False, at: str | None = None) -> Tap:
     name, url = parse_spec(spec)
     if reserved_cache_name(name):
         raise _reserved(name)
+    # Before the clone: the config write at the end would refuse anyway, and
+    # leave the clone behind as a tap no config lists.
+    config.refuse_unreadable()
     for existing in list_taps():
         if name_key(existing.name) == name_key(name):
             if not same_source(existing.url, url):
@@ -977,33 +980,19 @@ def _clone_one(spec: str, curated: bool, at: str | None) -> dict:
     return {"spec": spec, "name": name, "url": url, "ok": True, "tap": tap}
 
 
-def add_many(specs: list[str], curated: bool = False,
-             pins: dict[str, str] | None = None, jobs: int | None = None,
-             on_done=None,
-             curated_names: Collection[str] = ()) -> list[dict]:
-    """Clone many taps at once and register them in a single config write.
+def plan_specs(specs: list[str]) -> list[dict]:
+    """How :func:`add_many` will treat each spec, in order, touching nothing.
 
-    Returns one result dict per spec, in the order given, each with ``ok`` and
-    either ``tap`` or ``error``. One registry's failure never costs another its
-    clone — a catalog tap of 463 repos that aborted on the first 404 would be
-    worse than useless.
-
-    `pins` maps a tap name to the commit to check out, for published vector
-    shards (see ``core.shards``).
-
-    `curated` stars every tap in the batch; `curated_names` stars only the
-    named ones. A catalogue tap needs the second: one flag for the whole batch
-    is how all 463 registries of `tap --catalog` came out curated, which made
-    the ★ mark everything and so mean nothing.
+    One dict per spec: ``todo`` True for one it will clone (with ``name`` and
+    ``url``), else the result row it reports without cloning — ``skipped``
+    for a registry already tapped or repeated in the batch, ``ok`` False with
+    an ``error`` for one it refuses. `boost tap --dry-run` reads the same
+    plan, so its preview cannot list as "would tap" a registry the real run
+    skips.
     """
-    if not specs:
-        return []
-    paths.ensure_dirs()
-    pins = pins or {}
     existing = {name_key(t.name): t for t in list_taps()}
     batch: dict[str, str] = {}
     results: list[dict] = []
-    todo: list[str] = []
     for spec in specs:
         try:
             name, url = parse_spec(spec)
@@ -1043,7 +1032,41 @@ def add_many(specs: list[str], curated: bool = False,
         # two threads cloning into one directory is a corrupt clone, not a race
         # anyone would enjoy debugging.
         batch[key] = url
-        todo.append(spec)
+        results.append({"spec": spec, "name": name, "url": url, "todo": True})
+    return results
+
+
+def add_many(specs: list[str], curated: bool = False,
+             pins: dict[str, str] | None = None, jobs: int | None = None,
+             on_done=None,
+             curated_names: Collection[str] = ()) -> list[dict]:
+    """Clone many taps at once and register them in a single config write.
+
+    Returns one result dict per spec, in the order given, each with ``ok`` and
+    either ``tap`` or ``error``. One registry's failure never costs another its
+    clone — a catalog tap of 463 repos that aborted on the first 404 would be
+    worse than useless.
+
+    `pins` maps a tap name to the commit to check out, for published vector
+    shards (see ``core.shards``).
+
+    `curated` stars every tap in the batch; `curated_names` stars only the
+    named ones. A catalogue tap needs the second: one flag for the whole batch
+    is how all 463 registries of `tap --catalog` came out curated, which made
+    the ★ mark everything and so mean nothing.
+    """
+    if not specs:
+        return []
+    config.refuse_unreadable()      # before any clone, as in `add`
+    paths.ensure_dirs()
+    pins = pins or {}
+    results: list[dict] = []
+    todo: list[str] = []
+    for row in plan_specs(specs):
+        if row.pop("todo", False):
+            todo.append(row["spec"])
+        else:
+            results.append(row)
 
     def work(spec: str) -> dict:
         name, _url = parse_spec(spec)
