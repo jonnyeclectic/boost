@@ -716,3 +716,67 @@ class TestDumpUnescape:
     ])
     def test_inverts_dump_escape(self, value):
         assert frontmatter._dump_unescape(frontmatter._dump_escape(value)) == value
+
+
+class TestFoldIsLinear:
+    """Folding joins each key's lines once, not once per continuation line.
+
+    ``prev + " " + line`` per line was quadratic: a 160,000-line description
+    took 12.8 s to tap. Counted through `_fold_join` rather than timed, so a
+    slow runner cannot flake it and a regression cannot hide in a fast one.
+    """
+
+    N = 5000
+
+    @pytest.fixture
+    def joins(self, monkeypatch):
+        calls: list[int] = []
+        real = frontmatter._fold_join
+
+        def counting(parts, strip):
+            calls.append(len(parts))
+            return real(parts, strip)
+
+        monkeypatch.setattr(frontmatter, "_fold_join", counting)
+        return calls
+
+    @pytest.mark.parametrize("opener", [">", "|", ""])
+    def test_one_join_per_folded_key(self, joins, opener):
+        lines = ["line %d" % i for i in range(self.N)]
+        block = "name: x\ndescription: %s\n%s\nversion: 1.0.0" % (
+            opener, "\n".join("  " + ln for ln in lines))
+        meta = frontmatter.parse_block(block)
+        assert meta == {"name": "x", "description": " ".join(lines),
+                        "version": "1.0.0"}
+        # One call, holding the head plus every line: the string is built once.
+        assert joins == [self.N + 1]
+
+    def test_each_folded_key_joins_once(self, joins):
+        meta = frontmatter.parse_block(
+            "a: one\n  two\n  three\nb: four\n  five\nc: six")
+        assert meta == {"a": "one two three", "b": "four five", "c": "six"}
+        assert joins == [3, 2]
+
+    def test_a_colon_line_after_an_empty_head_still_folds(self):
+        # The head is "" until the first line folds in; the colon line must see
+        # the folded value, not the empty head, or it opens a nested map.
+        assert frontmatter.parse_block(
+            "description:\n  foo\n  bar: baz\nname: x") == {
+                "description": "foo bar: baz", "name": "x"}
+
+    def test_a_repeated_key_replaces_its_folded_value(self):
+        assert frontmatter.parse_block("d: a\n  b\nd: c") == {"d": "c"}
+        assert frontmatter.parse_block("d: a\n  b\nd: c\n  e") == {"d": "c e"}
+
+    def test_a_fold_then_list_items_keeps_the_folded_head(self):
+        assert frontmatter.parse_block("t: a\n  b\n- c") == {"t": ["a b", "c"]}
+
+    def test_a_quoted_head_keeps_its_edge_spaces_under_a_plain_fold(self):
+        # Only the deeper-indent branch folds here, and it never stripped.
+        assert frontmatter.parse_block('d: " a "\n  b') == {"d": " a  b"}
+        # A block scalar's head is empty: the leading join space is trimmed.
+        assert frontmatter.parse_block("d: >\n  a\n  b") == {"d": "a b"}
+
+    def test_fold_join_strips_only_when_asked(self):
+        assert frontmatter._fold_join(["", "a", "b"], True) == "a b"
+        assert frontmatter._fold_join([" a", "b"], False) == " a b"
