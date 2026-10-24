@@ -116,7 +116,10 @@ class TestTap:
         cfg["taps"].append({"url": "https://github.com/x/y"})
         config.save(cfg)
         boost("untap", "fixture-tap", "-f")
-        assert config.load()["taps"] == [{"url": "https://github.com/x/y"}]
+        # Kept on disk as written; the merged view skips a nameless row.
+        on_disk = json.loads(paths.config_path().read_text(encoding="utf-8"))
+        assert on_disk["taps"] == [{"url": "https://github.com/x/y"}]
+        assert config.load()["taps"] == []
 
     def test_garbage_spec_rc1(self, boost, sandbox):
         r = boost("tap", "@@@garbage@@@", expect=1)

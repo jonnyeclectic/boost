@@ -355,12 +355,100 @@ def _read_file() -> tuple[dict | None, str | None]:
     return data, err
 
 
+def _shown(value: Any) -> str:
+    """``value`` as config.json spells it, and its JSON type."""
+    kind = {bool: "a boolean", int: "a number", float: "a number",
+            str: "a string", list: "a list", dict: "an object",
+            type(None): "null"}.get(type(value), type(value).__name__)
+    return "%s (%s)" % (json.dumps(value), kind) if value is not None else "null"
+
+
+def _sanitize(user: dict) -> tuple[dict, list[str]]:
+    """``user`` without the values no reader can use, and why each went.
+
+    The two shapes every surface indexes without asking: a ``taps`` row is an
+    object whose ``name`` is a non-empty string and whose ``url``, when
+    present, is a string; ``agents`` is an object of objects. A hand-edited
+    ``"name": 7`` reached ``registry.safe_name`` and ``"url": null`` the
+    ``update`` pool worker, ``"agents": "x"`` reached ``known_agents`` —
+    each an AttributeError at exit 70 from taps, search, info, update, doctor
+    and install. Here the bad value is left out of the *merged* view only:
+    writers go through :func:`mutate`, which reads :func:`_read_raw`, so a
+    row skipped here is written back exactly as the user left it rather
+    than silently lost on the next ``boost tap``. A `taps` that is not a list
+    is :func:`_read_file`'s refusal, not this.
+    """
+    issues: list[str] = []
+    out = user.copy()
+    taps = user.get("taps")
+    if isinstance(taps, list):
+        keep = []
+        for i, row in enumerate(taps):
+            if not isinstance(row, dict):
+                why = "is %s, not an object" % _shown(row)
+            elif not isinstance(row.get("name"), str) or not row["name"]:
+                why = ('has no "name"' if "name" not in row
+                       else '"name" is %s, not a non-empty string'
+                       % _shown(row["name"]))
+            elif "url" in row and not isinstance(row["url"], str):
+                why = '"url" is %s, not a string' % _shown(row["url"])
+            else:
+                keep.append(row)
+                continue
+            issues.append("taps[%d] %s, so boost skips that tap — repair or "
+                          "remove the row in %s" % (i, why, paths.tilde(
+                              paths.config_path())))
+        out["taps"] = keep
+    if "agents" in user:
+        section = user["agents"]
+        if not isinstance(section, dict):
+            del out["agents"]
+            issues.append("agents is %s, not an object, so boost reads the "
+                          "default agents — `boost config unset agents` "
+                          "restores them" % _shown(section))
+        else:
+            specs = {}
+            for name, spec in section.items():
+                if isinstance(spec, dict):
+                    specs[name] = spec
+                    continue
+                issues.append("agents.%s is %s, not an object, so boost %s — "
+                              "`boost config unset agents.%s` removes it"
+                              % (name, _shown(spec),
+                                 "reads its default" if name in
+                                 cast(dict, DEFAULTS["agents"])
+                                 else "skips that agent", name))
+            out["agents"] = specs
+    return out, issues
+
+
+def shape_issues() -> list[str]:
+    """Each config.json value :func:`_sanitize` leaves out, for doctor.
+
+    Never prints, like :func:`check`; the ordinary read warns once instead.
+    """
+    data = _read_file()[0]
+    return _sanitize(data)[1] if data else []
+
+
+#: Issues :func:`_read` has already warned about in this process. A write
+#: changes the stat stamp, so the read after `config set` would otherwise
+#: repeat every line it printed before it.
+_WARNED_SHAPE: set[str] = set()
+
+
 def _read() -> dict:
     user, err = _read_file()
     if err:
         _warn_corrupt(err)
     if user is None:
         return deepcopy(DEFAULTS)
+    user, issues = _sanitize(user)
+    for issue in issues:
+        if issue in _WARNED_SHAPE:
+            continue
+        _WARNED_SHAPE.add(issue)
+        output.warn("config.json: %s" % issue, stream=sys.stderr, wrap=True)
     return _merge(DEFAULTS, user)
 
 
