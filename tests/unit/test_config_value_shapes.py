@@ -19,6 +19,7 @@ import pytest
 
 from boost_cli.commands import quality
 from boost_cli.core import agents, config, paths, registry
+from boost_cli.errors import BoostError
 
 
 @pytest.fixture()
@@ -151,6 +152,51 @@ class TestSurvivesAWrite:
         registry.remove(tap.name)
         on_disk = json.loads(paths.config_path().read_text(encoding="utf-8"))
         assert on_disk["taps"] == [{"name": 7}]
+
+
+class TestTapOverAMalformedRow:
+    """`boost tap` never says "tapped" over a config that lists no usable row.
+
+    The reader skipped a same-name ``"url": 123`` row while the writer counted
+    it as taken: the new row was never written, the clone sat unlisted, and
+    the next command said "no taps configured".
+    """
+
+    def test_the_new_row_takes_the_malformed_rows_place(
+            self, fresh, tmp_path, fixture_tap_src, capsys):
+        dest = tmp_path / "fixture-tap"
+        shutil.copytree(fixture_tap_src, dest)
+        bad = {"name": "fixture-tap", "url": 123}
+        _write({"taps": [GOOD, bad, {"name": 7}]})
+        tap = registry.add(str(dest))
+        on_disk = json.loads(paths.config_path().read_text(encoding="utf-8"))
+        rows = on_disk["taps"]
+        assert rows[0] == GOOD
+        assert (rows[1]["name"], rows[1]["url"]) == ("fixture-tap",
+                                                     tap.url)
+        # A malformed row of another name is left exactly as it was.
+        assert rows[2:] == [{"name": 7}]
+        assert [t.name for t in registry.list_taps()] == ["a/b",
+                                                          "fixture-tap"]
+        # The read before the write already said boost skips that row.
+        assert ('taps[1] "url" is 123 (a number), not a string, so boost '
+                "skips that tap" in " ".join(capsys.readouterr().err.split()))
+
+    def test_a_row_with_no_url_is_named_not_left_blank(
+            self, fresh, tmp_path, fixture_tap_src):
+        dest = tmp_path / "fixture-tap"
+        shutil.copytree(fixture_tap_src, dest)
+        _write({"taps": [{"name": "fixture-tap"}]})
+        with pytest.raises(BoostError) as ei:
+            registry.add(str(dest))
+        assert ei.value.message == ("tap name fixture-tap is already used by "
+                                    "a config.json row with no url")
+        on_disk = json.loads(paths.config_path().read_text(encoding="utf-8"))
+        assert on_disk == {"taps": [{"name": "fixture-tap"}]}
+
+    def test_a_real_url_is_still_named(self):
+        assert registry._taken("x", "u", "/a/x").message == \
+            "tap name x is already used by /a/x"
 
 
 class TestTheRemedyWorks:
