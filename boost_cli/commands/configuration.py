@@ -1068,6 +1068,7 @@ def cmd_onboard(argv) -> int:
     # preview that skips them is the one shape of dry run that is worse than
     # none: `--dry-run --pr` outside a git repository exited 0 with no plan and
     # no failure, so the flag the user was rehearsing was never rehearsed.
+    on_branch = False
     if args.pr:
         if not gitutil.is_repo(repo):
             raise BoostError("%s is not a git repository" % _tilde(repo),
@@ -1078,17 +1079,28 @@ def cmd_onboard(argv) -> int:
         if not shutil.which("gh"):
             raise BoostError("the `gh` CLI is required for --pr",
                             hint="brew install gh, or rerun without --pr")
+        # A killed git's lock would fail `git add` after the files are
+        # written and the branch is made, stranding both. Refuse first.
+        if locks := gitutil.stale_locks(repo):
+            raise BoostError(
+                "%s has %s" % (_tilde(repo), "git lock files"
+                               if len(locks) > 1 else "a git lock file"),
+                hint=gitutil.lock_hint(", ".join(_tilde(p) for p in locks)))
         # A branch left by an earlier run whose `gh pr create` failed: without
         # this, the rerun wrote every file onto the current branch and then
-        # died on `checkout -b`, leaving them untracked with no hint.
+        # died on `checkout -b`, leaving them untracked with no hint. Standing
+        # on that branch is the state the earlier run left behind, and the
+        # `boost onboard -f` it advised — so commit onto it instead.
         if gitutil.run(["-C", str(repo), "rev-parse", "--verify", "--quiet",
                         "refs/heads/" + _PR_BRANCH], check=False).returncode == 0:
-            raise BoostError("branch %s already exists in %s"
-                             % (_PR_BRANCH, _tilde(repo)),
-                             hint="open its PR with `git checkout %s && gh pr "
-                                  "create --fill`, or delete it with `git "
-                                  "branch -D %s` and rerun"
-                                  % (_PR_BRANCH, _PR_BRANCH))
+            on_branch = gitutil.branch_state(repo).branch == _PR_BRANCH
+            if not on_branch:
+                raise BoostError(
+                    "branch %s already exists in %s"
+                    % (_PR_BRANCH, _tilde(repo)),
+                    hint="`git checkout %s` and rerun `boost onboard --pr` to "
+                         "commit onto it, or delete it with `git branch -D "
+                         "%s` and rerun" % (_PR_BRANCH, _PR_BRANCH))
 
     if args.dry_run:
         changes = 0
@@ -1143,7 +1155,8 @@ def cmd_onboard(argv) -> int:
 
     if args.pr:
         branch = _PR_BRANCH
-        gitutil.run(["-C", str(repo), "checkout", "-b", branch])
+        if not on_branch:
+            gitutil.run(["-C", str(repo), "checkout", "-b", branch])
         gitutil.run(["-C", str(repo), "add", *written])
         gitutil.run(["-C", str(repo), "commit", "-m",
                      "chore: add boost skill tracking (boost onboard)"])
