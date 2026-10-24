@@ -2202,6 +2202,45 @@ class TestMcp:
         assert "octo/skills — great skills" in text
         assert "acme/pack — b/SKILL.md" in text          # falls back to path
 
+    def test_discover_github_leaves_out_tapped_repos(self, sandbox,
+                                                      monkeypatch):
+        from boost_cli.commands import configuration, discovery
+        from boost_cli.core import config
+        config.save({"taps": [{"name": "skills",
+                               "url": "https://github.com/octo/skills"}]})
+        monkeypatch.setattr("boost_cli.commands.configuration.shutil.which",
+                            lambda c: "/usr/bin/gh")
+        monkeypatch.setattr(
+            discovery, "github_skill_search",
+            lambda query="", limit=20: [
+                {"repo": "Octo/Skills", "path": "a/SKILL.md", "url": "u",
+                 "description": "great skills"},
+                {"repo": "acme/pack", "path": "b/SKILL.md", "url": "u",
+                 "description": ""}])
+        text, is_err = configuration._mcp_tool("boost_discover_github",
+                                               {"query": "react"})
+        assert is_err is False
+        assert text == ("acme/pack — b/SKILL.md\n(1 already-tapped repo(s) "
+                        "not shown — boost_search covers them)")
+
+    def test_discover_github_only_tapped_repos(self, sandbox, monkeypatch):
+        from boost_cli.commands import configuration, discovery
+        from boost_cli.core import config
+        config.save({"taps": [{"name": "skills",
+                               "url": "https://github.com/octo/skills"}]})
+        monkeypatch.setattr("boost_cli.commands.configuration.shutil.which",
+                            lambda c: "/usr/bin/gh")
+        monkeypatch.setattr(
+            discovery, "github_skill_search",
+            lambda query="", limit=20: [
+                {"repo": "octo/skills", "path": "a/SKILL.md", "url": "u"}])
+        text, is_err = configuration._mcp_tool("boost_discover_github",
+                                               {"query": "react"})
+        assert is_err is False
+        assert text == ("no SKILL.md repositories found on GitHub for 'react'"
+                        "\n(1 already-tapped repo(s) not shown — boost_search "
+                        "covers them)")
+
     def test_discover_github_no_results(self, sandbox, monkeypatch):
         from boost_cli.commands import configuration, discovery
         monkeypatch.setattr("boost_cli.commands.configuration.shutil.which",

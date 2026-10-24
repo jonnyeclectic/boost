@@ -1750,12 +1750,11 @@ def _update_materialized(kind: str, installed: dict[str, dict], results,
         # twice, and `matches[0]` refreshed the copy the user did not pick.
         entry, warning = catalog.select_lock_source(matches, lk)
         entry = cast(dict, entry)             # matches is non-empty above
-        if warning:
-            out.warn(warning)
         old_v = str(lk.get("version", "0.0.0"))
         new_v = str(entry.get("version", "0.0.0"))
         bumped = util.semver_gt(new_v, old_v)
         changed = bumped
+        cur = None
         if not changed:
             try:
                 src = registry.get(tapname).path / entry.get("skill_md", "")
@@ -1765,6 +1764,14 @@ def _update_materialized(kind: str, installed: dict[str, dict], results,
             except OSError:
                 cur = None
             changed = bool(cur and cur != lk.get("sha256"))
+        if warning:
+            # Moved upstream with the same bytes: record where, once, rather
+            # than warning on every run (`store.record_moved_source`).
+            if cur and cur == lk.get("sha256"):
+                _note_move("%s %s" % (kind, name), kind, name, lk, entry,
+                           gitutil.head_commit(registry.get(tapname).path))
+            else:
+                out.warn(warning)
         if not changed:
             continue
         if lk.get("quarantined"):
@@ -1974,6 +1981,20 @@ def _ingest_shards(args) -> int:
     return rc
 
 
+def _note_move(label: str, kind: str, name: str, lk: dict, entry: dict,
+               commit: str, *, base=None) -> None:
+    """Record an unchanged item's new upstream location and say so once."""
+    field, key = (("source_dir", "rel_dir") if kind == "skill"
+                  else ("source_file", "skill_md"))
+    was = lk.get(field)
+    if store.record_moved_source(kind, name, entry, commit, base=base):
+        lk[field] = entry.get(key)
+        if commit:
+            lk["commit"] = commit
+        out.info("%s: moved upstream from %s to %s — lock updated"
+                 % (label, out.plain(str(was)), out.plain(str(entry.get(key)))))
+
+
 def _update_skill(name: str, lk: dict, scope: str, pbase, results,
                   args, *, heads: dict[str, str],
                   index: dict[str, list[dict]]) -> tuple[int, int, int, int]:
@@ -2013,8 +2034,6 @@ def _update_skill(name: str, lk: dict, scope: str, pbase, results,
     # user's choice for whichever copy scanned first.
     entry, warning = catalog.select_lock_source(matches, lk)
     entry = cast(dict, entry)             # matches is non-empty above
-    if warning:
-        out.warn("%s: %s" % (label, warning))
     old_v = str(lk.get("version", "0.0.0"))
     new_v = str(entry.get("version", "0.0.0"))
     head, src_sha, exec_changed = "", None, False
@@ -2026,6 +2045,8 @@ def _update_skill(name: str, lk: dict, scope: str, pbase, results,
             try:
                 src_sha = store.skill_source_sha(entry)
             except BoostError:
+                if warning:
+                    out.warn("%s: %s" % (label, warning))
                 return 0, 0, 0, 0
             exec_changed = store.source_exec_changed(
                 entry, lk, integrity.project_skill_dir(lk, pbase)
@@ -2034,6 +2055,15 @@ def _update_skill(name: str, lk: dict, scope: str, pbase, results,
     reason = staleness.upstream_reason(old_v, new_v, lk.get("commit", ""),
                                        head, lk.get("sha256", ""), src_sha,
                                        exec_changed)
+    if warning:
+        # Moved upstream with the same bytes and modes: nothing to reinstall,
+        # so record the new location here, or the warning repeats every run.
+        if (reason is None and src_sha is not None
+                and src_sha == lk.get("sha256")):
+            _note_move(label, "skill", name, lk, entry, head,
+                       base=pbase if scope == scopes.SCOPE_PROJECT else None)
+        else:
+            out.warn("%s: %s" % (label, warning))
     if reason is None:
         return 0, 0, 0, 0
     if lk.get("quarantined"):

@@ -693,6 +693,8 @@ class TestStale:
         _root, entries = corpus
         monkeypatch.setattr(rag.registry, "list_taps",
                             lambda: [_StatTap("acme/skills", mtime=None)])
+        # A stat-only fake has no cache text to read a format from.
+        monkeypatch.setattr(rag, "_tap_formats", dict)
         rag.build(entries=entries, force=True)
         assert rag.ready() is True
         assert rag.stale() is False
@@ -760,6 +762,7 @@ class TestAnIndexBoostCannotSave:
         monkeypatch.setattr(registry, "list_taps", lambda: ["a-tap"])
         # The fake taps are bare names with no cache file to stamp.
         monkeypatch.setattr(rag, "_tap_stamps", dict)
+        monkeypatch.setattr(rag, "_tap_formats", dict)
         monkeypatch.setattr(rag.catalog, "all_entries", lambda: entries)
         build, raised = rag.build, []
 
@@ -1101,6 +1104,111 @@ class TestIncremental:
         stats = rag.build(entries=entries)
         assert stats["reused"] == []
         assert stats["reindexed"] == ["acme/skills"]
+
+    # -- a scanner fix rescans a cache at the SAME commit (`load_tap` backfills
+    # a stale CACHE_FORMAT); reuse keyed on the commit alone kept the old
+    # documents, so the restored text reached `info` but never `search`.
+
+    @staticmethod
+    def _cached_tap(monkeypatch, tmp_path, fmt):
+        cache = tmp_path / "acme__skills.json"
+        cache.write_text(json.dumps({"format": fmt, "commit": "c1"}),
+                         encoding="utf-8")
+        tap = types.SimpleNamespace(name="acme/skills",
+                                    safe_name="acme__skills", cache_file=cache)
+        monkeypatch.setattr(rag.registry, "list_taps", lambda: [tap])
+        return cache
+
+    @staticmethod
+    def _with_desc(entries, desc):
+        return [{**e, "description": desc} if e["name"] == "jest-runner" else e
+                for e in entries]
+
+    def test_a_cache_format_bump_reindexes_the_tap_at_the_same_commit(
+            self, corpus, monkeypatch, tmp_path):
+        _root, entries = corpus
+        cache = self._cached_tap(monkeypatch, tmp_path, 8)
+        old = self._with_desc(entries, "Use this skill when")
+        rag.build(entries=old, force=True)
+        assert rag._load_raw()["formats"] == {"acme__skills": 8}
+        assert rag.retrieve("quokkaword", entries=old) == []
+        cache.write_text(json.dumps({"format": 9, "commit": "c1"}),
+                         encoding="utf-8")
+        new = self._with_desc(entries, "Use this skill when reviewing code: "
+                                       "it checks QUOKKAWORD style")
+        stats = rag.build(entries=new)
+        assert stats["reindexed"] == ["acme/skills"]
+        assert stats["reused"] == []
+        assert rag._load_raw()["formats"] == {"acme__skills": 9}
+        assert [h["entry"]["name"]
+                for h in rag.retrieve("quokkaword", entries=new)] == [
+                    "jest-runner"]
+        # Nothing moved since: the tap is reused again, not re-indexed forever.
+        again = rag.build(entries=new)
+        assert again["reused"] == ["acme/skills"]
+        assert again["reindexed"] == []
+
+    def test_an_unchanged_format_at_the_same_commit_is_reused(
+            self, corpus, monkeypatch, tmp_path):
+        _root, entries = corpus
+        self._cached_tap(monkeypatch, tmp_path, 9)
+        rag.build(entries=entries, force=True)
+        stats = rag.build(entries=self._with_desc(entries, "QUOKKAWORD"))
+        assert stats["reused"] == ["acme/skills"]
+        assert stats["reindexed"] == []
+
+    def test_a_tap_missing_from_the_recorded_formats_is_judged_by_commit(
+            self, corpus, monkeypatch, tmp_path):
+        # A shard import whose tap had no readable cache records no format.
+        _root, entries = corpus
+        self._cached_tap(monkeypatch, tmp_path, 9)
+        monkeypatch.setattr(rag, "_tap_formats", dict)
+        rag.build(entries=entries, force=True)
+        assert rag._load_raw()["formats"] == {}
+        monkeypatch.setattr(rag, "_tap_formats",
+                            lambda: {"acme__skills": 9})
+        stats = rag.build(entries=entries)
+        assert stats["reused"] == ["acme/skills"]
+
+    def test_an_index_written_before_formats_rebuilds_once(
+            self, corpus, monkeypatch, tmp_path):
+        # No `formats` key: nothing says which scanner built these docs.
+        _root, entries = corpus
+        self._cached_tap(monkeypatch, tmp_path, 9)
+        rag.build(entries=entries, force=True)
+        raw = rag._load_raw()
+        del raw["formats"]
+        rag._save(rag._kept_docs(raw, {"acme__skills"}), raw["commits"],
+                  raw["stamps"])
+        rag._CACHE.clear()
+        assert "formats" not in rag._load_raw()
+        stats = rag.build(entries=entries)
+        assert stats["reindexed"] == ["acme/skills"]
+        assert stats["reused"] == []
+        assert rag.build(entries=entries)["reused"] == ["acme/skills"]
+
+    def test_a_cache_that_lost_its_format_reindexes(
+            self, corpus, monkeypatch, tmp_path):
+        _root, entries = corpus
+        cache = self._cached_tap(monkeypatch, tmp_path, 9)
+        rag.build(entries=entries, force=True)
+        cache.write_text(json.dumps({"commit": "c1"}), encoding="utf-8")
+        stats = rag.build(entries=entries)
+        assert stats["reindexed"] == ["acme/skills"]
+
+    def test_tap_formats_keeps_only_integer_formats(
+            self, monkeypatch, tmp_path, sandbox):
+        def tap(safe, body):
+            cache = tmp_path / (safe + ".json")
+            if body is not None:
+                cache.write_text(body, encoding="utf-8")
+            return types.SimpleNamespace(safe_name=safe, cache_file=cache)
+        taps = [tap("ok", '{"format": 9}'), tap("str", '{"format": "9"}'),
+                tap("bool", '{"format": true}'), tap("none", "{}"),
+                tap("list", "[9]"), tap("bad", "{not json"),
+                tap("missing", None)]
+        monkeypatch.setattr(rag.registry, "list_taps", lambda: taps)
+        assert rag._tap_formats() == {"ok": 9}
 
     def test_force_ignores_cached_commit(self, corpus):
         _root, entries = corpus

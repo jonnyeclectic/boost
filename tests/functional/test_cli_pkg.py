@@ -3369,6 +3369,81 @@ class TestUpdateKeepsTheChosenCopy:
         assert "Use four spaces." in claude and "Use tabs." not in claude
 
 
+class TestUpdateRecordsAMoveWithUnchangedContent:
+    """An upstream `git mv` with no edit gave `update` nothing to reinstall,
+    and the reinstall was the only writer of the lock's source path: every
+    run repeated "no longer at its installed source", `info` kept the dead
+    path and `drift` called the skill source-missing."""
+
+    @staticmethod
+    def _mv(tap_dir, old, new):
+        subprocess.run(["git", "-C", str(tap_dir), "mv", old, new],
+                       check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(tap_dir), "commit", "-qm", "move"],
+                       check=True, capture_output=True)
+        return subprocess.run(["git", "-C", str(tap_dir), "rev-parse", "HEAD"],
+                              check=True, capture_output=True,
+                              text=True).stdout.strip()
+
+    def test_a_moved_skill_is_recorded_once_and_then_quiet(
+            self, boost, fixture_tap_src, tmp_path):
+        tap_dir = _copy_tap(fixture_tap_src, tmp_path / "mv-skill-tap")
+        boost("tap", tap_dir)
+        boost("install", "brainstorming")
+        before = _lock()["brainstorming"]
+        assert before["source_dir"] == "skills/brainstorming"
+        head = self._mv(tap_dir, "skills/brainstorming", "skills/brainstorm")
+        r = boost("update")
+        assert ("brainstorming: moved upstream from skills/brainstorming to "
+                "skills/brainstorm — lock updated") in r.out
+        assert "no longer at its installed source" not in r.out + r.err
+        row = _lock()["brainstorming"]
+        assert row["source_dir"] == "skills/brainstorm"
+        assert row["commit"] == head
+        assert row["sha256"] == before["sha256"]
+        assert row["version"] == before["version"]
+        again = boost("update")
+        assert "moved upstream" not in again.out
+        assert "no longer at its installed source" not in again.out + again.err
+        assert "everything up to date" in again.out
+        assert "source-missing" not in boost("drift").out
+
+    def test_a_moved_and_edited_skill_still_warns_and_reinstalls(
+            self, boost, fixture_tap_src, tmp_path):
+        tap_dir = _copy_tap(fixture_tap_src, tmp_path / "mv-edit-tap")
+        boost("tap", tap_dir)
+        boost("install", "brainstorming")
+        subprocess.run(["git", "-C", str(tap_dir), "mv", "skills/brainstorming",
+                        "skills/brainstorm"], check=True, capture_output=True)
+        _add_and_commit(tap_dir, "skills/brainstorm/extra.md", "new\n", "edit")
+        r = boost("update", "--yes")
+        assert ("brainstorming: brainstorming no longer at its installed "
+                "source (skills/brainstorming) — using skills/brainstorm"
+                ) in r.out
+        assert "moved upstream" not in r.out
+        assert _lock()["brainstorming"]["source_dir"] == "skills/brainstorm"
+
+    def test_a_moved_rule_is_recorded_once(
+            self, boost, fixture_tap_src, tmp_path):
+        tap_dir = _copy_tap(fixture_tap_src, tmp_path / "mv-rule-tap")
+        _add_and_commit(tap_dir, "rules/a/house.mdc",
+                        "---\nname: mv-house\nversion: 1.0.0\n---\n\n"
+                        "Use tabs.\n", "a rule")
+        boost("tap", tap_dir)
+        boost("install", "mv-house")
+        head = self._mv(tap_dir, "rules/a", "rules/b")
+        r = boost("update")
+        assert ("rule mv-house: moved upstream from rules/a/house.mdc to "
+                "rules/b/house.mdc — lock updated") in r.out
+        row = json.loads(paths.lockfile_path().read_text(
+            encoding="utf-8"))["rules"]["mv-house"]
+        assert row["source_file"] == "rules/b/house.mdc"
+        assert row["commit"] == head
+        again = boost("update")
+        assert "moved upstream" not in again.out
+        assert "no longer at its installed source" not in again.out
+
+
 class TestReinstallEdges:
     def test_multi_skips_missing(self, boost, installed):
         r = boost("reinstall", "brainstorming", "ghost", expect=1)

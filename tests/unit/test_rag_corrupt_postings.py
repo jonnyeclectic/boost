@@ -101,6 +101,7 @@ class TestRecovery:
         monkeypatch.setattr(rag.registry, "list_taps", lambda: ["acme/skills"])
         # The fake taps are bare names with no cache file to stamp.
         monkeypatch.setattr(rag, "_tap_stamps", dict)
+        monkeypatch.setattr(rag, "_tap_formats", dict)
         monkeypatch.setattr(rag.catalog, "all_entries", lambda: corpus)
         _corrupt()
         assert rag.ensure() is True

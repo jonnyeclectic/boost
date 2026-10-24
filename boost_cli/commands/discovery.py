@@ -1097,6 +1097,13 @@ def _fall_back(why: str, hint: str) -> None:
     return None
 
 
+def _note_tapped(n: int) -> None:
+    """Say how many matching repos were left out for being tapped already."""
+    if n:
+        out.info(out.role("%d already-tapped repo(s) not shown — `boost search` "
+                          "covers them" % n, "muted"))
+
+
 def _discover_live(args, tokens):
     """Search GitHub itself — the same reach-out the MCP tool makes.
 
@@ -1116,7 +1123,8 @@ def _discover_live(args, tokens):
     if hits is None:
         _fall_back("GitHub code search failed", "check `gh auth status`")
         return None, "GitHub code search failed"
-    rows = _by_repo(hits)[:args.limit]
+    fresh, tapped = registry.untapped_repos(hits)
+    rows = _by_repo(fresh)[:args.limit]
     if args.as_json:
         # `source` on every row, in both paths, because the fall-through above
         # switches corpus *and* row shape. Without it a script cannot tell
@@ -1126,6 +1134,7 @@ def _discover_live(args, tokens):
     if not rows:
         out.info("no SKILL.md repositories on GitHub match %r"
                  % " ".join(tokens))
+        _note_tapped(tapped)
         out.info(out.role("try broader terms, or `boost search` for the "
                           "registries already tapped", "muted"))
         return 0, None
@@ -1142,6 +1151,7 @@ def _discover_live(args, tokens):
     # than letting a capped sample read as a total.
     out.info(out.role("%d repo(s) across the top %d code-search hits · live "
                       "GitHub Code Search" % (len(rows), len(hits)), "muted"))
+    _note_tapped(tapped)
     out.info(out.role("add one with `boost tap <repo>`, then `boost install "
                       "<skill>`", "muted"))
     return 0, None
@@ -1202,10 +1212,15 @@ def cmd_discover(argv):
         raise BoostError("the discovery index is corrupt",
                         hint="rebuild it with `boost index`")
     query_tokens = [t.lower() for t in args.query if t.strip()]
-    items = [it for it in all_items
-             if all(t in ("%s %s %s" % (it.get("repo", ""), it.get("path", ""),
-                                        it.get("description", ""))).lower()
-                    for t in query_tokens)]
+    matched = [it for it in all_items
+               if all(t in ("%s %s %s" % (it.get("repo", ""), it.get("path", ""),
+                                          it.get("description", ""))).lower()
+                      for t in query_tokens)]
+    # The index is a snapshot from before any tap made since: reconcile it
+    # with the tap list now, as the help promises (`registry.untapped_repos`).
+    # After the query filter, so "N already-tapped not shown" counts only
+    # repos this query would otherwise have shown.
+    items, tapped = registry.untapped_repos(matched)
     if args.as_json:
         # Tagged like the live rows above: this is the branch a script reaches
         # after a silent fall-through, and the two row shapes differ. Rows stay
@@ -1236,6 +1251,7 @@ def cmd_discover(argv):
             note = ("this searched a local sample of %d entries — GitHub was "
                      "not searched" % len(all_items))
         out.info(out.role(note, "muted"))
+        _note_tapped(tapped)
         return 0
     # out.plain: these rows came from GitHub too, by way of `boost index`. The
     # "(N)" cell mirrors the live table for the same reason it exists there.
@@ -1251,6 +1267,7 @@ def cmd_discover(argv):
                       "reported ~%d total%s when this index was built"
                       % (len(repo_rows), len(items), len(all_items),
                          int(data.get("github_total") or 0), scope), "muted"))
+    _note_tapped(tapped)
     return 0
 
 

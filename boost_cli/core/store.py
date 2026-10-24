@@ -265,6 +265,39 @@ def source_missing_message(label: str, name: str, lk: dict) -> str:
             % (label, tap, how, name))
 
 
+def record_moved_source(kind: str, name: str, entry: dict, commit: str, *,
+                        base: Path | str | None = None) -> bool:
+    """Point ``name``'s lock row at where its *unchanged* content now lives.
+
+    An upstream ``git mv`` with no edit leaves nothing for `update` to
+    reinstall, and the reinstall was the only writer of ``source_dir``: the
+    row kept naming a path the tap no longer has, so every `update` repeated
+    "no longer at its installed source", `info` showed the dead path, and
+    `drift` called the skill source-missing and suggested uninstalling it.
+    The caller decides the content matched; this records the new location
+    (``rel_dir`` for a skill, ``skill_md`` for a rule or workflow) and the
+    ``commit`` it was verified at. ``base`` names a project lock to write
+    instead of the user's. Returns whether a row was changed.
+    """
+    field, value = (("source_dir", entry.get("rel_dir", ".")) if kind == "skill"
+                    else ("source_file", entry.get("skill_md", "")))
+
+    def apply(row: dict) -> bool | None:
+        if row.get(field) == value and (not commit or row.get("commit") == commit):
+            return False
+        row[field] = value
+        if commit:
+            row["commit"] = commit
+        return None
+
+    if base is not None:
+        def apply_project(lock: dict) -> bool | None:
+            row = lock.get("skills", {}).get(name)
+            return False if row is None else apply(row)
+        return projectlock.mutate(base, apply_project)
+    return lockfile.update_entry(kind, name, apply)
+
+
 def skill_store_dir(name: str) -> Path:
     """Resolve ``name`` to its dir under the canonical store.
 
