@@ -119,7 +119,8 @@ def _warn_secrets(res: store.InstallResult) -> None:
     _emit_scan(installscan.scan(res, installscan.SECRET))
 
 
-def _offer_mcp(res: store.InstallResult, no_mcp: bool = False) -> None:
+def _offer_mcp(res: store.InstallResult, no_mcp: bool = False,
+               yes: bool | None = None) -> None:
     """Surface the MCP servers a just-installed skill needs, and offer to wire them.
 
     A skill that only works paired with an MCP server used to install "cleanly"
@@ -134,6 +135,13 @@ def _offer_mcp(res: store.InstallResult, no_mcp: bool = False) -> None:
     The offer targets whichever agent CLIs are actually installed, so a machine
     with only Gemini CLI is offered ``gemini mcp add`` rather than a ``claude``
     command it cannot run.
+
+    ``yes`` is ``boost install``'s own ``-y``, the one flag that answers this
+    prompt. Every other caller leaves it ``None``: `protocol open -y` and
+    `import -y` consent to *their* prompt, and registering a server with every
+    agent CLI for every project on the machine is a separate decision that
+    defaults to No — so for them the decline hint names only
+    ``BOOST_ASSUME_YES``, not a ``-y`` that would change nothing.
     """
     rows = res.mcp_servers
     if not rows or no_mcp or typedvalue.env_flag("BOOST_NO_MCP_OFFER", unknown=True):
@@ -193,9 +201,10 @@ def _offer_mcp(res: store.InstallResult, no_mcp: bool = False) -> None:
     # Name the scope. The prompt used to say only "register N servers with
     # Claude Code now?", which is the one detail the answer turns on — this
     # writes a registration every project on this machine will then launch.
-    if not out.confirm(
+    if not (yes or out.confirm(
             "  register %s with %s, for every project on this machine?"
-            % (_plural(len(wirable), "server"), where), default=False):
+            % (_plural(len(wirable), "server"), where), default=False,
+            hint=out.ENV_ONLY_BYPASS_HINT if yes is None else None)):
         out.dim("  skipped — run these yourself when you're ready:", wrap=True)
         for row in wirable:
             # One line per host, not `targets[0]` — the prompt named every
@@ -275,8 +284,12 @@ def _register_mcp_server(name: str, spec: dict, host: str = "claude",
     journal.log("mcp-register", name, host=host)
 
 
-def _report_result(res: store.InstallResult, no_mcp: bool = False) -> None:
-    """The canonical three-line install report."""
+def _report_result(res: store.InstallResult, no_mcp: bool = False,
+                   yes: bool | None = None) -> None:
+    """The canonical three-line install report.
+
+    ``yes`` reaches :func:`_offer_mcp` only from ``boost install`` — see there.
+    """
     if res.kind in ("rule", "workflow"):
         where = " (this repo)" if res.scope == "project" else ""
         out.ok("materialized%s → %s"
@@ -299,7 +312,7 @@ def _report_result(res: store.InstallResult, no_mcp: bool = False) -> None:
         _warn_submodules(res)
         _warn_injection(res)
         _warn_secrets(res)
-        _offer_mcp(res, no_mcp=no_mcp)
+        _offer_mcp(res, no_mcp=no_mcp, yes=yes)
         return
     out.ok("copied to %s" % _tilde(res.dest))
     if res.linked:
@@ -315,7 +328,7 @@ def _report_result(res: store.InstallResult, no_mcp: bool = False) -> None:
     out.ok("lock updated (.skill-lock.json)")
     _warn_injection(res)
     _warn_secrets(res)
-    _offer_mcp(res, no_mcp=no_mcp)
+    _offer_mcp(res, no_mcp=no_mcp, yes=yes)
 
 
 def _report_skill_copy(res) -> None:
@@ -607,6 +620,9 @@ def cmd_install(argv: list[str]) -> int:
                          "(the wider spellings are reported, never installed)")
     ap.add_argument("--no-mcp", action="store_true",
                     help="don't offer to register MCP servers a skill declares")
+    ap.add_argument("-y", "--yes", action="store_true",
+                    help="register the MCP servers a skill declares without "
+                         "asking")
     skill_g = ap.add_mutually_exclusive_group()
     skill_g.add_argument("--as-skill", dest="as_skill", action="store_const",
                          const=True, default=None,
@@ -859,7 +875,7 @@ def cmd_install(argv: list[str]) -> int:
             out.warn("%s: %s" % (e["name"], err.message), stream=sys.stderr)
             failed += 1
             continue
-        _report_result(res, no_mcp=args.no_mcp)
+        _report_result(res, no_mcp=args.no_mcp, yes=args.yes)
         results.append(res)
     if results:
         _report_prerequisites([e for e in entries
@@ -1508,15 +1524,18 @@ def _foreign_prompt(rows: list) -> str:
 
 # ── update ───────────────────────────────────────────────────────────────
 
-def _show_and_confirm(label: str, diff, name: str) -> bool:
-    """Print why an update is risky, show it, and ask. Shared by all kinds."""
+def _show_and_confirm(label: str, diff, name: str, yes: bool = False) -> bool:
+    """Print why an update is risky, show it, and ask. Shared by all kinds.
+
+    ``yes`` is ``boost update --yes``: the diff is still shown, then applied.
+    """
     out.warn("%s: upstream update %s" % (label, "; ".join(diff.reasons)))
     print(diff.text)
-    return out.confirm("Apply this update to %s?" % name)
+    return yes or out.confirm("Apply this update to %s?" % name)
 
 
 def _confirm_risky_update(name: str, entry: dict, base=None,
-                          lk: dict | None = None) -> bool:
+                          lk: dict | None = None, yes: bool = False) -> bool:
     """Gate an in-place update behind a visible diff when it is risky.
 
     Diffs the installed skill against the incoming source. If the change adds
@@ -1540,7 +1559,7 @@ def _confirm_risky_update(name: str, entry: dict, base=None,
         updatediff.read_tree(current) if current is not None else {}, new_tree)
     if not diff.risky:
         return True
-    return _show_and_confirm(name, diff, name)
+    return _show_and_confirm(name, diff, name, yes=yes)
 
 
 def _materialized_sides(kind: str, name: str, lk: dict,
@@ -1599,7 +1618,7 @@ def _materialized_sides(kind: str, name: str, lk: dict,
 
 
 def _confirm_risky_materialized(kind: str, name: str, lk: dict,
-                                new_raw: str) -> bool:
+                                new_raw: str, yes: bool = False) -> bool:
     """The same gate as `_confirm_risky_update`, for rules and workflows.
 
     This used to be absent, and the asymmetry ran the wrong way: a skill that
@@ -1614,7 +1633,7 @@ def _confirm_risky_materialized(kind: str, name: str, lk: dict,
                                 {label: new for label, _, new in sides})
     if not diff.risky:
         return True
-    return _show_and_confirm("%s %s" % (kind, name), diff, name)
+    return _show_and_confirm("%s %s" % (kind, name), diff, name, yes=yes)
 
 
 def _hold_update(label: str, name: str, lk: dict, kind: str, old_v: str,
@@ -1693,6 +1712,7 @@ def _update_materialized(kind: str, installed: dict[str, dict], results,
                          discard_edits: bool = False,
                          allow_downgrade: bool = False, *,
                          index: dict[str, list[dict]],
+                         yes: bool = False,
                          ) -> tuple[int, int, int, int]:
     """Re-materialize installed rules/workflows whose tap source moved.
 
@@ -1730,12 +1750,11 @@ def _update_materialized(kind: str, installed: dict[str, dict], results,
         # twice, and `matches[0]` refreshed the copy the user did not pick.
         entry, warning = catalog.select_lock_source(matches, lk)
         entry = cast(dict, entry)             # matches is non-empty above
-        if warning:
-            out.warn(warning)
         old_v = str(lk.get("version", "0.0.0"))
         new_v = str(entry.get("version", "0.0.0"))
         bumped = util.semver_gt(new_v, old_v)
         changed = bumped
+        cur = None
         if not changed:
             try:
                 src = registry.get(tapname).path / entry.get("skill_md", "")
@@ -1745,6 +1764,14 @@ def _update_materialized(kind: str, installed: dict[str, dict], results,
             except OSError:
                 cur = None
             changed = bool(cur and cur != lk.get("sha256"))
+        if warning:
+            # Moved upstream with the same bytes: record where, once, rather
+            # than warning on every run (`store.record_moved_source`).
+            if cur and cur == lk.get("sha256"):
+                _note_move("%s %s" % (kind, name), kind, name, lk, entry,
+                           gitutil.head_commit(registry.get(tapname).path))
+            else:
+                out.warn(warning)
         if not changed:
             continue
         if lk.get("quarantined"):
@@ -1777,7 +1804,8 @@ def _update_materialized(kind: str, installed: dict[str, dict], results,
                            encoding="utf-8", errors="replace")
         except (OSError, BoostError):
             new_raw = ""        # unreadable: store.install reports the real error
-        if new_raw and not _confirm_risky_materialized(kind, name, lk, new_raw):
+        if new_raw and not _confirm_risky_materialized(kind, name, lk, new_raw,
+                                                       yes=yes):
             out.warn("%s %s: update skipped — review the diff, then `boost "
                      "update --yes` to apply" % (kind, name))
             held += 1
@@ -1953,6 +1981,20 @@ def _ingest_shards(args) -> int:
     return rc
 
 
+def _note_move(label: str, kind: str, name: str, lk: dict, entry: dict,
+               commit: str, *, base=None) -> None:
+    """Record an unchanged item's new upstream location and say so once."""
+    field, key = (("source_dir", "rel_dir") if kind == "skill"
+                  else ("source_file", "skill_md"))
+    was = lk.get(field)
+    if store.record_moved_source(kind, name, entry, commit, base=base):
+        lk[field] = entry.get(key)
+        if commit:
+            lk["commit"] = commit
+        out.info("%s: moved upstream from %s to %s — lock updated"
+                 % (label, out.plain(str(was)), out.plain(str(entry.get(key)))))
+
+
 def _update_skill(name: str, lk: dict, scope: str, pbase, results,
                   args, *, heads: dict[str, str],
                   index: dict[str, list[dict]]) -> tuple[int, int, int, int]:
@@ -1992,8 +2034,6 @@ def _update_skill(name: str, lk: dict, scope: str, pbase, results,
     # user's choice for whichever copy scanned first.
     entry, warning = catalog.select_lock_source(matches, lk)
     entry = cast(dict, entry)             # matches is non-empty above
-    if warning:
-        out.warn("%s: %s" % (label, warning))
     old_v = str(lk.get("version", "0.0.0"))
     new_v = str(entry.get("version", "0.0.0"))
     head, src_sha, exec_changed = "", None, False
@@ -2005,6 +2045,8 @@ def _update_skill(name: str, lk: dict, scope: str, pbase, results,
             try:
                 src_sha = store.skill_source_sha(entry)
             except BoostError:
+                if warning:
+                    out.warn("%s: %s" % (label, warning))
                 return 0, 0, 0, 0
             exec_changed = store.source_exec_changed(
                 entry, lk, integrity.project_skill_dir(lk, pbase)
@@ -2013,6 +2055,15 @@ def _update_skill(name: str, lk: dict, scope: str, pbase, results,
     reason = staleness.upstream_reason(old_v, new_v, lk.get("commit", ""),
                                        head, lk.get("sha256", ""), src_sha,
                                        exec_changed)
+    if warning:
+        # Moved upstream with the same bytes and modes: nothing to reinstall,
+        # so record the new location here, or the warning repeats every run.
+        if (reason is None and src_sha is not None
+                and src_sha == lk.get("sha256")):
+            _note_move(label, "skill", name, lk, entry, head,
+                       base=pbase if scope == scopes.SCOPE_PROJECT else None)
+        else:
+            out.warn("%s: %s" % (label, warning))
     if reason is None:
         return 0, 0, 0, 0
     if lk.get("quarantined"):
@@ -2032,7 +2083,8 @@ def _update_skill(name: str, lk: dict, scope: str, pbase, results,
         return 0, 1, 0, 0
     # A declined diff or a refused install (a policy block) is held back too:
     # both used to end the run on "everything up to date".
-    if not _confirm_risky_update(name, entry, base=pbase, lk=lk):
+    if not _confirm_risky_update(name, entry, base=pbase, lk=lk,
+                                 yes=args.yes):
         out.warn("%s: update skipped — review the diff, then `boost update "
                  "--yes` to apply" % label)
         return 0, 1, 0, 0
@@ -2059,9 +2111,9 @@ def cmd_update(argv: list[str]) -> int:
     # Declared because this command *advertises* it: a skipped risky update
     # prints "review the diff, then `boost update --yes` to apply", and without
     # this line that instruction died on `unrecognized arguments: --yes` — the
-    # only escape from the confirmation was a flag the parser rejected. The
-    # behaviour needs nothing else: out.confirm() already honours --yes/-y off
-    # sys.argv, so this makes the printed advice true rather than adding a path.
+    # only escape from the confirmation was a flag the parser rejected. It is
+    # threaded to the risky-update gates explicitly: out.confirm() no longer
+    # reads -y off sys.argv, because that let one flag answer every prompt.
     ap.add_argument("-y", "--yes", action="store_true",
                     help="skip the confirmation prompt")
     ap.add_argument("--force", action="store_true",
@@ -2185,7 +2237,7 @@ def cmd_update(argv: list[str]) -> int:
                           ("workflow", lockfile.installed_workflows())):
         n, h, p, q = _update_materialized(
             kind, section, results, discard_edits=args.discard_edits,
-            allow_downgrade=args.allow_downgrade, index=index)
+            allow_downgrade=args.allow_downgrade, index=index, yes=args.yes)
         upgraded += n
         held += h
         pinned_held += p
@@ -3379,10 +3431,9 @@ def _snapshot_save(label: str | None) -> int:
 def _snapshot_list(as_json: bool) -> int:
     paths.ensure_dirs()
     snaps = []
-    # newest first; file mtime keeps same-second saves (snap-...-2) in order
-    for tar_path in sorted(paths.snapshots_dir().glob("snap-*.tar.gz"),
-                           key=lambda p: (p.stat().st_mtime, p.name),
-                           reverse=True):
+    # newest first, by the id's stamp and same-second serial (snap-...-2)
+    for tar_path in util.sorted_history(
+            paths.snapshots_dir().glob("snap-*.tar.gz"), newest_first=True):
         snap_id = tar_path.name[:-len(".tar.gz")]
         side = tar_path.parent / (snap_id + ".json")
         meta = {}

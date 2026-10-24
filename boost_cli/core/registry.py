@@ -256,7 +256,10 @@ def _file_url_path(spec: str) -> Path | None:
     Only an empty or `localhost` host is this machine; `file://otherhost/…`
     stays a URL for git to judge.
     """
-    u = urllib.parse.urlparse(spec)
+    try:
+        u = urllib.parse.urlparse(spec)
+    except ValueError:      # "Invalid IPv6 URL": an unbalanced `[` in the host
+        return None
     if u.scheme.lower() != "file" or u.netloc.lower() not in ("", "localhost"):
         return None
     return Path(urllib.request.url2pathname(u.path))
@@ -444,6 +447,38 @@ def _source_key(url: str) -> str:
     if host.split(":", 1)[0] == "github.com":
         path = path.lower()
     return host + "/" + path
+
+
+def tapped_source_keys() -> set[str]:
+    """:func:`_source_key` of every configured tap's URL.
+
+    What "already tapped" means to a caller holding a GitHub ``owner/repo``
+    (see :func:`untapped_repos`): the URL, not the tap's name, because a
+    local tap named ``skills`` is not ``anthropics/skills``.
+    """
+    return {_source_key(t.url) for t in list_taps() if t.url}
+
+
+def untapped_repos(rows: list[dict]) -> tuple[list[dict], int]:
+    """``rows`` (each carrying a GitHub ``repo``) minus repos already tapped.
+
+    `boost discover` and the MCP `boost_discover_github` tool both promise
+    repositories nobody here has tapped, and both listed tapped ones: the
+    discovery index is a snapshot from before the tap, and the live search
+    never asked. Matched through :func:`_source_key`, so `Anthropics/Skills`
+    from GitHub and a tap of `https://github.com/anthropics/skills.git` are
+    one repository. Returns ``(kept, dropped_repo_count)``.
+    """
+    tapped = tapped_source_keys()
+    kept: list[dict] = []
+    dropped: set[str] = set()
+    for row in rows:
+        key = _source_key("https://github.com/%s" % row.get("repo", ""))
+        if key in tapped:
+            dropped.add(key)
+        else:
+            kept.append(row)
+    return kept, len(dropped)
 
 
 def name_key(name: str) -> str:
