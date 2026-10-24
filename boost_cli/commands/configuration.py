@@ -1319,9 +1319,11 @@ def _schedule_env() -> dict[str, str]:
 
     launchd and cron start the job with their own environment, so without
     these the job updated ``~/.boost`` while its log went to the
-    ``$BOOST_HOME`` the user enabled it from.
+    ``$BOOST_HOME`` the user enabled it from — and, without
+    ``BOOST_AGENTS_STORE``, updated a lock and store the user does not use.
     """
-    return {"BOOST_HOME": str(paths.boost_home()), "HOME": str(paths.home())}
+    return ({"BOOST_HOME": str(paths.boost_home()), "HOME": str(paths.home())}
+            | paths.override_env())
 
 
 def _plist_body(shim: Path, seconds: int) -> str:

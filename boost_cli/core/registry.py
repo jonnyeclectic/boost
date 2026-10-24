@@ -634,7 +634,7 @@ def add(spec: str, curated: bool = False, at: str | None = None) -> Tap:
         raise BoostError("%r is not a full commit SHA" % at,
                          hint="pin with the 40-character hash a manifest names")
     tap = Tap(name=name, url=url, curated=curated)
-    paths.ensure_dirs()
+    paths.require_dirs()
     _clear_path(tap.path)
     gitutil.clone_shallow(url, tap.path)
     if at:
@@ -1109,7 +1109,7 @@ def add_many(specs: list[str], curated: bool = False,
     if not specs:
         return []
     config.refuse_unreadable()      # before any clone, as in `add`
-    paths.ensure_dirs()
+    paths.require_dirs()
     pins = pins or {}
     results: list[dict] = []
     todo: list[str] = []

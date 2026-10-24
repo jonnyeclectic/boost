@@ -1392,6 +1392,51 @@ class TestProtocol:
         assert "not written" in status
         assert "no — build Boost.app" in status
 
+    def test_register_script_carries_the_state_it_was_registered_under(
+            self, boost, sandbox, monkeypatch):
+        monkeypatch.setattr("boost_cli.commands.team.platform.system",
+                            lambda: "Darwin")
+        monkeypatch.setenv("BOOST_HOME", str(sandbox / "alt boost"))
+        monkeypatch.setenv("BOOST_AGENTS_STORE", "~/st$re")
+        shim = sandbox / "bin $x" / 'b"st'
+        monkeypatch.setattr("boost_cli.core.paths.launcher", lambda: shim)
+        boost("protocol", "register")
+        script = sandbox / "alt boost" / "state" / "boost-protocol-handler.sh"
+        assert script.read_text(encoding="utf-8") == (
+            "#!/usr/bin/env bash\n"
+            "# boost:// URL handler — invoked with the URL as $1\n"
+            "unset BOOST_ASSUME_YES\n"
+            "export BOOST_HOME='%s'\n"
+            "export BOOST_AGENTS_STORE='%s'\n"
+            "exec '%s' protocol open --gui \"$1\"\n"
+            # str() of each Path, so the separator is the platform's own.
+            % (sandbox / "alt boost", sandbox / "st$re", shim))
+
+    @pytest.mark.skipif(sys.platform == "win32" or not shutil.which("bash"),
+                        reason="runs the bash handler")
+    def test_register_script_runs_with_hostile_paths(self, boost, sandbox,
+                                                     monkeypatch):
+        monkeypatch.setattr("boost_cli.commands.team.platform.system",
+                            lambda: "Darwin")
+        monkeypatch.setenv("BOOST_AGENTS_STORE", str(sandbox / "s $(x) `y`"))
+        bindir = sandbox / "bin $HOME `z`"
+        bindir.mkdir()
+        shim = bindir / "boost"
+        shim.write_text('#!/bin/sh\nprintf "%s|%s|%s|%s" '
+                        '"$BOOST_AGENTS_STORE" "${BOOST_HOME-unset}" "$3" "$4"\n',
+                        encoding="utf-8")
+        shim.chmod(0o755)
+        monkeypatch.setattr("boost_cli.core.paths.launcher", lambda: shim)
+        boost("protocol", "register")
+        script = paths.state_dir() / "boost-protocol-handler.sh"
+        env = {k: v for k, v in os.environ.items()
+               if k not in ("BOOST_HOME", "BOOST_AGENTS_STORE")}
+        got = subprocess.run(["bash", str(script), "boost://install/x"],
+                             capture_output=True, text=True, encoding="utf-8",
+                             env=env, check=True).stdout
+        assert got == "%s|unset|--gui|boost://install/x" % (
+            sandbox / "s $(x) `y`")
+
     def test_register_linux_and_other(self, boost, sandbox, monkeypatch):
         monkeypatch.setattr("boost_cli.commands.team.platform.system",
                             lambda: "Linux")
