@@ -456,10 +456,16 @@ def dir_identity(adir: Path) -> object:
     ``(st_dev, st_ino)`` for a dir that exists — which also catches a
     case-insensitive volume spelling it two ways — else its ``realpath``,
     normalised, so a dir not created yet still compares by where it would be.
+
+    A zero ``st_ino`` is no identity: Windows reports one on volumes with no
+    file index (FAT, exFAT, some shares), and keying on it made every dir on
+    that volume one dir, so the sweep walked the first and skipped the rest.
     """
     try:
         st = Path(adir).stat()
     except OSError:
+        st = None
+    if st is None or not st.st_ino:
         return os.path.normcase(os.path.realpath(adir))
     return (st.st_dev, st.st_ino)
 

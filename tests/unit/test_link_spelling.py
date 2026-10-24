@@ -13,6 +13,7 @@ agent link dangling.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 import pytest
 
@@ -108,6 +109,37 @@ class TestDirIdentity:
                 == os.path.normcase(os.path.realpath(real / "nope")))
         assert (agents.dir_identity(real / "nope")
                 != agents.dir_identity(real / "other"))
+
+    @staticmethod
+    def _fake_stat(monkeypatch, table):
+        real_stat = Path.stat
+
+        def fake(self, *a, **kw):
+            st = real_stat(self, *a, **kw)
+            dev, ino = table.get(self.name, (st.st_dev, st.st_ino))
+            vals = list(st)
+            vals[1], vals[2] = ino, dev   # st_ino, st_dev
+            return os.stat_result(vals)
+        monkeypatch.setattr(Path, "stat", fake)
+
+    def test_same_inode_on_two_devices_is_two_dirs(self, tmp_path,
+                                                   monkeypatch):
+        a, b = tmp_path / "a", tmp_path / "b"
+        a.mkdir()
+        b.mkdir()
+        self._fake_stat(monkeypatch, {"a": (1, 42), "b": (2, 42)})
+        assert agents.dir_identity(a) == (1, 42)
+        assert agents.dir_identity(a) != agents.dir_identity(b)
+
+    def test_a_zero_inode_falls_back_to_the_real_path(self, tmp_path,
+                                                      monkeypatch):
+        # Windows on FAT/exFAT: st_ino is 0 for every dir on the volume.
+        a, b = tmp_path / "a", tmp_path / "b"
+        a.mkdir()
+        b.mkdir()
+        self._fake_stat(monkeypatch, {"a": (7, 0), "b": (7, 0)})
+        assert agents.dir_identity(a) == os.path.normcase(os.path.realpath(a))
+        assert agents.unique_dirs([a, b]) == [a, b]
 
     def test_unique_dirs_keeps_the_first_spelling_in_order(self, tmp_path):
         a, b = tmp_path / "a", tmp_path / "b"
