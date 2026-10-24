@@ -435,3 +435,50 @@ class TestFormerLinkDirs:
         assert agents._remembered_link_dirs() == {}
         f.write_text('{"cursor": "nope", "x": ["/a", 3]}', encoding="utf-8")
         assert agents._remembered_link_dirs() == {"x": ["/a"]}
+
+
+class TestSkillLinkIsWritten:
+    """A skill's link is asked the question a rule's row is, against the set
+    its install writes: linking agents at user scope, project agents at
+    project scope."""
+
+    @staticmethod
+    def _set(agent, **flags):
+        cfg = config.load()
+        cfg["agents"][agent].update(flags)
+        config.save(cfg)
+
+    def test_user_scope_is_the_linking_set(self, sandbox):
+        assert agents.materialization_is_written("skill", None, "cursor")
+        assert agents.materialization_is_written("skill", None, "antigravity")
+        assert not agents.materialization_is_written("skill", None, "gemini")
+        assert agents.materialization_is_written("skill", None, None)
+
+    def test_project_scope_is_the_project_set(self, sandbox):
+        assert agents.materialization_is_written("skill", "/repo", "gemini")
+        assert not agents.materialization_is_written(
+            "skill", "/repo", "antigravity")
+
+    def test_a_disabled_agent_is_not_written_and_says_why(self, sandbox):
+        self._set("cursor", enabled=False)
+        assert not agents.materialization_is_written("skill", None, "cursor")
+        assert not agents.materialization_is_written("skill", "/r", "cursor")
+        assert agents.materialization_skip_reason(
+            "skill", None, "cursor") == agents.REASON_DISABLED
+        assert agents.materialization_skip_reason(
+            "skill", None, "claude-code") is None
+
+    def test_a_skills_only_agent_is_never_skipped_for_being_skills_only(
+            self, sandbox):
+        """antigravity takes skills; its project refusal is scope, not kind."""
+        assert agents.materialization_skip_reason(
+            "skill", "/repo", "antigravity") == agents.REASON_NO_PROJECT_SCOPE
+        assert agents.materialization_skip_reason(
+            "rule", "/repo", "antigravity") == agents.REASON_SKILLS_ONLY
+        self._set("antigravity", enabled=False)
+        assert agents.materialization_skip_reason(
+            "skill", None, "antigravity") == agents.REASON_DISABLED
+
+    def test_an_unknown_agent_is_unconfigured(self, sandbox):
+        assert agents.materialization_skip_reason(
+            "skill", None, "nope") == agents.REASON_UNCONFIGURED

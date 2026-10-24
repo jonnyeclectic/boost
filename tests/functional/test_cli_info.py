@@ -103,7 +103,8 @@ class TestList:
         assert "commit-messages" in r.out and "1.0.2" in r.out
         # abbreviated agents column: the linked ones only — gemini reads the
         # canonical store directly and is never symlinked
-        assert "claude·windsurf·cursor" in r.out
+        # Sorted, as a rule's agents are (`integrity.written_agent_names`).
+        assert "antigravity·claude·cursor·windsurf" in r.out
         assert "gemini" not in r.out
         assert "2 skills" in r.out
 
@@ -309,7 +310,8 @@ class TestInfo:
         assert re.search(r"tap\s+fixture-tap", r.out)
         assert "~/.agents/skills/brainstorming" in r.out   # ~-contracted store
         assert re.search(r"quality\s+95/100", r.out)
-        assert "claude-code, windsurf, cursor" in r.out
+        assert re.search(r"agents\s+antigravity, claude-code, cursor, windsurf$",
+                         r.out, re.M)
         assert re.search(r"pinned\s+no", r.out)
         assert re.search(r"quarantined\s+no", r.out)
         # D17: identity-card badges beneath the name

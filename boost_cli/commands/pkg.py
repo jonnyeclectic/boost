@@ -925,6 +925,15 @@ def _project_fallback(names: list[str]) -> tuple[list[str], Path | None]:
     return here, (base if here else None)
 
 
+def _rm_target(base, row: str) -> str:
+    """``base/row`` as one shell word for an `rm -rf` hint.
+
+    The real path, not the `~`-tilded one the prose uses: once quoted, a `~`
+    no longer expands, and a repo path with a space split in two unquoted.
+    """
+    return util.shell_arg("%s/%s" % (base, row) if base else row)
+
+
 def cmd_uninstall(argv: list[str]) -> int:
     ap = cliparse.parser(
         prog="boost uninstall",
@@ -1069,8 +1078,10 @@ def cmd_uninstall(argv: list[str]) -> int:
                 out.warn("left alone: the lock names %s, but a symlink inside "
                          "the repo redirects the path to it. boost will not "
                          "delete through a symlink it did not create; "
-                         "`rm -rf %s/%s` removes it if it is yours."
-                         % (out.plain(row), at, out.plain(row)), wrap=True)
+                         "`rm -rf %s` removes it if it is yours."
+                         % (out.plain(row), _rm_target(info.get("base"),
+                                                        out.plain(row))),
+                         wrap=True)
             if refused:
                 # The derived set, not a `<repo>/<dotdir>/skills/<name>`
                 # shape: the leaf comes from the agent's `dir`, so the shape
@@ -2997,8 +3008,9 @@ def _warn_import(res: store.InstallResult, narrowed: bool) -> None:
     if res.replaced_tap:
         out.warn("%s was installed from %s — it is a local import now, so "
                  "`boost update` will not refresh it "
-                 "(`boost install %s:%s --force` puts the tap's copy back)"
-                 % (res.name, res.replaced_tap, res.replaced_tap, res.name),
+                 "(`boost install %s --force` puts the tap's copy back)"
+                 % (res.name, res.replaced_tap,
+                    util.shell_arg("%s:%s" % (res.replaced_tap, res.name))),
                  wrap=True)
     if res.out_of_scope:
         out.warn("%s is still linked into %s, outside the --agent scope %s "
@@ -3118,7 +3130,7 @@ def cmd_pin(argv: list[str]) -> int:
     _add_pin_scope(ap, "pin")
     args = ap.parse_args(argv)
     args.name = store.installed_name(args.name, args.scope)
-    row = _pin_target(args.name, args.scope, "pin")
+    row = _pin_target(args.name, args.scope, "pin", commit=args.commit)
     if args.commit and row is not None:
         # `verify` never grades a project row's commit pin, so writing one
         # would promise a check that does not exist.
@@ -3177,13 +3189,16 @@ def _add_pin_scope(ap, verb: str) -> None:
         global_help="the copy in your user config (= --scope user)")
 
 
-def _pin_target(name: str, scope: str | None,
-                verb: str) -> integrity.InstalledSkill | None:
+def _pin_target(name: str, scope: str | None, verb: str,
+                commit: bool = False) -> integrity.InstalledSkill | None:
     """The project row ``pin``/``unpin`` acts on, or None for the user lock.
 
     Unscoped, a name only this repo holds is the project row, as before. A
     name both scopes hold is refused: acting on the user row alone pinned it
     while `boost update` moved the repo's copy, with nothing said about it.
+    ``commit`` is ``pin --commit``, which the hint must keep: dropped, the
+    suggested command set a version pin and no commit pin. It offers no
+    ``--local`` form then, because ``--commit`` is refused at project scope.
     """
     base, project = integrity.project_skills()
     prow = project.get(name)
@@ -3207,8 +3222,11 @@ def _pin_target(name: str, scope: str | None,
     if lockfile.find_any(name) is not None:
         raise BoostError("%s is installed in your user config and in this "
                          "repo — say which to %s" % (name, verb),
-                         hint="`boost %s %s --global` or `boost %s %s --local`"
-                              % (verb, name, verb, name))
+                         hint=("`boost %s %s --commit --global` — --commit "
+                               "applies to user-scope installs" % (verb, name)
+                               if commit else
+                               "`boost %s %s --global` or `boost %s %s --local`"
+                               % (verb, name, verb, name)))
     return integrity.InstalledSkill(name, prow, scopes.SCOPE_PROJECT, base, None)
 
 

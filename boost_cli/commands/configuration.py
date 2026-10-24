@@ -1737,6 +1737,8 @@ def _tool_list(args: dict):
     if not any(everything.values()) and not project:
         return "nothing installed\n" + footer, False
     lines = []
+    # `[modified]` hashes each installed skill copy, as `boost list` does --
+    # the one cost here beyond the lock reads, 0.2-0.4 ms per fixture skill.
     for kind, section in everything.items():
         for n, e in sorted(section.items()):
             where = scopes.project_label(e) if kind != "skill" else None
@@ -1744,12 +1746,14 @@ def _tool_list(args: dict):
                          % (n, e.get("version", "?"), e.get("tap", "?"),
                             "" if kind == "skill" else " [%s]" % kind,
                             " [project %s]" % where if where else "",
-                            mcp.state_marks(e)))
+                            mcp.state_marks(e, kind == "skill" and integrity
+                                            .locally_edited(kind, n, e))))
     if project:
         lines.append("project skills (%s):" % _tilde(pbase))
         lines.extend("%s v%s (%s) [project]%s"
                      % (n, e.get("version", "?"), e.get("tap", "?"),
-                        mcp.state_marks(e))
+                        mcp.state_marks(e, integrity.locally_edited(
+                            "skill", n, e, base=pbase)))
                      for n, e in sorted(project.items()))
     lines.append(footer)
     return "\n".join(lines), False
@@ -1837,6 +1841,12 @@ def _tool_info(args: dict):
                  else scopes.project_label(entry))
         if where:
             lines.append("scope: project (%s)" % where)
+        if kind == "skill" and integrity.locally_edited(
+                kind, catalog.split_name(name)[1], entry, base=pbase):
+            # Doctor's and verify's check: the body an agent reads next is
+            # not the tap's.
+            lines.append("modified: yes — edited since install; `boost "
+                         "verify` names it")
         if entry.get("pinned"):
             lines.append("pinned: yes")
         if entry.get("quarantined"):

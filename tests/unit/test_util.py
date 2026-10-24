@@ -365,6 +365,75 @@ class TestSha256Dir:
         assert util.sha256_dir(noisy) == util.sha256_dir(clean)
 
 
+class TestLineEndingBlindHash:
+    """A CRLF checkout (core.autocrlf) of a copy is not an edit to it."""
+
+    @staticmethod
+    def _tree(root, data: bytes):
+        root.mkdir()
+        (root / "SKILL.md").write_bytes(data)
+        return root
+
+    def test_hashed_bytes_folds_crlf_in_text_only(self):
+        assert util.hashed_bytes(b"a\r\nb\r\n") == b"a\nb\n"
+        assert util.hashed_bytes(b"a\nb") == b"a\nb"
+        # A lone CR is not a line-ending conversion git makes.
+        assert util.hashed_bytes(b"a\rb") == b"a\rb"
+        assert util.hashed_bytes(b"\0a\r\n") == b"\0a\r\n"
+
+    def test_the_binary_sniff_window_is_exact(self):
+        assert util.BINARY_SNIFF == 8000
+        inside = b"x" * (util.BINARY_SNIFF - 1) + b"\0\r\n"
+        past = b"x" * util.BINARY_SNIFF + b"\0\r\n"
+        assert util.hashed_bytes(inside) == inside
+        assert util.hashed_bytes(past) == past[:-2] + b"\n"
+
+    def test_updatediff_sniffs_the_same_window(self):
+        from boost_cli.core import updatediff
+        assert updatediff._SNIFF == util.BINARY_SNIFF
+
+    def test_crlf_and_lf_trees_hash_alike(self, tmp_path):
+        lf = self._tree(tmp_path / "lf", b"---\nname: x\n---\nbody\n")
+        crlf = self._tree(tmp_path / "crlf", b"---\r\nname: x\r\n---\r\nbody\r\n")
+        assert util.sha256_dir(crlf) == util.sha256_dir(lf)
+        assert util.sha256_dir(crlf, raw=True) != util.sha256_dir(lf, raw=True)
+
+    def test_an_lf_tree_hashes_as_the_raw_bytes_did(self, tmp_path):
+        # Why most existing lock rows need nothing: no CRLF, same digest.
+        lf = self._tree(tmp_path / "lf", b"body\n")
+        want = hashlib.sha256(b"SKILL.md\0body\n\0").hexdigest()
+        assert util.sha256_dir(lf) == want
+        assert util.sha256_dir(lf, raw=True) == want
+
+    def test_raw_hashes_crlf_as_written(self, tmp_path):
+        crlf = self._tree(tmp_path / "c", b"body\r\n")
+        assert util.sha256_dir(crlf, raw=True) == hashlib.sha256(
+            b"SKILL.md\0body\r\n\0").hexdigest()
+        assert util.sha256_dir(crlf) == hashlib.sha256(
+            b"SKILL.md\0body\n\0").hexdigest()
+
+    def test_a_binary_file_keeps_its_bytes(self, tmp_path):
+        a = self._tree(tmp_path / "a", b"\0bin\r\n")
+        b = self._tree(tmp_path / "b", b"\0bin\n")
+        assert util.sha256_dir(a) != util.sha256_dir(b)
+
+    def test_matches_a_normalised_or_a_raw_digest(self, tmp_path):
+        crlf = self._tree(tmp_path / "c", b"body\r\n")
+        assert util.sha256_matches(crlf, util.sha256_dir(crlf)) is True
+        # A row recorded from these CRLF bytes before the hash folded them.
+        assert util.sha256_matches(crlf, util.sha256_dir(crlf, raw=True)) is True
+        lf = self._tree(tmp_path / "l", b"body\n")
+        assert util.sha256_matches(crlf, util.sha256_dir(lf)) is True
+
+    def test_matches_rejects_an_edit_and_an_empty_digest(self, tmp_path):
+        a = self._tree(tmp_path / "a", b"body\r\n")
+        recorded = util.sha256_dir(a)
+        (a / "SKILL.md").write_bytes(b"bodY\r\n")
+        assert util.sha256_matches(a, recorded) is False
+        assert util.sha256_matches(a, "") is False
+        assert util.sha256_matches(a, None) is False
+
+
 class TestDirSize:
     def test_empty_dir_is_zero(self, tmp_path):
         assert util.dir_size(tmp_path) == 0

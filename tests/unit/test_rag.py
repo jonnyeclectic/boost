@@ -14,6 +14,7 @@ import math
 import os
 import re
 import sqlite3
+import sys
 from pathlib import Path
 from unittest import mock
 
@@ -37,6 +38,62 @@ class TestTokenize:
 
     def test_empty(self):
         assert rag.tokenize("") == []
+
+
+class TestUnicodeFold:
+    """`résumé` in NFC, in NFD and `resume` are one term on both sides."""
+
+    NFC = "r\u00e9sum\u00e9"
+    NFD = "re\u0301sume\u0301"
+
+    def test_three_spellings_tokenize_alike(self):
+        for text in (self.NFC, self.NFD, "resume", "R\u00c9SUM\u00c9"):
+            assert rag.tokenize("Builds a %s" % text) == ["builds", "resume"]
+
+    def test_fold_text_exact(self):
+        assert rag.fold_text("ABC") == "abc"
+        assert rag.fold_text(self.NFD) == "resume"
+        # casefold before NFKD: `İ` casefolds to `i` + U+0307, which is stripped
+        assert rag.fold_text("\u0130stanbul") == "istanbul"
+        assert rag.fold_text("Stra\u00dfe") == "strasse"
+        # compatibility forms map onto plain letters (NFKD, not NFD)
+        assert rag.fold_text("\ufb01le \uff21\uff22") == "file ab"
+        # a non-Latin letter is kept, so it still separates the words around it
+        assert rag.fold_text("foo\u65e5bar") == "foo\u65e5bar"
+        assert rag.tokenize("foo\u65e5bar") == ["foo", "bar"]
+
+    def test_every_combining_block_is_stripped(self):
+        for mark in ("\u0300", "\u036f", "\u1ab0", "\u1aff", "\u1dc0",
+                     "\u1dff", "\u20d0", "\u20ff", "\ufe20", "\ufe2f"):
+            assert rag.tokenize("ab%scd" % mark) == ["abcd"], hex(ord(mark))
+        # just outside the first block: a separator, not a mark
+        assert rag.tokenize("ab\u0370cd") == ["ab", "cd"]
+
+    def test_accented_word_is_not_reported_dropped(self):
+        assert rag.dropped_terms(self.NFC) == []
+        assert rag.dropped_terms("\u00e9 ok") == ["\u00e9"]
+
+    def test_index_version_moved(self):
+        assert rag.INDEX_VERSION == 11
+
+    def test_each_spelling_finds_every_document(
+            self, tmp_path, monkeypatch, sandbox):
+        root = tmp_path / "repo"
+        entries = []
+        for name, word in (("alpha", self.NFC), ("bravo", self.NFD),
+                           ("charlie", "resume")):
+            (root / name).mkdir(parents=True)
+            (root / name / "SKILL.md").write_text(
+                "---\nname: %s\n---\n\nBuilds a %s for you.\n" % (name, word),
+                encoding="utf-8")
+            entries.append(_entry(name, skill_md="%s/SKILL.md" % name))
+        monkeypatch.setattr(rag, "_tap_paths", lambda: {"acme/skills": root})
+        monkeypatch.setattr(rag, "_tap_commits", lambda: {"acme__skills": "c1"})
+        rag.build(entries=entries, force=True)
+        for query in (self.NFC, self.NFD, "resume"):
+            names = {h["entry"]["name"]
+                     for h in rag.retrieve(query, entries=entries)}
+            assert names == {"alpha", "bravo", "charlie"}, query
 
 
 class TestSymbolLanguageAliases:
@@ -570,6 +627,30 @@ class TestAnIndexBoostCannotSave:
         assert ei.value.hint == "run `chmod u+w %s`" \
             % where
         assert isinstance(ei.value.__cause__, PermissionError)
+
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="chmod can't make a directory unsearchable "
+                               "on Windows")
+    @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                        reason="root ignores mode bits")
+    def test_an_unsearchable_cache_dir_is_told_to_add_the_search_bit(
+            self, corpus, monkeypatch):
+        # At 0o600 `chmod u+w` changes nothing — measured, the same error and
+        # hint came back after running it. The missing bit is search.
+        _root, entries = corpus
+        cache = paths.cache_dir()
+        self._refuse(monkeypatch, PermissionError(
+            13, "Permission denied", str(cache / ".rag_postings.sqlite.x.tmp")))
+        cache.mkdir(parents=True, exist_ok=True)
+        cache.chmod(0o600)
+        try:
+            with pytest.raises(BoostError) as ei:
+                rag.build(entries=entries, force=True)
+        finally:
+            cache.chmod(0o700)
+        assert ei.value.message == ("could not save the search index in %s "
+                                    "(Permission denied)" % paths.tilde(cache))
+        assert ei.value.hint == "run `chmod u+wx %s`" % paths.tilde(cache)
 
     def test_search_still_degrades_rather_than_raising(self, corpus,
                                                        monkeypatch):

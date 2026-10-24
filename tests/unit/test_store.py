@@ -7,6 +7,7 @@ import errno
 import inspect
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -25,6 +26,7 @@ from boost_cli.core import (
     lockfile,
     paths,
     policy,
+    projectlock,
     registry,
     scopes,
     store,
@@ -6593,6 +6595,35 @@ class TestARowForADisabledAgentIsNotRot:
             ("rule", "team-conventions", "cursor", "is disabled"),
             ("workflow", "ship-it", "cursor", "is disabled")]
 
+    def test_skill_links_are_named_beside_the_rows(self, tap):
+        """A skill drops a disabled agent from its agents line as a rule
+        does, so doctor names its link as it names the rule's row. User
+        scope first, then the current project's; a quarantined, sidelined or
+        held skill's links are gone on purpose."""
+        store.install(_rule_entry(tap))
+        lockfile.set_skill("alpha", {"agents": ["cursor", "claude-code"]})
+        lockfile.set_skill("held", {"agents": ["cursor"], "quarantined": True})
+        lockfile.set_skill("parked", {"agents": ["cursor"],
+                                      "sidelined_by": "bmad"})
+        lockfile.set_skill("away", {"agents": ["cursor"],
+                                    store.HELD_KEY: "x"})
+        base = scopes.resolve_base(scopes.SCOPE_PROJECT)
+        projectlock.set_skill(base, "beta", {
+            "scope": "project", "agents": ["cursor", "gemini"]})
+        assert store.unwritten_materializations() == []
+        self._disable("cursor")
+        assert store.unwritten_materializations() == [
+            ("skill", "alpha", "cursor", "is disabled"),
+            ("skill", "beta", "cursor", "is disabled"),
+            ("rule", "team-conventions", "cursor", "is disabled")]
+
+    def test_a_project_skill_is_judged_by_the_project_set(self, tap):
+        base = scopes.resolve_base(scopes.SCOPE_PROJECT)
+        projectlock.set_skill(base, "beta", {
+            "scope": "project", "agents": ["antigravity", "gemini"]})
+        assert store.unwritten_materializations() == [
+            ("skill", "beta", "antigravity", "has no project scope")]
+
     def test_a_quarantined_entry_is_not_named(self, tap):
         """Its artifacts are deliberately gone and `sync_plan` skips it, so
         naming it would print exactly the line this list exists to end: a
@@ -7217,11 +7248,30 @@ class TestSourceMissingMessage:
         assert store.tap_configured(None) is False
         assert store.tap_configured("") is False
         url = str(paths.home() / "src" / "gone")
+        # The full path, not `~/src/gone`: quoted, a `~` no longer expands.
         assert store.source_missing_message(
             "x", "x", {"tap": "gone", "tap_url": url}) == (
             "x: source missing — tap gone is no longer tapped and `boost "
             "update` can't restore it; re-tap it with `boost tap "
-            "~/src/gone`, or `boost uninstall x`")
+            "%s`, or `boost uninstall x`" % util.shell_arg(url))
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX shell quoting")
+    def test_a_path_with_a_space_and_an_apostrophe_is_quoted(self, sandbox):
+        url = "/src/fix ture's \u00e9"
+        msg = store.source_missing_message(
+            "x", "x", {"tap": "fix-ture's-\u00e9", "tap_url": url})
+        assert ("re-tap it with `boost tap '/src/fix ture'\"'\"'s \u00e9'`"
+                in msg), msg
+        cmd = msg.split("re-tap it with `", 1)[1].split("`", 1)[0]
+        assert shlex.split(cmd) == ["boost", "tap", url]
+
+    def test_a_wheel_url_gets_words_not_a_command(self, sandbox):
+        # `boost tap wheel://…` does not parse; say re-tap, name no command.
+        msg = store.source_missing_message(
+            "x", "x", {"tap": "gone", "tap_url": registry.WHEEL_SCHEME + "x"})
+        assert msg == ("x: source missing — tap gone is no longer tapped and "
+                       "`boost update` can't restore it; re-tap it, or "
+                       "`boost uninstall x`")
 
     def test_no_recorded_url_still_says_what_to_do(self, sandbox):
         assert store.source_missing_message("x", "x", {"tap": "gone"}) == (

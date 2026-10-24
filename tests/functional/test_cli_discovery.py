@@ -2796,6 +2796,30 @@ class TestReindex:
         boost("reindex", "--force")               # and once it is writable
 
     @pytest.mark.skipif(sys.platform == "win32",
+                        reason="chmod can't make a directory unsearchable "
+                               "on Windows")
+    @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                        reason="root ignores mode bits")
+    def test_an_unsearchable_cache_dir_is_told_the_chmod_that_works(
+            self, boost, tapped):
+        # At 0o600 the hint was `chmod u+w`, and following it brought the
+        # same error and hint back: the missing bit is search, not write.
+        boost("reindex")
+        paths.cache_dir().chmod(0o600)
+        try:
+            r = boost("reindex", "--force", expect=1)
+            assert r.err.splitlines()[-2:] == [
+                "Error: could not save the search index in ~/.boost/cache "
+                "(Permission denied)",
+                "  hint: run `chmod u+wx ~/.boost/cache`"]
+            assert not list(paths.logs_dir().glob("crash-*.log"))
+            # Following the hint is enough on its own.
+            paths.cache_dir().chmod(0o700)
+            boost("reindex", "--force")
+        finally:
+            paths.cache_dir().chmod(0o700)
+
+    @pytest.mark.skipif(sys.platform == "win32",
                         reason="chmod can't make a directory unwritable on Windows")
     @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
                         reason="root ignores mode bits")

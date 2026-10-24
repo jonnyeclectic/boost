@@ -297,8 +297,8 @@ def _print_wrapped(text: str) -> None:
 # ---------------------------------------------------------------- commands
 
 def _materialized_agents(kind, entry):
-    """Abbreviated agent column for a rule/workflow: the agents boost still
-    writes for it, not every recorded row (`integrity.written_agent_names`)."""
+    """Abbreviated agent column for any kind: the agents boost still writes
+    for it, not every recorded row or link (`integrity.written_agent_names`)."""
     return "·".join(a.split("-")[0]
                     for a in integrity.written_agent_names(kind, entry))
 
@@ -410,13 +410,26 @@ def cmd_list(argv):
     # A row whose store dir is gone is a skill no agent can load: doctor says
     # so, and list printed it beside the healthy ones with an empty FLAGS.
     gone = {n for n, e in skills.items() if store.missing_from_store(n, e)}
+    # A copy edited since install, by the check doctor and verify make
+    # (`integrity.locally_edited`): without it a hand-edited skill looked
+    # pristine here while both of them flagged it. It hashes each installed
+    # copy, which is the cost of this command -- measured on the fixture at
+    # 0.2-0.4 ms per skill, so 200 skills add well under 0.1 s; a skill
+    # shipping large assets costs what reading them costs.
+    edited = {n for n, e in skills.items()
+              if n not in gone and integrity.locally_edited("skill", n, e)}
+    pedited = {n for n, e in project.items()
+               if integrity.locally_edited("skill", n, e, base=pbase)}
     if args.json:
         # Marked on a copy, and only when true, so a healthy row is still
         # the lock's row byte for byte.
-        shown = {n: (e | {"missing_from_store": True} if n in gone else e)
+        shown = {n: (e | ({"missing_from_store": True} if n in gone else {})
+                     | ({"modified": True} if n in edited else {}))
                  for n, e in skills.items()}
+        pshown = {n: (e | {"modified": True} if n in pedited else e)
+                  for n, e in project.items()}
         print(json.dumps({"skills": shown, "rules": rules,
-                          "workflows": workflows, "project": project},
+                          "workflows": workflows, "project": pshown},
                          indent=2, sort_keys=True))
         return 0
     # Every row below is a tap's frontmatter by way of the lock (version,
@@ -448,6 +461,7 @@ def cmd_list(argv):
             # colored cells stay in their column: pinned amber, quarantined pink,
             # tags dim.
             flags = ([out.role("missing", "danger")] if name in gone else []) + \
+                    ([out.role("modified", "warn")] if name in edited else []) + \
                     ([out.aurora("pinned", "yellow")] if e.get("pinned") else []) + \
                     ([out.aurora("quarantined", "pink")] if e.get("quarantined")
                      else []) + \
@@ -455,8 +469,7 @@ def cmd_list(argv):
                      if e.get("sidelined_by") else []) + \
                     [out.role("#" + t, "muted") for t in e.get("tags") or []]
             rows.append((name, e.get("version", "?"), e.get("tap", "?"),
-                         "·".join(a.split("-")[0] for a in e.get("agents") or []),
-                         " ".join(flags)))
+                         _materialized_agents("skill", e), " ".join(flags)))
         # NAME is what `uninstall`/`update`/`cat` take: `brainstorm…` is not
         # a name any of them accepts, so it is shown whole or dropped.
         out.table(rows, headers=("NAME", "VERSION", "TAP", "AGENTS", "FLAGS"),
@@ -479,8 +492,11 @@ def cmd_list(argv):
         # holds `update` off this row, and a pinned row that looked like any
         # other was visible only in --json.
         rows = [(name, e.get("version", "?"), e.get("tap", "?"),
-                 "·".join(a.split("-")[0] for a in e.get("agents") or []),
-                 out.aurora("pinned", "yellow") if e.get("pinned") else "")
+                 _materialized_agents("skill", e),
+                 " ".join(([out.role("modified", "warn")]
+                           if name in pedited else [])
+                          + ([out.aurora("pinned", "yellow")]
+                             if e.get("pinned") else [])))
                 for name, e in sorted(project.items())]
         out.table(rows, headers=("NAME", "VERSION", "TAP", "AGENTS", "FLAGS"),
                   whole=("NAME",))
@@ -691,9 +707,15 @@ def cmd_info(argv):
     if not (lock or plock) and cat and kind == "skill":
         submodules = store.unfetched_submodules(cat)
 
+    # Edited since install, by doctor's and verify's own check. Either
+    # scope's copy counts: `boost update` refuses to overwrite either one.
+    edited = bool((lock and integrity.locally_edited("skill", name, lock))
+                  or (plock and integrity.locally_edited(
+                      "skill", name, plock, base=pbase)))
     if args.json:
         print(json.dumps({
             "name": name, "kind": kind, "description": desc,
+            "modified": edited,
             "submodules": submodules,
             "upstream_description": upstream or None,
             "installed": lock, "project": plock,
@@ -735,6 +757,8 @@ def cmd_info(argv):
         badges.append(out.badge("installed", "green"))
         if store.missing_from_store(name, lock):
             badges.append(out.badge("missing from store", "pink"))
+        if edited:
+            badges.append(out.badge("modified", "yellow"))
         if lock.get("pinned"):
             badges.append(out.badge("pinned", "yellow"))
         if lock.get("quarantined"):
@@ -747,6 +771,8 @@ def cmd_info(argv):
             badges.append(out.badge("also in this project", "green"))
     elif plock:
         badges.append(out.badge("installed in this project", "green"))
+        if edited:
+            badges.append(out.badge("modified", "yellow"))
         if plock.get("pinned"):
             badges.append(out.badge("pinned", "yellow"))
     else:
@@ -835,7 +861,10 @@ def cmd_info(argv):
             out.kv("installed", "%s (%s)" % (ia, util.rel_time(ia)))
         if ua and ua != ia:
             out.kv("updated", "%s (%s)" % (ua, util.rel_time(ua)))
-        out.kv("agents", ", ".join(entry.get("agents") or []) or "(none)")
+        # Written agents only, as for a rule: a link left in a disabled
+        # agent's dir is kept for uninstall, not one boost still writes.
+        out.kv("agents", ", ".join(
+            integrity.written_agent_names("skill", entry)) or "(none)")
     if plock and not lock:
         # Which copy the rows above describe. Only worth saying when there is
         # no user-scope record to confuse it with.
@@ -962,7 +991,7 @@ def cmd_edit(argv):
         # lock, hiding the edit from `boost drift` (which would then fall
         # through to UPSTREAM_MOVED instead of LOCAL_EDITS). The journal is
         # the record of the edit; drift/attest compare honestly instead.
-        if util.sha256_dir(sdir) == row.get("sha256"):
+        if util.sha256_matches(sdir, row.get("sha256")):
             return False
         row["updated_at"] = util.now_iso()
         return True
@@ -1315,7 +1344,7 @@ def cmd_log(argv):
                 hint="re-tap it with `boost tap`, or see `boost taps`") from None
         if not tap.is_cloned:
             raise BoostError("tap %s is not cloned" % tap.name,
-                            hint="run `boost update %s`" % tap.name)
+                            hint="run `boost update %s`" % util.shell_arg(tap.name))
         if args.as_json:
             # `log_entries`, not a re-split of the display format: the columns
             # there are two-space separated and an author or subject may

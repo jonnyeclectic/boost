@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import sys
 import threading
 from pathlib import Path
@@ -135,6 +136,68 @@ class TestScanDir:
         assert catalog.find("t:\u65e5\u672c\u8a9e", entries=entries) == [hit]
         assert catalog.find("jp", entries=entries) == [hit]
 
+    def test_non_ascii_rule_and_workflow_resolve_by_file_name(self, tmp_path):
+        # A rule or workflow is named by its file and has no meta name, so the
+        # meta-name alias never covered it: `boost install déploy` failed.
+        root = tmp_path / "tap"
+        (root / "rules").mkdir(parents=True)
+        (root / "commands" / "\u00e9quipe").mkdir(parents=True)
+        (root / "rules" / "na\u00efve.mdc").write_text(
+            "---\ndescription: r\n---\nrule\n", encoding="utf-8")
+        (root / "commands" / "d\u00e9ploy.md").write_text(
+            "---\ndescription: w\n---\ncmd\n", encoding="utf-8")
+        (root / "commands" / "\u00e9quipe" / "go.md").write_text(
+            "---\ndescription: n\n---\ncmd\n", encoding="utf-8")
+        (root / "rules" / "plain.mdc").write_text(
+            "---\ndescription: p\n---\nrule\n", encoding="utf-8")
+        entries = catalog.scan_dir(root, tap_name="t")
+        by = {e["name"]: e for e in entries}
+        assert sorted(by) == ["deploy", "equipe/go", "naive", "plain"]
+        assert by["naive"]["original_name"] == "na\u00efve"
+        assert by["deploy"]["original_name"] == "d\u00e9ploy"
+        assert by["equipe/go"]["original_name"] == "\u00e9quipe/go"
+        assert "original_name" not in by["plain"]
+        assert catalog.find("na\u00efve", entries=entries) == [by["naive"]]
+        assert catalog.find("d\u00e9ploy", entries=entries) == [by["deploy"]]
+        assert catalog.find("\u00e9quipe/go", entries=entries) == [by["equipe/go"]]
+        # typed in NFD (pasted from a macOS filename): the same entry
+        assert catalog.find("de\u0301ploy", entries=entries) == [by["deploy"]]
+        assert catalog.find("t:de\u0301ploy", entries=entries) == [by["deploy"]]
+
+    def test_nfd_file_name_is_stored_and_found_as_nfc(self, tmp_path):
+        root = tmp_path / "tap"
+        (root / "rules").mkdir(parents=True)
+        nfd = root / "rules" / "nai\u0308ve.mdc"
+        nfd.write_text("---\ndescription: r\n---\nrule\n", encoding="utf-8")
+        (e,) = catalog.scan_dir(root, tap_name="t")
+        assert e["name"] == "naive"
+        assert e["original_name"] == "na\u00efve"
+        assert catalog.find("na\u00efve", entries=[e]) == [e]
+        assert catalog.find("nai\u0308ve", entries=[e]) == [e]
+
+    def test_nfd_skill_name_aliases_and_slugs_as_nfc(self, tmp_path):
+        root = tmp_path / "tap"
+        write_skill(root / "skills" / "c", "---\nname: cafe\u0301\n---")
+        (e,) = catalog.scan_dir(root, tap_name="t")
+        assert e["name"] == "cafe"
+        assert e["original_name"] == "caf\u00e9"
+        assert catalog.find("caf\u00e9", entries=[e]) == [e]
+        assert catalog.find("cafe\u0301", entries=[e]) == [e]
+
+    def test_original_name_alias_without_meta(self):
+        # `original_name` alone is enough: no meta name to fall back on.
+        e = dict(_entry("naive", "t"), original_name="na\u00efve")
+        assert catalog.find("na\u00efve", entries=[e]) == [e]
+        # ... but a safe original is never an alias
+        e2 = dict(_entry("y", "t"), original_name="other")
+        assert catalog.find("other", entries=[e2]) == []
+        # ... and an empty one is never indexed, so `find("")` stays empty
+        e3 = dict(_entry("z", "t"), original_name="")
+        assert catalog.find("", entries=[e3]) == []
+
+    def test_cache_format_moved(self):
+        assert catalog.CACHE_FORMAT == 9
+
     def test_alias_never_indexes_a_safe_name(self, tmp_path):
         # A safe frontmatter name IS the entry name; indexing it as an alias of
         # a differently-named entry would let it shadow that name.
@@ -165,6 +228,8 @@ class TestScanDir:
         assert slug("\ud55c\uad6d\uc5b4 tools", "d") != "tools-0bb94d74"
         # Hash of the name as written, not of its accent-folded form.
         assert slug("caf\u00e9 \u65e5\u672c", "d") == "cafe-5ce3bbb3"
+        # ... in NFC, so the NFD spelling of the same name slugs identically
+        assert slug("cafe\u0301 \u65e5\u672c", "d") == "cafe-5ce3bbb3"
 
     def test_name_without_spaces_kept_verbatim(self, tmp_path):
         root = tmp_path / "tap"
@@ -1330,6 +1395,36 @@ class TestResolveOneVendoredCopies:
         assert excinfo.value.qualified == "t:dbg"
         got = catalog.resolve_one(excinfo.value.qualified, path="a/dbg")
         assert (got["tap"], got["description"]) == ("t", "python")
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX shell quoting")
+    def test_the_ambiguity_hint_quotes_a_tap_name_with_an_apostrophe(
+            self, sandbox):
+        tap = "fix-ture's-\u00e9"
+        _fake_taps((tap, [_entry("dbg", tap, desc="python", rel_dir="a/dbg"),
+                          _entry("dbg", tap, desc="rust", rel_dir="b/dbg")]))
+        with pytest.raises(catalog.SameTapAmbiguity) as excinfo:
+            catalog.resolve_one("dbg")
+        assert excinfo.value.hint == (
+            "that registry ships one name twice — install one with `boost "
+            "install 'fix-ture'\"'\"'s-\u00e9:dbg' --path <one of the above>`, "
+            "then retry; raise it with the tap")
+        cmd = excinfo.value.hint.split("`")[1].split(" --path")[0]
+        assert shlex.split(cmd) == ["boost", "install", "%s:dbg" % tap]
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX shell quoting")
+    def test_the_path_grammar_hint_quotes_tap_and_path(self, sandbox):
+        # `tap:dir/skill` misreads the grammar; the suggested `--path` form
+        # must paste as-is when the tap name carries an apostrophe.
+        tap = "o'tap"
+        _fake_taps((tap, [_entry("dbg", tap, rel_dir="a b/dbg")]))
+        with pytest.raises(BoostError) as excinfo:
+            catalog.resolve_one("%s:a b/dbg" % tap)
+        hint = excinfo.value.hint or ""
+        assert hint == (
+            "`tap:skill` picks the registry; to pick a copy inside one, use "
+            "--path: `boost install 'o'\"'\"'tap:dbg' --path 'a b/dbg'`")
+        assert shlex.split(hint.split("`")[3]) == [
+            "boost", "install", "o'tap:dbg", "--path", "a b/dbg"]
 
     def test_the_ambiguity_message_names_the_entry_s_own_kind(self, sandbox):
         """A workflow sharing a name inside one tap was still reported as

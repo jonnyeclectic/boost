@@ -70,7 +70,10 @@ from . import (
 #   8 -- a slash command is named by its file, not its frontmatter `name`,
 #        and keeps its namespace dir (`commands/frontend/test.md` is
 #        `frontend/test`), as Claude Code and Gemini CLI name it
-CACHE_FORMAT = 8
+#   9 -- an entry whose name had to be slugged carries `original_name`, the
+#        NFC name the tap wrote, so a rule or workflow named by a non-ASCII
+#        file (`rules/naïve.mdc`, `commands/déploy.md`) installs by that name
+CACHE_FORMAT = 9
 
 KIND_SKILL = "skill"
 KIND_RULE = "rule"
@@ -254,8 +257,11 @@ def _entry_slug(name: str, default_name: str) -> str:
     so ``日本語 tools`` and ``한국어 tools`` are not both ``tools``. A name with
     nothing slug-able at all (``🚀``, ``!!!``) is the same no-survivor case:
     two emoji names must not both read as ``skill``. The hash is
-    of the name alone, so the slug is stable across scans and machines.
+    of the name alone, so the slug is stable across scans and machines —
+    and of its NFC form, so a name read off an NFD filesystem (macOS) slugs
+    to the same hash as the one typed in NFC.
     """
+    name = unicodedata.normalize("NFC", name)
     if util.is_safe_component(name):
         return name
     folded = "".join(c for c in unicodedata.normalize("NFKD", name)
@@ -289,9 +295,17 @@ def command_name(rel: str) -> str | None:
     return workflows.NAMESPACE_SEP.join(_entry_slug(p, p) for p in parts)
 
 
+def _typed_command_name(rel: str) -> str:
+    """The unslugged name of the command at ``rel`` (``commands/déploy.md``
+    -> ``déploy``) — what a user reading the tap types to install it."""
+    parts = (*workflows.command_namespace(rel), Path(rel).stem)
+    return workflows.NAMESPACE_SEP.join(parts)
+
+
 def _make_entry(root: Path, defining_file: Path, kind: str, default_name: str,
                 tap_name: str, curated: bool, meta: dict, body: str,
-                tap_category: str = "", fixed_name: str | None = None) -> dict:
+                tap_category: str = "", fixed_name: str | None = None,
+                typed_name: str | None = None) -> dict:
     name = _text(meta, "name") or default_name
     # Slugify anything that is not already a safe path component, not just names
     # containing a space: this name becomes a rule/workflow filename, so
@@ -299,7 +313,7 @@ def _make_entry(root: Path, defining_file: Path, kind: str, default_name: str,
     slug = fixed_name or _entry_slug(name, default_name)
     description = _description(meta, body)
     item_dir = defining_file.parent
-    return {
+    entry = {
         "name": slug,
         "description": description,
         "version": _text(meta, "version") or UNDECLARED_VERSION,
@@ -319,6 +333,14 @@ def _make_entry(root: Path, defining_file: Path, kind: str, default_name: str,
         # search() never re-walks the frontmatter per query (see _search_blob).
         "search_blob": _search_blob(slug, description, meta),
     }
+    # The name the tap wrote, when it had to be slugged, so `find` can alias
+    # it. A skill's is also in `meta["name"]`, but a rule or workflow is named
+    # by its *file* and has no meta name to fall back on — `rules/naïve.mdc`
+    # was catalogued as `naive` and `boost install naïve` found nothing.
+    original = unicodedata.normalize("NFC", typed_name or name)
+    if original != slug:
+        entry["original_name"] = original
+    return entry
 
 
 def _classify_rule(path: Path) -> bool:
@@ -437,11 +459,13 @@ def scan_dir(root: Path, tap_name: str = "local", curated: bool = False,
                 default = path.parent.name if path.parent != root else root.name
             else:
                 default = path.stem
-            fixed = (command_name(path.relative_to(root).as_posix())
-                     if kind == KIND_WORKFLOW else None)
+            rel = path.relative_to(root).as_posix()
+            fixed = command_name(rel) if kind == KIND_WORKFLOW else None
             entries.append(_make_entry(root, path, kind, default,
                                        tap_name, curated, meta, body, tap_category,
-                                       fixed_name=fixed))
+                                       fixed_name=fixed,
+                                       typed_name=(_typed_command_name(rel)
+                                                   if fixed else None)))
 
     entries.sort(key=operator.itemgetter("skill_md", "name"))
     return entries
@@ -543,7 +567,7 @@ def rebuild_tap(tap: registry.Tap) -> list[dict]:
     """
     if not tap.is_cloned:
         raise BoostError("tap %s is not cloned" % tap.name,
-                        hint="run `boost update %s`" % tap.name)
+                        hint="run `boost update %s`" % util.shell_arg(tap.name))
     escaped: list[str] = []
     scanned = scan_dir(tap.path, tap.name, tap.curated, escaped=escaped)
     _report_escaped(tap.name, escaped)
@@ -1062,11 +1086,16 @@ def _name_index(pool: list[dict]) -> dict[str, list[dict]]:
             # (`日本語` -> `jp`), so `boost install 日本語` finds what the tap
             # calls it. Only an unsafe original is indexed, and no slug is
             # ever unsafe, so an alias can never shadow another entry's name.
+            # Keys are NFC, and `find` looks up in NFC, so a name typed in
+            # NFD (pasted from a macOS filename) meets the same bucket.
             meta = e.get("meta")
-            original = _text(meta, "name") if isinstance(meta, dict) else ""
-            if original and original != e["name"] \
-                    and not util.is_safe_component(original):
-                index.setdefault(original, []).append(e)
+            aliases = {unicodedata.normalize("NFC", a) for a in (
+                _text(e, "original_name"),
+                _text(meta, "name") if isinstance(meta, dict) else "") if a}
+            for original in sorted(aliases):
+                if original != e["name"] \
+                        and not util.is_safe_component(original):
+                    index.setdefault(original, []).append(e)
         _NAME_INDEX.pop(key, None)
         while len(_NAME_INDEX) >= _NAME_INDEX_SLOTS:
             del _NAME_INDEX[next(iter(_NAME_INDEX))]
@@ -1086,7 +1115,7 @@ def find(name: str, tap: str | None = None,
     if qualifier is not None:
         tap, name = qualifier, bare
     pool = all_entries() if entries is None else entries
-    matches = list(_name_index(pool).get(name, ()))
+    matches = list(_name_index(pool).get(unicodedata.normalize("NFC", name), ()))
     if tap:
         # Same tiering as registry.get: a qualified owner/repo beats a bare
         # repo tail, so `angular/skills:x` never picks up `microsoft/skills:x`.
@@ -1392,8 +1421,10 @@ def resolve_one(name: str, path: str | None = None) -> dict:
                 "no skill named %r — after ':' boost expects a skill name, "
                 "not a path" % bare,
                 hint="`tap:skill` picks the registry; to pick a copy inside "
-                     "one, use --path: `boost install %s:%s --path %s`"
-                     % (qualifier, bare.rsplit("/", 1)[-1], bare))
+                     "one, use --path: `boost install %s --path %s`"
+                     % (util.shell_arg("%s:%s" % (qualifier,
+                                                  bare.rsplit("/", 1)[-1])),
+                        util.shell_arg(bare)))
         # A qualified miss searches the BARE name, restricted to the taps the
         # qualifier actually selects — never the whole `tap:skill` string.
         # Scoring the full string lets the tap's own tokens dominate (a typo'd
@@ -1482,8 +1513,9 @@ def resolve_one(name: str, path: str | None = None) -> dict:
                 # the wrong tap — or, for identical copies, quietly installed
                 # the other registry's.
                 hint="that registry ships one name twice — install one with "
-                     "`boost install %s:%s --path <one of the above>`, then "
-                     "retry; raise it with the tap" % (taps[0], bare),
+                     "`boost install %s --path <one of the above>`, then "
+                     "retry; raise it with the tap"
+                     % util.shell_arg("%s:%s" % (taps[0], bare)),
                 bare=bare, qualified="%s:%s" % (taps[0], bare),
                 paths=sorted(str(e.get("rel_dir", "?")) for e in matches))
         # Several taps, one thing. Registries mirror each other constantly, so

@@ -27,6 +27,7 @@ import os
 import re
 import sqlite3
 import tempfile
+import unicodedata
 from collections import defaultdict
 from collections.abc import Callable, Sequence
 from functools import lru_cache
@@ -71,7 +72,11 @@ from . import (
 # postings read in 1.17 s instead of 3.31 s; `scripts/measure_keyword_index.py`
 # re-derives the table. A v9 file read by the v10 reader would decode row
 # integers as blobs, so the bump is what keeps the two from ever meeting.
-INDEX_VERSION = 10
+# v11: `tokenize` folds Unicode first (`fold_text`: casefold, NFKD, combining
+# marks dropped), so `résumé` in NFC, in NFD and `resume` are one term. A v10
+# store split NFC `résumé` into `sum` and NFD into `re`+`sume`, so it holds
+# none of the folded terms a v11 query asks for.
+INDEX_VERSION = 11
 ENGINE = "bm25"
 
 # Chunking defaults (documented in docs/rag-architecture.md §4).
@@ -157,8 +162,34 @@ _ALIAS_RE = re.compile(
                for k in sorted(SYMBOL_ALIASES, key=len, reverse=True)))
 
 
+#: The combining-mark blocks `fold_text` strips after NFKD. A range class
+#: rather than a per-character ``unicodedata.combining`` test because this runs
+#: over every chunk of every tap at index time; these blocks hold every mark
+#: NFKD splits off a Latin, Greek or Cyrillic letter.
+_COMBINING_RE = re.compile(
+    "[\u0300-\u036f\u1ab0-\u1aff\u1dc0-\u1dff\u20d0-\u20ff\ufe20-\ufe2f]+")
+
+
+def fold_text(text: str) -> str:
+    """``text`` casefolded, NFKD-decomposed and stripped of combining accents.
+
+    Without it the same word landed under three disjoint index terms: NFC
+    ``résumé`` split at each ``é`` into ``sum``, NFD (what macOS filenames and
+    some editors produce) kept the marks as separators and gave ``re`` +
+    ``sume``, and ``resume`` was ``resume`` — so no spelling found another's
+    documents. Casefold runs first because it can itself emit a combining mark
+    (``İ`` -> ``i`` + U+0307); NFKD also maps compatibility forms (``ﬁ``,
+    full-width ``ＡＢＣ``) onto plain letters. Pure ASCII is returned lowered
+    without the Unicode work, which is nearly every chunk.
+    """
+    if text.isascii():
+        return text.lower()
+    return _COMBINING_RE.sub("", unicodedata.normalize("NFKD", text.casefold()))
+
+
 def tokenize(text: str) -> list[str]:
-    """Lowercase, split on non-alphanumerics, drop stopwords and 1-char noise.
+    """Fold (:func:`fold_text`), split on non-alphanumerics, drop stopwords
+    and 1-char noise.
 
     :data:`SYMBOL_ALIASES` is folded in first, and on the **index** side as
     well as the query side — that symmetry is the whole point. A query-only map
@@ -171,7 +202,7 @@ def tokenize(text: str) -> list[str]:
     gate is what says whether it costs anything measurable.
     """
     lowered = _ALIAS_RE.sub(lambda m: " %s " % SYMBOL_ALIASES[m.group(0)],
-                            text.lower())
+                            fold_text(text))
     return [t for t in re.split(r"[^a-z0-9]+", lowered)
             if len(t) >= 2 and t not in _STOPWORDS]
 
@@ -198,7 +229,7 @@ def dropped_terms(text: str) -> list[str]:
     for word in text.split():
         if tokenize(word):
             continue
-        parts = [p for p in re.split(r"[^a-z0-9]+", word.lower()) if p]
+        parts = [p for p in re.split(r"[^a-z0-9]+", fold_text(word)) if p]
         if parts and all(p in _STOPWORDS for p in parts):
             continue
         # `isalnum` rather than the ASCII class above: a CJK query has no
@@ -959,13 +990,14 @@ def _unsaved(e: OSError) -> BoostError:
     ~/.boost names ~/.boost. `reindex` only gets here in that state because
     catalog.rebuild_tap tolerates the same refused mkdir while loading taps.
     chmod is offered only for a permission error, since it cannot help a full
-    or read-only disk.
+    or read-only disk, and it is :func:`paths.chmod_command`'s: a cache dir at
+    ``0o600`` lacks the search bit, which ``chmod u+w`` leaves exactly as
+    stuck — the hint used to repeat itself after being followed.
     """
-    where = paths.tilde(Path(e.filename).parent if e.filename
-                        else paths.cache_dir())
+    d = Path(e.filename).parent if e.filename else paths.cache_dir()
     return BoostError("could not save the search index in %s (%s)"
-                      % (where, e.strerror or e),
-                      hint=("run `chmod u+w %s`" % where
+                      % (paths.tilde(d), e.strerror or e),
+                      hint=("run `%s`" % paths.chmod_command(d)
                             if isinstance(e, PermissionError) else None))
 
 

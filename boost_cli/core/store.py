@@ -256,7 +256,10 @@ def source_missing_message(label: str, name: str, lk: dict) -> str:
         return ("%s not found in tap %s — skipped (try `boost update`)"
                 % (label, tap))
     url = lk.get("tap_url")
-    how = " with `boost tap %s`" % paths.tilde(str(url)) if url else ""
+    # `retap_hint` quotes the URL; a `~`-tilded path would be one the shell
+    # no longer expands once it is quoted.
+    retap = registry.retap_hint(str(tap or ""), str(url)) if url else ""
+    how = " with `%s`" % retap if retap.startswith("boost tap ") else ""
     return ("%s: source missing — tap %s is no longer tapped and `boost "
             "update` can't restore it; re-tap it%s, or `boost uninstall %s`"
             % (label, tap, how, name))
@@ -524,7 +527,8 @@ def refuse_escape(tap: registry.Tap, path: Path, name: str) -> None:
         raise BoostError(
             "refusing %s from tap %s: its file links outside the clone"
             % (name, tap.name),
-            hint="run `boost update %s` to rescan the tap" % tap.name)
+            hint="run `boost update %s` to rescan the tap"
+                 % util.shell_arg(tap.name))
 
 
 def source_file_for(entry: dict) -> Path:
@@ -545,7 +549,7 @@ def source_file_for(entry: dict) -> Path:
     if not path.is_file():
         raise BoostError("source for %s %s vanished from tap %s"
                          % (kind, entry["name"], tap.name),
-                         hint="run `boost update %s`" % tap.name)
+                         hint="run `boost update %s`" % util.shell_arg(tap.name))
     refuse_escape(tap, path, entry["name"])
     return path
 
@@ -588,7 +592,7 @@ def source_dir_for(entry: dict) -> Path:
     gitutil.materialize(tap.path, entry["rel_dir"])
     if not (src / "SKILL.md").exists():
         raise BoostError("source for %s vanished from tap %s" % (entry["name"], tap.name),
-                        hint="run `boost update %s`" % tap.name)
+                        hint="run `boost update %s`" % util.shell_arg(tap.name))
     refuse_escape(tap, src / "SKILL.md", entry["name"])
     _materialize_link_targets(tap.path, src)
     return src
@@ -1824,8 +1828,31 @@ def unwritten_materializations() -> list[tuple[str, str, str, str]]:
     `boost sync` remedy cannot run -- the very failure this list exists to
     end. The ``reason`` is :func:`agents.materialization_skip_reason`, because
     *disabled* is only one of the ways a row stops being written.
+
+    Skills are named too, user scope and the current project's, because
+    :func:`integrity.written_agent_names` drops the same agents from their
+    ``agents`` list: a disabled cursor is gone from `boost list` for a skill as
+    for a rule, and doctor naming only the rule left the skill's links -- still
+    on disk, still read by Cursor -- accounted for nowhere. A quarantined or
+    sidelined skill is left out as a quarantined rule is: its links are
+    removed on purpose.
     """
-    return [(kind, name, m["agent"],
+    pbase = scopes.resolve_base(scopes.SCOPE_PROJECT)
+    project = projectlock.installed(pbase) if pbase is not None else {}
+    skills: list[tuple[str, dict, str | None]] = [
+        (name, entry, None)
+        for name, entry in sorted(lockfile.installed().items())
+        if not (is_held(entry) or entry.get("quarantined")
+                or entry.get("sidelined_by"))]
+    skills += [(name, entry, scopes.SCOPE_PROJECT)
+               for name, entry in sorted(project.items())]
+    unlinked = [("skill", name, agent,
+                 agents.materialization_skip_reason("skill", base, agent)
+                 or agents.REASON_UNKNOWN)
+                for name, entry, base in skills
+                for agent in lockfile.agent_names("skill", entry)
+                if not agents.materialization_is_written("skill", base, agent)]
+    return unlinked + [(kind, name, m["agent"],
              agents.materialization_skip_reason(kind, entry.get("base"),
                                                 m["agent"])
              or agents.REASON_UNKNOWN)
@@ -3078,8 +3105,9 @@ def check_existing(entry: dict, *, force: bool = False, scope: str = "user",
                     "%s is already installed in this project (v%s) from %s, "
                     "not %s" % (name, existing.get("version"), other,
                                 entry.get("tap")),
-                    hint="`boost install %s:%s --local --force` to replace it"
-                         % (entry.get("tap"), name), wrap=True)
+                    hint="`boost install %s --local --force` to replace it"
+                         % util.shell_arg("%s:%s" % (entry.get("tap"), name)),
+                    wrap=True)
             # `reinstall --local` reads this repo's lock, so it reaches the
             # recorded tap even where a bare `install x` would stop at "exists
             # in multiple taps".
@@ -3104,8 +3132,9 @@ def check_existing(entry: dict, *, force: bool = False, scope: str = "user",
             raise BoostError(
                 "%s is already installed (v%s) from %s, not %s"
                 % (name, existing.get("version"), other, entry.get("tap")),
-                hint="`boost install %s:%s --force` to replace it"
-                     % (entry.get("tap"), name), wrap=True)
+                hint="`boost install %s --force` to replace it"
+                     % util.shell_arg("%s:%s" % (entry.get("tap"), name)),
+                wrap=True)
         raise BoostError("%s is already installed (v%s)" % (name, existing.get("version")),
                         hint="`boost reinstall %s` to force, `boost update` to upgrade" % name)
     return existing
@@ -3228,7 +3257,11 @@ def _refuse_self_installing(entry: dict) -> None:
     the upstream command is the whole point — a refusal that only says "no"
     leaves the user exactly where `boost install` pretending would have.
     """
-    cmd = config.self_installing_command(entry.get("tap") or "")
+    tap = entry.get("tap") or ""
+    # The configured URL is what says which repository a tap is; its name is
+    # only the URL's tail, and a local `~/work/gstack` is named `gstack` too.
+    url = next((t.url for t in registry.list_taps() if t.name == tap), "")
+    cmd = config.self_installing_command(tap, url)
     if not cmd:
         return
     raise BoostError(
@@ -3639,6 +3672,7 @@ def _install_project_skill(entry: dict, force: bool = False,
     # Before anything is copied: projectlock.write refuses a corrupt lock too,
     # but by then the copies would be on disk unrecorded.
     projectlock.refuse_corrupt(resolved_base)
+    projectlock.refuse_unwritable(resolved_base, "install", name)
 
     existing = check_existing(entry, force=force, scope=scopes.SCOPE_PROJECT,
                               base=resolved_base, kind="skill")
@@ -3974,6 +4008,9 @@ def uninstall_project(name: str, base=None) -> dict:
             return (_uninstall_rule if owned_kind == "rule"
                     else _uninstall_workflow)(name, owned_entry)
         raise _not_in_this_project(name)
+    # After the rule/workflow fall-through, which records in the user lock:
+    # only a skill's row lives in `.boost/`, so only it can be stranded there.
+    projectlock.refuse_unwritable(resolved_base, "uninstall", name)
     removed: list[str] = []
     refused: list[str] = []
     redirected: list[str] = []
@@ -4265,7 +4302,7 @@ def project_intact_copy(entry: dict, base) -> Path | None:
     if not recorded:
         return None
     for copy in integrity.project_skill_dirs(entry, base):
-        if (util.sha256_dir(copy) == recorded
+        if (util.sha256_matches(copy, recorded)
                 and not integrity.exec_drifted(copy, entry)):
             return copy
     return None
@@ -4724,7 +4761,7 @@ def _install_rule(entry: dict, force: bool = False,
     src = tap.path / entry.get("skill_md", "")
     if not src.is_file():
         raise BoostError("source for rule %s vanished from tap %s" % (name, tap.name),
-                        hint="run `boost update %s`" % tap.name)
+                        hint="run `boost update %s`" % util.shell_arg(tap.name))
     refuse_escape(tap, src, name)
     _enforce_capability_policy(name, src)
     raw = src.read_text(encoding="utf-8", errors="replace")
@@ -5688,7 +5725,7 @@ def _install_workflow(entry: dict, force: bool = False,
     src = tap.path / source_rel
     if not src.is_file():
         raise BoostError("source for workflow %s vanished from tap %s" % (name, tap.name),
-                        hint="run `boost update %s`" % tap.name)
+                        hint="run `boost update %s`" % util.shell_arg(tap.name))
     refuse_escape(tap, src, name)
     _enforce_capability_policy(name, src)
     raw = src.read_text(encoding="utf-8", errors="replace")

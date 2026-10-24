@@ -56,6 +56,24 @@ def test_status_missing_when_the_store_dir_is_gone(installed):
     assert integrity.status(installed) == integrity.STATUS_MISSING
 
 
+def test_status_ok_after_a_crlf_rewrite(installed):
+    md = paths.store_dir() / installed / "SKILL.md"
+    md.write_bytes(md.read_bytes().replace(b"\n", b"\r\n"))
+    assert integrity.status(installed) == integrity.STATUS_OK
+    assert integrity.locally_edited(
+        "skill", installed, lockfile.get_skill(installed)) is False
+
+
+def test_status_ok_for_a_raw_digest_an_older_row_recorded(installed):
+    md = paths.store_dir() / installed / "SKILL.md"
+    md.write_bytes(md.read_bytes().replace(b"\n", b"\r\n"))
+    entry = dict(lockfile.get_skill(installed),
+                 sha256=util.sha256_dir(md.parent, raw=True))
+    assert integrity.status(installed, entry) == integrity.STATUS_OK
+    md.write_bytes(b"TAMPERED\r\n")
+    assert integrity.status(installed, entry) == integrity.STATUS_MODIFIED
+
+
 def test_status_unlocked_when_the_lock_has_no_digest(installed):
     entry = lockfile.get_skill(installed)
     del entry["sha256"]
@@ -285,6 +303,39 @@ class TestProjectScope:
         entry = dict(entry)
         del entry["sha256"]
         assert integrity.project_status(entry, repo) == integrity.STATUS_UNLOCKED
+
+    @staticmethod
+    def _to_crlf(repo, entry):
+        n = 0
+        for m in entry["materializations"]:
+            for f in (repo / m["path"]).rglob("*"):
+                if f.is_file():
+                    data = f.read_bytes().replace(b"\r\n", b"\n")
+                    f.write_bytes(data.replace(b"\n", b"\r\n"))
+                    n += data.count(b"\n")
+        assert n > 0
+
+    def test_a_crlf_checkout_is_not_an_edit(self, sandbox, fixture_tap_src,
+                                            tmp_path):
+        # What core.autocrlf (Git for Windows' default) does to a clone.
+        repo, entry = self._install_local(sandbox, fixture_tap_src, tmp_path)
+        self._to_crlf(repo, entry)
+        assert integrity.project_status(entry, repo) == integrity.STATUS_OK
+        assert integrity.locally_edited("skill", "brainstorming", entry,
+                                        base=repo) is False
+        assert store.project_intact_copy(entry, repo) is not None
+
+    def test_a_raw_digest_recorded_from_crlf_still_verifies(
+            self, sandbox, fixture_tap_src, tmp_path):
+        # A row written before the hash folded CRLF, over CRLF copies.
+        repo, entry = self._install_local(sandbox, fixture_tap_src, tmp_path)
+        self._to_crlf(repo, entry)
+        first = repo / entry["materializations"][0]["path"]
+        entry = dict(entry, sha256=util.sha256_dir(first, raw=True))
+        assert entry["sha256"] != util.sha256_dir(first)
+        assert integrity.project_status(entry, repo) == integrity.STATUS_OK
+        (first / "SKILL.md").write_bytes(b"EVIL\r\n")
+        assert integrity.project_status(entry, repo) == integrity.STATUS_MODIFIED
 
     def test_project_status_ignores_an_escaping_materialization(self, sandbox,
                                                                fixture_tap_src,
@@ -814,13 +865,37 @@ class TestWrittenAgentNames:
         assert integrity.written_agent_names("rule", e) == \
             ["cursor", "windsurf"]
 
-    def test_a_skill_passes_through_unfiltered(self, sandbox):
-        """A skill records links, not rows -- and no materializations to
-        filter, so treating it as a rule would answer [] for every skill."""
-        self._disable("windsurf")
+    def test_a_skill_drops_a_disabled_agent_like_a_rule(self, sandbox):
+        """A skill records links, not rows, and is filtered by the same
+        predicate: it passed through, so `list` named a disabled cursor for
+        every skill while dropping it for every rule."""
         e = {"agents": ["windsurf", "claude-code"]}
         assert integrity.written_agent_names("skill", e) == \
             ["claude-code", "windsurf"]
+        self._disable("windsurf")
+        assert integrity.written_agent_names("skill", e) == ["claude-code"]
+        # the raw reader still lists the link -- uninstall removes it
+        assert lockfile.agent_names("skill", e) == ["claude-code", "windsurf"]
+
+    def test_a_user_skill_is_judged_against_the_linking_set(self, sandbox):
+        """gemini reads the store itself and is never linked at user scope."""
+        e = {"agents": ["gemini", "claude-code"]}
+        assert integrity.written_agent_names("skill", e) == ["claude-code"]
+
+    @pytest.mark.parametrize("project", [
+        {"scope": "project"},
+        {"materializations": [{"agent": "gemini", "path": ".gemini/x"}]}])
+    def test_a_project_skill_is_judged_against_the_project_set(self, sandbox,
+                                                               project):
+        """A project install copies into gemini and codex; antigravity has
+        no project scope. Either project marker on the row decides it."""
+        e = {"agents": ["antigravity", "codex", "gemini"], **project}
+        assert integrity.skill_base(e) == "project"
+        assert integrity.written_agent_names("skill", e) == ["codex", "gemini"]
+
+    def test_a_user_skill_has_no_base(self, sandbox):
+        assert integrity.skill_base({"agents": ["cursor"]}) is None
+        assert integrity.skill_base({"scope": "user"}) is None
 
     @pytest.mark.parametrize("entry", [None, {}])
     def test_no_entry_names_none(self, sandbox, entry):

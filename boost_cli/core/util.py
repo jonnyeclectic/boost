@@ -987,16 +987,59 @@ def exec_bits(path: Path) -> list[str] | None:
             if f.stat().st_mode & stat.S_IXUSR]
 
 
-def sha256_dir(path: Path) -> str:
-    """Deterministic content hash of a directory tree (paths + bytes)."""
+#: How far into a file a NUL byte makes it binary. ``updatediff.read_file``
+#: sniffs the same window, so the two agree about which files are text.
+BINARY_SNIFF = 8000
+
+
+def hashed_bytes(data: bytes) -> bytes:
+    """``data`` as :func:`sha256_dir` hashes it: CRLF folded to LF in text.
+
+    A file with a NUL in its first :data:`BINARY_SNIFF` bytes is binary and
+    hashed as it is. Text is folded because git's ``core.autocrlf`` (Git for
+    Windows' default) checks committed copies out CRLF, and a hash over raw
+    bytes read that conversion as a hand edit: every Windows clone of a
+    project failed `verify`. Rules and workflows were already immune, being
+    read as text. Bytes, not a decode: a file that is not UTF-8 hashes the
+    same before and after.
+    """
+    if b"\0" in data[:BINARY_SNIFF]:
+        return data
+    return data.replace(b"\r\n", b"\n")
+
+
+def sha256_dir(path: Path, *, raw: bool = False) -> str:
+    """Deterministic content hash of a directory tree (paths + contents).
+
+    Contents as :func:`hashed_bytes` sees them, so a tree that differs only
+    in CRLF vs LF hashes alike. A tree with no CRLF in a text file hashes
+    exactly as it did over raw bytes, which is most lock rows; ``raw=True``
+    is that old hash, for the rows whose copy held CRLF when it was recorded
+    (:func:`sha256_matches`).
+    """
     h = hashlib.sha256()
     root = Path(path)
     for f in _hashed_files(root):
+        data = f.read_bytes()
         h.update(f.relative_to(root).as_posix().encode())
         h.update(b"\0")
-        h.update(f.read_bytes())
+        h.update(data if raw else hashed_bytes(data))
         h.update(b"\0")
     return h.hexdigest()
+
+
+def sha256_matches(path: Path, recorded: str | None) -> bool:
+    """Whether the tree at ``path`` holds what a lock row's ``recorded`` names.
+
+    The question every "is this copy intact?" check asks. A row written now
+    records :func:`sha256_dir`; one written before it was line-ending blind
+    records the raw-byte hash, so either one matching is a match: no lock
+    migration, and no copy that verified before fails now. The raw walk only
+    runs on a mismatch. An empty ``recorded`` matches nothing.
+    """
+    if not recorded:
+        return False
+    return any(sha256_dir(path, raw=raw) == recorded for raw in (False, True))
 
 
 def dir_size(path: Path) -> int:
@@ -1272,3 +1315,12 @@ def shell_arg(arg: str) -> str:
         # single quotes `shlex.quote` emits.
         return '"%s"' % arg if any(c.isspace() for c in arg) else arg
     return shlex.quote(arg)
+
+
+def shell_join(argv: list[str]) -> str:
+    """``argv`` as one command line a user can paste into their shell.
+
+    Each word goes through :func:`shell_arg`, so on POSIX this is
+    ``shlex.join`` and on Windows it keeps that function's double quotes.
+    """
+    return " ".join(shell_arg(a) for a in argv)

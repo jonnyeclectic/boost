@@ -47,10 +47,8 @@ def moved(boost, tmp_path, monkeypatch):
     repo = tmp_path / "mvproj"
     repo.mkdir()
     _git(repo, "init", "-q")
-    # Committed copies are compared by `sha256_dir` over raw bytes, and a
-    # core.autocrlf checkout (Git for Windows' default) restores them CRLF:
-    # a hash the lock never recorded. Pinned off here so the test is about
-    # the printed command; the CRLF case itself is a separate open question.
+    # Pinned off so each test controls line endings itself; the
+    # core.autocrlf=true checkout has its own case below.
     _git(repo, "config", "core.autocrlf", "false")
     monkeypatch.chdir(repo)
     boost("install", "--local", "movey")
@@ -135,3 +133,24 @@ def test_committed_copies_get_a_git_checkout_that_restores_them(
                    cwd=repo / ".boost", check=True)
     assert all(util.sha256_dir(c) == locked for c in copies)
     assert _project_issues(boost) == []
+
+
+def test_an_autocrlf_checkout_of_the_copies_is_not_drift(boost, moved):
+    # Git for Windows' default: a teammate's checkout restores every copy
+    # CRLF. That is not an edit, so verify, doctor and drift stay clean.
+    repo, copies = moved
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "proj")
+    locked = projectlock.get_skill(repo, "movey")["sha256"]
+    for c in copies:
+        util.rmtree(c)
+    rels = [c.relative_to(repo).as_posix() for c in copies]
+    _git(repo, "-c", "core.autocrlf=true", "checkout", "--", *rels)
+    assert all(b"\r\n" in (c / "SKILL.md").read_bytes() for c in copies)
+    assert all(util.sha256_dir(c, raw=True) != locked for c in copies)
+    assert _project_issues(boost) == []
+    r = boost("verify")
+    assert "modified" not in r.out
+    r = boost("drift")
+    assert "local-edits" not in r.out
+    assert projectlock.get_skill(repo, "movey")["sha256"] == locked
