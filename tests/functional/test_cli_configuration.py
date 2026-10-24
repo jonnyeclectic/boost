@@ -2575,6 +2575,16 @@ class TestMcp:
         r = boost("mcp", "register", "--host", "gemini", expect=1)
         assert "gemini mcp register failed — no auth" in r.out
 
+    def test_register_accepts_the_yes_its_hint_names(
+            self, boost, sandbox, monkeypatch):
+        # The boost-first offer's decline prints "pass -y …"; `boost mcp
+        # register -y` used to be an argparse error (rc 2).
+        calls = self._fake_clis(monkeypatch, "claude")
+        r = boost("mcp", "register", "-y", "--no-seed", "--dry-run")
+        assert calls == []
+        assert "unrecognized arguments" not in r.err
+        assert "dry run — nothing was registered, nothing tapped" in r.out
+
     def test_dry_run_prints_argv_and_install_status_without_acting(
             self, boost, sandbox, monkeypatch):
         # The one behaviour `--dry-run` exists for: the argv boost would run

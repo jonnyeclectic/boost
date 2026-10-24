@@ -1376,26 +1376,41 @@ def table(rows, headers=None, stream=None, keep=(), text=(),
 
 
 _CONFIRM_BYPASS_HINT = "pass -y or set BOOST_ASSUME_YES=1 to skip this prompt"
+# For a prompt the running command's -y deliberately does not answer — the
+# hint must not name a flag that would change nothing.
+ENV_ONLY_BYPASS_HINT = "set BOOST_ASSUME_YES=1 to skip this prompt"
 
 
-def confirm(prompt: str, default: bool = False, quiet: bool = False) -> bool:
+def confirm(prompt: str, default: bool = False, quiet: bool = False,
+            hint: str | None = None) -> bool:
     """Ask a yes/no question and return the answer as a bool.
 
-    BOOST_ASSUME_YES or --yes/-y force True; non-TTY stdin and an empty
-    answer return `default`; EOF or Ctrl-C returns False.
+    BOOST_ASSUME_YES forces True; non-TTY stdin and an empty answer return
+    `default`; EOF or Ctrl-C returns False.
+
+    A command's own ``-y``/``--yes`` is NOT read here: each caller passes its
+    parsed flag as ``args.yes or out.confirm(...)``. This used to scan
+    ``sys.argv`` for either spelling, which made one flag answer every prompt
+    a run reached — `protocol open -y` and `import -y`, whose -y means "skip
+    this command's prompt", also said yes to the separate, default-No
+    "register MCP servers for every project on this machine?" question. A
+    prompt that needs its own consent can only get it from a caller that
+    asks for it by name.
 
     Every path that resolves to a decline (as opposed to `default` being
     True) prints the bypass hint here, once, so callers inherit it instead
     of each command growing its own reminder — see the confirm-bypass-hints
     roadmap item. ``quiet`` suppresses that hint — for a caller that is about
     to print its own machine-readable (``--json``) result on a decline, where
-    the hint would land as a stray prose line ahead of it.
+    the hint would land as a stray prose line ahead of it. ``hint`` replaces
+    the default wording, for a prompt the command's own ``-y`` does not reach.
     """
-    if typedvalue.env_flag("BOOST_ASSUME_YES") or "--yes" in sys.argv or "-y" in sys.argv:
+    if typedvalue.env_flag("BOOST_ASSUME_YES"):
         return True
+    hint = hint or _CONFIRM_BYPASS_HINT
     if not stdin_is_tty():
         if not default and not quiet:
-            dim(_CONFIRM_BYPASS_HINT)
+            dim(hint)
         return default
     suffix = " [Y/n] " if default else " [y/N] "
     try:
@@ -1403,9 +1418,9 @@ def confirm(prompt: str, default: bool = False, quiet: bool = False) -> bool:
     except (EOFError, KeyboardInterrupt):
         print()
         if not quiet:
-            dim(_CONFIRM_BYPASS_HINT)
+            dim(hint)
         return False
     result = answer in ("y", "yes") if answer else default
     if not result and not quiet:
-        dim(_CONFIRM_BYPASS_HINT)
+        dim(hint)
     return result

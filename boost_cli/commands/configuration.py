@@ -2658,7 +2658,7 @@ def _boost_first_targets(hosts: list[str]) -> list[str]:
             if agent in scoped_agents]
 
 
-def _offer_boost_first(hosts: list[str]) -> None:
+def _offer_boost_first(hosts: list[str], yes: bool = False) -> None:
     """Offer to install boost's own rule into the agent's standing instructions.
 
     This is the most invasive thing boost can propose, and the only text it
@@ -2666,6 +2666,7 @@ def _offer_boost_first(hosts: list[str]) -> None:
     the consent has to be real rather than procedural. The body is printed in
     full BEFORE the question, the target paths are named, the answer defaults
     to NO, and the reversal command is shown whether or not they accept.
+    ``yes`` is ``boost mcp register -y`` — the body is still printed first.
 
     Why it exists at all: Gemini never delivers MCP server `instructions` in
     interactive mode, and in an untrusted folder — which a brand-new project
@@ -2695,7 +2696,7 @@ def _offer_boost_first(hosts: list[str]) -> None:
     for line in body.read_text(encoding="utf-8").splitlines():
         out.info("  | %s" % line)
     out.info("")
-    if not out.confirm("Install it?", default=False):
+    if not (yes or out.confirm("Install it?", default=False)):
         out.info("Not installed. `boost install %s` any time."
                  % builtin.BUILTIN_RULES[0])
         return
@@ -2756,6 +2757,10 @@ def cmd_mcp(argv) -> int:
     seeding.add_argument("--no-seed", dest="seed_ok", action="store_false",
                          default=True,
                          help="register only; do not tap anything")
+    # The boost-first offer's decline hint says "pass -y"; without this the
+    # advice died on `unrecognized arguments: -y`.
+    p.add_argument("-y", "--yes", action="store_true",
+                   help="install the boost-first rule without asking")
     args = p.parse_args(argv)
 
     if args.stdio:
@@ -2899,7 +2904,7 @@ def cmd_mcp(argv) -> int:
         # `mcphost.is_named`), so only a one-host request fails here.
         return 1 if named else 0
     if args.action == "register":
-        _offer_boost_first(settled)
+        _offer_boost_first(settled, yes=args.yes)
     journal.log("mcp", args.action, hosts=",".join(settled))
     # Same rule as `boost update` across taps: a partial sweep is a success
     # with a warning, because the hosts that worked really did work.
