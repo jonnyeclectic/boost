@@ -3817,6 +3817,30 @@ def _flat(text):
     return " ".join(text.split())
 
 
+def _disk():
+    """Every file and link under the sandbox HOME, with its bytes or target.
+
+    What a preview is held to. The diagnostic log is left out — every run
+    appends to it — and so are bare directories, which its creation adds.
+    """
+    home = paths.home()
+    logs = os.path.abspath(paths.logs_dir())
+    seen = {}
+    for root, dirs, files in os.walk(home):
+        if os.path.abspath(root) == logs:
+            dirs[:] = []
+            continue
+        for name in dirs + files:
+            p = os.path.join(root, name)
+            rel = os.path.relpath(p, home).replace(os.sep, "/")
+            if os.path.islink(p):
+                seen[rel] = ("link", os.readlink(p))
+            elif os.path.isfile(p):
+                with open(p, "rb") as fh:
+                    seen[rel] = ("file", fh.read())
+    return seen
+
+
 def _store_skill(name, body="# mine\n"):
     d = paths.store_dir() / name
     d.mkdir(parents=True)
@@ -3866,6 +3890,32 @@ class TestStoreDirsBoostDidNotInstall:
         assert "would record pr-me, which boost did not install, and link it" in r.out
         assert "recorded pr-me as a local skill" in boost("heal").out
         assert _lock()["pr-me"]["tap"] == "local"
+
+    def test_sync_diff_and_heal_name_the_scope_the_run_records(
+            self, boost, installed):
+        # Linked by hand into Claude Code alone: the run keeps it there and
+        # links nothing. Both previews said "and link it".
+        d = _store_skill("handmade", "---\nname: handmade\ndescription: "
+                         "my notes\n---\nx\n")
+        (agents.linking_agents()["claude-code"] / "handmade").symlink_to(d)
+        line = ("would record handmade, which boost did not install, and "
+                "keep it to claude-code, where it is already linked (nothing "
+                "to link)")
+        before = _disk()
+        r = boost("sync", "--diff")
+        assert "skills added outside boost, to record (1)" in r.out
+        assert "to record and link" not in r.out
+        assert line in _flat(r.out)
+        assert line in _flat(boost("heal", "--dry-run").out)
+        assert _disk() == before
+        r = boost("sync")
+        assert "recorded handmade as a local skill" in r.out
+        assert "linked handmade" not in r.out
+        after = _disk()
+        assert {k for k in after if "/skills/" in k and "handmade" in k
+                and not k.startswith(".agents/")} == {
+            ".claude/skills/handmade"}
+        assert _lock()["handmade"]["only_agents"] == ["claude-code"]
 
     def test_an_older_copy_elsewhere_is_named_and_left(self, boost, installed):
         old = paths.home() / ".codex" / "skills" / "pr-me"

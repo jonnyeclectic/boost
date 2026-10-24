@@ -8686,7 +8686,7 @@ def sync_preview(plan: dict[str, list]) -> list[str]:
             else:
                 lines.append("would leave %s unrecorded (no SKILL.md to record)"
                              % name)
-    lines += [_adoption_preview(name) for name in plan.get("adoptable_store", [])]
+    lines += [adoption_preview(name) for name in plan.get("adoptable_store", [])]
     repairs = [plan_missing_store(name) for name in plan.get("missing_store", [])]
     for kind, name in plan.get("missing_materializations", []):
         repair = plan_missing_materialization(kind, name)
@@ -8708,24 +8708,43 @@ def sync_preview(plan: dict[str, list]) -> list[str]:
     return lines
 
 
-def _adoption_preview(name: str) -> str:
+def adoption_preview(name: str) -> str:
     """What :func:`adopt_unrecorded` will do with ``name``, worded ahead of it.
 
-    It names an agent whose link something else is in the way of, since the
-    run will leave that agent unlinked; saying "and link it" alone promised a
-    link the run then refused.
+    Built from the decisions the run makes. The scope is
+    :func:`_adoption_scope`'s: a skill already linked into fewer agents than
+    link is kept to those, and saying only "and link it" read as a promise of
+    every agent. An agent boost already links it into needs nothing, so a
+    link is promised only into the agents left over; one whose link something
+    else is in the way of is named, since the run leaves it unlinked.
     """
-    _linked, _unseen, narrowed = _adoption_scope(name)
+    linked, _unseen, narrowed = _adoption_scope(name)
     scope = scoped_agents({"only_agents": narrowed}, agents.linking_agents())
     blocked = _in_the_way(name, scope)
+    todo = [a for a in scope if a not in blocked and a not in linked]
     head = "would record %s, which boost did not install" % name
-    if not blocked:
-        return head + ", and link it"
-    why = "; ".join("not into %s: %s is in the way" % (a, paths.tilde(p))
-                    for a, p in blocked.items())
-    if len(blocked) < len(scope):
-        return "%s, and link it (%s)" % (head, why)
-    return "%s, and leave it unlinked (%s)" % (head, why)
+    keep = "" if narrowed is None else ", ".join(narrowed)
+    if todo:
+        # Named once anything is linked or kept to: "and link it" alone,
+        # over a skill linked into Cursor, reads as relinking Cursor too.
+        act = ("link it into %s" % ", ".join(todo) if linked or keep
+               else "link it")
+        if keep:
+            act = "keep it to %s, and %s" % (keep, act)
+    elif linked and keep:
+        act = "keep it to %s, where it is already linked (nothing to link)" \
+            % keep
+    elif linked:
+        act = "leave its links as they are (already linked into %s, " \
+              "nothing to link)" % ", ".join(linked)
+    else:
+        act = "leave it unlinked"
+    line = "%s, and %s" % (head, act)
+    if blocked:
+        line += " (%s)" % "; ".join(
+            "not into %s: %s is in the way" % (a, paths.tilde(p))
+            for a, p in blocked.items())
+    return line
 
 
 def recover_unrecorded(name: str) -> str | None:
