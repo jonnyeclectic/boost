@@ -1406,10 +1406,11 @@ class TestProtocol:
             "#!/usr/bin/env bash\n"
             "# boost:// URL handler — invoked with the URL as $1\n"
             "unset BOOST_ASSUME_YES\n"
-            "export BOOST_HOME='%s/alt boost'\n"
-            "export BOOST_AGENTS_STORE='%s/st$re'\n"
-            "exec '%s/bin $x/b\"st' protocol open --gui \"$1\"\n"
-            % (sandbox, sandbox, sandbox))
+            "export BOOST_HOME='%s'\n"
+            "export BOOST_AGENTS_STORE='%s'\n"
+            "exec '%s' protocol open --gui \"$1\"\n"
+            # str() of each Path, so the separator is the platform's own.
+            % (sandbox / "alt boost", sandbox / "st$re", shim))
 
     @pytest.mark.skipif(sys.platform == "win32" or not shutil.which("bash"),
                         reason="runs the bash handler")
