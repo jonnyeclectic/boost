@@ -379,3 +379,28 @@ def test_snapshot_names_an_unreadable_archived_lock(sandbox, unreadable,
     # The archived lock's own path, not the live one.
     assert lockfile.remedy(integ) == ("make it readable with `chmod u+r %s`"
                                       % paths.tilde(lock))
+
+
+def test_clean_keeps_tap_caches_while_config_is_unreadable(
+        sandbox, unreadable, boost):
+    # An unreadable config lists no taps, so every tap cache read as stale.
+    paths.ensure_dirs()
+    p = paths.config_path()
+    p.write_text(json.dumps({"taps": [{"name": "kept", "url": "x"}]}),
+                 encoding="utf-8")
+    cache = paths.cache_dir() / "kept.json"
+    cache.write_text("{}", encoding="utf-8")
+    unreadable(p)
+    res = boost("clean", "-y", expect=0)
+    assert cache.is_file()
+    assert "left the tap caches alone: %s" % config.check() in _flat(res.err)
+    assert "stale tap cache" not in res.out
+
+
+def test_clean_still_sweeps_a_stale_cache_when_config_reads(sandbox, boost):
+    paths.ensure_dirs()
+    stale = paths.cache_dir() / "gone.json"
+    stale.write_text("{}", encoding="utf-8")
+    res = boost("clean", "-y", expect=0)
+    assert not stale.exists()
+    assert "left the tap caches alone" not in res.err
