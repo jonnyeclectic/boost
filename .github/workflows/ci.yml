@@ -70,7 +70,7 @@ jobs:
         with:
           fetch-depth: 0    # tags for setuptools-scm version resolution
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
       - name: install linters
@@ -329,7 +329,7 @@ jobs:
         with:
           fetch-depth: 0    # tags for setuptools-scm version resolution
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
       - name: evaluation harness gate (floors + significance)
@@ -393,7 +393,7 @@ jobs:
         with:
           fetch-depth: 0    # tags for setuptools-scm version resolution
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: ${{ matrix.python }}
       - name: git identity (fixture repos)
@@ -832,7 +832,7 @@ jobs:
         with:
           fetch-depth: 0    # tags for setuptools-scm version resolution
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.14"
       - name: git identity (fixture repos)
@@ -975,7 +975,7 @@ jobs:
         with:
           fetch-depth: 0    # tags for setuptools-scm version resolution
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         if: needs.mutation-scope.outputs.relevant == 'true'
         with:
           python-version: "3.14"
@@ -1039,7 +1039,7 @@ jobs:
         with:
           fetch-depth: 0    # tags for setuptools-scm version resolution
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
       - name: build wheel + sdist
@@ -1091,7 +1091,7 @@ jobs:
         with:
           fetch-depth: 0    # full history so origin/main is a real diff base
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
       - name: git identity (fixture repos)
@@ -1162,7 +1162,7 @@ jobs:
         with:
           fetch-depth: 0    # tags for setuptools-scm version resolution
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.14t"
       - name: git identity (fixture repos)
@@ -1216,7 +1216,7 @@ jobs:
         with:
           fetch-depth: 0    # tags for setuptools-scm version resolution
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
       - name: git identity (fixture repos)
@@ -1263,7 +1263,7 @@ jobs:
         with:
           fetch-depth: 0    # tags for setuptools-scm version resolution
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
       - name: read the pinned model revision
