@@ -196,7 +196,7 @@ class TestScanDir:
         assert catalog.find("", entries=[e3]) == []
 
     def test_cache_format_moved(self):
-        assert catalog.CACHE_FORMAT == 9
+        assert catalog.CACHE_FORMAT == 10
 
     def test_alias_never_indexes_a_safe_name(self, tmp_path):
         # A safe frontmatter name IS the entry name; indexing it as an alias of
@@ -2441,3 +2441,90 @@ class TestResolveRecorded:
         with pytest.raises(BoostError) as e:
             catalog.resolve_recorded("cm", kind="skill")
         assert e.value.message == "'cm' exists in multiple taps: alpha, beta"
+
+
+class TestDescriptionClamp:
+    """A description is bounded at scan time, so every sink is bounded."""
+
+    def test_short_description_is_untouched(self):
+        d = "x" * catalog.DESCRIPTION_MAX
+        assert catalog.clamp_description(d) == d
+
+    def test_long_description_is_cut_at_a_word_with_an_ellipsis(self):
+        out = catalog.clamp_description("testing " * 131072)
+        assert len(out) <= catalog.DESCRIPTION_MAX
+        assert out == ("testing " * 127).rstrip() + "…"
+        assert len(out) == 1016
+
+    def test_one_long_token_is_hard_cut(self):
+        out = catalog.clamp_description("a " + "b" * 5000)
+        assert out == "a " + "b" * (catalog.DESCRIPTION_MAX - 3) + "…"
+        assert len(out) == catalog.DESCRIPTION_MAX
+
+    def test_space_at_three_quarters_is_used(self):
+        budget = catalog.DESCRIPTION_MAX - 1
+        at = budget * 3 // 4
+        d = "a" * at + " " + "b" * 2000
+        assert catalog.clamp_description(d) == "a" * at + "…"
+        d2 = "a" * (at - 1) + " " + "b" * 2000
+        assert catalog.clamp_description(d2) == d2[:budget] + "…"
+
+    def test_scan_clamps_entry_meta_and_blob(self, sandbox):
+        root = sandbox / "tap"
+        write_skill(root / "hugedesc",
+                    "---\nname: hugedesc\ndescription: %s\n---" % ("testing " * 131072))
+        (e,) = catalog.scan_dir(root)
+        assert e["description"] == ("testing " * 127).rstrip() + "…"
+        assert e["meta"]["description"] == e["description"]
+        assert e["meta"]["name"] == "hugedesc"
+        assert len(e["search_blob"]) < 3 * catalog.DESCRIPTION_MAX
+        assert len(json.dumps(e)) < 6 * catalog.DESCRIPTION_MAX
+
+    def test_scan_leaves_a_short_description_meta_alone(self, sandbox):
+        root = sandbox / "tap"
+        write_skill(root / "s", "---\nname: s\ndescription: short one\n---")
+        (e,) = catalog.scan_dir(root)
+        assert e["description"] == "short one"
+        assert e["meta"] == {"name": "s", "description": "short one"}
+
+    def test_describe_matches_the_scan(self):
+        long = "word " * 1000
+        assert catalog.describe({"description": long}, "") == (
+            catalog.clamp_description(long.strip()))
+
+
+class TestBinaryFilesAreNotItems:
+    def test_is_binary(self):
+        assert catalog.is_binary(b"a\0b")
+        assert catalog.is_binary(b"\xff\xfe plain")
+        assert not catalog.is_binary("café — ok".encode())
+        assert not catalog.is_binary(b"")
+        # The NUL window is git's: one past it does not make the file binary.
+        assert catalog.is_binary(b"x" * (catalog.util.BINARY_SNIFF - 1) + b"\0")
+        assert not catalog.is_binary(b"x" * catalog.util.BINARY_SNIFF + b"\0")
+
+    def test_binary_workflow_is_skipped_and_text_survives(self, sandbox):
+        root = sandbox / "tap"
+        (root / "commands").mkdir(parents=True)
+        (root / "commands" / "binary.md").write_bytes(
+            b"---\ndescription: x\n---\n\0" + os.urandom(2000))
+        (root / "commands" / "latin.md").write_bytes(b"caf\xe9 means coffee\n")
+        (root / "commands" / "ok.md").write_text(
+            "---\ndescription: fine — really\n---\nbody\n", encoding="utf-8")
+        (e,) = catalog.scan_dir(root)
+        assert (e["name"], e["kind"], e["description"]) == (
+            "ok", "workflow", "fine — really")
+
+    def test_binary_rule_is_skipped(self, sandbox):
+        root = sandbox / "tap"
+        (root / ".cursor" / "rules").mkdir(parents=True)
+        (root / ".cursor" / "rules" / "bad.mdc").write_bytes(b"\0\x01\x02")
+        assert catalog.scan_dir(root) == []
+
+    def test_binary_skill_md_still_claims_its_dir(self, sandbox):
+        root = sandbox / "tap"
+        (root / "s").mkdir(parents=True)
+        (root / "s" / "SKILL.md").write_bytes(b"\0binary")
+        (root / "s" / "commands").mkdir()
+        (root / "s" / "commands" / "x.md").write_text("x\n", encoding="utf-8")
+        assert catalog.scan_dir(root) == []
