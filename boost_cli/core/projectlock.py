@@ -56,6 +56,19 @@ def recover_hint(base) -> str:
             "— repair the JSON by hand")
 
 
+def remedy(base, err: str) -> str:
+    """The one step that repairs project lock problem ``err`` at ``base``.
+
+    An unreadable lock (:class:`jsonstate.Unreadable`) holds bytes that may be
+    perfectly good, so its fix is a permission or a stray directory
+    (:func:`jsonstate.read_remedy`) — never :func:`recover_hint`, whose
+    checkout overwrites the file and drops every uncommitted row in it.
+    """
+    if isinstance(err, jsonstate.Unreadable):
+        return jsonstate.read_remedy(err, paths.tilde)
+    return recover_hint(base)
+
+
 def lock_path(base) -> Path:
     """Path of the project lock for the repo at ``base``."""
     return Path(base) / LOCK_DIRNAME / LOCK_FILENAME
@@ -148,6 +161,12 @@ def _warn_corrupt(p: Path, err: str) -> None:
     if str(p) in _WARNED_CORRUPT:
         return
     _WARNED_CORRUPT.add(str(p))
+    if isinstance(err, jsonstate.Unreadable):
+        output.warn("project lock %s cannot be read (%s), so boost sees no "
+                    "project skills here and will not write over it — %s"
+                    % (paths.tilde(err.path), err.reason, remedy(p.parent.parent, err)),
+                    stream=sys.stderr, wrap=True)
+        return
     output.warn("%s — boost sees no project skills here and will not write "
                 "over it; %s" % (err, recover_hint(p.parent.parent)),
                 stream=sys.stderr, wrap=True)
@@ -171,6 +190,11 @@ def refuse_corrupt(base) -> None:
     err = check(base)
     if err is None:
         return
+    if isinstance(err, jsonstate.Unreadable):
+        raise BoostError("project lock %s cannot be read (%s) — boost will "
+                         "not write over a lock it cannot read"
+                         % (paths.tilde(err.path), err.reason),
+                         hint="%s, then re-run" % remedy(base, err), wrap=True)
     raise BoostError("project lock is corrupt — boost will not write over it "
                      "(%s)" % err,
                      hint=recover_hint(base), wrap=True)

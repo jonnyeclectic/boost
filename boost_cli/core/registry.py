@@ -256,7 +256,10 @@ def _file_url_path(spec: str) -> Path | None:
     Only an empty or `localhost` host is this machine; `file://otherhost/…`
     stays a URL for git to judge.
     """
-    u = urllib.parse.urlparse(spec)
+    try:
+        u = urllib.parse.urlparse(spec)
+    except ValueError:      # "Invalid IPv6 URL": an unbalanced `[` in the host
+        return None
     if u.scheme.lower() != "file" or u.netloc.lower() not in ("", "localhost"):
         return None
     return Path(urllib.request.url2pathname(u.path))
@@ -461,7 +464,8 @@ def name_key(name: str) -> str:
 def _taken(name: str, url: str, existing: str) -> BoostError:
     """The error for `name` already belonging to a different repository."""
     return BoostError(
-        "tap name %s is already used by %s" % (name, existing),
+        "tap name %s is already used by %s"
+        % (name, existing or "a config.json row with no url"),
         # Both halves backticked: the hint folds to the pane, and only a
         # backtick span is atomic — a quoted path with a space split at it.
         hint="`boost untap %s`, then `boost tap %s` to tap it in its place"
@@ -693,16 +697,31 @@ def _append_rows(cfg: dict, rows: list[dict]) -> bool:
     happens before the clone, outside any lock, so two processes tapping
     one name both pass it — re-checking here keeps the second from adding
     the same tap twice.
+
+    Only a row the reader uses holds a name (:func:`config.tap_row_issue`).
+    A malformed row of the same name — ``"url": 123`` — is one boost already
+    warned it skips, so the new row takes its place: counting it as taken
+    printed "tapped" over a config that still listed no usable tap.
     """
     taps = cfg.setdefault("taps", [])
-    have = {name_key(str(t.get("name"))) for t in taps
-            if isinstance(t, dict) and t.get("name")}
+    have = {name_key(t["name"]) for t in taps
+            if config.tap_row_issue(t) is None}
     added = False
     for row in rows:
-        if name_key(row["name"]) not in have:
+        key = name_key(row["name"])
+        if key in have:
+            continue
+        stale = [i for i, t in enumerate(taps)
+                 if isinstance(t, dict) and isinstance(t.get("name"), str)
+                 and name_key(t["name"]) == key]
+        if stale:
+            taps[stale[0]] = row
+            for i in reversed(stale[1:]):
+                del taps[i]
+        else:
             taps.append(row)
-            have.add(name_key(row["name"]))
-            added = True
+        have.add(key)
+        added = True
     return added
 
 
