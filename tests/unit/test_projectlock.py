@@ -10,7 +10,7 @@ import sys
 
 import pytest
 
-from boost_cli.core import gitutil, paths, projectlock, util
+from boost_cli.core import gitutil, jsonstate, paths, projectlock, util
 from boost_cli.errors import BoostError
 
 
@@ -321,3 +321,73 @@ class TestAReadOnlyDotBoost:
         assert projectlock.refuse_unwritable(tmp_path, "install", "a") is None
         projectlock.set_skill(tmp_path, "a", _entry())
         assert projectlock.refuse_unwritable(tmp_path, "install", "a") is None
+
+
+class TestAnUnreadableLock:
+    """A lock that cannot be *read* is not corrupt, and a checkout is no fix.
+
+    Its bytes may be fine: `git checkout` over it would throw away every row
+    not yet committed, so the remedy is the permission or the stray dir.
+    """
+
+    @pytest.fixture()
+    def locked(self, sandbox, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        if gitutil.has_git():
+            _git(repo, "init", "-q")
+        projectlock.set_skill(repo, "a", _entry())
+        if gitutil.has_git():
+            _git(repo, "add", "-A")
+            _git(repo, "commit", "-qm", "lock")
+        p = projectlock.lock_path(repo)
+        p.chmod(0o000)
+        yield repo, p
+        p.chmod(0o644)
+
+    @_NOT_WINDOWS
+    @_NOT_ROOT
+    def test_a_write_is_refused_as_unreadable_not_corrupt(self, locked):
+        repo, p = locked
+        with pytest.raises(BoostError) as ei:
+            projectlock.set_skill(repo, "b", _entry())
+        assert ei.value.message == (
+            "project lock %s cannot be read (Permission denied) — boost will "
+            "not write over a lock it cannot read" % paths.tilde(p))
+        assert ei.value.hint == ("make it readable with `chmod u+r %s`, then "
+                                 "re-run" % paths.tilde(p))
+        p.chmod(0o644)
+        assert list(projectlock.installed(repo)) == ["a"]
+
+    @_NOT_WINDOWS
+    @_NOT_ROOT
+    def test_a_read_warns_with_the_chmod(self, locked, capsys):
+        repo, p = locked
+        assert projectlock.read(repo)["skills"] == {}
+        err = _err(capsys)
+        assert err == (
+            "! project lock %s cannot be read (Permission denied), so boost "
+            "sees no project skills here and will not write over it — make "
+            "it readable with `chmod u+r %s`" % (paths.tilde(p),
+                                                 paths.tilde(p)))
+        assert "corrupt" not in err and "checkout" not in err
+
+    def test_a_directory_on_the_name_is_moved_aside(self, sandbox, tmp_path):
+        p = projectlock.lock_path(tmp_path)
+        p.mkdir(parents=True)
+        err = projectlock.check(tmp_path)
+        assert isinstance(err, jsonstate.Unreadable)
+        with pytest.raises(BoostError) as ei:
+            projectlock.set_skill(tmp_path, "a", _entry())
+        assert ei.value.message.startswith(
+            "project lock %s cannot be read (" % paths.tilde(p))
+        assert ei.value.hint == ("move the directory %s aside (it is not a "
+                                 "file), then re-run" % paths.tilde(p))
+        assert p.is_dir()
+
+    def test_a_corrupt_lock_keeps_the_recover_hint(self, tmp_path):
+        _corrupt(tmp_path, b"{")
+        err = projectlock.check(tmp_path)
+        assert not isinstance(err, jsonstate.Unreadable)
+        assert projectlock.remedy(tmp_path, err) == \
+            projectlock.recover_hint(tmp_path)
