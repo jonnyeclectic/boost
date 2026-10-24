@@ -2119,17 +2119,24 @@ def cmd_update(argv: list[str]) -> int:
     unpinnable = [t for t, e in failures.items() if registry.PIN_MISSING in e]
     for tname in unpinnable:
         out.info(out.role(registry.pin_missing_remedy(tname), "muted"))
+    # A lock a killed git left in the clone fails every command there, and the
+    # tap is fine: `untap` would throw away a healthy clone over one file.
+    locked = {t: lock for t, e in failures.items()
+              if t not in unpinnable and (lock := gitutil.git_lock_path(e))}
+    for tname, lock in locked.items():
+        out.info(out.role("%s: %s" % (tname, gitutil.lock_hint(lock)),
+                          "muted"))
     if refused:
         out.info(out.role(
             "%d tap%s refused by provenance policy and left on %s last "
             "verified commit — `boost trust verify` shows why"
             % (len(refused), "s" if len(refused) != 1 else "",
                "their" if len(refused) != 1 else "its"), "muted"))
-    if len(failures) > len(refused) + len(unpinnable):
+    if len(failures) > len(refused) + len(unpinnable) + len(locked):
         out.info(out.role(
             "%d of %d taps could not be refreshed — the rest are up to date. "
             "Drop a dead one with `boost untap <name>`."
-            % (len(failures) - len(refused) - len(unpinnable),
+            % (len(failures) - len(refused) - len(unpinnable) - len(locked),
                len(results) + len(failures)),
             "muted"))
     if pinned_skips:

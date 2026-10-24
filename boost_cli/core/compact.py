@@ -194,15 +194,22 @@ def freight_bytes(repo: Path, keep_dirs: list[str]) -> int:
     An untracked file outside the cone survives and must not be promised — the
     defect this function was rewritten to fix.
 
-    It is an upper bound in one case left uncorrected: git also declines to
-    remove a tracked path with local modifications. Chasing that would cost a
-    `git status` over the clone for a state a tap should never be in (boost
-    only ever reads a tap's tree), and it fails safe — over-promising by the
-    size of a file the user edited by hand, not by a megabyte of build output.
+    git also declines to remove a tracked path with local modifications. In a
+    clone boost owns, `gitutil.narrow` puts such a file back to the commit
+    first, so it is freed and counted. Anywhere else narrow leaves it, so it
+    is not promised: the dry run promised it, and the real run freed nothing.
     """
     tracked = tracked_files(repo)
+    if not gitutil.owned_clone(repo):
+        tracked -= modified_files(repo)
     return sum(size for rel, size in _off_cone_files(repo, keep_dirs)
                if rel in tracked)
+
+
+def modified_files(repo: Path) -> set[str]:
+    """Tracked paths whose working-tree copy differs from the index."""
+    out = gitutil.run(["-C", str(repo), "ls-files", "-m", "-z"]).stdout
+    return {p for p in out.split("\0") if p}
 
 
 def worktree_freight_bytes(repo: Path, keep_dirs: list[str]) -> int:

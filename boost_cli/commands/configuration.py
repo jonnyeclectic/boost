@@ -494,8 +494,9 @@ def cmd_compact(argv) -> int:
         except BoostError as e:
             broken += 1
             rows.append({"tap": tap.name, "error": str(e)})
-            out.warn("could not compact %s: %s" % (tap.name, e),
-                     stream=sys.stderr if args.json else None)
+            out.warn("could not compact %s: %s%s"
+                     % (tap.name, e, " — %s" % e.hint if e.hint else ""),
+                     stream=sys.stderr if args.json else None, wrap=True)
             continue
         after = util.dir_size(tap.path)
         # A re-clone did real work — refreshed the clone, possibly moved it
