@@ -124,7 +124,11 @@ def _read(path: Path) -> tuple[dict, str] | None:
         return None
     if is_binary(data):
         return None
-    return frontmatter.parse(data.decode("utf-8"))
+    # Universal newlines, as ``read_text`` applied: `rag.read_body` still reads
+    # that way, and a CRLF body kept verbatim here would hash to a digest the
+    # index's own text never reproduces.
+    text = data.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
+    return frontmatter.parse(text)
 
 
 def _text(meta: dict, key: str) -> str:

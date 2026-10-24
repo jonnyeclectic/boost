@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from boost_cli.core import catalog, config, paths, registry
+from boost_cli.core import catalog, config, paths, rag, registry
 from boost_cli.errors import BoostError
 
 FIXTURE_NAMES = ["brainstorming", "commit-messages", "cowboy-coding",
@@ -2528,3 +2528,17 @@ class TestBinaryFilesAreNotItems:
         (root / "s" / "commands").mkdir()
         (root / "s" / "commands" / "x.md").write_text("x\n", encoding="utf-8")
         assert catalog.scan_dir(root) == []
+
+    def test_crlf_body_digest_matches_the_index_text(self, sandbox):
+        # Reading bytes must not drop read_text's universal newlines: a
+        # frontmatter-less CRLF rule kept its \r in the body and hashed to a
+        # digest rag.read_body (which reads text) never reproduces.
+        root = sandbox / "tap"
+        root.mkdir()
+        (root / ".cursorrules").write_bytes(b"# Rules\r\nuse tabs\rno spaces\r\n")
+        (e,) = catalog.scan_dir(root, "t")
+        text = rag.read_body(e, {"t": root})
+        assert text == "%s\n%s\n# Rules\nuse tabs\nno spaces" % (
+            e["name"], e["description"])
+        assert e["content"] == catalog._content_digest(
+            e["name"], e["description"], "# Rules\nuse tabs\nno spaces\n")
