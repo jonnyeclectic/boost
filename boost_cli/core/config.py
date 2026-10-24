@@ -363,6 +363,25 @@ def _shown(value: Any) -> str:
     return "%s (%s)" % (json.dumps(value), kind) if value is not None else "null"
 
 
+def tap_row_issue(row: Any) -> str | None:
+    """Why config.json ``taps`` row ``row`` is skipped, or None when it is used.
+
+    The one test of a usable tap row, shared by the reader (:func:`_sanitize`)
+    and the writer (``registry._append_rows``): a writer that counted a row
+    the reader skips reported "tapped" over a config still holding only the
+    row nothing reads.
+    """
+    if not isinstance(row, dict):
+        return "is %s, not an object" % _shown(row)
+    if not isinstance(row.get("name"), str) or not row["name"]:
+        return ('has no "name"' if "name" not in row
+                else '"name" is %s, not a non-empty string'
+                % _shown(row["name"]))
+    if "url" in row and not isinstance(row["url"], str):
+        return '"url" is %s, not a string' % _shown(row["url"])
+    return None
+
+
 def _sanitize(user: dict) -> tuple[dict, list[str]]:
     """``user`` without the values no reader can use, and why each went.
 
@@ -384,15 +403,8 @@ def _sanitize(user: dict) -> tuple[dict, list[str]]:
     if isinstance(taps, list):
         keep = []
         for i, row in enumerate(taps):
-            if not isinstance(row, dict):
-                why = "is %s, not an object" % _shown(row)
-            elif not isinstance(row.get("name"), str) or not row["name"]:
-                why = ('has no "name"' if "name" not in row
-                       else '"name" is %s, not a non-empty string'
-                       % _shown(row["name"]))
-            elif "url" in row and not isinstance(row["url"], str):
-                why = '"url" is %s, not a string' % _shown(row["url"])
-            else:
+            why = tap_row_issue(row)
+            if why is None:
                 keep.append(row)
                 continue
             issues.append("taps[%d] %s, so boost skips that tap — repair or "

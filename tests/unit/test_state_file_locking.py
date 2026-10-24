@@ -336,6 +336,22 @@ class TestRegistryRows:
         assert cfg["taps"] == [{"name": "Foo", "url": "u"}, "junk",
                                {"name": "bar", "url": "w"}]
 
+    def test_append_rows_replaces_a_malformed_row_of_that_name(self):
+        cfg = {"taps": [{"name": "foo", "url": 123}, {"name": "x", "url": "u"},
+                        {"name": "FOO"}, {"name": 9}]}
+        # `{"name": "FOO"}` is usable (no url is allowed), so it holds the
+        # name and the malformed `foo` row is not a slot to fill.
+        assert registry._append_rows(cfg, [{"name": "foo", "url": "v"}]) \
+            is False
+        cfg = {"taps": [{"name": "foo", "url": 123}, {"name": "x", "url": "u"},
+                        {"name": "Foo", "url": None}, {"name": 9},
+                        {"name": "FOO", "url": 1}, {"name": "y", "url": "w"}]}
+        assert registry._append_rows(cfg, [{"name": "foo", "url": "v"}]) \
+            is True
+        assert cfg["taps"] == [{"name": "foo", "url": "v"},
+                               {"name": "x", "url": "u"}, {"name": 9},
+                               {"name": "y", "url": "w"}]
+
     def test_append_rows_reports_nothing_new(self):
         cfg: dict = {}
         assert registry._append_rows(cfg, []) is False
