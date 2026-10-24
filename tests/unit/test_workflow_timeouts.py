@@ -42,7 +42,8 @@ REUSABLE = re.compile(r"^    uses: ", re.M)
 # *successful* job of each kind was mutation-shard 55.7m against a cap of 75,
 # tests 24.6m on windows against 45 (raised to 60 on 2026-10-21, when a
 # 15k-test suite passed at 44.9m, and to 80 on 2026-10-23, when a 17.5k one
-# finished at 58) and 10.3m on macOS against 30,
+# finished at 58) and 10.3m on macOS against 30 (raised to 80 with
+# Windows on 2026-10-23, when a macOS cell was cancelled at 30.0),
 # patch-coverage 6.0m against 15 (raised to 30 on 2026-10-22, when a
 # train's suite was still running at 93% of 15m), and everything else under 3m — but the
 # assertion here is only that nobody sets a number so large it defeats the
@@ -323,37 +324,36 @@ def test_the_parser_refuses_a_shape_it_cannot_read(value):
         job_timeouts("    timeout-minutes: %s\n" % value)
 
 
-def test_windows_gets_the_wider_cap_and_the_others_do_not():
+def test_linux_keeps_the_tight_cap_and_the_others_get_the_wider_one():
     """Measured, not guessed — see the comment above the line in ci.yml.
 
     Over 40 `ci` runs the Windows cells' medians were 19.3-20.7 min against
-    4.0-8.8 for Linux and macOS, and the slowest Windows run that still passed
-    took 24.6. A flat 30 gave Windows 5.4 minutes of headroom, and on
-    2026-09-28 windows-3.14 ran out of it twice in one morning — a release
-    train's job at 30.4 min and main's own at 30.3, both still printing test
-    results when they were killed.
+    4.0-8.8 for Linux and macOS, and on 2026-09-28 windows-3.14 ran out of a
+    flat 30 twice in one morning, still printing test results when killed.
+    By 2026-10-23 the suite had grown to 17.5k tests and macOS had caught up:
+    macos-3.13 passed in 28.0 and macos-3.12 was cancelled at 30.0 (run
+    40037733470), while Linux took 12.7-18.3.
 
     The assertion is on the *cap each real matrix cell gets*, not on how the
-    condition is spelled: an equivalent rewrite (`!= 'windows-latest' && 30 ||
-    45`) passes, and a condition that has quietly stopped matching its own
-    `os:` list fails. Widening the default instead would make a wedged Linux
-    job — the case the timeout exists for — take 50% longer to be killed.
+    condition is spelled: an equivalent rewrite passes, and a condition that
+    has quietly stopped matching its own `os:` list fails. Widening Linux too
+    would make a wedged Linux job — the case the timeout exists for — take
+    far longer to be killed.
     """
     caps = caps_by_os(dict(jobs_in(CI))["tests"])
-    windows = {name: cap for name, cap in caps.items()
-               if name.startswith("windows")}
+    linux = {name: cap for name, cap in caps.items()
+             if name.startswith("ubuntu")}
     others = {name: cap for name, cap in caps.items()
-              if not name.startswith("windows")}
-    assert windows, "no windows runner in the os matrix: %r" % caps
-    assert others, "no non-windows runner in the os matrix: %r" % caps
-    assert min(windows.values()) > max(others.values()), (
-        "the wider cap must land on Windows, not against it: %r" % caps)
-    assert min(windows.values()) >= 40, (
-        "45 is 1.8x the slowest Windows run that ever *passed* (24.6 min) and "
-        "~1.5x the two that were killed at ~30.4; the assertion floors at 40 "
-        "rather than pinning 45 so the value stays tunable, but under 40 the "
-        "cap is back inside 1.6x of a run that already passed: %r" % caps)
-    assert max(others.values()) == 30, (
-        "the non-Windows cells measured 4.0-8.8 min with a worst pass of "
-        "10.3; 30 is 2.9x the slowest of them and does not need widening: %r"
-        % caps)
+              if not name.startswith("ubuntu")}
+    assert linux, "no ubuntu runner in the os matrix: %r" % caps
+    assert any(n.startswith("windows") for n in others), caps
+    assert any(n.startswith("macos") for n in others), caps
+    assert min(others.values()) > max(linux.values()), (
+        "the wider cap must land on macOS and Windows, not Linux: %r" % caps)
+    assert min(others.values()) >= 40, (
+        "windows-3.12 printed its `100%%` row at 58 min on 2026-10-23 and "
+        "macOS passed at 28.0 against 30; under 40 the cap is back inside "
+        "the runs that already passed: %r" % caps)
+    assert max(linux.values()) == 30, (
+        "the Linux cells took 12.7-18.3 min on a 17.5k-test suite; 30 still "
+        "leaves 1.6x headroom and does not need widening: %r" % caps)
