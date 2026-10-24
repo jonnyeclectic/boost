@@ -232,6 +232,21 @@ def _value(v: str):
 _BLOCK = object()
 
 
+def _fold_join(parts: list[str], strip: bool) -> str:
+    """One folded scalar from its head and continuation lines.
+
+    Called once per folded key, when the key closes. Rebuilding the string at
+    every continuation line (``prev + " " + line``) made a 160,000-line
+    description cost 12.8 s to tap and ~40 s per ``boost info``: quadratic in
+    the file. ``.strip()`` only ever trims the edges, so stripping once here
+    reads exactly as stripping after every line did; ``strip`` is False when
+    every line folded through the one branch that never stripped, which keeps
+    a quoted head's own edge spaces.
+    """
+    joined = " ".join(parts)
+    return joined.strip() if strip else joined
+
+
 def _is_item(line: str) -> bool:
     return line.startswith("- ") or line == "-"
 
@@ -248,6 +263,28 @@ def parse_block(block: str) -> dict:
     or a block list per entry. Anything deeper than that one level, and an
     indented `k: v` under a key that already has a value, is skipped.
     """
+    # Continuation lines per folded key, joined once by `_fold_join` when the
+    # key closes. While a key folds, ``meta[key]`` holds a non-empty stand-in
+    # (its first non-empty piece), so the truthiness checks below read the
+    # folded state; ``settle`` writes the real value before anything else uses it.
+    folds: dict[str | None, list[str]] = {}
+    stripped: set[str | None] = set()   # keys folded by a branch that strips
+
+    def fold(k: str | None, line: str, strip: bool = True) -> None:
+        parts = folds.get(k)
+        if parts is None:
+            parts = folds[k] = [meta[k]]
+        parts.append(line)
+        if strip:
+            stripped.add(k)
+        if not meta[k]:
+            meta[k] = line
+
+    def settle(k: str | None) -> None:
+        parts = folds.pop(k, None)
+        if parts is not None:
+            meta[k] = _fold_join(parts, k in stripped)
+        stripped.discard(k)
     meta: dict = {}
     key = None
     in_block = False       # inside a | / > block scalar
@@ -265,9 +302,8 @@ def parse_block(block: str) -> dict:
         # block-scalar content: every deeper-indented line folds in verbatim
         if in_block:
             if indent > block_indent:
-                prev = meta.get(key)
-                if isinstance(prev, str):
-                    meta[key] = (prev + " " + line).strip()
+                if isinstance(meta.get(key), str):
+                    fold(key, line)
                 continue
             in_block = False
         if line.startswith("#"):
@@ -282,7 +318,7 @@ def parse_block(block: str) -> dict:
             # to its first line, and dropped every line after it.
             prev = meta.get(key)
             if not _is_item(line) and isinstance(prev, str) and prev:
-                meta[key] = prev + " " + line
+                fold(key, line, strip=False)
                 continue
             if nest is None and not _is_item(line) and ":" in line:
                 if meta.get(key) not in ("", None):
@@ -312,15 +348,15 @@ def parse_block(block: str) -> dict:
         if _is_item(line):
             if key is None:
                 continue
+            settle(key)
             if not isinstance(meta.get(key), list):
                 meta[key] = [] if meta.get(key) in ("", None) else [meta[key]]
             meta[key].append(_scalar(line[1:].strip()))
             continue
         # folded continuation of the previous plain scalar
         if indent > 0 and ":" not in line and key is not None:
-            prev = meta.get(key)
-            if isinstance(prev, str):
-                meta[key] = (prev + " " + line).strip()
+            if isinstance(meta.get(key), str):
+                fold(key, line)
             continue
         if ":" not in line:
             continue
@@ -328,12 +364,16 @@ def parse_block(block: str) -> dict:
             top_indent = indent
         k, _, v = line.partition(":")
         key = k.strip()
+        folds.pop(key, None)   # a repeated key replaces its earlier value
+        stripped.discard(key)
         val = _value(v)
         if val is _BLOCK:
             meta[key] = ""  # block scalar: folded from the indented lines below
             in_block, block_indent = True, indent
         else:
             meta[key] = val
+    for pending in list(folds):
+        settle(pending)
     return meta
 
 
