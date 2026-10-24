@@ -578,6 +578,16 @@ class TestEnsureDirsRefused:
         assert "could not create ~/.boost (" in err
         assert "move ~/.boost aside, then re-run" in err
 
+    def test_protocol_register_with_a_file_for_boost_home_is_rc_1(
+            self, sandbox, capsys):
+        # It writes its handler under state/ and cannot go on without it.
+        from boost_cli import cli
+        (sandbox / ".boost").write_text("x", encoding="utf-8")
+        assert cli.main(["protocol", "register"]) == 1
+        err = " ".join(capsys.readouterr().err.split())
+        assert "could not create ~/.boost (" in err
+        assert "move ~/.boost aside, then re-run" in err
+
     def test_no_block_found_has_no_hint(self, sandbox, monkeypatch):
         def boom(self, *a, **k):
             raise OSError(28, "No space left on device")

@@ -851,7 +851,7 @@ def cmd_protocol(argv) -> int:
         return 0
 
     if args.action == "register":
-        paths.ensure_dirs()
+        paths.require_dirs()
         shim = paths.launcher()
         script = _handler_script()
         # newline="\n" because this artifact is a bash script and bash is a
