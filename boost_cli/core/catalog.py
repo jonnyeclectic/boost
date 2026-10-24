@@ -73,7 +73,9 @@ from . import (
 #   9 -- an entry whose name had to be slugged carries `original_name`, the
 #        NFC name the tap wrote, so a rule or workflow named by a non-ASCII
 #        file (`rules/naïve.mdc`, `commands/déploy.md`) installs by that name
-CACHE_FORMAT = 9
+#  10 -- a description longer than `DESCRIPTION_MAX` is clamped, and a file
+#        that is not UTF-8 text (see `is_binary`) is no longer an item
+CACHE_FORMAT = 10
 
 KIND_SKILL = "skill"
 KIND_RULE = "rule"
@@ -92,11 +94,41 @@ DOC_STEMS = {"readme", "contributing", "license", "changelog", "security",
              "code_of_conduct", "index", "_index", "authors", "notice"}
 
 
-def _read(path: Path) -> tuple[dict, str] | None:
+def is_binary(data: bytes) -> bool:
+    """True when ``data`` is not a text file an agent could read.
+
+    A NUL in the first :data:`util.BINARY_SNIFF` bytes (git's rule, and the
+    window ``updatediff`` sniffs), or bytes that are not UTF-8 at all. Decoded
+    with ``errors="replace"`` instead, ``commands/x.md`` holding random bytes
+    was catalogued, installed into every agent as a workflow and served by
+    ``boost_read`` as a page of U+FFFD and raw control bytes.
+    """
+    if b"\0" in data[:util.BINARY_SNIFF]:
+        return True
     try:
-        return frontmatter.parse(path.read_text(encoding="utf-8", errors="replace"))
+        data.decode("utf-8")
+    except UnicodeDecodeError:
+        return True
+    return False
+
+
+def _read(path: Path) -> tuple[dict, str] | None:
+    """``path`` parsed, or None when it cannot be read or is not text.
+
+    One gate for all three kinds: a skill, a rule and a workflow are each
+    somebody's Markdown, and a binary is none of them.
+    """
+    try:
+        data = path.read_bytes()
     except OSError:
         return None
+    if is_binary(data):
+        return None
+    # Universal newlines, as ``read_text`` applied: `rag.read_body` still reads
+    # that way, and a CRLF body kept verbatim here would hash to a digest the
+    # index's own text never reproduces.
+    text = data.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
+    return frontmatter.parse(text)
 
 
 def _text(meta: dict, key: str) -> str:
@@ -126,10 +158,35 @@ def declared_version(entry: dict) -> str:
     return "" if version == UNDECLARED_VERSION else version
 
 
+#: The longest description the catalog keeps, in characters, ellipsis
+#: included. A description is one paragraph saying what an item is for; one
+#: tap's 1 MB description made every `boost_search`/`boost_info` MCP reply
+#: that matched it 1 MB, and a 13,000-line `boost info`. Clamped at scan time
+#: so the entry, its search blob, its digest and every sink agree.
+DESCRIPTION_MAX = 1024
+
+
+def clamp_description(desc: str) -> str:
+    """``desc`` cut to :data:`DESCRIPTION_MAX`, at a word where one is near.
+
+    The cut lands on the last space in the budget unless that would drop more
+    than a quarter of it (one long token), and ends in ``…`` so the reader
+    can see the text continues.
+    """
+    if len(desc) <= DESCRIPTION_MAX:
+        return desc
+    budget = DESCRIPTION_MAX - 1
+    head = desc[:budget]
+    space = head.rfind(" ")
+    if space >= budget * 3 // 4:
+        head = head[:space]
+    return head.rstrip() + "…"
+
+
 def _description(meta: dict, body: str) -> str:
     desc = _text(meta, "description")
     if desc:
-        return desc
+        return clamp_description(desc)
     for line in body.splitlines():
         line = line.strip()
         if line and not line.startswith("#"):
@@ -312,6 +369,11 @@ def _make_entry(root: Path, defining_file: Path, kind: str, default_name: str,
     # `../../..` has to be neutralized at index time too, not only at the sinks.
     slug = fixed_name or _entry_slug(name, default_name)
     description = _description(meta, body)
+    if (isinstance(meta.get("description"), str)
+            and len(meta["description"]) > DESCRIPTION_MAX):
+        # The cached frontmatter too: `_search_blob` flattens it, so a clamp
+        # on the field alone still stored and searched the whole megabyte.
+        meta = meta | {"description": description}
     item_dir = defining_file.parent
     entry = {
         "name": slug,
@@ -420,20 +482,18 @@ def scan_dir(root: Path, tap_name: str = "local", curated: bool = False,
         # A directory holding a SKILL.md is a skill: index it and remember the
         # dir so its other files are not re-indexed as loose rules/workflows.
         if "SKILL.md" in filenames:
-            # An escaping SKILL.md still marks its dir a skill dir, so its
-            # sibling .md files are not indexed as loose workflows instead.
-            if _escaping(root, here / "SKILL.md", escaped):
-                skill_dirs.add(here)
-                parsed = None
-            else:
-                parsed = _read(here / "SKILL.md")
+            # An escaping, unreadable or binary SKILL.md still marks its dir a
+            # skill dir, so its sibling .md files are not indexed as loose
+            # workflows instead.
+            skill_dirs.add(here)
+            parsed = (None if _escaping(root, here / "SKILL.md", escaped)
+                      else _read(here / "SKILL.md"))
             if parsed is not None:
                 meta, body = parsed
                 default = here.name if here != root else root.name
                 entries.append(_make_entry(root, here / "SKILL.md", KIND_SKILL,
                                            default, tap_name, curated,
                                            meta, body, tap_category))
-                skill_dirs.add(here)
         # Files inside any skill directory belong to that skill, never re-indexed.
         if here in skill_dirs or any(a in skill_dirs for a in here.parents):
             continue

@@ -113,6 +113,27 @@ class TestTruncationIsAnnounced:
         assert "truncated" in text
         assert len(text) < len(body)
 
+    def test_a_long_later_line_is_cut_inside_not_dropped(self):
+        # A 1 MB description on line 3: the last newline in the budget sits
+        # after line 2, and cutting there served 18 characters of 12,000.
+        body = "---\nname: hugedesc\ndescription: " + "testing " * 131072
+        text = mcp.read_reply("hugedesc", body)
+        kept = text.split("\n\n", 1)[1].split("\n\n[truncated")[0]
+        assert kept == body[:mcp.READ_LIMIT]
+        assert ("[truncated at %d of %d characters" % (mcp.READ_LIMIT, len(body))
+                in text)
+
+    def test_the_line_cut_needs_half_the_budget(self):
+        # A boundary keeping exactly half the budget is used; one short of
+        # half is not, and the reply hard-cuts at the budget instead.
+        limit = 100
+        half = "a" * (limit // 2) + "\n" + "b" * 200
+        assert mcp.read_reply("x", half, limit=limit).split("\n\n")[1] == (
+            "a" * (limit // 2))
+        under = "a" * (limit // 2 - 1) + "\n" + "b" * 200
+        assert mcp.read_reply("x", under, limit=limit).split(
+            "\n\n[truncated")[0].split("\n\n", 1)[1] == under[:limit]
+
     def test_the_limit_is_honoured_not_merely_approached(self):
         body = "\n".join("line %d" % i for i in range(4000))
         kept = mcp.read_reply("x", body).split("\n\n[truncated")[0]

@@ -511,3 +511,49 @@ def test_a_declined_agent_is_named_with_its_reason_and_remedy():
     assert refused == [
         "not written for gemini: mcp has no `description`, which Gemini "
         "requires — fix it in the tap, then `boost reinstall mcp`"]
+
+
+class TestGeminiNotesAreBounded:
+    def test_many_braced_commands_make_a_bounded_summary(self):
+        body = "".join("step !`cmd {x%d}`\n" % i for i in range(1000))
+        assert workflows.gemini_command_notes(body) == [
+            "Gemini cannot run `!`cmd {x0}`` before the prompt (a brace "
+            "would end its `!{...}` early); left as text",
+            "Gemini cannot run `!`cmd {x1}`` before the prompt (a brace "
+            "would end its `!{...}` early); left as text",
+            "... and 998 more braced `!`...`` commands, left as text"]
+
+    def test_one_past_the_examples_is_singular(self):
+        body = "".join("!`c {%d}`\n" % i for i in range(workflows.NOTE_EXAMPLES + 1))
+        notes = workflows.gemini_command_notes(body)
+        assert len(notes) == workflows.NOTE_EXAMPLES + 1
+        assert notes[-1] == "... and 1 more braced `!`...`` command, left as text"
+
+    def test_exactly_the_examples_has_no_summary(self):
+        body = "".join("!`c {%d}`\n" % i for i in range(workflows.NOTE_EXAMPLES))
+        notes = workflows.gemini_command_notes(body)
+        assert len(notes) == workflows.NOTE_EXAMPLES
+        assert not any(n.startswith("...") for n in notes)
+
+    def test_control_bytes_are_not_echoed(self):
+        notes = workflows.gemini_command_notes(
+            "Run !`echo \x1b]0;PWNED\x07\x1b[2J{a}` now\n")
+        assert notes == [
+            "Gemini cannot run `!`echo ]0;PWNED[2J{a}`` before the prompt (a "
+            "brace would end its `!{...}` early); left as text"]
+
+    def test_a_long_command_is_clamped(self):
+        cmd = "echo {" + "y" * 500 + "}"
+        (note,) = workflows.gemini_command_notes("!`%s`\n" % cmd)
+        snippet = cmd[:workflows.NOTE_SNIPPET_MAX - 1] + "…"
+        assert note == ("Gemini cannot run `!`%s`` before the prompt (a brace "
+                        "would end its `!{...}` early); left as text" % snippet)
+        exact = "e {" + "z" * (workflows.NOTE_SNIPPET_MAX - 4) + "}"
+        assert len(exact) == workflows.NOTE_SNIPPET_MAX
+        (note2,) = workflows.gemini_command_notes("!`%s`\n" % exact)
+        assert "`!`%s``" % exact in note2
+
+    def test_a_repeated_command_is_noted_once(self):
+        assert workflows.gemini_command_notes("!`a {b}`\n" * 500) == [
+            "Gemini cannot run `!`a {b}`` before the prompt (a brace would "
+            "end its `!{...}` early); left as text"]
