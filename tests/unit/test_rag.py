@@ -569,6 +569,21 @@ class TestStale:
                   taps=[_StatTap("a/b", mtime=100)], built_at=100.0)
         assert rag.stale() is False
 
+    def test_unstamped_index_from_the_future_is_stale(self, monkeypatch):
+        # An index written before stamps existed, built while the clock ran
+        # ahead: no cache can be newer than it, so only its future mtime
+        # betrays it. Without this an upgrading user stays stuck.
+        self._fix(monkeypatch, stored={"a__b": "c1"},
+                  taps=[_StatTap("a/b", mtime=50)],
+                  built_at=time.time() + 365 * 86400)
+        assert rag.stale() is True
+
+    def test_unstamped_index_from_just_now_is_fresh(self, monkeypatch):
+        self._fix(monkeypatch, stored={"a__b": "c1"},
+                  taps=[_StatTap("a/b", mtime=50)],
+                  built_at=time.time() - 5)
+        assert rag.stale() is False
+
     def test_unreadable_index_mtime_is_stale(self, monkeypatch):
         monkeypatch.setattr(rag, "_load_raw", lambda: {"commits": {}})
         monkeypatch.setattr(rag.registry, "list_taps", lambda: [])

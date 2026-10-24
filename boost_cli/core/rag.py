@@ -27,6 +27,7 @@ import os
 import re
 import sqlite3
 import tempfile
+import time
 import unicodedata
 from collections import defaultdict
 from collections.abc import Callable, Sequence
@@ -1372,7 +1373,8 @@ def stale() -> bool:
 
     An index written before stamps were recorded has no ``stamps`` key and is
     judged the old way, so upgrading does not force a full rebuild; its next
-    build records stamps.
+    build records stamps. The one exception is such an index whose mtime is in
+    the future, which the old rule can never call stale: it rebuilds once.
     """
     raw = _load_raw()
     if raw is None:
@@ -1391,6 +1393,11 @@ def stale() -> bool:
     try:
         built_at = index_path().stat().st_mtime
     except OSError:
+        return True
+    if built_at > time.time():
+        # An index stamped in the future was built while the clock ran ahead,
+        # and nothing can be "newer" than it until the clock catches up — the
+        # bug stamps fix. Rebuild once; that build records stamps.
         return True
     for t in taps:
         try:
