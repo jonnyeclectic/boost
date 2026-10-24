@@ -27,6 +27,7 @@ import urllib.request
 
 import pytest
 
+from boost_cli.commands import configuration
 from boost_cli.core import config, frontmatter, journal, paths, policy, util
 from boost_cli.errors import BoostError
 
@@ -822,6 +823,85 @@ class TestOnboard:
                                     text=True)
             assert status.stdout == ""
             assert not (repo / ".boost").exists()
+
+    def test_pr_rerun_on_its_own_branch_commits_onto_it(
+            self, boost, sandbox, tmp_path, monkeypatch):
+        # Run 1 skips a differing workflow, commits the rest on the branch,
+        # stays there and dies at gh; the `boost onboard -f` it advises
+        # must then finish the job rather than refuse "branch exists".
+        repo = _mk_repo(tmp_path / "repo")
+        wf = repo / ".github" / "workflows" / "boost-skill-inventory.yml"
+        wf.parent.mkdir(parents=True)
+        wf.write_text("name: mine\n", encoding="utf-8")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "own workflow")
+        monkeypatch.setattr("boost_cli.commands.configuration.shutil.which",
+                            lambda c: "/usr/bin/" + c)
+        gh_rc = [1]
+        real_run = subprocess.run
+        monkeypatch.setattr(
+            "boost_cli.commands.configuration.subprocess.run",
+            lambda cmd, **kw: _proc(cmd, gh_rc[0], out="https://x/pull/9\n",
+                                    err="boom")
+            if cmd and cmd[0] == "/usr/bin/gh" else real_run(cmd, **kw))
+        monkeypatch.delenv("BOOST_ASSUME_YES")   # stdin is not a tty -> "no"
+
+        r = boost("onboard", "--repo", repo, "--pr", expect=1)
+        assert "gh pr create failed: boom" in r.err
+        assert wf.read_text(encoding="utf-8") == "name: mine\n"
+
+        r = boost("onboard", "--repo", repo, "--pr", "--dry-run")
+        assert ("would commit them on boost/onboard-skill-tracker and run "
+                "`gh pr create --fill`") in r.out
+
+        gh_rc[0] = 0
+        r = boost("onboard", "--repo", repo, "--pr", "-f")
+        assert "already exists" not in r.err
+        assert "opened PR https://x/pull/9" in r.out
+        head = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                              cwd=str(repo), capture_output=True, text=True)
+        assert head.stdout.strip() == "boost/onboard-skill-tracker"
+        subjects = subprocess.run(["git", "log", "--pretty=%s"],
+                                  cwd=str(repo), capture_output=True,
+                                  text=True).stdout.splitlines()
+        assert subjects == ["chore: add boost skill tracking (boost onboard)"
+                            ] * 2 + ["own workflow", "init"]
+        assert wf.read_text(encoding="utf-8") == configuration._WORKFLOW_YML
+        status = subprocess.run(["git", "status", "--porcelain"],
+                                cwd=str(repo), capture_output=True, text=True)
+        assert status.stdout == ""
+
+    def test_pr_branch_exists_elsewhere_hint_works(
+            self, boost, sandbox, tmp_path, monkeypatch):
+        repo = _mk_repo(tmp_path / "repo")
+        _git(repo, "branch", "boost/onboard-skill-tracker")
+        monkeypatch.setattr("boost_cli.commands.configuration.shutil.which",
+                            lambda c: "/usr/bin/" + c)
+        r = boost("onboard", "--repo", repo, "--pr", expect=1)
+        assert ("hint: open its PR with `git checkout "
+                "boost/onboard-skill-tracker && gh pr create --fill`, or check "
+                "it out and rerun `boost onboard --pr -f` to commit onto it, "
+                "or delete it with `git branch -D boost/onboard-skill-tracker` "
+                "and rerun" in " ".join(r.err.split()))
+        assert not (repo / ".boost").exists()
+
+    def test_pr_refuses_a_stale_git_lock_before_writing(
+            self, boost, sandbox, tmp_path, monkeypatch):
+        repo = _mk_repo(tmp_path / "repo")
+        lock = repo / ".git" / "index.lock"
+        lock.write_text("", encoding="utf-8")
+        monkeypatch.setattr("boost_cli.commands.configuration.shutil.which",
+                            lambda c: "/usr/bin/" + c)
+        r = boost("onboard", "--repo", repo, "--pr", expect=1)
+        err = " ".join(r.err.split())
+        assert "%s has a git lock file" % paths.tilde(repo.resolve()) in err
+        assert ("another git process is working in this repository; if none "
+                "is, remove %s" % paths.tilde(lock.resolve())) in err
+        assert "tap's clone" not in err
+        assert not (repo / ".boost").exists()
+        head = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                              cwd=str(repo), capture_output=True, text=True)
+        assert head.stdout.strip() != "boost/onboard-skill-tracker"
 
     def test_pr_preconditions(self, boost, sandbox, tmp_path):
         r = boost("onboard", "--repo", "/no/such/dir", expect=1)

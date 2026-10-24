@@ -254,6 +254,32 @@ class TestTilde:
         assert paths.tilde(resolved + os.sep + "sub") == "~/sub"
 
 
+class TestShellPath:
+    """A remedy is pasted into a shell: one word per path, ``~`` expandable."""
+
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="POSIX quoting; cmd.exe takes double quotes")
+    def test_chmod_command_quotes_a_space_or_quote(self, sandbox):
+        # Pasted unquoted, `chmod u+w ~/my proj/.boost` hands chmod two paths.
+        assert (paths.chmod_command(sandbox / "my proj" / ".boost")
+                == "chmod u+w ~/'my proj/.boost'")
+        assert (paths.chmod_command(sandbox / "it's")
+                == "chmod u+w ~/'it'\"'\"'s'")
+        assert paths.chmod_command(sandbox / ".boost") == "chmod u+w ~/.boost"
+        assert paths.chmod_command(sandbox) == "chmod u+w ~"
+        assert (paths.chmod_command(Path("/no such/dir"))
+                == "chmod u+w '/no such/dir'")
+        assert paths.chmod_command(Path("/plain/dir")) == "chmod u+w /plain/dir"
+
+    def test_tilde_stays_outside_the_quotes(self, sandbox):
+        assert paths.shell_path(sandbox / ".boost") == "~/.boost"
+        assert paths.shell_path(sandbox) == "~"
+        if sys.platform == "win32":
+            assert paths.shell_path(sandbox / "a b") == '~/"a b"'
+        else:
+            assert paths.shell_path(sandbox / "a b") == "~/'a b'"
+
+
 class TestEnsureDirs:
     EXPECTED = ("repos", "cache", "logs", "state", "state/snapshots",
                 "state/lock-history", "state/profiles")

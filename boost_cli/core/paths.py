@@ -412,6 +412,26 @@ def chmod_command(block: Path) -> str:
 
     ``u+w`` alone was the advice for every refusing dir, and on a dir at
     ``0o600`` it changes nothing: the missing bit is search, not write.
+
+    The path is shell-quoted, because the hint is a command to paste: an
+    unquoted ``my proj/.boost`` handed chmod two arguments and failed. A
+    leading ``~/`` stays outside the quotes, where the shell still expands it.
     """
     return "chmod u+%s %s" % ("wx" if not_searchable(block) else "w",
-                              tilde(block))
+                              shell_path(block))
+
+
+def shell_path(p) -> str:
+    """`p` for display as one pasteable shell word, ``~`` still expandable.
+
+    :func:`tilde` contracts $HOME, then the remainder is quoted by
+    :func:`util.shell_arg` — ``'~/x'`` would not expand, so the ``~/`` is
+    left bare in front of the quoted rest.
+    """
+    from . import util  # util imports paths at module level
+    s = tilde(p)
+    if s == "~":
+        return s
+    if s.startswith("~/"):
+        return "~/" + util.shell_arg(s[2:])
+    return util.shell_arg(s)

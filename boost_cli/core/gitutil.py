@@ -804,10 +804,20 @@ def git_lock_path(text: str) -> str | None:
     return m.group(1) if m else None
 
 
-def lock_hint(lock: str | Path) -> str:
-    """The remedy for a git lock: the tap is healthy, the lock is not."""
-    return ("another git process is working in this tap's clone; if none "
-            "is, remove %s" % lock)
+#: What :func:`lock_hint` calls a tap's clone, for callers that know it is one.
+TAP_CLONE = "this tap's clone"
+
+
+def lock_hint(lock: str | Path, where: str = "this repository") -> str:
+    """The remedy for a git lock: the repo is healthy, the lock is not.
+
+    `where` names the repo. The default is neutral because :func:`run` serves
+    every repo boost touches — ``boost onboard --pr`` in the user's own
+    project told them a "tap's clone" was busy. Callers that know they are in
+    a tap pass :data:`TAP_CLONE`.
+    """
+    return ("another git process is working in %s; if none is, remove %s"
+            % (where, lock))
 
 
 def stale_locks(repo: Path) -> list[Path]:
@@ -846,7 +856,7 @@ def _git_lock_busy(err: BoostError) -> bool:
 def _sparse_hint(err: BoostError) -> str | None:
     lock = git_lock_path(str(err))
     if lock:
-        return lock_hint(lock)
+        return lock_hint(lock, TAP_CLONE)
     low = str(err).lower()
     if any(w in low for w in _TRANSPORT_ERRORS):
         return NETWORK_HINT
