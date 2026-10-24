@@ -583,6 +583,9 @@ def add(spec: str, curated: bool = False, at: str | None = None) -> Tap:
     name, url = parse_spec(spec)
     if reserved_cache_name(name):
         raise _reserved(name)
+    # Before the clone: the config write at the end would refuse anyway, and
+    # leave the clone behind as a tap no config lists.
+    config.refuse_unreadable()
     for existing in list_taps():
         if name_key(existing.name) == name_key(name):
             if not same_source(existing.url, url):
@@ -998,6 +1001,7 @@ def add_many(specs: list[str], curated: bool = False,
     """
     if not specs:
         return []
+    config.refuse_unreadable()      # before any clone, as in `add`
     paths.ensure_dirs()
     pins = pins or {}
     existing = {name_key(t.name): t for t in list_taps()}

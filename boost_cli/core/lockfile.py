@@ -39,6 +39,8 @@ _WARNED_UNSAVED = False
 # Once per process too: every read of a corrupt lock finds the same fault, and
 # `boost list` reads it several times before it prints "no skills installed".
 _WARNED_CORRUPT = False
+# And for a lock boost cannot read at all (mode 000, a directory on the name).
+_WARNED_UNREADABLE = False
 #: What a refused write tells the user. History snapshots the lock *before*
 #: each write, so the newest snapshot predates the last change.
 ROLLBACK_HINT = ("`boost replay rollback <id>` restores the lock as it was "
@@ -129,6 +131,11 @@ def read() -> dict:
     """
     p = paths.lockfile_path()
     lock, err = jsonstate.read_object(p)
+    if isinstance(err, jsonstate.Unreadable):
+        # Not corrupt: the bytes were never seen, so there is nothing to
+        # copy aside (a copy needs a read too) and nothing to roll back.
+        _warn_unreadable(err)
+        return _skeleton()
     if err is not None:
         # Corrupt (present but unparseable) is NOT the same as empty: returning
         # a bare skeleton here would let the next write() overwrite the only
@@ -277,6 +284,28 @@ def _preserve_corrupt(p) -> None:
                     stream=sys.stderr, wrap=True)
 
 
+def _warn_unreadable(err: jsonstate.Unreadable) -> None:
+    """Warn, once per process, that the lock could not be read at all.
+
+    :func:`_preserve_corrupt` is the wrong answer here: its backup cannot be
+    copied from a file boost cannot read, and its advice (`boost replay
+    rollback`) replaced an intact lock with an older snapshot.
+    """
+    global _WARNED_UNREADABLE
+    with suppress(Exception):
+        from . import logs
+        logs.get_logger().warning("lock file %s is unreadable: %s",
+                                  err.path, err.reason)
+    if not _WARNED_UNREADABLE:
+        _WARNED_UNREADABLE = True
+        output.warn("the lock file %s cannot be read (%s), so boost sees "
+                    "nothing installed — %s; boost will not write the lock "
+                    "until it can read it"
+                    % (paths.tilde(err.path), err.reason,
+                       jsonstate.read_remedy(err, paths.tilde)),
+                    stream=sys.stderr, wrap=True)
+
+
 def refuse_corrupt() -> None:
     """Raise while the lock on disk is one boost must not write over.
 
@@ -298,16 +327,31 @@ def refuse_corrupt() -> None:
             "not write over it" % (integ.version, SCHEMA_VERSION),
             hint="%s; this boost would drop what v%s records"
                  % (UPGRADE, integ.version), wrap=True)
+    if integ.problem == "unreadable":
+        raise BoostError("lock file %s — boost will not write over a lock it "
+                         "cannot read" % fault(integ),
+                         hint="%s, then re-run" % remedy(integ), wrap=True)
     # Kept now, not only by a read(): install refuses before reading, and the
     # newest backup may hold an earlier corruption rather than these bytes.
     try:
         held = keep_copy(p)
-    except OSError:
-        held = corrupt_backup(p)
+    except OSError as e:
+        # No backup holds these bytes, so none is named: the hint used to
+        # point at a `.corrupt` file that was never written.
+        raise BoostError("lock file %s — boost will not write over it"
+                         % fault(integ),
+                         hint=_backup_refused(p, e), wrap=True) from e
     raise BoostError("lock file %s — boost will not write over it" % fault(integ),
                      hint=(ROLLBACK_HINT if has_history() else REBUILD_HINT)
                      % paths.tilde(held),
                      wrap=True)
+
+
+def _backup_refused(p, e: OSError) -> str:
+    """The hint when the bytes of a damaged lock `p` cannot be copied aside."""
+    return ("boost could not back it up (%s), and the newest record is only "
+            "in it — copy %s somewhere safe before changing it"
+            % (e.strerror or e, paths.tilde(p)))
 
 
 def newer(integ: Integrity) -> bool:
@@ -325,6 +369,10 @@ def remedy(integ: Integrity) -> str:
     """
     if newer(integ):
         return UPGRADE
+    if integ.problem == "unreadable":
+        if isinstance(integ.detail, jsonstate.Unreadable):
+            return jsonstate.read_remedy(integ.detail, paths.tilde)
+        return "make it readable"
     if has_history():
         return "restore it with `boost replay`"
     return "rebuild it from the store with `boost sync --rebuild-lock`"
@@ -346,6 +394,12 @@ def set_aside():
         if newer(integ):
             raise BoostError("the lock file %s — boost will not set it aside"
                              % fault(integ), hint=UPGRADE, wrap=True)
+        if integ.problem == "unreadable":
+            # Its bytes may be intact; setting it aside would throw away a
+            # good record for a re-record of the store.
+            raise BoostError("the lock file %s — boost will not set it aside"
+                             % fault(integ),
+                             hint="%s, then re-run" % remedy(integ), wrap=True)
         p = paths.lockfile_path()
         try:
             backup = keep_copy(p)
@@ -362,18 +416,42 @@ def restore(hist_id: str) -> dict:
     The way back from a corrupt lock, and so the one write that does not go
     through :func:`write`'s guard: it replaces the lock with a snapshot boost
     itself took, byte for byte. The corrupt bytes are copied to
-    ``<lock>.corrupt`` first, so restoring loses nothing.
+    ``<lock>.corrupt`` first, so restoring loses nothing — and a lock whose
+    bytes cannot be copied (:func:`backup_for_restore`) is not replaced.
     """
     snapshot = history_read(hist_id)
     p = paths.lockfile_path()
     with exclusive():
         integ = check()
         if not integ.ok and integ.problem != "missing":
-            with suppress(OSError):
-                keep_copy(p)
+            backup_for_restore(integ)
         src = paths.lock_history_dir() / ("lock-%s.json" % hist_id)
         util.atomic_write_text(p, src.read_text(encoding="utf-8"))
     return snapshot
+
+
+def backup_for_restore(integ: Integrity):
+    """Back up the damaged lock :func:`check` found, before a rollback
+    replaces it; the backup holding its bytes.
+
+    Raises :class:`BoostError` rather than let the rollback go ahead without
+    one: an unreadable lock (``chmod 000``, a directory on the name) may be
+    intact, so the fix is its permissions, not an older snapshot; and a lock
+    whose copy fails would be overwritten with the only copy of its newest
+    record — which `boost replay rollback` did, with a green tick naming a
+    `.corrupt` backup that was never written.
+    """
+    p = paths.lockfile_path()
+    if integ.problem == "unreadable":
+        raise BoostError("the lock file %s — boost will not replace a lock it "
+                         "cannot read, which may be intact" % fault(integ),
+                         hint="%s, then re-run" % remedy(integ), wrap=True)
+    try:
+        return keep_copy(p)
+    except OSError as e:
+        raise BoostError("the lock file %s — boost will not replace a lock it "
+                         "could not back up" % fault(integ),
+                         hint=_backup_refused(p, e), wrap=True) from e
 
 
 def unrestored_corrupt():
@@ -427,11 +505,22 @@ class Integrity(NamedTuple):
     whose record vanished out from under a populated store.
     """
     ok: bool
-    # None | "missing" | "corrupt" | "schema" | "older". "older" is the one
-    # problem that is ok: a lock with no schema version, or an earlier one,
-    # still parses and is migrated by being rewritten (:func:`migrate`).
+    # None | "missing" | "unreadable" | "corrupt" | "schema" | "older".
+    # "older" is the one problem that is ok: a lock with no schema version, or
+    # an earlier one, still parses and is migrated by being rewritten
+    # (:func:`migrate`). "unreadable" is not corrupt: the read itself failed
+    # (a permission, a directory on the name), so the bytes may be intact.
     problem: str | None
-    version: object = None  # the schema version found, for "schema"/"older"
+    # The schema version found, for "schema"/"older"; for "unreadable", the
+    # jsonstate.Unreadable saying why (see :attr:`detail`). Not a fourth
+    # field: callers compare an Integrity to a plain 3-tuple.
+    version: object = None
+
+    @property
+    def detail(self) -> jsonstate.Unreadable | None:
+        """Why the lock could not be read, for ``"unreadable"``; else None."""
+        v = self.version
+        return v if isinstance(v, jsonstate.Unreadable) else None
 
 
 def check(p=None) -> Integrity:
@@ -444,6 +533,8 @@ def check(p=None) -> Integrity:
     one before that replaces the live store.
     """
     raw, err = jsonstate.read_object(p or paths.lockfile_path())
+    if isinstance(err, jsonstate.Unreadable):
+        return Integrity(False, "unreadable", err)
     if err is not None:
         return Integrity(False, "corrupt")
     if raw is None:
@@ -509,6 +600,10 @@ def fault(integ: Integrity) -> str:
     """
     if integ.problem == "corrupt":
         return "is corrupt"
+    if integ.problem == "unreadable":
+        return ("cannot be read (%s)" % integ.detail.reason
+                if isinstance(integ.detail, jsonstate.Unreadable)
+                else "cannot be read")
     if newer(integ):
         return "is schema v%s, newer than this boost's v%d" % (
             integ.version, SCHEMA_VERSION)

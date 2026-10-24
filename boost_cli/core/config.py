@@ -316,6 +316,15 @@ def _stat_stamp(p: Any) -> tuple:
 
 
 def _warn_corrupt(err: str) -> None:
+    if isinstance(err, jsonstate.Unreadable):
+        # Not corrupt, so no promise to move it aside: a file boost could not
+        # read may hold every tap and setting, and `save` refuses over it.
+        output.warn(
+            "%s — reading as empty for this command; boost will not write "
+            "config.json until it can read it: %s"
+            % (err, jsonstate.read_remedy(err, paths.tilde)),
+            stream=sys.stderr)
+        return
     output.warn(
         "%s — reading as empty for this command; the file on disk is left "
         "untouched, but the next `config set`/`config unset` will move it "
@@ -400,6 +409,25 @@ def load() -> dict:
     return deepcopy(_cached())
 
 
+def refuse_unreadable() -> None:
+    """Raise while config.json exists but cannot be read at all.
+
+    An unreadable file (mode 000, a directory on the name) reads as DEFAULTS,
+    whose tap list is empty — so a write built on that view, `config set` or
+    `boost tap` (doctor's own remedy), set the user's whole config aside and
+    left one value or one tap in its place. Its bytes may be intact, so the
+    fix is the permission, never a fresh file. Callers that clone first
+    (`registry.add`) ask before the clone, so a refusal leaves nothing behind.
+    """
+    err = _read_file()[1]
+    if isinstance(err, jsonstate.Unreadable):
+        raise BoostError(
+            "could not read %s (%s) — boost will not write over a config it "
+            "cannot read" % (paths.tilde(err.path), err.reason),
+            hint="%s, then re-run" % jsonstate.read_remedy(err, paths.tilde),
+            wrap=True)
+
+
 def save(cfg: dict) -> None:
     """Atomically write `cfg` to `~/.boost/config.json`, creating dirs first.
 
@@ -407,12 +435,15 @@ def save(cfg: dict) -> None:
     quarantined to `config.json.corrupt` first, so this never overwrites bytes
     the read path already warned about with a fresh file built from an
     in-memory view that silently dropped them — see `jsonstate.quarantine`.
+    One that exists but cannot be *read* is not corrupt and is not moved:
+    the write is refused (:func:`refuse_unreadable`).
 
     A directory that refuses the write is a :class:`BoostError` naming it.
     This used ``ensure_dirs``, so a cache dir a read-only ``~/.boost`` would
     not create failed `boost untap` at exit 70 before its config was even
     tried, and the config write itself would have failed the same way.
     """
+    refuse_unreadable()
     paths.create_dirs(paths.boost_dirs())
     p = paths.config_path()
     try:
