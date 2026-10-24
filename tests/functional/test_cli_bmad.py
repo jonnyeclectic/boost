@@ -297,6 +297,26 @@ class TestUninstall:
         boost("bmad", "uninstall", "--scope", "global", expect=1)
         assert asked == ["Remove BMAD (global)? no bmad-* skills to delete"]
 
+    def test_a_symlinked_runtime_dir_is_kept_and_named(
+            self, boost, sandbox, proj, tmp_path, monkeypatch):
+        elsewhere = tmp_path / "shared-bmad"
+        elsewhere.mkdir()
+        (proj / "_bmad").symlink_to(elsewhere)
+        (proj / "_bmad-output").mkdir()
+        asked = []
+        monkeypatch.setattr(bmad.out, "confirm",
+                            lambda q, **kw: asked.append(q) or True)
+        r = boost("bmad", "uninstall")
+        # The confirm lists only what the run deletes.
+        assert asked == ["Remove BMAD (project)? deletes %s"
+                         % bmad.paths.tilde(proj / "_bmad-output")]
+        flat = " ".join(r.out.split())
+        assert "removed BMAD (project): 1 item(s)" in flat
+        assert ("kept %s — not a BMAD install (a symlink)"
+                % bmad.paths.tilde(proj / "_bmad")) in flat
+        assert (proj / "_bmad").is_symlink() and elsewhere.is_dir()
+        assert not (proj / "_bmad-output").exists()
+
     def test_state_that_existed_is_cleared(self, boost, sandbox):
         bmad._set_scope_state("global", installed=True)
         r = boost("bmad", "uninstall", "--scope", "global", "-y")

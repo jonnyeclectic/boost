@@ -814,8 +814,13 @@ def _status(scope) -> int:
 def _uninstall(scope, yes, force: bool = False) -> int:
     scope = scope or "project"
     skills, kept = core.skill_dirs(_skills_dir(scope))
-    extras = [Path.cwd() / extra for extra in ("_bmad", "_bmad-output")
-              if scope == "project" and (Path.cwd() / extra).is_dir()]
+    extras: list[Path] = []
+    for extra in ("_bmad", "_bmad-output") if scope == "project" else ():
+        pth = Path.cwd() / extra
+        if pth.is_symlink():
+            kept.append(pth)    # remove_dirs never follows a link
+        elif pth.is_dir():
+            extras.append(pth)
     # The confirm names what it deletes: "deletes bmad-* skills" was all a
     # user approved, which hid both a count of nothing and a symlink the run
     # then could not remove.
