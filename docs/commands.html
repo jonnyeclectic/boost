@@ -102,7 +102,7 @@
     <input id="q" type="search" placeholder="Filter 81 commands…" autocomplete="off" aria-label="Filter commands">
     <div class="group" data-group="pkg">
       <div class="group-h">Install &amp; lifecycle</div>
-      <a class="cmd-link" href="#cmd-install" data-search="install install a skill from a tap registry  --force --path p --agent a --scope {user,project} --local --global --dry-run --no-deps --no-mcp --as-skill --no-as-skill name">install</a>
+      <a class="cmd-link" href="#cmd-install" data-search="install install a skill from a tap registry  --force --path p --agent a --scope {user,project} --local --global --dry-run --no-deps --no-mcp -y, --yes --as-skill --no-as-skill name">install</a>
       <a class="cmd-link" href="#cmd-uninstall" data-search="uninstall remove an installed skill, rule, or workflow  --scope {user,project} --local --global --kind {skill,rule,workflow} -y, --yes name">uninstall</a>
       <a class="cmd-link" href="#cmd-sync" data-search="sync reconcile installed skills &amp; symlinks against the lock file  --diff --prune --json -y, --yes --rebuild-lock">sync</a>
       <a class="cmd-link" href="#cmd-update" data-search="update sync taps or update installed skills  --taps-only -y, --yes --force --discard-edits --allow-downgrade --shards --json tap">update</a>
@@ -191,7 +191,7 @@
       <a class="cmd-link" href="#cmd-completions" data-search="completions generate shell tab-completion scripts  --eval --dry-run --install --uninstall {bash,zsh,fish}">completions</a>
       <a class="cmd-link" href="#cmd-schedule" data-search="schedule manage automatic skill-sync scheduling  --interval {6h,12h,daily} --json {status,enable,disable}">schedule</a>
       <a class="cmd-link" href="#cmd-serve" data-search="serve browse the catalogue in a browser: search, facets and a tap graph  --port port --host host">serve</a>
-      <a class="cmd-link" href="#cmd-mcp" data-search="mcp register boost as an mcp server (claude code, gemini cli, antigravity cli, codex cli) register boost as an mcp server for your agent clis --host h --stdio --dry-run --force --seed --no-seed {register,unregister}">mcp</a>
+      <a class="cmd-link" href="#cmd-mcp" data-search="mcp register boost as an mcp server (claude code, gemini cli, antigravity cli, codex cli) register boost as an mcp server for your agent clis --host h --stdio --dry-run --force --seed --no-seed -y, --yes {register,unregister}">mcp</a>
       <a class="cmd-link" href="#cmd-hooks" data-search="hooks manage agent hooks (claude code, gemini cli, codex cli) manage agent hooks (scope- and host-aware) in an agent&#x27;s settings --host h -c, --command command -n, --name name -s, --scope {global,project} -m, --matcher matcher --timeout timeout --json --force {add,remove,list} event">hooks</a>
       <a class="cmd-link" href="#cmd-bmad" data-search="bmad bmad method autopilot — `bmad on` routes every task to a persona bmad method autopilot: personas, prompt routing, workflows -s, --scope {project,global} --modules modules -y, --yes --startup --plain --force --host h action value">bmad</a>
       <a class="cmd-link" href="#cmd-self-update" data-search="self-update update boost itself to the latest version  --dry-run">self-update</a>
@@ -212,10 +212,10 @@
     <p class="lead">All <b>81</b> commands, generated from the CLI itself —
        run <code>boost &lt;command&gt; --help</code> for the same in your terminal.</p>
       <h2 class="group-h" id="grp-pkg">Install &amp; lifecycle</h2>
-      <section class="cmd" id="cmd-install" data-search="install install a skill from a tap registry  --force --path p --agent a --scope {user,project} --local --global --dry-run --no-deps --no-mcp --as-skill --no-as-skill name">
+      <section class="cmd" id="cmd-install" data-search="install install a skill from a tap registry  --force --path p --agent a --scope {user,project} --local --global --dry-run --no-deps --no-mcp -y, --yes --as-skill --no-as-skill name">
         <h3><span class="cname">install</span><span class="gtag">pkg</span></h3>
         <p class="summary">Install a skill from a tap registry</p>
-        <pre class="syn">boost install [--force] [--path P] [--agent A] [--scope {user,project} | --local | --global] [--dry-run] [--no-deps] [--no-mcp] [--as-skill | --no-as-skill] NAME [NAME ...]</pre>
+        <pre class="syn">boost install [--force] [--path P] [--agent A] [--scope {user,project} | --local | --global] [--dry-run] [--no-deps] [--no-mcp] [-y] [--as-skill | --no-as-skill] NAME [NAME ...]</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
           <div class="arg"><code>NAME</code><span>skill name, optionally qualified as tap:skill</span></div>
@@ -231,6 +231,7 @@
           <div class="arg"><code>--dry-run</code><span>show what would happen without changing anything</span></div>
           <div class="arg"><code>--no-deps</code><span>install only the named skills, not their `requires:` (the wider spellings are reported, never installed)</span></div>
           <div class="arg"><code>--no-mcp</code><span>don&#x27;t offer to register MCP servers a skill declares</span></div>
+          <div class="arg"><code>-y, --yes</code><span>register the MCP servers a skill declares without asking</span></div>
           <div class="arg"><code>--as-skill</code><span>also put a workflow in the skill store, for agents that read only skills (default: the workflows_as_skills config); remembered</span></div>
           <div class="arg"><code>--no-as-skill</code><span>don&#x27;t put a workflow in the skill store; remembered</span></div>
         </div>
@@ -1181,10 +1182,10 @@
           <div class="arg"><code>--host HOST</code><span>address to bind (default: 127.0.0.1)</span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-mcp" data-search="mcp register boost as an mcp server (claude code, gemini cli, antigravity cli, codex cli) register boost as an mcp server for your agent clis --host h --stdio --dry-run --force --seed --no-seed {register,unregister}">
+      <section class="cmd" id="cmd-mcp" data-search="mcp register boost as an mcp server (claude code, gemini cli, antigravity cli, codex cli) register boost as an mcp server for your agent clis --host h --stdio --dry-run --force --seed --no-seed -y, --yes {register,unregister}">
         <h3><span class="cname">mcp</span><span class="gtag">cfg</span></h3>
         <p class="summary">Register boost as an MCP server (Claude Code, Gemini CLI, Antigravity CLI, Codex CLI)</p>
-        <pre class="syn">boost mcp [--host H] [--stdio] [--dry-run] [--force] [--seed | --no-seed] [{register,unregister}]</pre>
+        <pre class="syn">boost mcp [--host H] [--stdio] [--dry-run] [--force] [--seed | --no-seed] [-y] [{register,unregister}]</pre>
         <p class="desc">Register boost as an MCP server for your agent CLIs</p>
         <div class="args-h">Arguments</div>
         <div class="args">
@@ -1198,6 +1199,7 @@
           <div class="arg"><code>--force</code><span>(un)register even when the host would write outside this $HOME — for a config home deliberately kept elsewhere</span></div>
           <div class="arg"><code>--seed</code><span>top up any missing recommended registries even if others are already tapped (the repair path)</span></div>
           <div class="arg"><code>--no-seed</code><span>register only; do not tap anything</span></div>
+          <div class="arg"><code>-y, --yes</code><span>install the boost-first rule without asking</span></div>
         </div>
       </section>
       <section class="cmd" id="cmd-hooks" data-search="hooks manage agent hooks (claude code, gemini cli, codex cli) manage agent hooks (scope- and host-aware) in an agent&#x27;s settings --host h -c, --command command -n, --name name -s, --scope {global,project} -m, --matcher matcher --timeout timeout --json --force {add,remove,list} event">
