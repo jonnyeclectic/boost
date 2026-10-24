@@ -370,6 +370,28 @@ class TestRegisterArgvOptions:
             "no_proxy": "*",
         }
 
+    def test_default_env_carries_relocated_state(self, sandbox, monkeypatch):
+        # The host starts the server with its own environment: without these
+        # the server read ~/.boost and ~/.agents/skills instead.
+        monkeypatch.setenv("BOOST_HOME", "~/alt")
+        monkeypatch.setenv("BOOST_AGENTS_STORE", str(sandbox / "st"))
+        assert mcphost.launch_env() == {
+            **mcphost.LAUNCH_ENV,
+            "BOOST_HOME": str(sandbox / "alt"),
+            "BOOST_AGENTS_STORE": str(sandbox / "st")}
+        assert mcphost.register_argv(mcphost.CODEX, SHIM) == [
+            "codex", "mcp", "add",
+            "--env", "BOOST_AGENTS_STORE=%s" % (sandbox / "st"),
+            "--env", "BOOST_HOME=%s" % (sandbox / "alt"),
+            "--env", "OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES",
+            "--env", "no_proxy=*", "boost", "--", SHIM, "mcp", "--stdio"]
+        assert mcphost.argv(mcphost.CODEX, "register", SHIM) == \
+            mcphost.register_argv(mcphost.CODEX, SHIM)
+
+    def test_default_env_without_overrides_is_launch_env(self, sandbox):
+        assert mcphost.launch_env() == mcphost.LAUNCH_ENV
+        assert mcphost.launch_env() is not mcphost.LAUNCH_ENV
+
     def test_unknown_host_raises(self):
         with pytest.raises(KeyError):
             mcphost.register_argv("copilot", SHIM)
