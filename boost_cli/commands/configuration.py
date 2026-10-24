@@ -2305,11 +2305,15 @@ def _tool_discover_github(args: dict):
     hits = discovery.github_skill_search(query, limit)
     if hits is None:
         return ("GitHub code search failed — check `gh auth status` and retry."), True
+    # The description promises repos nobody here has tapped yet.
+    hits, tapped = registry.untapped_repos(hits)
+    note = (("\n(%d already-tapped repo(s) not shown — boost_search covers "
+             "them)" % tapped) if tapped else "")
     if not hits:
-        return ("no SKILL.md repositories found on GitHub for %r"
-                % (query.strip() or "any query")), False
+        return ("no SKILL.md repositories found on GitHub for %r%s"
+                % (query.strip() or "any query", note)), False
     return "\n".join("%s — %s" % (h["repo"], h.get("description") or h.get("path", ""))
-                     for h in hits), False
+                     for h in hits) + note, False
 
 
 # These descriptions do more work than they look like they should. Gemini CLI
