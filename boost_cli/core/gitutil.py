@@ -458,7 +458,8 @@ def owned_clone(repo: Path) -> bool:
         real = Path(repo).resolve()
     except OSError:
         return False
-    if real == root or root not in real.parents:
+    # `parents` never holds the path itself, so the repos dir fails too.
+    if root not in real.parents:
         return False
     if not (real / ".git").is_dir():
         return False
