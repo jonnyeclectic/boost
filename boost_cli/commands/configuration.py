@@ -952,6 +952,27 @@ def _onboard_unchanged(dest: Path, content: str) -> bool:
         return False
 
 
+def _onboard_lock_text(dest: Path, lock: dict) -> str:
+    """The repo lock onboard would write — or the one already there, if equal.
+
+    ``updated`` is a write stamp, not content: with no user lock it is the
+    skeleton's *now*, so every re-run a second later generated a "different"
+    lock, and on a non-TTY that read as a declined overwrite — rc 1 and
+    "1 file differs" on a repo nothing had touched. Equal modulo that one
+    field keeps the existing bytes, so the run reports it unchanged.
+    """
+    text = json.dumps(lock, indent=2, sort_keys=True) + "\n"
+    try:
+        raw = dest.read_text(encoding="utf-8")
+        have = json.loads(raw)
+    except (OSError, UnicodeDecodeError, ValueError):
+        return text
+    if (isinstance(have, dict) and "updated" in have and "updated" in lock
+            and have | {"updated": None} == lock | {"updated": None}):
+        return raw
+    return text
+
+
 def _write_onboard_file(dest: Path, content: str, force: bool) -> str:
     """Write one generated onboard file; confirm first if it already exists.
 
@@ -1036,9 +1057,9 @@ def cmd_onboard(argv) -> int:
     }, indent=2) + "\n"
     files = [(_TELEMETRY_REL, telemetry), (_WORKFLOW_REL, _WORKFLOW_YML)]
     if repo != paths.store_dir().resolve():
-        files.append((".skill-lock.json",
-                      json.dumps(lockfile.portable(lockfile.read(), base=repo),
-                                indent=2, sort_keys=True) + "\n"))
+        files.append((".skill-lock.json", _onboard_lock_text(
+            repo / ".skill-lock.json",
+            lockfile.portable(lockfile.read(), base=repo))))
 
     # Preconditions FIRST so a real run never leaves the repo mid-state — and
     # *before* the dry-run return, because all three are read-only and a

@@ -871,6 +871,36 @@ class TestOnboardOverwrite:
         assert ("1 file differs and was left unchanged — `boost onboard -f` "
                 "to overwrite") in r.out
 
+    def _restamped(self, boost, tmp_path, **extra):
+        """An onboarded repo whose lock differs only in ``updated`` (+extra)."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        boost("onboard", "--repo", repo)
+        lock = json.loads((repo / self.LOCK).read_text(encoding="utf-8"))
+        lock.update(updated="2001-01-01T00:00:00Z", **extra)
+        text = json.dumps(lock, indent=2, sort_keys=True) + "\n"
+        (repo / self.LOCK).write_text(text, encoding="utf-8")
+        return repo, text
+
+    def test_a_rerun_whose_lock_differs_only_in_its_stamp_is_onboarded(
+            self, boost, tmp_path, monkeypatch):
+        # No user lock: the skeleton stamps `updated` with *now*, so a re-run
+        # a second later used to "differ", decline on a non-TTY, and exit 1.
+        repo, text = self._restamped(boost, tmp_path)
+        monkeypatch.delenv("BOOST_ASSUME_YES")
+        r = boost("onboard", "--repo", repo)
+        assert "unchanged" in r.out and "skipped" not in r.out
+        assert "already onboarded" in r.out
+        assert (repo / self.LOCK).read_text(encoding="utf-8") == text
+
+    def test_a_lock_that_differs_beyond_its_stamp_still_asks(
+            self, boost, tmp_path, monkeypatch):
+        repo, text = self._restamped(boost, tmp_path, mine=True)
+        monkeypatch.delenv("BOOST_ASSUME_YES")
+        r = boost("onboard", "--repo", repo, expect=1)
+        assert "skipped" in r.out
+        assert (repo / self.LOCK).read_text(encoding="utf-8") == text
+
     def test_declining_two_files_counts_both(
             self, boost, installed, tmp_path, monkeypatch):
         repo = self._seeded(boost, tmp_path)
