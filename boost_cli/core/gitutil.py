@@ -11,7 +11,7 @@ import signal
 import subprocess
 import sys
 import unicodedata
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import NamedTuple
 
@@ -70,6 +70,50 @@ def branch_state(cwd: Path | None = None) -> BranchState:
     return BranchState(has_git=True, in_repo=True, branch=branch)
 
 
+#: The locale categories ``LC_ALL`` overrode, other than messages. When boost
+#: drops ``LC_ALL`` it hands its value to each of these, so only the language
+#: of git's messages changes — not how it decodes a non-ASCII path.
+_LC_KEPT = ("LC_CTYPE", "LC_COLLATE", "LC_NUMERIC", "LC_TIME", "LC_MONETARY")
+
+
+def git_env(base: Mapping[str, str] | None = None) -> dict[str, str]:
+    """The environment every git child of boost runs under: ``base`` (default
+    ``os.environ``) with git's messages forced into English and its prompts off.
+    """
+    # GIT_LFS_SKIP_SMUDGE: taps are indexed for their Markdown, and boost
+    # never reads an LFS payload. Without this, tapping a repo that stores
+    # large media in LFS downloads all of it on clone — heygen-com/hyperframes
+    # tracks 163 files totalling 578 MB (83 .mp4 regression baselines under
+    # packages/producer/tests, plus .png/.webm/.mov) beside the 31 SKILL.md
+    # files boost actually wants. Pointer files still check out as text, so
+    # discovery is unaffected. Only takes effect where git-lfs is installed;
+    # elsewhere it is inert.
+    # GIT_TERMINAL_PROMPT=0: without it, a clone/fetch against a
+    # deleted or private repo falls back to an interactive
+    # "Username for 'https://github.com':" prompt — on a real
+    # terminal this blocks tap/import/update forever, and in a
+    # sandbox with no tty it dies as "Device not configured", an
+    # unrelated-looking crash for what is really a 404. With the
+    # flag set git fails fast instead, with wording clone_shallow
+    # and pull() translate into the actual cause.
+    # Messages in English: boost reads git's stderr for its meaning —
+    # `_git_error`'s `fatal:` line, the credential-prompt and transport
+    # markers, `_LEFT_BEHIND` — and git translates all of it. Under
+    # LC_ALL=de_DE.UTF-8, `fatal:` is `Schwerwiegend:`, so a failed fetch was
+    # reported as the tail of git's hint ("und das Repository existiert."),
+    # and `compact` missed the heading over the files git kept and reported
+    # "compacted" with them still on disk. LC_ALL outranks LC_MESSAGES, so it
+    # is dropped and its value handed to the other categories: the character
+    # set stays UTF-8 and a path with an é still round-trips.
+    env = dict(os.environ if base is None else base)
+    every = env.pop("LC_ALL", "")
+    if every:
+        env.update(dict.fromkeys(_LC_KEPT, every))
+    env.update({"LC_MESSAGES": "C", "LANGUAGE": "C",
+                "GIT_LFS_SKIP_SMUDGE": "1", "GIT_TERMINAL_PROMPT": "0"})
+    return env
+
+
 def run(args: list[str], cwd: Path | None = None, check: bool = True,
         timeout: int = 300) -> subprocess.CompletedProcess:
     """Run `git *args` with captured text output; return the CompletedProcess.
@@ -81,24 +125,7 @@ def run(args: list[str], cwd: Path | None = None, check: bool = True,
     try:
         proc = _exec(
             ["git", *args], cwd=str(cwd) if cwd else None, timeout=timeout,
-            # GIT_LFS_SKIP_SMUDGE: taps are indexed for their Markdown, and boost
-            # never reads an LFS payload. Without this, tapping a repo that stores
-            # large media in LFS downloads all of it on clone — heygen-com/hyperframes
-            # tracks 163 files totalling 578 MB (83 .mp4 regression baselines under
-            # packages/producer/tests, plus .png/.webm/.mov) beside the 31 SKILL.md
-            # files boost actually wants. Pointer files still check out as text, so
-            # discovery is unaffected. Only takes effect where git-lfs is installed;
-            # elsewhere it is inert.
-            # GIT_TERMINAL_PROMPT=0: without it, a clone/fetch against a
-            # deleted or private repo falls back to an interactive
-            # "Username for 'https://github.com':" prompt — on a real
-            # terminal this blocks tap/import/update forever, and in a
-            # sandbox with no tty it dies as "Device not configured", an
-            # unrelated-looking crash for what is really a 404. With the
-            # flag set git fails fast instead, with wording clone_shallow
-            # and pull() translate into the actual cause.
-            env=os.environ | {"GIT_LFS_SKIP_SMUDGE": "1",
-                              "GIT_TERMINAL_PROMPT": "0"},
+            env=git_env(),
         )
     except subprocess.TimeoutExpired:
         name = _subcommand(args)
@@ -955,7 +982,7 @@ def read_blob(repo: Path, rev: str, path: str) -> bytes | None:
     try:
         proc = _exec(["git", "-C", str(repo), "cat-file", "blob",
                       "%s:%s" % (rev, path)], cwd=None, timeout=300,
-                     env=os.environ | {"GIT_TERMINAL_PROMPT": "0"}, text=False)
+                     env=git_env(), text=False)
     except subprocess.TimeoutExpired:
         return None
     return proc.stdout if proc.returncode == 0 else None
