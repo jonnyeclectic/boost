@@ -1212,6 +1212,18 @@ class TestDiscover:
         assert "no locally indexed skills match 'acme'" in r.out
         assert "1 already-tapped repo(s) not shown" in r.out
 
+    def test_a_tapped_repo_the_query_misses_is_not_counted(self, boost,
+                                                           sandbox):
+        # "not shown" means this query would have shown it: counting the
+        # whole index named repos the query never matched.
+        from boost_cli.core import config
+        config.save({"taps": [{"name": "pack",
+                               "url": "https://github.com/Acme/Pack.git"}]})
+        _write_index(_ITEMS)
+        r = boost("discover", "--local", "octo")
+        assert "octo/skills" in r.out
+        assert "already-tapped" not in r.out
+
     def test_nothing_tapped_says_nothing_about_tapped_repos(self, boost,
                                                             sandbox):
         _write_index(_ITEMS)

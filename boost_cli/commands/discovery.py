@@ -1212,13 +1212,15 @@ def cmd_discover(argv):
         raise BoostError("the discovery index is corrupt",
                         hint="rebuild it with `boost index`")
     query_tokens = [t.lower() for t in args.query if t.strip()]
+    matched = [it for it in all_items
+               if all(t in ("%s %s %s" % (it.get("repo", ""), it.get("path", ""),
+                                          it.get("description", ""))).lower()
+                      for t in query_tokens)]
     # The index is a snapshot from before any tap made since: reconcile it
     # with the tap list now, as the help promises (`registry.untapped_repos`).
-    untapped, tapped = registry.untapped_repos(all_items)
-    items = [it for it in untapped
-             if all(t in ("%s %s %s" % (it.get("repo", ""), it.get("path", ""),
-                                        it.get("description", ""))).lower()
-                    for t in query_tokens)]
+    # After the query filter, so "N already-tapped not shown" counts only
+    # repos this query would otherwise have shown.
+    items, tapped = registry.untapped_repos(matched)
     if args.as_json:
         # Tagged like the live rows above: this is the branch a script reaches
         # after a silent fall-through, and the two row shapes differ. Rows stay
