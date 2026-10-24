@@ -1098,9 +1098,10 @@ def cmd_onboard(argv) -> int:
                 raise BoostError(
                     "branch %s already exists in %s"
                     % (_PR_BRANCH, _tilde(repo)),
-                    hint="`git checkout %s` and rerun `boost onboard --pr` to "
-                         "commit onto it, or delete it with `git branch -D "
-                         "%s` and rerun" % (_PR_BRANCH, _PR_BRANCH))
+                    hint="open its PR with `git checkout %s && gh pr create "
+                         "--fill`, or check it out and rerun `boost onboard "
+                         "--pr -f` to commit onto it, or delete it with `git "
+                         "branch -D %s` and rerun" % (_PR_BRANCH, _PR_BRANCH))
 
     if args.dry_run:
         changes = 0

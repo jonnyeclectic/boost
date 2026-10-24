@@ -878,10 +878,11 @@ class TestOnboard:
         monkeypatch.setattr("boost_cli.commands.configuration.shutil.which",
                             lambda c: "/usr/bin/" + c)
         r = boost("onboard", "--repo", repo, "--pr", expect=1)
-        assert ("hint: `git checkout boost/onboard-skill-tracker` and rerun "
-                "`boost onboard --pr` to commit onto it, or delete it with "
-                "`git branch -D boost/onboard-skill-tracker` and rerun"
-                in " ".join(r.err.split()))
+        assert ("hint: open its PR with `git checkout "
+                "boost/onboard-skill-tracker && gh pr create --fill`, or check "
+                "it out and rerun `boost onboard --pr -f` to commit onto it, "
+                "or delete it with `git branch -D boost/onboard-skill-tracker` "
+                "and rerun" in " ".join(r.err.split()))
         assert not (repo / ".boost").exists()
 
     def test_pr_refuses_a_stale_git_lock_before_writing(
