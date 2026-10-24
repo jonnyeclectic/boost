@@ -108,98 +108,18 @@ _STACK_MARKERS = [
 _tilde = paths.tilde
 
 
-def _resolve_as_far_as_it_exists(path: Path) -> Path:
-    """Absolute ``path``, symlinks resolved down to its deepest real ancestor.
-
-    Plain ``resolve()`` is wrong on both sides of this comparison. The link's
-    target does not exist — that is what makes the link broken — and the store
-    dir does, so resolving only the one that can be resolved compares a real
-    path against a nominal one. On macOS that is not hypothetical: ``/tmp`` is
-    itself a symlink to ``/private/tmp``, so a genuine boost link read as
-    foreign and `heal` declined to repair anything.
-    """
-    path = Path(os.path.abspath(str(path)))
-    tail: list[str] = []
-    cur = path
-    while cur != cur.parent and not cur.exists():
-        tail.append(cur.name)
-        cur = cur.parent
-    # RuntimeError is not redundant with OSError here: Python 3.12's
-    # `Path.resolve()` raises RuntimeError("Symlink loop from ...") for a
-    # cycle even in non-strict mode, and RuntimeError is NOT an OSError
-    # subclass — 3.13+ raises OSError for the same input. See
-    # store.resolves_into_store for the identical split, caught the same way.
-    with suppress(OSError, RuntimeError):
-        cur = cur.resolve()
-    return cur.joinpath(*reversed(tail))
-
-
-def _norm(path: Path) -> str:
-    """``path`` as a comparable string, without resolving anything.
-
-    Strips Windows' extended-length prefix — ``os.readlink`` returns
-    ``\\\\?\\C:\\...`` for a link the store created while ``store_dir()`` is
-    spelled the ordinary way, so the two name one location with two strings —
-    and applies `os.path.normcase`, which folds case on Windows (where the
-    filesystem is case-insensitive) and is a no-op on POSIX.
-    """
-    # Strip BEFORE abspath: on a POSIX host a backslash path is not absolute,
-    # so abspath would prepend the cwd and move the prefix out of position —
-    # which matters because this must be testable off Windows.
-    text = str(path)
-    for prefix in ("\\\\?\\UNC\\", "\\\\?\\"):
-        if text.startswith(prefix):
-            text = text[len(prefix):]
-            break
-    return os.path.normcase(os.path.abspath(text))
-
-
-def _within(target: str, parent: str) -> bool:
-    """True if normalised ``target`` is ``parent`` or sits under it."""
-    return target == parent or target.startswith(parent.rstrip(os.sep) + os.sep)
-
-
-def _link_key(path: Path) -> str:
-    """``path`` resolved, then normalised into a comparable string.
-
-    Comparing `Path` objects directly is wrong on Windows, in two ways that
-    both read as "boost does not own its own link" and left `heal` refusing to
-    repair anything at all there:
-
-    * ``os.readlink`` returns the extended-length form (``\\\\?\\C:\\...``) for
-      a link the store created, while ``store_dir()`` is spelled the ordinary
-      way — same location, different string.
-    * The filesystem is case-insensitive, so ``C:\\Users`` and ``c:\\users``
-      are one directory and two unequal `Path`s.
-
-    `os.path.normcase` is a no-op on POSIX, so this stays exact where case is.
-    """
-    return _norm(_resolve_as_far_as_it_exists(path))
-
-
 def _owned_link(link: Path) -> bool:
     """True if ``link`` points into boost's canonical store.
 
     Ownership is read off the link itself rather than the lock, so it still
     answers correctly for a skill uninstalled mid-sweep or a lock that has gone
     missing — the two cases where a dangling link is most likely to exist.
+    It is :func:`store.points_into_store`, so heal and doctor agree with
+    uninstall, sync and clean about whose a link is: they used to keep a
+    resolving copy of their own, and a store reached through macOS ``/tmp``
+    was boost's to heal and nobody's to uninstall.
     """
-    try:
-        raw = Path(os.readlink(str(link)))
-    except OSError:
-        return False
-    target = raw if raw.is_absolute() else link.parent / raw
-    store = paths.store_dir()
-    # Spelled form first. A link boost made carries the store's own path, so
-    # this settles the ordinary case without resolving anything — and every
-    # platform quirk lives in resolution. Windows alone supplies three: the
-    # extended-length prefix, 8.3 short names, and case-insensitivity.
-    if _within(_norm(target), _norm(store)):
-        return True
-    # Resolved form second, for a store genuinely reached through a symlinked
-    # parent — macOS `/tmp` -> `/private/tmp` is the case that made this
-    # necessary rather than theoretical.
-    return _within(_link_key(target), _link_key(store))
+    return store.points_into_store(link)
 
 
 def _broken_links() -> tuple[list[Path], list[Path]]:
@@ -226,7 +146,8 @@ def _broken_links() -> tuple[list[Path], list[Path]]:
     theirs: list[Path] = []
     # Former dirs too (`agents.sweep_dirs`): repointing an agent's dir left
     # every link made under the old one unreachable by any other check.
-    for adir in agents.sweep_dirs():
+    sweep = agents.sweep_dirs()
+    for adir in sweep:
         # ``os.path``: ``Path.is_dir`` raises under a dotdir with no search
         # bit on Python 3.12 and 3.13, and doctor and heal exited 70 there.
         if not os.path.isdir(adir):  # noqa: FURB146
@@ -237,8 +158,11 @@ def _broken_links() -> tuple[list[Path], list[Path]]:
     # A native-store dir boost once linked into, before that agent's
     # `links_skills` went false: boost's own dangling links there are its to
     # remove, and anything else in it is none of this command's business.
+    swept = {agents.dir_identity(d) for d in sweep}
     for _agent, adir in agents.remembered_native_dirs():
-        if not os.path.isdir(adir):  # noqa: FURB146
+        # One already swept above, through another spelling, counts once.
+        if (not os.path.isdir(adir)  # noqa: FURB146
+                or agents.dir_identity(adir) in swept):
             continue
         ours.extend(link for link in sorted(adir.iterdir())
                     if link.is_symlink() and not link.exists()
@@ -2284,7 +2208,9 @@ def cmd_heal(argv):
         if dry:
             out.info("would remove broken link %s" % _tilde(link))
         else:
-            link.unlink()
+            # missing_ok: the sweep de-duplicates aliased dirs, but a link
+            # gone between the sweep and here is gone, not a crash.
+            link.unlink(missing_ok=True)
             out.ok("removed broken link %s" % out.plain(_tilde(link)))
         actions.append("unlink %s" % link.name)
     plan = store.sync_plan()
