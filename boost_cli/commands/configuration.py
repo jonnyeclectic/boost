@@ -207,7 +207,14 @@ def cmd_clean(argv) -> int:
         )
 
     configured = {t.safe_name for t in registry.list_taps()}
-    if paths.cache_dir().is_dir():
+    # With config.json unreadable or corrupt, the tap list is DEFAULTS' empty
+    # one, so every tap's cache read as stale and was deleted — on a file
+    # whose bytes, under a mode-000 config, still list every one of them.
+    cfg_err = config.check()
+    if cfg_err:
+        out.warn("left the tap caches alone: %s" % cfg_err,
+                 stream=sys.stderr, wrap=True)
+    elif paths.cache_dir().is_dir():
         # Skip boost's own derived artifacts. They live in the same directory and
         # end in .json, but no tap is named `rag_index` or `discovery`, so the
         # stem test alone called both stale and deleted them every run — see

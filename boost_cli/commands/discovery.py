@@ -34,6 +34,7 @@ from ..core import (
     installscan,
     integrity,
     journal,
+    jsonstate,
     lockfile,
     paths,
     prereq,
@@ -140,6 +141,12 @@ def cmd_search(argv):
         # query at all, so it gets the same answer and argparse's rc 2.
         p.error("the query is empty — give at least one search term")
     if not registry.list_taps():
+        cfg_err = config.check()
+        if isinstance(cfg_err, jsonstate.Unreadable):
+            # The taps may all be in it; `tap --defaults` is refused over it.
+            raise BoostError("%s — no taps are read, so nothing was searched"
+                             % cfg_err,
+                             hint=jsonstate.read_remedy(cfg_err, paths.tilde))
         raise BoostError("no taps configured — nothing to search",
                         hint="add the recommended registries with `boost tap --defaults`")
     # Full-content (RAG) search is the default: build the index on first use so

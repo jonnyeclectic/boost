@@ -3237,7 +3237,7 @@ def _refuse_unrecorded(name: str, existing: dict | None, force: bool,
     if not os.path.lexists(dest):
         return None
     integ = lockfile.check()
-    if integ.problem in ("corrupt", "schema"):
+    if integ.problem in ("corrupt", "unreadable", "schema"):
         hint = ("the lock file cannot be read — %s, and it will know whose "
                 "it is" % lockfile.remedy(integ))
     else:

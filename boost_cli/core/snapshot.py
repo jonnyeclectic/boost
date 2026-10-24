@@ -348,6 +348,8 @@ def lock_problem(root: Path) -> tuple[str, lockfile.Integrity] | None:
     elif integ.problem == "schema":
         why = "has a lock file in schema %r, which this boost does not read" % (
             integ.version,)
+    elif integ.problem == "unreadable":
+        why = "has a lock file boost cannot read"
     else:
         why = "has a corrupt lock file"
     return why, integ

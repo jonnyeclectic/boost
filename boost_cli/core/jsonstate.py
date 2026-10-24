@@ -17,9 +17,60 @@ before it writes the replacement.
 """
 from __future__ import annotations
 
+import errno
 import json
 import sys
+from collections.abc import Callable
 from pathlib import Path
+
+
+class Unreadable(str):
+    """The message :func:`read_object`/:func:`read_list` return for a file
+    that exists but could not be *read* — an ``OSError`` such as ``EACCES``
+    (mode 000) or ``EISDIR`` (a directory sitting on the name).
+
+    Still a ``str``, so every caller that formats the message keeps working;
+    one that must act on the difference asks ``isinstance(err, Unreadable)``.
+    The difference is the whole point: corrupt bytes are damage, and moving
+    them aside to write a fresh file loses nothing, but an unreadable file's
+    bytes may be perfectly good — quarantining them to start from defaults
+    drops every record they hold, and a ``.corrupt`` backup cannot even be
+    copied from a file that cannot be read. The fix is a permission or a
+    stray directory, never a rollback (:func:`read_remedy`).
+    """
+
+    path: Path
+    errno: int | None
+    reason: str  # the OSError's strerror, for "could not read X (reason)"
+
+
+def _unreadable(path: Path, exc: OSError) -> Unreadable:
+    # The strerror, not str(exc): that repeats the path ("[Errno 13]
+    # Permission denied: '/…/config.json'") right after naming it.
+    reason = exc.strerror or str(exc)
+    msg = Unreadable("%s: cannot be read (%s)" % (path, reason))
+    msg.path = path
+    msg.errno = exc.errno
+    msg.reason = reason
+    return msg
+
+
+def read_remedy(err: Unreadable,
+                show: Callable[[Path], str] = str) -> str:
+    """The one step that makes the file behind ``err`` readable again.
+
+    A directory on the name is moved aside (Windows reports reading one as
+    ``EACCES``, so the path is asked too); anything else is a permission,
+    cleared by ``chmod u+r``. `show` words the path (``paths.tilde``).
+    """
+    p = err.path
+    try:
+        is_dir = err.errno == errno.EISDIR or p.is_dir()
+    except OSError:
+        is_dir = False
+    if is_dir:
+        return "move the directory %s aside (it is not a file)" % show(p)
+    return "make it readable with `chmod u+r %s`" % show(p)
 
 
 def strip_comments(text: str) -> str:
@@ -78,7 +129,9 @@ def read_object(path: Path, jsonc: bool = False) -> tuple[dict | None, str | Non
     exists but can't be read as one — unreadable, not UTF-8, invalid JSON, or
     valid JSON that isn't an object — where ``message`` names the file and
     the underlying error so a caller can warn instead of quietly treating
-    corruption the same as "nothing here yet".
+    corruption the same as "nothing here yet". A read that failed (an
+    ``OSError``) is an :class:`Unreadable` message, not corruption: the bytes
+    were never seen, so nothing may be written over them.
 
     Not UTF-8 is its own branch because a failed decode raises
     ``UnicodeDecodeError``, a ``ValueError`` that is neither an ``OSError``
@@ -98,7 +151,7 @@ def read_object(path: Path, jsonc: bool = False) -> tuple[dict | None, str | Non
     try:
         text = path.read_text(encoding="utf-8-sig")
     except OSError as exc:
-        return None, "%s: %s" % (path, exc)
+        return None, _unreadable(path, exc)
     except UnicodeDecodeError as exc:
         return None, "%s: not valid UTF-8 (%s)" % (path, exc)
     try:
@@ -125,7 +178,7 @@ def read_list(path: Path) -> tuple[list | None, str | None]:
     try:
         text = path.read_text(encoding="utf-8-sig")
     except OSError as exc:
-        return None, "%s: %s" % (path, exc)
+        return None, _unreadable(path, exc)
     except UnicodeDecodeError as exc:
         return None, "%s: not valid UTF-8 (%s)" % (path, exc)
     try:
@@ -202,7 +255,17 @@ def save(path: Path, text: str, *, corrupt: bool, noun: str = "file",
     half-written file. `noun` and `show` word the quarantine warning the way
     each caller always has.
     """
+    from ..errors import BoostError
     from . import output, paths, util
+    _, err = read_object(path)
+    if isinstance(err, Unreadable):
+        # Not corrupt: quarantining it would set good bytes aside and
+        # replace them with a file built from the empty view the failed
+        # read produced.
+        raise BoostError("could not read %s (%s) — boost will not write over "
+                         "a file it cannot read" % (show(path), err.reason),
+                         hint="%s, then re-run" % read_remedy(err, show),
+                         wrap=wrap)
     paths.create_dirs((*paths.boost_dirs(), path.parent))
     try:
         if corrupt:

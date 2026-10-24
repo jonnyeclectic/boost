@@ -63,8 +63,9 @@ def _require_lock_integrity() -> None:
         raise BoostError(
             "lock file missing — the store has skills but nothing is recorded",
             hint="run `boost sync`")
-    if integ.problem == "corrupt":
-        raise BoostError("lock file is corrupt — %s" % lockfile.remedy(integ))
+    if integ.problem in ("corrupt", "unreadable"):
+        raise BoostError("lock file %s — %s"
+                         % (lockfile.fault(integ), lockfile.remedy(integ)))
     if lockfile.newer(integ):
         raise BoostError("lock file %s" % lockfile.fault(integ),
                          hint=lockfile.remedy(integ))

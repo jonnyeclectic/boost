@@ -36,6 +36,7 @@ from ..core import (
     imperative,
     integrity,
     journal,
+    jsonstate,
     lockfile,
     logs,
     paths,
@@ -707,7 +708,14 @@ def cmd_doctor(argv):
     # back empty and the verdict used to be "ready to set up", exit 0, on a
     # machine whose clones were all still on disk. Say what was lost instead.
     cfg_err = config.check()
-    if cfg_err:
+    if isinstance(cfg_err, jsonstate.Unreadable):
+        # Not corrupt: the bytes may be intact, so the fix is the permission,
+        # and re-adding taps is refused until it is made (config.save).
+        bad("config", "%s — boost is running on defaults, so no taps or "
+            "settings are read; %s. boost will not write config.json until "
+            "it can read it" % (cfg_err, jsonstate.read_remedy(
+                cfg_err, paths.tilde)), wrap=True)
+    elif cfg_err:
         # Each clone named with the command that re-adds it: "re-add your
         # taps" named none, though every clone's origin says where it came
         # from.
@@ -961,11 +969,7 @@ def cmd_doctor(argv):
         else:
             rep.note("lockfile", "no lock file yet — nothing installed")
             lock_ok = True
-    elif integ.problem == "corrupt":
-        bad("lockfile", "lock file is corrupt — %s" % lockfile.remedy(integ),
-            wrap=True)
-        lock_ok = False
-    elif lockfile.newer(integ):
+    elif integ.problem in ("corrupt", "unreadable") or lockfile.newer(integ):
         bad("lockfile", "lock file %s — %s"
             % (lockfile.fault(integ), lockfile.remedy(integ)), wrap=True)
         lock_ok = False
@@ -2526,7 +2530,11 @@ def cmd_heal(argv):
     # and never covered by an all-clear: with it unreadable, every check
     # above ran against DEFAULTS.
     cfg_err = config.check()
-    if cfg_err:
+    if isinstance(cfg_err, jsonstate.Unreadable):
+        out.warn("%s — heal does not change permissions: boost is running on "
+                 "defaults until you %s" % (cfg_err, jsonstate.read_remedy(
+                     cfg_err, paths.tilde)), wrap=True)
+    elif cfg_err:
         out.warn("%s — heal cannot repair it: boost is running on defaults "
                  "until the file is fixed or your taps are re-added"
                  % cfg_err, wrap=True)
