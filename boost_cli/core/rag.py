@@ -333,6 +333,34 @@ def _tap_commits() -> dict[str, str]:
     return commits
 
 
+def _stamp_of(path: Path) -> list[int] | None:
+    """A cache file's ``[st_mtime_ns, st_size]``, or None when it cannot be stat'd.
+
+    A list, not a tuple, because it round-trips through the index JSON and
+    ``[1, 2] != (1, 2)`` — comparing a stored stamp with a fresh tuple would
+    call every index stale and rebuild it on every search.
+    """
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    return [st.st_mtime_ns, st.st_size]
+
+
+def _tap_stamps() -> dict[str, list[int]]:
+    """Map safe tap name -> the stamp of the catalog cache this build consumed.
+
+    Kept apart from :func:`_tap_commits` so a caller faking one (tests do)
+    still gets the other.
+    """
+    stamps: dict[str, list[int]] = {}
+    for t in registry.list_taps():
+        stamp = _stamp_of(t.cache_file)
+        if stamp is not None:
+            stamps[t.safe_name] = stamp
+    return stamps
+
+
 def entry_path(entry: dict, tap_paths: dict[str, Path] | None = None
                ) -> Path | None:
     """Where a catalog entry's defining file actually lives on this machine.
@@ -556,6 +584,10 @@ def build(entries: list[dict] | None = None, force: bool = False) -> dict:
     entries = catalog.all_entries() if entries is None else entries
     tap_paths = _tap_paths()
     commits = _tap_commits()
+    # After the caches were loaded, not before: `load_tap` may rewrite a stale
+    # cache while loading it, and a stamp taken earlier would then call this
+    # index stale on the very next search.
+    stamps = _tap_stamps()
 
     old = _load_raw()
     reused_safe: set = set()
@@ -580,7 +612,7 @@ def build(entries: list[dict] | None = None, force: bool = False) -> dict:
              if e["tap"].replace("/", "__") not in reused_safe]
     docs = kept + _make_docs(fresh, tap_paths)
 
-    saved = _save(docs, commits)
+    saved = _save(docs, commits, stamps)
     reindexed = sorted({e["tap"] for e in fresh})
     # `reindexed` names taps by their real name ("owner/repo"); `reused_safe`
     # is keyed by the safe name ("owner__repo") that `_tap_commits` uses to
@@ -922,7 +954,8 @@ def postings_fault() -> str | None:
     return "the BM25 postings store is unreadable"
 
 
-def _save(docs: list[dict], commits: dict[str, str]) -> dict:
+def _save(docs: list[dict], commits: dict[str, str],
+          stamps: dict[str, list[int]] | None = None) -> dict:
     """Persist the index and return the ``stats`` block it wrote.
 
     Returning the stats rather than recomputing them in :func:`build` keeps one
@@ -959,6 +992,10 @@ def _save(docs: list[dict], commits: dict[str, str]) -> dict:
         "engine": ENGINE,
         "generated": _now(),
         "commits": commits,
+        # Each consumed tap cache's [mtime_ns, size], which `stale()` compares
+        # for equality. Always written, even empty: key presence is what tells
+        # `stale()` this index can be judged by stamps at all.
+        "stamps": stamps or {},
         "params": {"chunk_chars": CHUNK_CHARS, "overlap": OVERLAP,
                    "k1": K1, "b": B},
         "stats": stats,
@@ -1322,13 +1359,20 @@ def stale() -> bool:
 
     * the tap set must still match the set the index recorded (catches a tap
       added or removed, neither of which need touch an existing cache file);
-    * no tap's catalog cache may be newer than the index (catches a tap whose
-      contents moved, since ``build()`` writes the index only after every
-      catalog cache it consumed).
+    * every tap's catalog cache must still carry the ``(mtime_ns, size)``
+      stamp it had when ``build()`` consumed it (catches a tap whose contents
+      moved and were re-cached).
 
-    The residual gap is a cache rewritten inside the same filesystem mtime tick
-    as the index; the next tap operation catches it, and paying a full parse on
-    every search to close it is the worse trade.
+    The stamp is compared for **equality**, never ordered against the index's
+    own mtime. "Cache newer than index" only works while the clock never runs
+    backwards: an index built while the clock ran ahead stayed "fresh" until
+    the wall clock caught up with it, and every tap update in between went
+    unsearchable while doctor said healthy. Equality also closes the gap where
+    a cache was rewritten inside the index's own mtime tick.
+
+    An index written before stamps were recorded has no ``stamps`` key and is
+    judged the old way, so upgrading does not force a full rebuild; its next
+    build records stamps.
     """
     raw = _load_raw()
     if raw is None:
@@ -1336,6 +1380,14 @@ def stale() -> bool:
     taps = registry.list_taps()
     if {t.safe_name for t in taps} != set(raw.get("commits") or {}):
         return True
+    stamps = raw.get("stamps")
+    if isinstance(stamps, dict):
+        # A tap recorded with no stamp had no cache at build time; one that
+        # has a cache now is new content. A recorded stamp whose file is gone
+        # is a change too. `.get` on both sides makes those two cases fall out
+        # of the same inequality.
+        return any(_stamp_of(t.cache_file) != stamps.get(t.safe_name)
+                   for t in taps)
     try:
         built_at = index_path().stat().st_mtime
     except OSError:
