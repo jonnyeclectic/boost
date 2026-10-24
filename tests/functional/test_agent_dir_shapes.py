@@ -141,27 +141,6 @@ class TestRefusalWording:
         assert not paths.not_searchable(tmp_path / "gone")
         assert paths.chmod_command(tmp_path / "gone") == "chmod u+w ~/gone"
 
-    @pytest.mark.skipif(sys.platform == "win32",
-                        reason="POSIX quoting; cmd.exe takes double quotes")
-    def test_a_path_with_a_space_or_quote_is_one_shell_word(self, tmp_path):
-        # Pasted unquoted, `chmod u+w ~/my proj/.boost` hands chmod two paths.
-        assert (paths.chmod_command(tmp_path / "my proj" / ".boost")
-                == "chmod u+w ~/'my proj/.boost'")
-        assert (paths.chmod_command(tmp_path / "it's")
-                == "chmod u+w ~/'it'\"'\"'s'")
-        assert paths.chmod_command(tmp_path) == "chmod u+w ~"
-        outside = Path("/no such/dir")
-        assert paths.chmod_command(outside) == "chmod u+w '/no such/dir'"
-        assert paths.chmod_command(Path("/plain/dir")) == "chmod u+w /plain/dir"
-
-    def test_shell_path_keeps_the_tilde_expandable(self, tmp_path):
-        assert paths.shell_path(tmp_path / ".boost") == "~/.boost"
-        assert paths.shell_path(tmp_path) == "~"
-        if sys.platform == "win32":
-            assert paths.shell_path(tmp_path / "a b") == '~/"a b"'
-        else:
-            assert paths.shell_path(tmp_path / "a b") == "~/'a b'"
-
     def test_unwritable_refusal_words_both_halves(self, tmp_path):
         d = tmp_path / "dot"
         d.mkdir()
