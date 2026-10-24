@@ -10,7 +10,7 @@ No**, the offer is **scoped** to hosts where boost actually registered, and
 `BOOST_NO_RULE` is checked **before** `out.confirm`.
 
 That last one is not a style preference. `out.confirm` returns True whenever
-`BOOST_ASSUME_YES` is set or `--yes`/`-y` appears anywhere in `sys.argv` — and
+`BOOST_ASSUME_YES` is set — and
 the test fixtures set exactly that, as does every unattended provisioning
 script. Move the guard below the confirm and the offer stops being an offer:
 every existing `boost mcp register` test, and every CI run that ever calls it,
@@ -185,6 +185,33 @@ class TestConsentIsRealRatherThanProcedural:
         out = capsys.readouterr().out
         assert lockfile.get_rule(RULE) is not None
         assert ("boost uninstall %s" % RULE) in out
+
+
+class TestTheYesFlagIsExplicit:
+    """`boost mcp register -y` is the flag the decline hint names.
+
+    The hint said "pass -y" while `boost mcp` rejected -y with rc 2. Now the
+    parsed flag is threaded in as ``yes`` — and nothing else answers for it.
+    """
+
+    def test_yes_installs_and_still_prints_the_body_first(
+            self, offering, monkeypatch, capsys):
+        monkeypatch.delenv("BOOST_ASSUME_YES", raising=False)
+        configuration._offer_boost_first(["claude"], yes=True)
+        out = capsys.readouterr().out
+        assert lockfile.get_rule(RULE) is not None
+        assert out.count("  | ") == len(_body_lines())
+        assert "Not installed" not in out
+
+    def test_a_y_in_argv_alone_does_not_install(
+            self, offering, monkeypatch, capsys):
+        monkeypatch.delenv("BOOST_ASSUME_YES", raising=False)
+        monkeypatch.setattr("sys.argv", ["boost", "mcp", "register", "-y"])
+        configuration._offer_boost_first(["claude"])
+        assert lockfile.get_rule(RULE) is None
+        out = capsys.readouterr().out
+        assert "pass -y or set BOOST_ASSUME_YES=1 to skip this prompt" in out
+        assert "Not installed" in out
 
 
 class TestInstallScopeMatchesTheConsentTargets:

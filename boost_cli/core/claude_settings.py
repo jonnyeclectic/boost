@@ -389,8 +389,7 @@ def _snapshot(p: Path, prior: bytes, scope: str, host: str) -> Path:
 
 
 def _prune_history() -> None:
-    snaps = sorted(_history_dir().glob("*.json"),
-                   key=lambda f: (f.stat().st_mtime, f.name))
+    snaps = util.sorted_history(_history_dir().glob("*.json"))
     for old in snaps[:-HISTORY_KEEP]:
         with contextlib.suppress(OSError):
             old.unlink()

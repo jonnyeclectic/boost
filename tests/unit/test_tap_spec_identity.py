@@ -275,3 +275,17 @@ class TestRepoWithNoCommits:
         summary = gitutil.pull(clone)
         assert summary.startswith("(no commits) → ")
         assert summary.endswith(gitutil.head_commit(clone)[:7])
+
+
+@pytest.mark.parametrize("spec", ["file://[x", "file://[::1/repo",
+                                  "https://[x/y", "x://["])
+def test_an_unbalanced_bracket_in_a_url_host_is_not_a_crash(sandbox, spec):
+    # urlparse raises ValueError("Invalid IPv6 URL") on these; fuzz.yml's
+    # fuzz_registry found it on 2026-10-24 (run 40078767696). parse_spec must
+    # answer with a pair or a BoostError, never an uncaught ValueError.
+    assert registry._file_url_path(spec) is None
+    try:
+        _name, url = registry.parse_spec(spec)
+    except BoostError:
+        return
+    assert url == spec

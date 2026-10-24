@@ -99,6 +99,8 @@ class TestRecovery:
     def test_ensure_heals_a_corrupt_store(self, corpus, monkeypatch):
         monkeypatch.setattr(rag, "stale", lambda: False)
         monkeypatch.setattr(rag.registry, "list_taps", lambda: ["acme/skills"])
+        # The fake taps are bare names with no cache file to stamp.
+        monkeypatch.setattr(rag, "_tap_stamps", dict)
         monkeypatch.setattr(rag.catalog, "all_entries", lambda: corpus)
         _corrupt()
         assert rag.ensure() is True
