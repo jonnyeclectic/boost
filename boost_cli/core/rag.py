@@ -334,6 +334,11 @@ def _tap_commits() -> dict[str, str]:
     return commits
 
 
+# Recorded for a tap whose documents predate format tracking; no cache's
+# ``format`` is negative, so `_reusable` never matches it.
+_UNKNOWN_FORMAT = -1
+
+
 def _tap_formats() -> dict[str, int]:
     """Map safe tap name -> the ``CACHE_FORMAT`` its catalog cache was scanned at.
 
@@ -361,15 +366,19 @@ def _reusable(safe: str, commit: str, old: dict,
               formats: dict[str, int]) -> bool:
     """Whether ``safe``'s documents in index ``old`` still describe its cache.
 
-    Same commit, and — when the old index recorded one — the same cache
-    format. A tap the old index recorded no format for (an index written
-    before formats were, or a shard import that could not vouch) is judged
-    by commit alone, so upgrading does not discard every reused tap at once.
+    Same commit, and the same cache format. An index with no ``formats``
+    key at all was written before formats were recorded, so nothing says
+    which scanner its documents came from: it is rebuilt once, or the first
+    CACHE_FORMAT bump after upgrading would hit this bug one last time. A
+    tap missing from a recorded map (a shard import whose tap had no
+    readable cache) is judged by commit alone.
     """
     if not commit or (old.get("commits") or {}).get(safe) != commit:
         return False
     old_formats = old.get("formats")
-    if not isinstance(old_formats, dict) or safe not in old_formats:
+    if not isinstance(old_formats, dict):
+        return False
+    if safe not in old_formats:
         return True
     return old_formats[safe] == formats.get(safe)
 
@@ -1261,6 +1270,12 @@ def import_shards(batch: Sequence[tuple[dict, str]]
         old_formats = old.get("formats")
         if isinstance(old_formats, dict):
             formats = dict(old_formats)
+        else:
+            # An index from before formats were recorded: its kept taps are
+            # unvouched, and leaving them out of the map written below would
+            # let `_reusable` judge them by commit alone. A format no cache
+            # carries makes the next build re-index them once instead.
+            formats = dict.fromkeys(old.get("commits") or {}, _UNKNOWN_FORMAT)
         old_stamps = old.get("stamps")
         if isinstance(old_stamps, dict):
             stamps = dict(old_stamps)

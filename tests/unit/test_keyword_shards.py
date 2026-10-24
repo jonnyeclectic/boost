@@ -246,6 +246,20 @@ class TestImport:
         # format, so that build does not throw the import away.
         assert rag._load_raw()["formats"] == {"o__b": 8, "o__a": 9}
 
+    def test_an_import_into_a_pre_format_index_leaves_kept_taps_unvouched(
+            self, sandbox, monkeypatch):
+        rag._save([], {"o__b": B}, None)
+        assert "formats" not in rag._load_raw()
+        monkeypatch.setattr(rag, "_tap_formats",
+                            lambda: {"o__a": 9, "o__b": 9})
+        rag.import_shards([(_shard(), A)])
+        # o__b's docs were built by an unknown scanner: recorded as such, so
+        # the next build re-indexes it rather than reusing it by commit.
+        assert rag._load_raw()["formats"] == {"o__b": rag._UNKNOWN_FORMAT,
+                                              "o__a": 9}
+        assert not rag._reusable("o__b", B, rag._load_raw(), {"o__b": 9})
+        assert rag._reusable("o__a", A, rag._load_raw(), {"o__a": 9})
+
     def test_an_import_into_no_index_records_only_the_imported_format(
             self, sandbox, monkeypatch):
         monkeypatch.setattr(rag, "_tap_formats", lambda: {"o__z": 9})

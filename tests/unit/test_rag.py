@@ -1157,9 +1157,9 @@ class TestIncremental:
         assert stats["reused"] == ["acme/skills"]
         assert stats["reindexed"] == []
 
-    def test_an_index_that_recorded_no_format_is_judged_by_commit(
+    def test_a_tap_missing_from_the_recorded_formats_is_judged_by_commit(
             self, corpus, monkeypatch, tmp_path):
-        # Upgrading must not discard every reused tap at once.
+        # A shard import whose tap had no readable cache records no format.
         _root, entries = corpus
         self._cached_tap(monkeypatch, tmp_path, 9)
         monkeypatch.setattr(rag, "_tap_formats", dict)
@@ -1169,6 +1169,23 @@ class TestIncremental:
                             lambda: {"acme__skills": 9})
         stats = rag.build(entries=entries)
         assert stats["reused"] == ["acme/skills"]
+
+    def test_an_index_written_before_formats_rebuilds_once(
+            self, corpus, monkeypatch, tmp_path):
+        # No `formats` key: nothing says which scanner built these docs.
+        _root, entries = corpus
+        self._cached_tap(monkeypatch, tmp_path, 9)
+        rag.build(entries=entries, force=True)
+        raw = rag._load_raw()
+        del raw["formats"]
+        rag._save(rag._kept_docs(raw, {"acme__skills"}), raw["commits"],
+                  raw["stamps"])
+        rag._CACHE.clear()
+        assert "formats" not in rag._load_raw()
+        stats = rag.build(entries=entries)
+        assert stats["reindexed"] == ["acme/skills"]
+        assert stats["reused"] == []
+        assert rag.build(entries=entries)["reused"] == ["acme/skills"]
 
     def test_a_cache_that_lost_its_format_reindexes(
             self, corpus, monkeypatch, tmp_path):
