@@ -265,6 +265,15 @@ def written_agent_names(kind: str | None, entry: dict | None) -> list[str]:
     same predicate (:func:`skill_base`): it used to pass through, so with
     cursor disabled `boost list` still named cursor for every skill while
     dropping it for every rule, and doctor named only the rules.
+
+    A row marked ``unwritable`` is a *refusal* install recorded, not a file:
+    the agent's dir (or something in the way) stopped the write, and install
+    said "not written". It is dropped here too, so `list`, `info` and `stats`
+    agree with install and with `doctor`, which names that row "was not
+    written". :func:`reaches_no_agent` keeps it, deliberately: an item whose
+    every row was refused is fixed by a `chmod` and `boost sync`, which
+    doctor names, not by enabling an agent. So its ``True`` still implies
+    ``[]`` here, and the converse need not hold.
     """
     if not entry:
         return []
@@ -274,8 +283,9 @@ def written_agent_names(kind: str | None, entry: dict | None) -> list[str]:
         return [a for a in lockfile.agent_names(kind, entry)
                 if agents.materialization_is_written(kind, base, a)]
     written = [m for m in entry.get("materializations") or []
-               if agents.materialization_is_written(kind, entry.get("base"),
-                                                    m.get("agent"))]
+               if not m.get("unwritable")
+               and agents.materialization_is_written(kind, entry.get("base"),
+                                                     m.get("agent"))]
     return lockfile.agent_names(kind, {"materializations": written})
 
 
