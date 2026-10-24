@@ -15,6 +15,8 @@ import os
 import re
 import sqlite3
 import sys
+import time
+import types
 from pathlib import Path
 from unittest import mock
 
@@ -486,22 +488,28 @@ class TestEnsure:
 class _StatTap:
     """A tap whose cache_file reports a mtime we control."""
 
-    def __init__(self, name, mtime=None):
+    def __init__(self, name, mtime=None, size=0, mtime_ns=None):
         self.name = name
         self.safe_name = name.replace("/", "__")
         self._mtime = mtime
+        self._size = size
+        self._mtime_ns = mtime_ns
 
     @property
     def cache_file(self):
-        mtime = self._mtime
+        mtime, size, mtime_ns = self._mtime, self._size, self._mtime_ns
 
         class _F:
             @staticmethod
             def stat():
                 if mtime is None:
                     raise OSError("no cache file")
-                return os.stat_result(
-                    (0, 0, 0, 0, 0, 0, 0, 0, int(mtime), 0))
+                # Not os.stat_result: built from a 10-tuple it leaves
+                # st_mtime_ns as None, which no real stat ever returns.
+                return types.SimpleNamespace(
+                    st_mtime=float(mtime), st_size=size,
+                    st_mtime_ns=(int(mtime * 1e9) if mtime_ns is None
+                                 else mtime_ns))
         return _F
 
 
@@ -561,6 +569,21 @@ class TestStale:
                   taps=[_StatTap("a/b", mtime=100)], built_at=100.0)
         assert rag.stale() is False
 
+    def test_unstamped_index_from_the_future_is_stale(self, monkeypatch):
+        # An index written before stamps existed, built while the clock ran
+        # ahead: no cache can be newer than it, so only its future mtime
+        # betrays it. Without this an upgrading user stays stuck.
+        self._fix(monkeypatch, stored={"a__b": "c1"},
+                  taps=[_StatTap("a/b", mtime=50)],
+                  built_at=time.time() + 365 * 86400)
+        assert rag.stale() is True
+
+    def test_unstamped_index_from_just_now_is_fresh(self, monkeypatch):
+        self._fix(monkeypatch, stored={"a__b": "c1"},
+                  taps=[_StatTap("a/b", mtime=50)],
+                  built_at=time.time() - 5)
+        assert rag.stale() is False
+
     def test_unreadable_index_mtime_is_stale(self, monkeypatch):
         monkeypatch.setattr(rag, "_load_raw", lambda: {"commits": {}})
         monkeypatch.setattr(rag.registry, "list_taps", lambda: [])
@@ -585,6 +608,81 @@ class TestStale:
         monkeypatch.setattr(rag, "_load_raw", lambda: {"commits": None})
         monkeypatch.setattr(rag.registry, "list_taps",
                             lambda: [_StatTap("a/b", mtime=1)])
+        assert rag.stale() is True
+
+    # -- stamps: an index that recorded each cache's (mtime_ns, size) is judged
+    # by equality, so the clock running backwards cannot hide a change.
+
+    def _stamped(self, monkeypatch, stamps, taps):
+        monkeypatch.setattr(rag, "_load_raw", lambda: {
+            "commits": {t.safe_name: "c" for t in taps}, "stamps": stamps})
+        monkeypatch.setattr(rag.registry, "list_taps", lambda: list(taps))
+
+    def test_matching_stamp_is_fresh(self, monkeypatch):
+        self._stamped(monkeypatch, {"a__b": [5, 7]},
+                      [_StatTap("a/b", mtime=1, size=7, mtime_ns=5)])
+        assert rag.stale() is False
+
+    def test_older_cache_with_a_changed_stamp_is_stale(self, monkeypatch):
+        # The reported bug: the index was built while the clock ran ahead, so
+        # the re-cached tap is *older* than it — `>` said fresh forever.
+        self._stamped(monkeypatch, {"a__b": [9_000, 7]},
+                      [_StatTap("a/b", mtime=1, size=7, mtime_ns=5)])
+        assert rag.stale() is True
+
+    def test_size_only_change_is_stale(self, monkeypatch):
+        # A rewrite inside the same mtime tick still changes the size.
+        self._stamped(monkeypatch, {"a__b": [5, 7]},
+                      [_StatTap("a/b", mtime=1, size=8, mtime_ns=5)])
+        assert rag.stale() is True
+
+    def test_stamped_cache_that_vanished_is_stale(self, monkeypatch):
+        self._stamped(monkeypatch, {"a__b": [5, 7]}, [_StatTap("a/b")])
+        assert rag.stale() is True
+
+    def test_cache_appearing_after_an_unstamped_build_is_stale(self, monkeypatch):
+        self._stamped(monkeypatch, {},
+                      [_StatTap("a/b", mtime=1, size=7, mtime_ns=5)])
+        assert rag.stale() is True
+
+    def test_no_cache_then_or_now_is_fresh(self, monkeypatch):
+        self._stamped(monkeypatch, {}, [_StatTap("a/b")])
+        assert rag.stale() is False
+
+    def test_stamps_decide_even_when_the_index_mtime_is_unreadable(
+            self, monkeypatch):
+        # The stamp path never asks for the index's own mtime.
+        self._stamped(monkeypatch, {"a__b": [5, 7]},
+                      [_StatTap("a/b", mtime=1, size=7, mtime_ns=5)])
+
+        class _P:
+            @staticmethod
+            def stat():
+                raise OSError("gone")
+        monkeypatch.setattr(rag, "index_path", lambda: _P)
+        assert rag.stale() is False
+
+    def test_real_build_records_stamps_and_ignores_a_future_index_mtime(
+            self, corpus, monkeypatch, tmp_path):
+        # End to end over real files: build, push the index's mtime a year
+        # into the future (built while the clock ran ahead), rewrite the tap's
+        # cache — stale() must say so even though the cache is "older".
+        _root, entries = corpus
+        cache = tmp_path / "acme__skills.json"
+        cache.write_text('{"commit": "c1"}', encoding="utf-8")
+        tap = types.SimpleNamespace(name="acme/skills",
+                                    safe_name="acme__skills", cache_file=cache)
+        monkeypatch.setattr(rag.registry, "list_taps", lambda: [tap])
+        rag.build(entries=entries, force=True)
+        st = cache.stat()
+        raw = json.loads(rag.index_path().read_text(encoding="utf-8"))
+        assert raw["stamps"] == {"acme__skills": [st.st_mtime_ns, st.st_size]}
+        assert rag.stale() is False
+        future = time.time() + 365 * 86400
+        os.utime(rag.index_path(), (future, future))
+        rag._CACHE.clear()
+        assert rag.stale() is False
+        cache.write_text('{"commit": "c2-moved"}', encoding="utf-8")
         assert rag.stale() is True
 
     def test_fresh_after_a_real_build(self, corpus, monkeypatch):
@@ -660,6 +758,8 @@ class TestAnIndexBoostCannotSave:
         # frontmatter at exit 0 instead of exiting 1 on a cold cache.
         _root, entries = corpus
         monkeypatch.setattr(registry, "list_taps", lambda: ["a-tap"])
+        # The fake taps are bare names with no cache file to stamp.
+        monkeypatch.setattr(rag, "_tap_stamps", dict)
         monkeypatch.setattr(rag.catalog, "all_entries", lambda: entries)
         build, raised = rag.build, []
 

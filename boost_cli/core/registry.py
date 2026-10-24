@@ -256,7 +256,10 @@ def _file_url_path(spec: str) -> Path | None:
     Only an empty or `localhost` host is this machine; `file://otherhost/…`
     stays a URL for git to judge.
     """
-    u = urllib.parse.urlparse(spec)
+    try:
+        u = urllib.parse.urlparse(spec)
+    except ValueError:      # "Invalid IPv6 URL": an unbalanced `[` in the host
+        return None
     if u.scheme.lower() != "file" or u.netloc.lower() not in ("", "localhost"):
         return None
     return Path(urllib.request.url2pathname(u.path))
@@ -598,7 +601,7 @@ def add(spec: str, curated: bool = False, at: str | None = None) -> Tap:
         raise BoostError("%r is not a full commit SHA" % at,
                          hint="pin with the 40-character hash a manifest names")
     tap = Tap(name=name, url=url, curated=curated)
-    paths.ensure_dirs()
+    paths.require_dirs()
     _clear_path(tap.path)
     gitutil.clone_shallow(url, tap.path)
     if at:
@@ -1058,7 +1061,7 @@ def add_many(specs: list[str], curated: bool = False,
     if not specs:
         return []
     config.refuse_unreadable()      # before any clone, as in `add`
-    paths.ensure_dirs()
+    paths.require_dirs()
     pins = pins or {}
     results: list[dict] = []
     todo: list[str] = []
