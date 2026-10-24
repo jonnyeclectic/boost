@@ -63,6 +63,10 @@ class TestWithin:
         assert not store._contains(os.sep.join(["", "a", "b"]),
                                    os.sep.join(["", "a"]))
 
+    def test_a_root_spelled_with_a_trailing_separator_still_contains(self):
+        root = os.sep.join(["", "a", "b"]) + os.sep
+        assert store._contains(root, os.sep.join(["", "a", "b", "c"]))
+
     def test_no_common_root_is_outside_not_a_crash(self):
         # commonpath raises ValueError mixing absolute and relative paths
         # (and, on Windows, two drives): outside, never an exception.

@@ -7296,9 +7296,14 @@ def _contains(root_s: str, target_s: str) -> bool:
     try:
         # ValueError for paths with no common root — on Windows, two different
         # drives — which means "outside", not "crash out of the delete guard".
-        return os.path.commonpath([target_s, root_s]) == root_s
+        # Compare like with like: on Windows `commonpath` hands back
+        # backslashes (and folds nothing), so a forward-slash or mixed-case
+        # root never equalled it and a path was not within itself.
+        common = os.path.commonpath([target_s, root_s])
     except ValueError:
         return False
+    return os.path.normcase(common) == os.path.normcase(
+        os.path.normpath(root_s))
 
 
 def resolve_as_far_as_it_exists(path: Path) -> Path:
