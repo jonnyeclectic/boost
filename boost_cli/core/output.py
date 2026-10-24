@@ -76,6 +76,23 @@ def stdin_is_tty(stream: object = _STDIN) -> bool:
         return False
 
 
+def tolerate_undecodable_stdin(stream: object = _STDIN) -> None:
+    """Make a line read from stdin replace bytes it cannot decode.
+
+    Python 3.12–3.14 open a piped stdin with ``errors="strict"`` outside UTF-8
+    mode, so one Latin-1 byte (``printf 'caf\\xe9' | boost chat``) raised
+    UnicodeDecodeError out of ``input()`` and into the crash handler. A
+    question with a U+FFFD in it is still a question. A stream that cannot be
+    reconfigured (closed, already read, not a TextIOWrapper) is left alone.
+    """
+    if stream is _STDIN:
+        stream = sys.stdin
+    if getattr(stream, "errors", None) != "strict":
+        return
+    with contextlib.suppress(AttributeError, ValueError, OSError):
+        stream.reconfigure(errors="replace")  # type: ignore[attr-defined]
+
+
 def use_color(stream=None) -> bool:
     """True when ANSI color should be emitted on `stream` (default stdout).
 

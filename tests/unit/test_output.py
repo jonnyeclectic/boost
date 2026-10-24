@@ -2000,6 +2000,42 @@ def _confirm_hint_line() -> str:
     return output._CONFIRM_BYPASS_HINT + "\n"
 
 
+class TestTolerateUndecodableStdin:
+    @staticmethod
+    def _wrapped(data: bytes, errors: str = "strict") -> io.TextIOWrapper:
+        return io.TextIOWrapper(io.BytesIO(data), encoding="utf-8",
+                                errors=errors)
+
+    def test_strict_stdin_now_replaces(self, monkeypatch):
+        stream = self._wrapped(b"caf\xe9\n")
+        monkeypatch.setattr(sys, "stdin", stream)
+        output.tolerate_undecodable_stdin()
+        assert stream.errors == "replace"
+        assert stream.readline() == "caf\ufffd\n"
+
+    def test_explicit_stream_argument_is_used(self):
+        stream = self._wrapped(b"x\n")
+        output.tolerate_undecodable_stdin(stream)
+        assert stream.errors == "replace"
+
+    def test_a_non_strict_handler_is_left_alone(self):
+        stream = self._wrapped(b"x\n", errors="surrogateescape")
+        output.tolerate_undecodable_stdin(stream)
+        assert stream.errors == "surrogateescape"
+
+    def test_closed_or_odd_stdin_does_not_raise(self, monkeypatch):
+        monkeypatch.setattr(sys, "stdin", None)
+        output.tolerate_undecodable_stdin()          # fd 0 closed: no-op
+
+        class _NoReconfigure:
+            errors = "strict"
+        output.tolerate_undecodable_stdin(_NoReconfigure())
+
+        closed = self._wrapped(b"")
+        closed.close()
+        output.tolerate_undecodable_stdin(closed)
+
+
 class TestConfirm:
     def test_assume_yes_env_wins(self, monkeypatch):
         monkeypatch.setenv("BOOST_ASSUME_YES", "1")

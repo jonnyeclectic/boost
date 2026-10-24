@@ -1568,6 +1568,7 @@ def _chat_session(args) -> int:
         # fd 0 closed at launch (`<&-`): input() would raise RuntimeError
         # ("lost sys.stdin"), but this is just an EOF before the first line.
         return 0
+    out.tolerate_undecodable_stdin()
     history: list[chat_engine.Turn] = []
     while True:
         try:
