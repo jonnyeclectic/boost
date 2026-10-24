@@ -762,10 +762,9 @@ def row_differences(recorded: dict, current: dict) -> dict[str, tuple]:
 
 
 def _history_files() -> list:
-    """History snapshots oldest→newest (mtime, then name — '-2' suffixed
-    same-second snapshots would sort before their base name otherwise)."""
-    return sorted(paths.lock_history_dir().glob("lock-*.json"),
-                  key=lambda f: (f.stat().st_mtime, f.name))
+    """History snapshots oldest→newest, by the stamp and same-second serial
+    in their names (:func:`util.history_key`)."""
+    return util.sorted_history(paths.lock_history_dir().glob("lock-*.json"))
 
 
 def _prune_history() -> None:

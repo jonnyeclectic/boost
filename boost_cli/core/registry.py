@@ -256,7 +256,10 @@ def _file_url_path(spec: str) -> Path | None:
     Only an empty or `localhost` host is this machine; `file://otherhost/…`
     stays a URL for git to judge.
     """
-    u = urllib.parse.urlparse(spec)
+    try:
+        u = urllib.parse.urlparse(spec)
+    except ValueError:      # "Invalid IPv6 URL": an unbalanced `[` in the host
+        return None
     if u.scheme.lower() != "file" or u.netloc.lower() not in ("", "localhost"):
         return None
     return Path(urllib.request.url2pathname(u.path))
@@ -446,6 +449,38 @@ def _source_key(url: str) -> str:
     return host + "/" + path
 
 
+def tapped_source_keys() -> set[str]:
+    """:func:`_source_key` of every configured tap's URL.
+
+    What "already tapped" means to a caller holding a GitHub ``owner/repo``
+    (see :func:`untapped_repos`): the URL, not the tap's name, because a
+    local tap named ``skills`` is not ``anthropics/skills``.
+    """
+    return {_source_key(t.url) for t in list_taps() if t.url}
+
+
+def untapped_repos(rows: list[dict]) -> tuple[list[dict], int]:
+    """``rows`` (each carrying a GitHub ``repo``) minus repos already tapped.
+
+    `boost discover` and the MCP `boost_discover_github` tool both promise
+    repositories nobody here has tapped, and both listed tapped ones: the
+    discovery index is a snapshot from before the tap, and the live search
+    never asked. Matched through :func:`_source_key`, so `Anthropics/Skills`
+    from GitHub and a tap of `https://github.com/anthropics/skills.git` are
+    one repository. Returns ``(kept, dropped_repo_count)``.
+    """
+    tapped = tapped_source_keys()
+    kept: list[dict] = []
+    dropped: set[str] = set()
+    for row in rows:
+        key = _source_key("https://github.com/%s" % row.get("repo", ""))
+        if key in tapped:
+            dropped.add(key)
+        else:
+            kept.append(row)
+    return kept, len(dropped)
+
+
 def name_key(name: str) -> str:
     """The form of a tap name that decides whether two taps are one.
 
@@ -461,7 +496,8 @@ def name_key(name: str) -> str:
 def _taken(name: str, url: str, existing: str) -> BoostError:
     """The error for `name` already belonging to a different repository."""
     return BoostError(
-        "tap name %s is already used by %s" % (name, existing),
+        "tap name %s is already used by %s"
+        % (name, existing or "a config.json row with no url"),
         # Both halves backticked: the hint folds to the pane, and only a
         # backtick span is atomic — a quoted path with a space split at it.
         hint="`boost untap %s`, then `boost tap %s` to tap it in its place"
@@ -598,7 +634,7 @@ def add(spec: str, curated: bool = False, at: str | None = None) -> Tap:
         raise BoostError("%r is not a full commit SHA" % at,
                          hint="pin with the 40-character hash a manifest names")
     tap = Tap(name=name, url=url, curated=curated)
-    paths.ensure_dirs()
+    paths.require_dirs()
     _clear_path(tap.path)
     gitutil.clone_shallow(url, tap.path)
     if at:
@@ -693,16 +729,31 @@ def _append_rows(cfg: dict, rows: list[dict]) -> bool:
     happens before the clone, outside any lock, so two processes tapping
     one name both pass it — re-checking here keeps the second from adding
     the same tap twice.
+
+    Only a row the reader uses holds a name (:func:`config.tap_row_issue`).
+    A malformed row of the same name — ``"url": 123`` — is one boost already
+    warned it skips, so the new row takes its place: counting it as taken
+    printed "tapped" over a config that still listed no usable tap.
     """
     taps = cfg.setdefault("taps", [])
-    have = {name_key(str(t.get("name"))) for t in taps
-            if isinstance(t, dict) and t.get("name")}
+    have = {name_key(t["name"]) for t in taps
+            if config.tap_row_issue(t) is None}
     added = False
     for row in rows:
-        if name_key(row["name"]) not in have:
+        key = name_key(row["name"])
+        if key in have:
+            continue
+        stale = [i for i, t in enumerate(taps)
+                 if isinstance(t, dict) and isinstance(t.get("name"), str)
+                 and name_key(t["name"]) == key]
+        if stale:
+            taps[stale[0]] = row
+            for i in reversed(stale[1:]):
+                del taps[i]
+        else:
             taps.append(row)
-            have.add(name_key(row["name"]))
-            added = True
+        have.add(key)
+        added = True
     return added
 
 
@@ -1058,7 +1109,7 @@ def add_many(specs: list[str], curated: bool = False,
     if not specs:
         return []
     config.refuse_unreadable()      # before any clone, as in `add`
-    paths.ensure_dirs()
+    paths.require_dirs()
     pins = pins or {}
     results: list[dict] = []
     todo: list[str] = []

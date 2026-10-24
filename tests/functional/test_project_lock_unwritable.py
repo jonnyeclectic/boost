@@ -56,7 +56,8 @@ def _flat(text: str) -> str:
 def _refusal(verb: str, name: str, d) -> str:
     where = paths.tilde(d)
     return ("Error: cannot %s %s: %s is not writable "
-            "hint: run `chmod u+w %s`, then re-run" % (verb, name, where, where))
+            "hint: run `chmod u+w %s`, then re-run"
+            % (verb, name, where, paths.shell_path(d)))
 
 
 def _no_crash():
@@ -89,7 +90,7 @@ def test_pin_names_the_lock_and_the_chmod(boost, repo, readonly):
         "Error: could not save %s (Permission denied): %s is not writable "
         "hint: run `chmod u+w %s`, then re-run"
         % (paths.tilde(projectlock.lock_path(repo)), paths.tilde(d),
-           paths.tilde(d)))
+           paths.shell_path(d)))
     _no_crash()
     assert projectlock.lock_path(repo).read_bytes() == raw
 

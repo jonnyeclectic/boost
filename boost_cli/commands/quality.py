@@ -656,6 +656,10 @@ def cmd_doctor(argv):
         bad("config", "%s — boost is running on defaults, so %s. Repair the "
             "file, or %s; the next write moves the bad file to "
             "config.json.corrupt" % (cfg_err, unread, re_add), wrap=True)
+    # Parsed, but a tap row or agent the read leaves out: every other check
+    # runs on the rest, and nothing else would name the one that is gone.
+    for issue in config.shape_issues():
+        bad("config", issue, wrap=True)
 
     # Same for policy.json: unreadable, it reads as defaults, and the
     # verdict was "healthy" while every rule in it went unenforced.
@@ -762,7 +766,8 @@ def cmd_doctor(argv):
             bad("tap", "tap %s has %s in its clone — %s"
                 % (tap.name, "git lock files" if len(locks) > 1
                    else "a git lock file",
-                   gitutil.lock_hint(", ".join(_tilde(p) for p in locks))),
+                   gitutil.lock_hint(", ".join(_tilde(p) for p in locks),
+                                     gitutil.TAP_CLONE)),
                 wrap=True)
         elif not tap.cache_file.exists():
             bad("tap", "tap %s has no catalog cache — run `boost update %s`%s"
@@ -1109,7 +1114,7 @@ def cmd_doctor(argv):
         # wrong with copies nothing records any more.
         bad("project-lock", "%s — boost sees no project skills here and "
             "refuses to install or uninstall any until it is repaired; %s"
-            % (plock_err, projectlock.recover_hint(pbase)),
+            % (plock_err, projectlock.remedy(pbase, plock_err)),
             wrap=True)
         proj_issues += 1
     for name, entry in sorted(pskills.items()):

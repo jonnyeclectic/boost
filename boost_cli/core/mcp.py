@@ -445,8 +445,10 @@ def read_reply(name: str, text: str, *, kind: str = "skill",
     Truncation cuts at a LINE boundary within the budget rather than mid-line.
     A Markdown body cut mid-fence or mid-sentence is text an agent has to
     guess about; a whole-line cut is unambiguously "the document continues".
-    A body whose first line already exceeds the budget has no such boundary,
-    so it falls back to a hard character cut — announced the same way.
+    When the last boundary would keep less than half the budget — no newline
+    at all, or one long line (a 1 MB ``description:`` on line 3 served 18
+    characters of 12,000) — it hard-cuts at the budget instead, inside that
+    line, announced the same way.
     """
     head = ["name: %s" % name]
     if kind != "skill":
@@ -460,7 +462,9 @@ def read_reply(name: str, text: str, *, kind: str = "skill",
         head.append(held)
     body = text.strip("\n")
     if len(body) > limit:
-        cut = body[:limit].rpartition("\n")[0] or body[:limit]
+        cut = body[:limit].rpartition("\n")[0]
+        if len(cut) < limit // 2:
+            cut = body[:limit]
         body = ("%s\n\n[truncated at %d of %d characters — read the rest with "
                 "`boost cat %s`]" % (cut, len(cut), len(text), name))
     return "\n".join(head) + "\n\n" + body

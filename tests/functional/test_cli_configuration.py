@@ -27,6 +27,7 @@ import urllib.request
 
 import pytest
 
+from boost_cli.commands import configuration
 from boost_cli.core import config, frontmatter, journal, paths, policy, util
 from boost_cli.errors import BoostError
 
@@ -823,6 +824,85 @@ class TestOnboard:
             assert status.stdout == ""
             assert not (repo / ".boost").exists()
 
+    def test_pr_rerun_on_its_own_branch_commits_onto_it(
+            self, boost, sandbox, tmp_path, monkeypatch):
+        # Run 1 skips a differing workflow, commits the rest on the branch,
+        # stays there and dies at gh; the `boost onboard -f` it advises
+        # must then finish the job rather than refuse "branch exists".
+        repo = _mk_repo(tmp_path / "repo")
+        wf = repo / ".github" / "workflows" / "boost-skill-inventory.yml"
+        wf.parent.mkdir(parents=True)
+        wf.write_text("name: mine\n", encoding="utf-8")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "own workflow")
+        monkeypatch.setattr("boost_cli.commands.configuration.shutil.which",
+                            lambda c: "/usr/bin/" + c)
+        gh_rc = [1]
+        real_run = subprocess.run
+        monkeypatch.setattr(
+            "boost_cli.commands.configuration.subprocess.run",
+            lambda cmd, **kw: _proc(cmd, gh_rc[0], out="https://x/pull/9\n",
+                                    err="boom")
+            if cmd and cmd[0] == "/usr/bin/gh" else real_run(cmd, **kw))
+        monkeypatch.delenv("BOOST_ASSUME_YES")   # stdin is not a tty -> "no"
+
+        r = boost("onboard", "--repo", repo, "--pr", expect=1)
+        assert "gh pr create failed: boom" in r.err
+        assert wf.read_text(encoding="utf-8") == "name: mine\n"
+
+        r = boost("onboard", "--repo", repo, "--pr", "--dry-run")
+        assert ("would commit them on boost/onboard-skill-tracker and run "
+                "`gh pr create --fill`") in r.out
+
+        gh_rc[0] = 0
+        r = boost("onboard", "--repo", repo, "--pr", "-f")
+        assert "already exists" not in r.err
+        assert "opened PR https://x/pull/9" in r.out
+        head = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                              cwd=str(repo), capture_output=True, text=True)
+        assert head.stdout.strip() == "boost/onboard-skill-tracker"
+        subjects = subprocess.run(["git", "log", "--pretty=%s"],
+                                  cwd=str(repo), capture_output=True,
+                                  text=True).stdout.splitlines()
+        assert subjects == ["chore: add boost skill tracking (boost onboard)"
+                            ] * 2 + ["own workflow", "init"]
+        assert wf.read_text(encoding="utf-8") == configuration._WORKFLOW_YML
+        status = subprocess.run(["git", "status", "--porcelain"],
+                                cwd=str(repo), capture_output=True, text=True)
+        assert status.stdout == ""
+
+    def test_pr_branch_exists_elsewhere_hint_works(
+            self, boost, sandbox, tmp_path, monkeypatch):
+        repo = _mk_repo(tmp_path / "repo")
+        _git(repo, "branch", "boost/onboard-skill-tracker")
+        monkeypatch.setattr("boost_cli.commands.configuration.shutil.which",
+                            lambda c: "/usr/bin/" + c)
+        r = boost("onboard", "--repo", repo, "--pr", expect=1)
+        assert ("hint: open its PR with `git checkout "
+                "boost/onboard-skill-tracker && gh pr create --fill`, or check "
+                "it out and rerun `boost onboard --pr -f` to commit onto it, "
+                "or delete it with `git branch -D boost/onboard-skill-tracker` "
+                "and rerun" in " ".join(r.err.split()))
+        assert not (repo / ".boost").exists()
+
+    def test_pr_refuses_a_stale_git_lock_before_writing(
+            self, boost, sandbox, tmp_path, monkeypatch):
+        repo = _mk_repo(tmp_path / "repo")
+        lock = repo / ".git" / "index.lock"
+        lock.write_text("", encoding="utf-8")
+        monkeypatch.setattr("boost_cli.commands.configuration.shutil.which",
+                            lambda c: "/usr/bin/" + c)
+        r = boost("onboard", "--repo", repo, "--pr", expect=1)
+        err = " ".join(r.err.split())
+        assert "%s has a git lock file" % paths.tilde(repo.resolve()) in err
+        assert ("another git process is working in this repository; if none "
+                "is, remove %s" % paths.tilde(lock.resolve())) in err
+        assert "tap's clone" not in err
+        assert not (repo / ".boost").exists()
+        head = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                              cwd=str(repo), capture_output=True, text=True)
+        assert head.stdout.strip() != "boost/onboard-skill-tracker"
+
     def test_pr_preconditions(self, boost, sandbox, tmp_path):
         r = boost("onboard", "--repo", "/no/such/dir", expect=1)
         assert "is not a directory" in r.err
@@ -861,10 +941,67 @@ class TestOnboardOverwrite:
             self, boost, installed, tmp_path, monkeypatch):
         repo = self._seeded(boost, tmp_path)
         monkeypatch.delenv("BOOST_ASSUME_YES")   # stdin is not a tty -> "no"
-        r = boost("onboard", "--repo", repo)
+        r = boost("onboard", "--repo", repo, expect=1)
         assert (repo / self.LOCK).read_text(encoding="utf-8") == '{"mine": true}\n'
         assert "skipped" in r.out
         assert "created %s" % self.LOCK not in r.out
+        # A declined overwrite is a "no", not a finished onboard: it used to
+        # print "nothing to do — … already onboarded" and exit 0.
+        assert "already onboarded" not in r.out
+        assert ("1 file differs and was left unchanged — `boost onboard -f` "
+                "to overwrite") in r.out
+
+    def _restamped(self, boost, tmp_path, **extra):
+        """An onboarded repo whose lock differs only in ``updated`` (+extra)."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        boost("onboard", "--repo", repo)
+        lock = json.loads((repo / self.LOCK).read_text(encoding="utf-8"))
+        lock.update(updated="2001-01-01T00:00:00Z", **extra)
+        text = json.dumps(lock, indent=2, sort_keys=True) + "\n"
+        (repo / self.LOCK).write_text(text, encoding="utf-8")
+        return repo, text
+
+    def test_a_rerun_whose_lock_differs_only_in_its_stamp_is_onboarded(
+            self, boost, tmp_path, monkeypatch):
+        # No user lock: the skeleton stamps `updated` with *now*, so a re-run
+        # a second later used to "differ", decline on a non-TTY, and exit 1.
+        repo, text = self._restamped(boost, tmp_path)
+        monkeypatch.delenv("BOOST_ASSUME_YES")
+        r = boost("onboard", "--repo", repo)
+        assert "unchanged" in r.out and "skipped" not in r.out
+        assert "already onboarded" in r.out
+        assert (repo / self.LOCK).read_text(encoding="utf-8") == text
+
+    def test_a_lock_that_differs_beyond_its_stamp_still_asks(
+            self, boost, tmp_path, monkeypatch):
+        repo, text = self._restamped(boost, tmp_path, mine=True)
+        monkeypatch.delenv("BOOST_ASSUME_YES")
+        r = boost("onboard", "--repo", repo, expect=1)
+        assert "skipped" in r.out
+        assert (repo / self.LOCK).read_text(encoding="utf-8") == text
+
+    def test_declining_two_files_counts_both(
+            self, boost, installed, tmp_path, monkeypatch):
+        repo = self._seeded(boost, tmp_path)
+        wf = repo / self.WORKFLOW
+        wf.write_text(wf.read_text(encoding="utf-8") + "# mine\n",
+                      encoding="utf-8")
+        monkeypatch.delenv("BOOST_ASSUME_YES")
+        r = boost("onboard", "--repo", repo, expect=1)
+        assert "2 files differ and were left unchanged" in r.out
+        assert "already onboarded" not in r.out
+
+    def test_declining_one_file_still_writes_the_rest_and_exits_1(
+            self, boost, installed, tmp_path, monkeypatch):
+        repo = self._seeded(boost, tmp_path)
+        (repo / self.TELEMETRY).unlink()
+        monkeypatch.delenv("BOOST_ASSUME_YES")
+        r = boost("onboard", "--repo", repo, expect=1)
+        assert (repo / self.TELEMETRY).is_file()
+        assert "created" in r.out
+        assert "1 file differs and was left unchanged" in r.out
+        assert (repo / self.LOCK).read_text(encoding="utf-8") == '{"mine": true}\n'
 
     def test_force_overwrites_and_says_updated_not_created(
             self, boost, installed, tmp_path, monkeypatch):
@@ -918,7 +1055,7 @@ class TestOnboardOverwrite:
         repo = self._seeded(boost, tmp_path)
         (repo / self.WORKFLOW).write_bytes(b"\xff\xfe not utf-8")
         monkeypatch.delenv("BOOST_ASSUME_YES")
-        r = boost("onboard", "--repo", repo)
+        r = boost("onboard", "--repo", repo, expect=1)
         assert (repo / self.WORKFLOW).read_bytes() == b"\xff\xfe not utf-8"
         assert "skipped" in r.out
 
@@ -962,8 +1099,9 @@ class TestOnboardOverwrite:
         (repo / self.WORKFLOW).write_text("# theirs\n", encoding="utf-8")
         before = len(journal.events(action="onboard"))
         monkeypatch.delenv("BOOST_ASSUME_YES")
-        r = boost("onboard", "--repo", repo)
-        assert "nothing to do" in r.out
+        r = boost("onboard", "--repo", repo, expect=1)
+        assert "3 files differ and were left unchanged" in r.out
+        assert "nothing to do" not in r.out
         assert len(journal.events(action="onboard")) == before, \
             "a no-op run must not add an onboard event"
 
@@ -981,7 +1119,10 @@ class TestOnboardOverwrite:
             lambda cmd, **kw: _proc(cmd, 0, out="https://github.com/o/r/pull/9\n")
             if cmd and cmd[0] == "/usr/bin/gh" else real_run(cmd, **kw))
         monkeypatch.delenv("BOOST_ASSUME_YES")     # decline the lock overwrite
-        boost("onboard", "--repo", repo, "--pr")
+        # The PR still opens for what was written; the decline is rc 1.
+        r = boost("onboard", "--repo", repo, "--pr", expect=1)
+        assert "opened PR https://github.com/o/r/pull/9" in r.out
+        assert "1 file differs and was left unchanged" in r.out
 
         names = subprocess.run(["git", "show", "--name-only", "--pretty=", "HEAD"],
                                cwd=str(repo), capture_output=True, text=True)
@@ -1001,8 +1142,8 @@ class TestOnboardOverwrite:
         monkeypatch.setattr("boost_cli.commands.configuration.shutil.which",
                             lambda c: "/usr/bin/" + c)
         monkeypatch.delenv("BOOST_ASSUME_YES")
-        r = boost("onboard", "--repo", repo, "--pr")
-        assert "nothing to do" in r.out
+        r = boost("onboard", "--repo", repo, "--pr", expect=1)
+        assert "3 files differ and were left unchanged" in r.out
         head = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"],
                               cwd=str(repo), capture_output=True, text=True)
         assert head.stdout.strip() != "boost/onboard-skill-tracker", \
@@ -2061,6 +2202,45 @@ class TestMcp:
         assert "octo/skills — great skills" in text
         assert "acme/pack — b/SKILL.md" in text          # falls back to path
 
+    def test_discover_github_leaves_out_tapped_repos(self, sandbox,
+                                                      monkeypatch):
+        from boost_cli.commands import configuration, discovery
+        from boost_cli.core import config
+        config.save({"taps": [{"name": "skills",
+                               "url": "https://github.com/octo/skills"}]})
+        monkeypatch.setattr("boost_cli.commands.configuration.shutil.which",
+                            lambda c: "/usr/bin/gh")
+        monkeypatch.setattr(
+            discovery, "github_skill_search",
+            lambda query="", limit=20: [
+                {"repo": "Octo/Skills", "path": "a/SKILL.md", "url": "u",
+                 "description": "great skills"},
+                {"repo": "acme/pack", "path": "b/SKILL.md", "url": "u",
+                 "description": ""}])
+        text, is_err = configuration._mcp_tool("boost_discover_github",
+                                               {"query": "react"})
+        assert is_err is False
+        assert text == ("acme/pack — b/SKILL.md\n(1 already-tapped repo(s) "
+                        "not shown — boost_search covers them)")
+
+    def test_discover_github_only_tapped_repos(self, sandbox, monkeypatch):
+        from boost_cli.commands import configuration, discovery
+        from boost_cli.core import config
+        config.save({"taps": [{"name": "skills",
+                               "url": "https://github.com/octo/skills"}]})
+        monkeypatch.setattr("boost_cli.commands.configuration.shutil.which",
+                            lambda c: "/usr/bin/gh")
+        monkeypatch.setattr(
+            discovery, "github_skill_search",
+            lambda query="", limit=20: [
+                {"repo": "octo/skills", "path": "a/SKILL.md", "url": "u"}])
+        text, is_err = configuration._mcp_tool("boost_discover_github",
+                                               {"query": "react"})
+        assert is_err is False
+        assert text == ("no SKILL.md repositories found on GitHub for 'react'"
+                        "\n(1 already-tapped repo(s) not shown — boost_search "
+                        "covers them)")
+
     def test_discover_github_no_results(self, sandbox, monkeypatch):
         from boost_cli.commands import configuration, discovery
         monkeypatch.setattr("boost_cli.commands.configuration.shutil.which",
@@ -2574,6 +2754,16 @@ class TestMcp:
         # the failing host names itself — not a generic "an agent CLI failed"
         r = boost("mcp", "register", "--host", "gemini", expect=1)
         assert "gemini mcp register failed — no auth" in r.out
+
+    def test_register_accepts_the_yes_its_hint_names(
+            self, boost, sandbox, monkeypatch):
+        # The boost-first offer's decline prints "pass -y …"; `boost mcp
+        # register -y` used to be an argparse error (rc 2).
+        calls = self._fake_clis(monkeypatch, "claude")
+        r = boost("mcp", "register", "-y", "--no-seed", "--dry-run")
+        assert calls == []
+        assert "unrecognized arguments" not in r.err
+        assert "dry run — nothing was registered, nothing tapped" in r.out
 
     def test_dry_run_prints_argv_and_install_status_without_acting(
             self, boost, sandbox, monkeypatch):

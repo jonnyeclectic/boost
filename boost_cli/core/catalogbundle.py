@@ -324,7 +324,7 @@ def import_bundle(src: Path) -> dict:
             % (fmt, BUNDLE_FORMAT),
             hint="upgrade boost, or re-export the bundle with this version")
 
-    paths.ensure_dirs()
+    paths.require_dirs()
     written = 0
     try:
         with tarfile.open(src, "r:gz") as tar:

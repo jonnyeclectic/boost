@@ -1461,9 +1461,10 @@ class TestUpdateDiffGate:
 
         # Drive the real out.confirm() rather than patching it: drop conftest's
         # BOOST_ASSUME_YES (it would auto-approve and hide whether --yes did
-        # anything) and set sys.argv explicitly, which is where confirm() looks
-        # for the flag. With neither set and stdin not a tty, confirm returns
-        # its default — False — so the gate declines on its own.
+        # anything). sys.argv is pinned to a bare `update` both times so the
+        # pass cannot come from a process-argv scan: the parsed --yes is
+        # what reaches the gate. With neither and stdin not a tty, confirm
+        # returns its default — False — so the gate declines on its own.
         # NB: never monkeypatch.undo() here; the sandbox fixture's HOME is on
         # the same monkeypatch, so undoing drops the test out of its sandbox and
         # onto the developer's real ~/.boost.
@@ -1474,7 +1475,6 @@ class TestUpdateDiffGate:
         assert _lock()["brainstorming"]["version"] == "1.4.0"
 
         # Now take that advice verbatim.
-        monkeypatch.setattr("sys.argv", ["boost", "update", "--yes"])
         r2 = boost("update", "--yes")
         assert "unrecognized arguments" not in r2.err
         assert "upgraded brainstorming v1.4.0 → v1.5.0" in r2.out
@@ -3369,6 +3369,81 @@ class TestUpdateKeepsTheChosenCopy:
         assert "Use four spaces." in claude and "Use tabs." not in claude
 
 
+class TestUpdateRecordsAMoveWithUnchangedContent:
+    """An upstream `git mv` with no edit gave `update` nothing to reinstall,
+    and the reinstall was the only writer of the lock's source path: every
+    run repeated "no longer at its installed source", `info` kept the dead
+    path and `drift` called the skill source-missing."""
+
+    @staticmethod
+    def _mv(tap_dir, old, new):
+        subprocess.run(["git", "-C", str(tap_dir), "mv", old, new],
+                       check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(tap_dir), "commit", "-qm", "move"],
+                       check=True, capture_output=True)
+        return subprocess.run(["git", "-C", str(tap_dir), "rev-parse", "HEAD"],
+                              check=True, capture_output=True,
+                              text=True).stdout.strip()
+
+    def test_a_moved_skill_is_recorded_once_and_then_quiet(
+            self, boost, fixture_tap_src, tmp_path):
+        tap_dir = _copy_tap(fixture_tap_src, tmp_path / "mv-skill-tap")
+        boost("tap", tap_dir)
+        boost("install", "brainstorming")
+        before = _lock()["brainstorming"]
+        assert before["source_dir"] == "skills/brainstorming"
+        head = self._mv(tap_dir, "skills/brainstorming", "skills/brainstorm")
+        r = boost("update")
+        assert ("brainstorming: moved upstream from skills/brainstorming to "
+                "skills/brainstorm — lock updated") in r.out
+        assert "no longer at its installed source" not in r.out + r.err
+        row = _lock()["brainstorming"]
+        assert row["source_dir"] == "skills/brainstorm"
+        assert row["commit"] == head
+        assert row["sha256"] == before["sha256"]
+        assert row["version"] == before["version"]
+        again = boost("update")
+        assert "moved upstream" not in again.out
+        assert "no longer at its installed source" not in again.out + again.err
+        assert "everything up to date" in again.out
+        assert "source-missing" not in boost("drift").out
+
+    def test_a_moved_and_edited_skill_still_warns_and_reinstalls(
+            self, boost, fixture_tap_src, tmp_path):
+        tap_dir = _copy_tap(fixture_tap_src, tmp_path / "mv-edit-tap")
+        boost("tap", tap_dir)
+        boost("install", "brainstorming")
+        subprocess.run(["git", "-C", str(tap_dir), "mv", "skills/brainstorming",
+                        "skills/brainstorm"], check=True, capture_output=True)
+        _add_and_commit(tap_dir, "skills/brainstorm/extra.md", "new\n", "edit")
+        r = boost("update", "--yes")
+        assert ("brainstorming: brainstorming no longer at its installed "
+                "source (skills/brainstorming) — using skills/brainstorm"
+                ) in r.out
+        assert "moved upstream" not in r.out
+        assert _lock()["brainstorming"]["source_dir"] == "skills/brainstorm"
+
+    def test_a_moved_rule_is_recorded_once(
+            self, boost, fixture_tap_src, tmp_path):
+        tap_dir = _copy_tap(fixture_tap_src, tmp_path / "mv-rule-tap")
+        _add_and_commit(tap_dir, "rules/a/house.mdc",
+                        "---\nname: mv-house\nversion: 1.0.0\n---\n\n"
+                        "Use tabs.\n", "a rule")
+        boost("tap", tap_dir)
+        boost("install", "mv-house")
+        head = self._mv(tap_dir, "rules/a", "rules/b")
+        r = boost("update")
+        assert ("rule mv-house: moved upstream from rules/a/house.mdc to "
+                "rules/b/house.mdc — lock updated") in r.out
+        row = json.loads(paths.lockfile_path().read_text(
+            encoding="utf-8"))["rules"]["mv-house"]
+        assert row["source_file"] == "rules/b/house.mdc"
+        assert row["commit"] == head
+        again = boost("update")
+        assert "moved upstream" not in again.out
+        assert "no longer at its installed source" not in again.out
+
+
 class TestReinstallEdges:
     def test_multi_skips_missing(self, boost, installed):
         r = boost("reinstall", "brainstorming", "ghost", expect=1)
@@ -4409,6 +4484,15 @@ class TestMcpAwareSkills:
             "shutil.which",
             lambda n: "/usr/bin/" + n if n in present else None)
 
+    def _record_registrations(self, monkeypatch):
+        """Stub the registrar; return the (name, scope) of each call."""
+        calls = []
+        monkeypatch.setattr(
+            "boost_cli.commands.pkg._register_mcp_server",
+            lambda name, spec, host="claude", scope="user":
+                calls.append((name, scope)))
+        return calls
+
     def _capture_run(self, monkeypatch, rc=0, err=""):
         """Capture every subprocess argv; return the list."""
         calls = []
@@ -4499,6 +4583,55 @@ class TestMcpAwareSkills:
         assert "agy mcp add" not in r.out
         assert "codex mcp add" not in r.out
         assert "mcp-skill" in _lock()
+
+    def test_import_yes_does_not_answer_the_registration_prompt(
+            self, boost, sandbox, tmp_path, monkeypatch):
+        # import's -y skips *its* prompt (replace the only copy). Registering
+        # a server for every project on the machine is a separate, default-No
+        # decision: confirm() used to read -y off sys.argv and approve both.
+        # sys.argv carries the flag here because that is where the old scan
+        # looked; an in-process run would otherwise never show the bug.
+        monkeypatch.delenv("BOOST_ASSUME_YES", raising=False)
+        self._fake_which(monkeypatch, "claude")
+        calls = self._capture_run(monkeypatch)
+        d = _mcp_skill_dir(
+            tmp_path, decl="github",
+            sidecar={"mcpServers": {"github": {"command": "npx"}}})
+        monkeypatch.setattr("sys.argv", ["boost", "import", str(d), "-y"])
+        r = boost("import", d, "-y")
+        assert calls == []
+        assert "registered MCP server" not in r.out
+        assert "skipped — run these yourself when you're ready:" in r.out
+        # The hint must not tell the user to pass the -y they just passed.
+        assert "set BOOST_ASSUME_YES=1 to skip this prompt" in r.out
+        assert "pass -y" not in r.out
+        assert "mcp-skill" in _lock()
+
+    def test_install_yes_answers_the_registration_prompt(
+            self, boost, sandbox, tmp_path, monkeypatch, fixture_tap_src):
+        # The prompt's own hint says "pass -y"; install used to reject -y with
+        # rc 2. Now it parses, and it is the one -y that answers this prompt.
+        monkeypatch.delenv("BOOST_ASSUME_YES", raising=False)
+        boost("tap", _mcp_skill_tap(
+            fixture_tap_src, tmp_path,
+            sidecar={"mcpServers": {"github": {"command": "npx"}}}))
+        calls = self._record_registrations(monkeypatch)
+        boost("install", "needs-mcp", "-y")
+        # install fetches through git, so the registrar is stubbed rather than
+        # subprocess.run; with no agent CLI found every host is targeted.
+        assert calls and {c[0] for c in calls} == {"github"}
+        assert {c[1] for c in calls} == {"user"}
+
+    def test_install_without_yes_names_the_flag_it_takes(
+            self, boost, sandbox, tmp_path, monkeypatch, fixture_tap_src):
+        monkeypatch.delenv("BOOST_ASSUME_YES", raising=False)
+        boost("tap", _mcp_skill_tap(
+            fixture_tap_src, tmp_path,
+            sidecar={"mcpServers": {"github": {"command": "npx"}}}))
+        calls = self._record_registrations(monkeypatch)
+        r = boost("install", "needs-mcp")
+        assert calls == []
+        assert "pass -y or set BOOST_ASSUME_YES=1 to skip this prompt" in r.out
 
     def test_declining_prints_a_line_for_every_host_the_yes_would_have_hit(
             self, boost, sandbox, tmp_path, monkeypatch):
