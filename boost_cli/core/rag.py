@@ -993,15 +993,19 @@ def _save(docs: list[dict], commits: dict[str, str],
         "engine": ENGINE,
         "generated": _now(),
         "commits": commits,
-        # Each consumed tap cache's [mtime_ns, size], which `stale()` compares
-        # for equality. Always written, even empty: key presence is what tells
-        # `stale()` this index can be judged by stamps at all.
-        "stamps": stamps or {},
         "params": {"chunk_chars": CHUNK_CHARS, "overlap": OVERLAP,
                    "k1": K1, "b": B},
         "stats": stats,
         "docs": meta_docs,
     }
+    if stamps is not None:
+        # Each consumed tap cache's [mtime_ns, size], which `stale()` compares
+        # for equality. Written even when empty: key presence is what tells
+        # `stale()` this index can be judged by stamps at all. A writer that
+        # cannot vouch for the caches passes None and leaves the key out, so
+        # the index falls back to the mtime rule instead of being called
+        # stale on every search.
+        payload["stamps"] = stamps
     p = index_path()
     # Atomic swap: a bare write_text here can leave a truncated/corrupt index
     # on disk if the process dies mid-write or a query reads concurrently.
@@ -1201,9 +1205,17 @@ def import_shards(batch: Sequence[tuple[dict, str]]
     new_safe = {tap.replace("/", "__") for tap in accepted}
     commits: dict[str, str] = {}
     docs: list[dict] = []
+    # Stamps carry over for the taps kept as they were; an imported tap gets
+    # its cache's stamp now. An old index with no stamps stays without them,
+    # so `stale()` keeps judging it by mtime rather than by an empty map that
+    # would call every cached tap changed on every search.
+    stamps: dict[str, list[int]] | None = None
     if old is not None:
         commits = {k: v for k, v in (old.get("commits") or {}).items()
                    if k not in new_safe}
+        old_stamps = old.get("stamps")
+        if isinstance(old_stamps, dict):
+            stamps = dict(old_stamps)
         keep = {d["t"].replace("/", "__") for d in old.get("docs", [])}
         kept = _kept_docs(old, keep - new_safe)
         if kept is None:
@@ -1213,10 +1225,14 @@ def import_shards(batch: Sequence[tuple[dict, str]]
             # next search re-indexes them.
             commits, kept = {}, []
         docs = kept
+    if stamps is not None:
+        current = _tap_stamps()
+        stamps = {k: v for k, v in stamps.items() if k in commits}
+        stamps |= {k: current[k] for k in new_safe if k in current}
     for tap, shard in accepted.items():
         commits[tap.replace("/", "__")] = str(shard["commit"])
         docs.extend({**d, "c": 0} for d in shard["docs"])
-    _save(docs, commits)
+    _save(docs, commits, stamps)
     return results
 
 
