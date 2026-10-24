@@ -227,7 +227,9 @@ def cmd_clean(argv) -> int:
         )
 
     if paths.lock_history_dir().is_dir():
-        snaps = sorted(paths.lock_history_dir().glob("lock-*.json"))
+        # The order lock history prunes by, so this never names the newer
+        # of two same-second snapshots as the old one.
+        snaps = util.sorted_history(paths.lock_history_dir().glob("lock-*.json"))
         items.extend(
             (old, "old lock history", old.stat().st_size)
             for old in snaps[:-50]
@@ -952,7 +954,28 @@ def _onboard_unchanged(dest: Path, content: str) -> bool:
         return False
 
 
-def _write_onboard_file(dest: Path, content: str, force: bool) -> bool:
+def _onboard_lock_text(dest: Path, lock: dict) -> str:
+    """The repo lock onboard would write — or the one already there, if equal.
+
+    ``updated`` is a write stamp, not content: with no user lock it is the
+    skeleton's *now*, so every re-run a second later generated a "different"
+    lock, and on a non-TTY that read as a declined overwrite — rc 1 and
+    "1 file differs" on a repo nothing had touched. Equal modulo that one
+    field keeps the existing bytes, so the run reports it unchanged.
+    """
+    text = json.dumps(lock, indent=2, sort_keys=True) + "\n"
+    try:
+        raw = dest.read_text(encoding="utf-8")
+        have = json.loads(raw)
+    except (OSError, UnicodeDecodeError, ValueError):
+        return text
+    if (isinstance(have, dict) and "updated" in have and "updated" in lock
+            and have | {"updated": None} == lock | {"updated": None}):
+        return raw
+    return text
+
+
+def _write_onboard_file(dest: Path, content: str, force: bool) -> str:
     """Write one generated onboard file; confirm first if it already exists.
 
     ``boost onboard`` is routinely re-run on a repo that already has its own
@@ -961,24 +984,26 @@ def _write_onboard_file(dest: Path, content: str, force: bool) -> bool:
     still reporting "created". Existence has to be checked *before* the write,
     the same way :func:`intelligence._write_generated` already does.
 
-    Returns True when the file was written.
+    Returns ``"written"``, ``"unchanged"`` or ``"skipped"`` — the last two
+    are different answers: an unchanged file is onboarded, a skipped one is a
+    file that differs from boost's and that the user declined to overwrite.
     """
     if not dest.exists():
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_text(content, encoding="utf-8")
         out.ok("created %s" % _tilde(dest))
-        return True
+        return "written"
     if _onboard_unchanged(dest, content):
         # Re-running onboard regenerates the workflow byte-for-byte. Prompting
         # to overwrite a file with its own contents is noise, not safety.
         out.info("unchanged %s" % _tilde(dest))
-        return False
+        return "unchanged"
     if not force and not out.confirm("overwrite %s?" % _tilde(dest)):
         out.info("skipped %s" % _tilde(dest))
-        return False
+        return "skipped"
     dest.write_text(content, encoding="utf-8")
     out.ok("updated %s" % _tilde(dest))
-    return True
+    return "written"
 
 
 def _telemetry_created(dest: Path) -> str:
@@ -1034,15 +1059,16 @@ def cmd_onboard(argv) -> int:
     }, indent=2) + "\n"
     files = [(_TELEMETRY_REL, telemetry), (_WORKFLOW_REL, _WORKFLOW_YML)]
     if repo != paths.store_dir().resolve():
-        files.append((".skill-lock.json",
-                      json.dumps(lockfile.portable(lockfile.read(), base=repo),
-                                indent=2, sort_keys=True) + "\n"))
+        files.append((".skill-lock.json", _onboard_lock_text(
+            repo / ".skill-lock.json",
+            lockfile.portable(lockfile.read(), base=repo))))
 
     # Preconditions FIRST so a real run never leaves the repo mid-state — and
     # *before* the dry-run return, because all three are read-only and a
     # preview that skips them is the one shape of dry run that is worse than
     # none: `--dry-run --pr` outside a git repository exited 0 with no plan and
     # no failure, so the flag the user was rehearsing was never rehearsed.
+    on_branch = False
     if args.pr:
         if not gitutil.is_repo(repo):
             raise BoostError("%s is not a git repository" % _tilde(repo),
@@ -1053,17 +1079,29 @@ def cmd_onboard(argv) -> int:
         if not shutil.which("gh"):
             raise BoostError("the `gh` CLI is required for --pr",
                             hint="brew install gh, or rerun without --pr")
+        # A killed git's lock would fail `git add` after the files are
+        # written and the branch is made, stranding both. Refuse first.
+        if locks := gitutil.stale_locks(repo):
+            raise BoostError(
+                "%s has %s" % (_tilde(repo), "git lock files"
+                               if len(locks) > 1 else "a git lock file"),
+                hint=gitutil.lock_hint(", ".join(_tilde(p) for p in locks)))
         # A branch left by an earlier run whose `gh pr create` failed: without
         # this, the rerun wrote every file onto the current branch and then
-        # died on `checkout -b`, leaving them untracked with no hint.
+        # died on `checkout -b`, leaving them untracked with no hint. Standing
+        # on that branch is the state the earlier run left behind, and the
+        # `boost onboard -f` it advised — so commit onto it instead.
         if gitutil.run(["-C", str(repo), "rev-parse", "--verify", "--quiet",
                         "refs/heads/" + _PR_BRANCH], check=False).returncode == 0:
-            raise BoostError("branch %s already exists in %s"
-                             % (_PR_BRANCH, _tilde(repo)),
-                             hint="open its PR with `git checkout %s && gh pr "
-                                  "create --fill`, or delete it with `git "
-                                  "branch -D %s` and rerun"
-                                  % (_PR_BRANCH, _PR_BRANCH))
+            on_branch = gitutil.branch_state(repo).branch == _PR_BRANCH
+            if not on_branch:
+                raise BoostError(
+                    "branch %s already exists in %s"
+                    % (_PR_BRANCH, _tilde(repo)),
+                    hint="open its PR with `git checkout %s && gh pr create "
+                         "--fill`, or check it out and rerun `boost onboard "
+                         "--pr -f` to commit onto it, or delete it with `git "
+                         "branch -D %s` and rerun" % (_PR_BRANCH, _PR_BRANCH))
 
     if args.dry_run:
         changes = 0
@@ -1093,9 +1131,21 @@ def cmd_onboard(argv) -> int:
                      % _PR_BRANCH)
         return 0
 
-    written = [rel for rel, content in files
-               if _write_onboard_file(repo / rel, content,
-                                      args.force or args.yes)]
+    outcome = {rel: _write_onboard_file(repo / rel, content,
+                                        args.force or args.yes)
+               for rel, content in files}
+    written = [rel for rel, how in outcome.items() if how == "written"]
+    skipped = [rel for rel, how in outcome.items() if how == "skipped"]
+    if skipped:
+        # A declined overwrite is not "already onboarded": the file is not
+        # boost's version, and the user just said no to making it so. Same
+        # rule as `clean`'s decline, and the same rc as every other "no".
+        out.warn("%s left unchanged — `boost onboard -f` to overwrite"
+                 % ("1 file differs and was" if len(skipped) == 1
+                    else "%d files differ and were" % len(skipped)),
+                 wrap=True)
+        if not written:
+            return 1
     if not written:
         # Nothing changed, so there is nothing to journal — and nothing for
         # --pr to commit. Branching here would leave an empty branch behind
@@ -1106,7 +1156,8 @@ def cmd_onboard(argv) -> int:
 
     if args.pr:
         branch = _PR_BRANCH
-        gitutil.run(["-C", str(repo), "checkout", "-b", branch])
+        if not on_branch:
+            gitutil.run(["-C", str(repo), "checkout", "-b", branch])
         gitutil.run(["-C", str(repo), "add", *written])
         gitutil.run(["-C", str(repo), "commit", "-m",
                      "chore: add boost skill tracking (boost onboard)"])
@@ -1125,7 +1176,7 @@ def cmd_onboard(argv) -> int:
                             hint="branch %s is committed — push it and run `gh pr create --fill`" % branch)
         url = (proc.stdout or "").strip().splitlines()
         out.ok("opened PR%s" % ((" " + url[-1]) if url else ""))
-    return 0
+    return 1 if skipped else 0
 
 
 # ---------------------------------------------------------------- completions
@@ -2611,7 +2662,7 @@ def _seed_catalog_for_mcp(force: bool) -> None:
 
 #: Escape hatch, same shape as BOOST_NO_MCP_OFFER and BOOST_NO_SEED. It is
 #: checked BEFORE `out.confirm`, which is load-bearing: confirm returns True
-#: under BOOST_ASSUME_YES or a bare `--yes` anywhere in argv, and the test
+#: under BOOST_ASSUME_YES (and the offer under `mcp register -y`), and the test
 #: fixtures set BOOST_ASSUME_YES=1 — so without this guard every existing
 #: `boost mcp register` test, and every provisioning script, would silently
 #: write a standing block into a real CLAUDE.md.
@@ -2658,7 +2709,7 @@ def _boost_first_targets(hosts: list[str]) -> list[str]:
             if agent in scoped_agents]
 
 
-def _offer_boost_first(hosts: list[str]) -> None:
+def _offer_boost_first(hosts: list[str], yes: bool = False) -> None:
     """Offer to install boost's own rule into the agent's standing instructions.
 
     This is the most invasive thing boost can propose, and the only text it
@@ -2666,6 +2717,7 @@ def _offer_boost_first(hosts: list[str]) -> None:
     the consent has to be real rather than procedural. The body is printed in
     full BEFORE the question, the target paths are named, the answer defaults
     to NO, and the reversal command is shown whether or not they accept.
+    ``yes`` is ``boost mcp register -y`` — the body is still printed first.
 
     Why it exists at all: Gemini never delivers MCP server `instructions` in
     interactive mode, and in an untrusted folder — which a brand-new project
@@ -2695,7 +2747,7 @@ def _offer_boost_first(hosts: list[str]) -> None:
     for line in body.read_text(encoding="utf-8").splitlines():
         out.info("  | %s" % line)
     out.info("")
-    if not out.confirm("Install it?", default=False):
+    if not (yes or out.confirm("Install it?", default=False)):
         out.info("Not installed. `boost install %s` any time."
                  % builtin.BUILTIN_RULES[0])
         return
@@ -2756,6 +2808,10 @@ def cmd_mcp(argv) -> int:
     seeding.add_argument("--no-seed", dest="seed_ok", action="store_false",
                          default=True,
                          help="register only; do not tap anything")
+    # The boost-first offer's decline hint says "pass -y"; without this the
+    # advice died on `unrecognized arguments: -y`.
+    p.add_argument("-y", "--yes", action="store_true",
+                   help="install the boost-first rule without asking")
     args = p.parse_args(argv)
 
     if args.stdio:
@@ -2899,7 +2955,7 @@ def cmd_mcp(argv) -> int:
         # `mcphost.is_named`), so only a one-host request fails here.
         return 1 if named else 0
     if args.action == "register":
-        _offer_boost_first(settled)
+        _offer_boost_first(settled, yes=args.yes)
     journal.log("mcp", args.action, hosts=",".join(settled))
     # Same rule as `boost update` across taps: a partial sweep is a success
     # with a warning, because the hosts that worked really did work.

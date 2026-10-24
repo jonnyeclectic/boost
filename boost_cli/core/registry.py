@@ -256,7 +256,10 @@ def _file_url_path(spec: str) -> Path | None:
     Only an empty or `localhost` host is this machine; `file://otherhost/…`
     stays a URL for git to judge.
     """
-    u = urllib.parse.urlparse(spec)
+    try:
+        u = urllib.parse.urlparse(spec)
+    except ValueError:      # "Invalid IPv6 URL": an unbalanced `[` in the host
+        return None
     if u.scheme.lower() != "file" or u.netloc.lower() not in ("", "localhost"):
         return None
     return Path(urllib.request.url2pathname(u.path))
