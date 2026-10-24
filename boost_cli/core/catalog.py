@@ -74,7 +74,7 @@ from . import (
 #        NFC name the tap wrote, so a rule or workflow named by a non-ASCII
 #        file (`rules/naïve.mdc`, `commands/déploy.md`) installs by that name
 #  10 -- a description longer than `DESCRIPTION_MAX` is clamped, and a file
-#        that is not UTF-8 text (see `is_binary`) is no longer an item
+#        that is binary (see `is_binary`) is no longer an item
 CACHE_FORMAT = 10
 
 KIND_SKILL = "skill"
@@ -97,19 +97,15 @@ DOC_STEMS = {"readme", "contributing", "license", "changelog", "security",
 def is_binary(data: bytes) -> bool:
     """True when ``data`` is not a text file an agent could read.
 
-    A NUL in the first :data:`util.BINARY_SNIFF` bytes (git's rule, and the
-    window ``updatediff`` sniffs), or bytes that are not UTF-8 at all. Decoded
-    with ``errors="replace"`` instead, ``commands/x.md`` holding random bytes
-    was catalogued, installed into every agent as a workflow and served by
-    ``boost_read`` as a page of U+FFFD and raw control bytes.
+    A NUL in the first :data:`util.BINARY_SNIFF` bytes -- git's rule, and the
+    window ``updatediff`` sniffs. Text that merely is not UTF-8 (a Latin-1
+    ``café``) is still somebody's Markdown and stays an item, decoded with
+    replacement as ``rag.read_body`` decodes it; random bytes carry a NUL in
+    that window all but certainly. Without this, ``commands/x.md`` holding
+    random bytes was catalogued, installed into every agent as a workflow and
+    served by ``boost_read`` as a page of U+FFFD and raw control bytes.
     """
-    if b"\0" in data[:util.BINARY_SNIFF]:
-        return True
-    try:
-        data.decode("utf-8")
-    except UnicodeDecodeError:
-        return True
-    return False
+    return b"\0" in data[:util.BINARY_SNIFF]
 
 
 def _read(path: Path) -> tuple[dict, str] | None:
@@ -127,7 +123,7 @@ def _read(path: Path) -> tuple[dict, str] | None:
     # Universal newlines, as ``read_text`` applied: `rag.read_body` still reads
     # that way, and a CRLF body kept verbatim here would hash to a digest the
     # index's own text never reproduces.
-    text = data.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
+    text = data.decode("utf-8", errors="replace").replace("\r\n", "\n").replace("\r", "\n")
     return frontmatter.parse(text)
 
 

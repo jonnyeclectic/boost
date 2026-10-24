@@ -2496,7 +2496,8 @@ class TestDescriptionClamp:
 class TestBinaryFilesAreNotItems:
     def test_is_binary(self):
         assert catalog.is_binary(b"a\0b")
-        assert catalog.is_binary(b"\xff\xfe plain")
+        # Not UTF-8 is not binary: a Latin-1 file is still text.
+        assert not catalog.is_binary(b"\xff\xfe plain")
         assert not catalog.is_binary("café — ok".encode())
         assert not catalog.is_binary(b"")
         # The NUL window is git's: one past it does not make the file binary.
@@ -2511,9 +2512,11 @@ class TestBinaryFilesAreNotItems:
         (root / "commands" / "latin.md").write_bytes(b"caf\xe9 means coffee\n")
         (root / "commands" / "ok.md").write_text(
             "---\ndescription: fine — really\n---\nbody\n", encoding="utf-8")
-        (e,) = catalog.scan_dir(root)
-        assert (e["name"], e["kind"], e["description"]) == (
-            "ok", "workflow", "fine — really")
+        got = {e["name"]: e for e in catalog.scan_dir(root)}
+        assert sorted(got) == ["latin", "ok"]
+        assert (got["ok"]["kind"], got["ok"]["description"]) == (
+            "workflow", "fine — really")
+        assert got["latin"]["description"] == "caf\ufffd means coffee"
 
     def test_binary_rule_is_skipped(self, sandbox):
         root = sandbox / "tap"
