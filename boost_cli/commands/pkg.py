@@ -1167,13 +1167,17 @@ def cmd_sync(argv: list[str]) -> int:
     ap.add_argument("--diff", action="store_true",
                     help="show the plan without applying it")
     ap.add_argument("--prune", action="store_true",
-                    help="also delete store dirs that copy another tool's "
-                         "skills, drop boost's Claude Code link to a skill an "
+                    help="also move store dirs that copy another tool's "
+                         "skills to quarantine (~/.agents/.quarantine), drop "
+                         "boost's Claude Code link to a skill an "
                          "enabled plugin ships identically, and remove links "
                          "outside a declared --agent scope")
     ap.add_argument("--json", action="store_true", help="machine-readable output")
     ap.add_argument("-y", "--yes", action="store_true",
                     help="skip the --prune confirmation prompts")
+    ap.add_argument("--include-changed", action="store_true",
+                    help="with --prune, also quarantine copies that differ "
+                         "from the original (local edits, such as a port)")
     ap.add_argument("--rebuild-lock", action="store_true",
                     help="set an unreadable lock file aside (its bytes are "
                          "kept) and re-record the store into a new one")
@@ -1303,16 +1307,28 @@ def cmd_sync(argv: list[str]) -> int:
     # A store dir holding a git repository is never offered: its history is
     # in no copy, so it is named and kept rather than put to a confirm.
     offer = [r for r in copies if not store.is_repo_copy(r)]
+    # A copy that differs carries someone's edits, and `--yes` or
+    # BOOST_ASSUME_YES answer every confirm at once — so it needs its own
+    # flag, naming the risk, before it leaves the store.
+    changed = [r for r in offer if r[3] == foreign.DIFFERS
+               and not args.include_changed]
+    offer = [r for r in offer if r not in changed]
     pruned: list[str] = []
     kept: list[str] = []
     declined_copies = False
+    stamp = store.quarantine_stamp()
     if args.prune:
         kept += ["kept %s: %s" % (_tilde(store.skill_store_dir(r[0])),
                                   store.REPO_KEPT)
-                 for r in copies if r not in offer]
+                 for r in copies if store.is_repo_copy(r)]
+        kept += ["kept %s: it differs from the original (local changes) — "
+                 "`boost sync --prune --include-changed` moves it to "
+                 "quarantine" % _tilde(store.skill_store_dir(r[0]))
+                 for r in changed]
     if args.prune and offer:
         if _go(args, _foreign_prompt(offer)):
-            for row, why in zip(offer, store.remove_foreign_copies(offer),
+            for row, why in zip(offer,
+                                store.remove_foreign_copies(offer, stamp),
                                 strict=True):
                 if why is None:
                     pruned.append(row[0])
@@ -1403,7 +1419,9 @@ def cmd_sync(argv: list[str]) -> int:
                        ", ".join(unrecorded)) if unrecorded else "",
                     lockfile.remedy(integ)), wrap=True)
     for name in pruned:
-        out.ok("pruned %s" % _tilde(store.skill_store_dir(name)))
+        out.ok("pruned %s — moved to %s"
+               % (_tilde(store.skill_store_dir(name)),
+                  _tilde(paths.quarantine_dir() / stamp / name)))
     for line in store.older_copy_lines(plan["older_copies"]):
         out.info(line, wrap=True)
     # A decline names what it left rather than the flag the user just ran.
@@ -1483,22 +1501,23 @@ def _go(args, prompt: str) -> bool:
 def _foreign_prompt(rows: list) -> str:
     """The `--prune` confirm for copies of other tools' skills, with its cost.
 
-    Deleting one costs more than it looks: the agents that read the store
-    natively lose the skill, and a changed copy — a port, say — loses the
-    change. Both are said before the question rather than discovered after.
+    Moving one out costs more than it looks: the agents that read the store
+    natively lose the skill, and a changed copy — a port, say — takes the
+    change with it into quarantine. Both are said before the question rather
+    than discovered after.
     """
     differ = sum(1 for r in rows if r[3] == foreign.DIFFERS)
     native = [agents.display_name(a) for a in agents.native_store_agents()]
     costs = []
     if differ:
-        costs.append("%s from the original, and those changes go too"
+        costs.append("%s from the original, and those changes go with it"
                      % ("it differs" if len(rows) == 1 else "%d differ" % differ))
     if native:
         costs.append("%s read%s %s directly and will stop seeing %s"
                      % (" and ".join(native), "s" if len(native) == 1 else "",
                         _tilde(paths.store_dir()),
                         "it" if len(rows) == 1 else "them"))
-    return ("Delete %s that %s another tool's skill%s%s: %s?"
+    return ("Move %s that %s another tool's skill%s to quarantine%s: %s?"
             % (_plural(len(rows), "store dir"),
                "copies" if len(rows) == 1 else "copy",
                "" if len(rows) == 1 else "s",

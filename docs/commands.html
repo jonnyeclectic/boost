@@ -104,7 +104,7 @@
       <div class="group-h">Install &amp; lifecycle</div>
       <a class="cmd-link" href="#cmd-install" data-search="install install a skill from a tap registry  --force --path p --agent a --scope {user,project} --local --global --dry-run --no-deps --no-mcp --as-skill --no-as-skill name">install</a>
       <a class="cmd-link" href="#cmd-uninstall" data-search="uninstall remove an installed skill, rule, or workflow  --scope {user,project} --local --global --kind {skill,rule,workflow} -y, --yes name">uninstall</a>
-      <a class="cmd-link" href="#cmd-sync" data-search="sync reconcile installed skills &amp; symlinks against the lock file  --diff --prune --json -y, --yes --rebuild-lock">sync</a>
+      <a class="cmd-link" href="#cmd-sync" data-search="sync reconcile installed skills &amp; symlinks against the lock file  --diff --prune --json -y, --yes --include-changed --rebuild-lock">sync</a>
       <a class="cmd-link" href="#cmd-update" data-search="update sync taps or update installed skills  --taps-only -y, --yes --force --discard-edits --allow-downgrade --shards --json tap">update</a>
       <a class="cmd-link" href="#cmd-reinstall" data-search="reinstall reinstall a skill, rule or workflow (force) reinstall an installed skill, rule or workflow (force) --all --scope {user,project} --local --global name">reinstall</a>
       <a class="cmd-link" href="#cmd-bundle" data-search="bundle export/install skill sets via a boostfile  --dry-run {dump,install} file">bundle</a>
@@ -252,16 +252,17 @@
           <div class="arg"><code>-y, --yes</code><span>skip the confirmation prompt</span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-sync" data-search="sync reconcile installed skills &amp; symlinks against the lock file  --diff --prune --json -y, --yes --rebuild-lock">
+      <section class="cmd" id="cmd-sync" data-search="sync reconcile installed skills &amp; symlinks against the lock file  --diff --prune --json -y, --yes --include-changed --rebuild-lock">
         <h3><span class="cname">sync</span><span class="gtag">pkg</span></h3>
         <p class="summary">Reconcile installed skills &amp; symlinks against the lock file</p>
-        <pre class="syn">boost sync [--diff] [--prune] [--json] [-y] [--rebuild-lock]</pre>
+        <pre class="syn">boost sync [--diff] [--prune] [--json] [-y] [--include-changed] [--rebuild-lock]</pre>
         <div class="args-h">Options</div>
         <div class="args">
           <div class="arg"><code>--diff</code><span>show the plan without applying it</span></div>
-          <div class="arg"><code>--prune</code><span>also delete store dirs that copy another tool&#x27;s skills, drop boost&#x27;s Claude Code link to a skill an enabled plugin ships identically, and remove links outside a declared --agent scope</span></div>
+          <div class="arg"><code>--prune</code><span>also move store dirs that copy another tool&#x27;s skills to quarantine (~/.agents/.quarantine), drop boost&#x27;s Claude Code link to a skill an enabled plugin ships identically, and remove links outside a declared --agent scope</span></div>
           <div class="arg"><code>--json</code><span>machine-readable output</span></div>
           <div class="arg"><code>-y, --yes</code><span>skip the --prune confirmation prompts</span></div>
+          <div class="arg"><code>--include-changed</code><span>with --prune, also quarantine copies that differ from the original (local edits, such as a port)</span></div>
           <div class="arg"><code>--rebuild-lock</code><span>set an unreadable lock file aside (its bytes are kept) and re-record the store into a new one</span></div>
         </div>
       </section>

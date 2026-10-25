@@ -191,6 +191,17 @@ def held_skills_dir() -> Path:
     return state_dir() / "held"
 
 
+def quarantine_dir() -> Path:
+    """Where `boost sync --prune` moves the store dirs it takes out.
+
+    Beside the store, not in it: Codex and Gemini CLI read the store
+    directly, and sync would see a dir left inside as unrecorded. Not under
+    :func:`held_skills_dir` either, whose children are keyed by skill name —
+    a skill called ``pruned`` would collide with a fixed subdir there.
+    """
+    return store_dir().parent / ".quarantine"
+
+
 def tap_refresh_marker() -> Path:
     """File whose mtime records when the taps were last refreshed.
 
