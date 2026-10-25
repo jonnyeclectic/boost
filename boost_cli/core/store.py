@@ -9066,8 +9066,19 @@ def _still_a_copy(row: tuple, lock: dict, fresh: dict[str, list]) -> str | None:
     return None
 
 
-def remove_foreign_copies(rows: list) -> list[str | None]:
-    """Delete the store dirs ``rows`` called other tools' copies.
+def quarantine_stamp() -> str:
+    """One folder name per `--prune` run, so a run's moves can be undone together."""
+    import time
+    return time.strftime("%Y%m%dT%H%M%S")
+
+
+def remove_foreign_copies(rows: list,
+                          stamp: str | None = None) -> list[str | None]:
+    """Move the store dirs ``rows`` called other tools' copies to quarantine.
+
+    Moved under ``quarantine_dir()/stamp`` rather than deleted: the checks
+    below decide "copy" by name and content, and a yes given in bulk once
+    took 26 hand-edited ports with it. A move costs nothing to undo.
 
     ``rows`` are :func:`classify_unrecorded`'s ``foreign_store``. Returns, row
     by row, None for a dir that is gone or why it was kept. What made each one
@@ -9097,21 +9108,32 @@ def remove_foreign_copies(rows: list) -> list[str | None]:
     lock = lockfile.installed()
     fresh = classify_unrecorded([r[0] for r in rows if r[0] not in lock
                                  and os.path.lexists(skill_store_dir(r[0]))])
+    held_root = paths.quarantine_dir() / (stamp or quarantine_stamp())
     kept: list[str | None] = []
     for row in rows:
         why = _still_a_copy(row, lock, fresh)
+        held = held_root / row[0]
+        if why is None and os.path.lexists(held):
+            # Moving onto it would nest the dir or replace an earlier copy;
+            # either loses track of one of the two.
+            why = "a quarantined copy already sits at %s" % paths.tilde(held)
         if why is None:
             # Per row, because the result is: one dir that refuses the delete
             # (a subdir made unreadable since the check) used to end the run
             # at exit 70 with no word on the rows already removed.
             try:
-                util.remove_path(skill_store_dir(row[0]))
+                held_root.mkdir(parents=True, exist_ok=True)
+                # shutil.move renames a symlinked entry as the link, so the
+                # tree it points at is left where it is.
+                shutil.move(str(skill_store_dir(row[0])), str(held))
             except OSError as err:
-                why = ("deleting it stopped at %s: %s — what is left is "
-                       "still there" % (paths.tilde(err.filename or row[0]),
-                                        err.strerror or err))
+                why = ("moving it to quarantine stopped at %s: %s — what is "
+                       "left is still there"
+                       % (paths.tilde(err.filename or row[0]),
+                          err.strerror or err))
             else:
-                journal.log("prune", row[0], copy_of=row[2])
+                journal.log("prune", row[0], copy_of=row[2],
+                            quarantined=str(held))
         kept.append(why)
     return kept
 
