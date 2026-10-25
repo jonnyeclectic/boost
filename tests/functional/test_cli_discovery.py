@@ -2032,6 +2032,12 @@ class TestBrowse:
 class TestBrowseAurora:
     """The curses browser paints itself in the single-source Aurora palette."""
 
+    @pytest.fixture(autouse=True)
+    def _colour_allowed(self, monkeypatch):
+        # _browse_theme honours NO_COLOR, so one inherited from the shell
+        # (agents and CI wrappers often export it) hid every colour assertion.
+        monkeypatch.delenv("NO_COLOR", raising=False)
+
     def test_curses_rgb1000_parity_with_tokens(self):
         from boost_cli.commands import discovery
         from boost_cli.core import output as out
