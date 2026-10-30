@@ -274,7 +274,7 @@ def fallback_note() -> str:
     # the command unquoted, which zsh rejects with "no matches found".
     from . import dense
     return ("dense search needs the `[rag]` extra — `%s`; using the BM25 "
-            "full-content engine" % dense.install_extra())
+            "full-content engine" % dense.extra_hint())
 
 
 def embed(texts: list[str], input_type: str | None = None,

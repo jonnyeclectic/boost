@@ -3122,6 +3122,83 @@ class TestSelfUpdate:
         assert "cannot work out how boost was installed" in r.err
         assert "pipx upgrade boost-skill-cli" in r.err
 
+    def test_python_dry_run_names_the_pipx_reinstall(self, boost, sandbox,
+                                                     monkeypatch):
+        self._pipx_install(monkeypatch, sandbox)
+        monkeypatch.setattr("boost_cli.core.selfupdate.pipx_version",
+                            lambda *a, **k: (1, 18))
+
+        def no_run(*a, **kw):
+            raise AssertionError("--dry-run must not reinstall")
+        monkeypatch.setattr("boost_cli.core.selfupdate.run_upgrade", no_run)
+        r = boost("self-update", "--python", "3.13", "--dry-run")
+        assert "installed with: pipx" in r.out
+        assert ("would run: /opt/bin/pipx reinstall --python 3.13 "
+                "--fetch-python=always boost-skill-cli") in r.out
+
+    def test_python_reinstalls_and_reports_the_observed_interpreter(
+            self, boost, sandbox, monkeypatch):
+        self._pipx_install(monkeypatch, sandbox)
+        monkeypatch.setattr("boost_cli.core.selfupdate.pipx_version",
+                            lambda *a, **k: (1, 18))
+        ran = []
+        monkeypatch.setattr("boost_cli.core.selfupdate.run_upgrade",
+                            lambda cmd, **kw: ran.append((cmd, kw)))
+        monkeypatch.setattr(
+            "boost_cli.core.selfupdate.observed_python",
+            lambda: ("3.13.9", "/x/pipx/py/cpython-3.13.9-macos-aarch64"))
+        r = boost("self-update", "--python", "3.13")
+        assert ran == [(["/opt/bin/pipx", "reinstall", "--python", "3.13",
+                         "--fetch-python=always", "boost-skill-cli"],
+                        {"timeout": 900.0})]
+        assert "boost now runs on Python 3.13.9" in r.out
+        assert "Homebrew" not in r.out + r.err
+        ev = journal.events(action="self-update")[0]
+        assert ev["method"] == "pipx" and ev["python"] == "3.13.9"
+
+    def test_python_that_lands_on_homebrew_is_called_out(
+            self, boost, sandbox, monkeypatch):
+        # An older pipx gets `--fetch-missing-python`, which prefers a
+        # `python3.13` on PATH — Homebrew's, on the machines that need this.
+        self._pipx_install(monkeypatch, sandbox)
+        monkeypatch.setattr("boost_cli.core.selfupdate.pipx_version",
+                            lambda *a, **k: (1, 7))
+        ran = []
+        monkeypatch.setattr("boost_cli.core.selfupdate.run_upgrade",
+                            lambda cmd, **kw: ran.append(cmd))
+        brew = "/opt/homebrew/opt/python@3.13/Frameworks/Python.framework"
+        monkeypatch.setattr("boost_cli.core.selfupdate.observed_python",
+                            lambda: ("3.13.18", brew))
+        r = boost("self-update", "--python", "3.13")
+        assert "--fetch-missing-python" in ran[0]
+        said = " ".join((r.out + r.err).split())
+        assert "boost now runs on Python 3.13.18" in said
+        assert "that Python is Homebrew's (%s)" % brew in said
+        assert "upgrade pipx to 1.18 or later" in said
+
+    def test_python_unobserved_says_so_rather_than_claiming_it(
+            self, boost, sandbox, monkeypatch):
+        self._pipx_install(monkeypatch, sandbox)
+        monkeypatch.setattr("boost_cli.core.selfupdate.run_upgrade",
+                            lambda cmd, **kw: None)
+        monkeypatch.setattr("boost_cli.core.selfupdate.observed_python",
+                            lambda: None)
+        r = boost("self-update", "--python", "3.13")
+        assert "reinstalled via pipx; run `boost --version` to confirm" in r.out
+        assert "now runs on" not in r.out
+        assert journal.events(action="self-update")[0]["python"] == "3.13"
+
+    def test_python_on_a_checkout_is_refused_before_anything_runs(
+            self, boost, sandbox, monkeypatch):
+        monkeypatch.setattr("boost_cli.core.gitutil.is_repo", lambda p: True)
+
+        def no_git(*a, **kw):
+            raise AssertionError("--python must not pull a checkout")
+        monkeypatch.setattr("boost_cli.core.gitutil.run", no_git)
+        r = boost("self-update", "--python", "3.13", expect=1)
+        assert "installed with a git checkout" in r.err
+        assert "python3.13 -m venv --clear .venv" in r.err
+
     def test_git_checkout_dry_run_changes_nothing(self, boost, sandbox,
                                                   monkeypatch):
         monkeypatch.setattr("boost_cli.core.gitutil.is_repo", lambda p: True)

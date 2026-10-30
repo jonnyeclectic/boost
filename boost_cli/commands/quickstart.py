@@ -428,7 +428,7 @@ def cmd_quickstart(argv) -> int:
             elif not dense.have_backend():
                 out.info("0 because semantic search needs the extra: `%s` — "
                          "keyword search works without it"
-                         % dense.install_extra(), wrap=True)
+                         % dense.extra_hint(), wrap=True)
             elif manifest is None:
                 _muted("(0 because the shard manifest could not be read — "
                        "keyword search is unaffected)")
@@ -470,7 +470,7 @@ def cmd_quickstart(argv) -> int:
         out.info(out.role("skipped vectors as asked", "muted"))
     elif not dense.have_backend():
         out.info("semantic search needs the extra: `%s`, then `boost "
-                 "quickstart` again" % dense.install_extra(), wrap=True)
+                 "quickstart` again" % dense.extra_hint(), wrap=True)
     elif want_vectors:
         # The whole vector step was skipped, and the only word about it was a
         # warning many screens back. Without this the run ends "✓ ready" as

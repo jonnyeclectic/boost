@@ -2915,9 +2915,17 @@ def cmd_self_update(argv) -> int:
         description="Update boost itself to the latest version")
     p.add_argument("--dry-run", action="store_true",
                    help="show how boost would update itself, change nothing")
+    p.add_argument("--python", type=util.nonempty_str, metavar="VERSION",
+                   help="rebuild boost's pipx or uv tool venv on this Python "
+                        "(e.g. 3.13), downloading the manager's own build "
+                        "of it, and keep its extras — the way off an "
+                        "interpreter Homebrew removed, or one the [rag] "
+                        "extra has no wheel for")
     args = p.parse_args(argv)
 
     method = selfupdate.detect()
+    if args.python is not None:
+        return _self_update_python(method, args.python, dry_run=args.dry_run)
     if method != selfupdate.GIT:
         return _self_update_package(method, dry_run=args.dry_run)
     return _self_update_git(dry_run=args.dry_run)
@@ -2945,6 +2953,38 @@ def _self_update_package(method: str, dry_run: bool) -> int:
         out.ok("upgraded via %s; run `boost --version` to confirm" % method)
         return 0
     return _report_no_op(method, new)
+
+
+def _self_update_python(method: str, python: str, dry_run: bool) -> int:
+    """Rebuild a pipx / uv-tool venv on another interpreter, keeping extras.
+
+    The observed interpreter is reported, not the requested one: the venv
+    keeps its path, so a fresh process at `sys.executable` is the honest
+    witness — and a manager that resolved `3.13` to something else says so.
+    """
+    cmd = selfupdate.reinstall_command(method, python)  # refuses pip/git
+    if dry_run:
+        out.info("installed with: %s" % method)
+        out.info("would run: %s" % shlex.join(cmd))
+        return 0
+    out.info("reinstalling via %s on Python %s: %s"
+             % (method, python, shlex.join(cmd)), wrap=True)
+    selfupdate.run_upgrade(cmd, timeout=selfupdate.REINSTALL_TIMEOUT)
+    seen = selfupdate.observed_python()
+    journal.log("self-update", __version__, previous=__version__,
+                method=method, python=seen[0] if seen else python)
+    if not seen:
+        out.ok("reinstalled via %s; run `boost --version` to confirm" % method)
+        return 0
+    out.ok("boost now runs on Python %s; `boost doctor` checks semantic "
+           "search" % seen[0])
+    if selfupdate.homebrew_python(seen[1]):
+        # An older pipx, or a path, can land the venv back on a formula.
+        out.warn("that Python is Homebrew's (%s), which the next `brew "
+                 "upgrade` past it deletes — upgrade pipx to 1.18 or later "
+                 "and re-run with a version, so boost fetches its own"
+                 % seen[1], wrap=True)
+    return 0
 
 
 def _report_no_op(method: str, here: str) -> int:

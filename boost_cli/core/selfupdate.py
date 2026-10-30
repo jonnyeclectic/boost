@@ -20,6 +20,7 @@ from __future__ import annotations
 import http.client
 import json
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -222,6 +223,244 @@ def force_command(method: str, version: str) -> list[str]:
     raise BoostError(
         "cannot work out how boost was installed, so it cannot update itself",
         hint="install the version by hand, e.g. `pipx install --force %s`" % spec)
+
+
+#: Seconds a `--python` reinstall may take. Not the upgrade's 300: the manager
+#: may first download a whole interpreter, then every dependency again — the
+#: [rag] extra's onnxruntime alone is ~15 MB — into a venv it has just emptied.
+REINSTALL_TIMEOUT = 900.0
+
+# A Python *version* (`3.13`, `3.13.9`), as opposed to an interpreter path or a
+# name like `python3.13`. Only a version can be fetched, so only a version gets
+# the fetch flags below.
+_PY_VERSION = re.compile(r"^\d+\.\d+(?:\.\d+)?$")
+
+
+#: pipx's flag for "use a python-build-standalone interpreter even when one
+#: is on PATH". The only spelling that keeps a venv off Homebrew's
+#: ``python@3.X`` on a machine that has one — and every Mac that hit this has.
+FETCH_ALWAYS = "--fetch-python=always"
+#: The pre-1.18 alias for ``--fetch-python=missing``. It downloads only when no
+#: ``python3.13`` is found, so on a Homebrew machine it binds to Homebrew's.
+FETCH_MISSING = "--fetch-missing-python"
+#: The first pipx that accepts :data:`FETCH_ALWAYS`.
+PIPX_FETCH_ALWAYS = (1, 18)
+
+
+def pipx_version(pipx: str, timeout: float = 10.0) -> tuple[int, ...] | None:
+    """``pipx --version`` as a tuple, or None when it could not be read."""
+    try:
+        proc = subprocess.run([pipx, "--version"], capture_output=True,
+                              text=True, encoding="utf-8", errors="replace",
+                              timeout=timeout)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    m = re.match(r"\s*(\d+)\.(\d+)", proc.stdout or "")
+    if proc.returncode != 0 or not m:
+        return None
+    return int(m.group(1)), int(m.group(2))
+
+
+def pipx_fetch_flag(version: tuple[int, ...] | None) -> str:
+    """The strongest fetch flag a pipx of ``version`` accepts.
+
+    An unreadable version gets the alias: every pipx from 1.5 accepts it, and
+    a command that runs on Homebrew's 3.13 beats one that does not run —
+    :func:`homebrew_python` then says which interpreter it landed on.
+    """
+    if version is not None and version >= PIPX_FETCH_ALWAYS:
+        return FETCH_ALWAYS
+    return FETCH_MISSING
+
+
+#: The receipt fields :func:`uv_requirement` knows how to replay. Anything else
+#: — ``with``, constraints, overrides, options — is state a re-derived ``uv
+#: tool install`` would drop, so its presence sends the caller to ``upgrade``.
+_UV_TOOL_KEYS = frozenset({"requirements", "python", "entrypoints"})
+_UV_REQ_KEYS = frozenset({"name", "extras", "specifier"})
+
+
+def uv_requirement(prefix: Path | None = None) -> str | None:
+    """This uv tool's requirement as ``uv tool install`` takes it, or None.
+
+    Read from ``uv-receipt.toml``, and only for the plain shape — a single
+    index requirement for boost, with extras and a specifier at most. None for
+    anything else (a directory, a git URL, ``--with``), which the caller then
+    rebuilds with ``uv tool upgrade``: that replays every receipt field, but
+    leaves the receipt's own ``python`` naming the interpreter it left.
+    """
+    import tomllib
+    prefix = Path(sys.prefix) if prefix is None else Path(prefix)
+    try:
+        with (prefix / "uv-receipt.toml").open("rb") as fh:
+            tool = tomllib.load(fh)["tool"]
+        reqs = tool["requirements"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    if (not isinstance(tool, dict) or set(tool) - _UV_TOOL_KEYS
+            or not isinstance(reqs, list) or len(reqs) != 1
+            or not isinstance(reqs[0], dict)):
+        return None
+    req = reqs[0]
+    name = str(req.get("name", "")).lower().replace("_", "-")
+    if set(req) - _UV_REQ_KEYS or name != DIST:
+        return None
+    extras = req.get("extras") or []
+    spec = DIST
+    if extras:
+        spec += "[%s]" % ",".join(str(e) for e in extras)
+    return spec + str(req.get("specifier") or "")
+
+
+def reinstall_command(method: str, python: str,
+                      prefix: Path | None = None) -> list[str]:
+    """The argv that rebuilds this install's venv on ``python``, keeping it.
+
+    It exists because a pipx or uv venv is welded to the interpreter that made
+    it. Homebrew removes ``python@X`` when it upgrades past it, and every venv
+    built on that formula is left with a ``bin/python`` symlink into a deleted
+    directory — measured on 2026-10-28, when ``python@3.14`` went and
+    ``boost`` answered "bad interpreter: no such file or directory". It is also
+    the way off an interpreter the ``[rag]`` extra's onnxruntime has no wheel
+    for (see :data:`localembed.ONNX_WHEEL_CEILING`).
+
+    * **pipx** — ``pipx reinstall --python V --fetch-python=always``. pipx
+      1.18.5's own help: reinstall "is uninstalled, then installed with pipx
+      install PACKAGE with the same options used in the original install", so
+      ``boost-skill-cli[rag]`` keeps its extra. ``always`` and not ``missing``
+      (alias ``--fetch-missing-python``): pipx resolves a version against PATH
+      first and downloads only when that fails, and a Homebrew Mac has
+      ``python3.13`` on PATH — measured: ``missing`` rebuilt the venv on
+      ``/opt/homebrew/opt/python@3.13``, the formula the next cleanup removes.
+      ``always`` is new in 1.18, so an older pipx (read off ``pipx
+      --version``) gets the alias rather than an unknown argument.
+    * **uv tool** — ``uv tool install --force --managed-python --python V``
+      with the requirement read back from ``uv-receipt.toml``
+      (:func:`uv_requirement`). Install rather than ``uv tool upgrade
+      --reinstall --python V``: both move the environment, but only install
+      rewrites the receipt's ``python`` — measured with uv 0.13.6, upgrade
+      left ``python = "3.15"`` behind, so the next rebuild from the receipt
+      would land back on the interpreter this moved off. A receipt this cannot
+      replay whole falls back to upgrade, which can. ``--managed-python``
+      makes uv use (and download) its own cpython rather than Homebrew's.
+
+    The fetch flags ride only on a *version*: given a path, there is nothing
+    to fetch, and ``--managed-python`` would refuse the interpreter it was
+    pointed at. Every other install method is refused — pip, a uv-pip venv and
+    a checkout all live in a venv boost did not create and cannot rebuild
+    without knowing what else is in it.
+
+    Shown to a person, the argv goes through ``shlex.join``: a requirement
+    like ``boost-skill-cli[rag]>=1.2`` is a glob and a redirect to a shell.
+    """
+    python = python.strip()
+    if not python or python.startswith("-"):
+        # `-` first would be read by the manager as a flag of its own.
+        raise BoostError(
+            "--python needs a Python version or an interpreter path",
+            hint="e.g. `boost self-update --python %s`" % _recommended())
+    version = bool(_PY_VERSION.match(python))
+    if method == PIPX:
+        found = shutil.which("pipx")
+        # No pipx here means the user installs one, which is new enough.
+        flag = pipx_fetch_flag(pipx_version(found)) if found else FETCH_ALWAYS
+        tail = ["reinstall", "--python", python,
+                *([flag] if version else []), DIST]
+        return [_require("pipx", shlex.join(tail)), *tail]
+    if method == UV_TOOL:
+        managed = ["--managed-python"] if version else []
+        req = uv_requirement(prefix)
+        if req:
+            tail = ["tool", "install", "--force", *managed, "--python", python,
+                    req]
+        else:
+            tail = ["tool", "upgrade", "--reinstall", *managed, "--python",
+                    python, DIST]
+        return [_require("uv", shlex.join(tail)), *tail]
+    raise BoostError(
+        "--python rebuilds a pipx or uv tool install, and this boost was "
+        "installed with %s" % _method_name(method),
+        hint=move_hint(method, python))
+
+
+def _recommended() -> str:
+    """The interpreter the hints name — `localembed`'s, so they agree."""
+    from . import localembed
+    return localembed.RECOMMENDED_PYTHON
+
+
+def _method_name(method: str) -> str:
+    """`method` as a sentence says it."""
+    return {GIT: "a git checkout", UV_PIP: "uv pip", PIP: "pip"}.get(
+        method, "a method boost cannot identify")
+
+
+def move_command(method: str, python: str) -> str:
+    """The bare command that puts boost on ``python``, for an install
+    `--python` cannot rebuild.
+
+    A checkout rebuilds its own venv; anything else (pip, uv pip, unknown) is
+    offered a pipx install that downloads its own interpreter — the one way
+    off both a removed Homebrew formula and a Python the extra has no wheel
+    for that boost can name without knowing what else lives in that venv.
+    """
+    py = python if _PY_VERSION.match(python) else _recommended()
+    if method == GIT:
+        # Not `make venv`: its recipe runs `python3`, which is the very
+        # interpreter this user is trying to leave.
+        return ("python%s -m venv --clear .venv && .venv/bin/pip install -e "
+                "'.[rag]'" % py)
+    return 'pipx install --python %s %s "%s[rag]"' % (py, FETCH_ALWAYS, DIST)
+
+
+def move_hint(method: str, python: str) -> str:
+    """:func:`move_command` as a sentence.
+
+    Also the clause `dense` words its ``no-local-wheel`` remedy with, for the
+    same installs: one answer to "how do I get this boost onto 3.13".
+    """
+    if method == GIT:
+        return ("recreate the checkout's venv on that interpreter: `%s`"
+                % move_command(method, python))
+    return ("pipx can own the interpreter for you: `%s`"
+            % move_command(method, python))
+
+
+def observed_python(timeout: float = 30.0) -> tuple[str, str] | None:
+    """``(version, sys.base_prefix)`` of what `sys.executable` runs *now*.
+
+    After a `--python` reinstall the venv sits at the same path on a new
+    interpreter, so this process's own ``sys.version_info`` is the old answer —
+    the question has to go to a fresh process, as :func:`observed_version`'s
+    does. The base prefix comes along because *which* 3.13 matters as much as
+    the version: :func:`homebrew_python` reads it. None means it was not seen,
+    and the caller must not invent one.
+    """
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-I", "-c",
+             "import sys; print('%d.%d.%d' % sys.version_info[:3]); "
+             "print(sys.base_prefix)"],
+            capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=timeout)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    lines = (proc.stdout or "").strip().splitlines()
+    if len(lines) != 2 or not re.fullmatch(r"\d+\.\d+\.\d+", lines[0]):
+        return None
+    return lines[0], lines[1]
+
+
+def homebrew_python(base_prefix: str) -> bool:
+    """True when ``base_prefix`` is a Homebrew ``python@3.X`` formula.
+
+    Those are the interpreters ``brew upgrade`` deletes: macOS's
+    ``/opt/homebrew/opt/python@3.13/...`` (``/usr/local`` on Intel), the
+    ``Cellar/python@3.13/...`` it resolves to, and Linuxbrew's ``opt``.
+    """
+    return "/opt/python@" in base_prefix or "/Cellar/python@" in base_prefix
 
 
 def latest_version(timeout: float = 10.0) -> str | None:

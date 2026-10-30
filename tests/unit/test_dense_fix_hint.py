@@ -35,6 +35,7 @@ ALL_REASONS = [
     "no-backend",
     "no-extension-load",
     "no-key",
+    "no-local-wheel",
     "corrupt",
     "no-store",
     "version-changed",
@@ -75,9 +76,12 @@ class TestWording:
         assert "`" in hint, "%r gives no command to run: %r" % (reason, hint)
         # Three families, because the third one is the point: the kill switch
         # is fixed by neither pip nor boost, and a rule that admitted only
-        # those two is what left BOOST_NO_EMBED advertising an API key.
+        # those two is what left BOOST_NO_EMBED advertising an API key. A
+        # fourth for `no-local-wheel`: no command run on *this* interpreter
+        # fixes it, so its answer moves boost with `--python`.
         assert any(cmd in hint for cmd in
-                   ("boost reindex", "pip install", "unset BOOST_NO_EMBED")), hint
+                   ("boost reindex", "pip install", "unset BOOST_NO_EMBED",
+                    "--python 3.")), hint
 
     def test_missing_backend_says_install_not_set_a_key(self):
         # The [rag] extra carries a local embedding model, so the extra alone is
@@ -222,9 +226,12 @@ class TestNoKeyReadsTheStore:
         assert dense.fix_hint("no-key") == _table("no-key")
 
     @pytest.mark.parametrize("reason", [r for r in ALL_REASONS
-                                        if r not in ("no-key", "provider-changed")])
+                                        if r not in ("no-key", "no-local-wheel",
+                                                     "provider-changed")])
     def test_other_reasons_ignore_the_status_dict(self, reason):
-        # Only the two reasons a lost key can land on read the built store.
+        # Only the reasons a lost key can land on read the built store
+        # (`no-local-wheel` is `no-key` on an interpreter with no onnxruntime
+        # wheel, and reads it for the same reason).
         # ("no-store" reads the live provider, which this dict leaves out —
         # see TestKeyedMachineWithNoStore.) If a status dict started steering
         # the rest, the "these never chain" property would be back in play.

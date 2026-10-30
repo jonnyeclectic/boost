@@ -249,6 +249,31 @@ class TestQuickstartWithoutTheExtra:
         extra = dense.install_extra()
         assert dry.count(extra) == live.count(extra) == 1
 
+    def test_past_the_onnx_ceiling_both_lines_move_boost(
+            self, boost, monkeypatch):
+        # On a Python onnxruntime has no wheel for, `pipx inject` installs
+        # the store and no model; both lines must name the move to 3.13.
+        import importlib.util
+
+        from boost_cli.core import dense, embed, localembed, selfupdate
+        real = importlib.util.find_spec
+        monkeypatch.setattr(
+            importlib.util, "find_spec",
+            lambda name, *a, **k: None if name == "onnxruntime"
+            else real(name, *a, **k))
+        monkeypatch.setattr(localembed, "ONNX_WHEEL_CEILING", (3, 0))
+        monkeypatch.setattr(selfupdate, "detect", lambda *a, **k: "pipx")
+        for env in embed.KEY_ENV.values():
+            monkeypatch.delenv(env, raising=False)
+        monkeypatch.setattr(dense, "have_backend", lambda: False)
+        _fake_add_many(monkeypatch, ["ok"] * 7)
+        want = ('`pipx uninstall boost-skill-cli && pipx install --python 3.13 '
+                '--fetch-python=always "boost-skill-cli[rag]"`')
+        dry = _flat(boost("quickstart", "--dry-run").out)
+        live = _flat(boost("quickstart").out)
+        assert want in dry and want in live
+        assert "pipx inject" not in dry + live
+
     def test_zero_shards_says_why_it_is_zero(self, boost, monkeypatch):
         """"import 0 shard(s)" reads as "none are published".
 

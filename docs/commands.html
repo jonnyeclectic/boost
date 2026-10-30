@@ -194,7 +194,7 @@
       <a class="cmd-link" href="#cmd-mcp" data-search="mcp register boost as an mcp server (claude code, gemini cli, antigravity cli, codex cli) register boost as an mcp server for your agent clis --host h --stdio --dry-run --force --seed --no-seed {register,unregister}">mcp</a>
       <a class="cmd-link" href="#cmd-hooks" data-search="hooks manage agent hooks (claude code, gemini cli, codex cli) manage agent hooks (scope- and host-aware) in an agent&#x27;s settings --host h -c, --command command -n, --name name -s, --scope {global,project} -m, --matcher matcher --timeout timeout --json --force {add,remove,list} event">hooks</a>
       <a class="cmd-link" href="#cmd-bmad" data-search="bmad bmad method autopilot — `bmad on` routes every task to a persona bmad method autopilot: personas, prompt routing, workflows -s, --scope {project,global} --modules modules -y, --yes --startup --plain --force --host h action value">bmad</a>
-      <a class="cmd-link" href="#cmd-self-update" data-search="self-update update boost itself to the latest version  --dry-run">self-update</a>
+      <a class="cmd-link" href="#cmd-self-update" data-search="self-update update boost itself to the latest version  --dry-run --python version">self-update</a>
     </div>
     <div class="group" data-group="team">
       <div class="group-h">Team &amp; sharing</div>
@@ -1243,13 +1243,14 @@
           <div class="arg"><code>--host H</code><span>on/startup: hosts to hook (claude | gemini | codex; default auto: claude + any in use) · route/orient: output format</span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-self-update" data-search="self-update update boost itself to the latest version  --dry-run">
+      <section class="cmd" id="cmd-self-update" data-search="self-update update boost itself to the latest version  --dry-run --python version">
         <h3><span class="cname">self-update</span><span class="gtag">cfg</span></h3>
         <p class="summary">Update boost itself to the latest version</p>
-        <pre class="syn">boost self-update [--dry-run]</pre>
+        <pre class="syn">boost self-update [--dry-run] [--python VERSION]</pre>
         <div class="args-h">Options</div>
         <div class="args">
           <div class="arg"><code>--dry-run</code><span>show how boost would update itself, change nothing</span></div>
+          <div class="arg"><code>--python VERSION</code><span>rebuild boost&#x27;s pipx or uv tool venv on this Python (e.g. 3.13), downloading the manager&#x27;s own build of it, and keep its extras — the way off an interpreter Homebrew removed, or one the [rag] extra has no wheel for</span></div>
         </div>
       </section>
       <h2 class="group-h" id="grp-team">Team &amp; sharing</h2>

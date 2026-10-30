@@ -753,10 +753,11 @@ def cmd_reindex(argv):
         if dense_stats is None:
             from ..core import dense
             st = dense.status()
-            # The extra is here and cannot load: "install the extra" would
-            # name the step this machine already took.
+            # The extra is here and cannot load, or is here without the
+            # model runtime this interpreter has no wheel for: "install the
+            # extra" would name the step this machine already took.
             note = (dense.fix_hint(st["reason"], st)
-                    if st["reason"] == "no-extension-load"
+                    if st["reason"] in ("no-extension-load", "no-local-wheel")
                     else embed.fallback_note())
             out.warn("dense index skipped — %s" % note, wrap=True)
         elif dense_stats.get("refused"):

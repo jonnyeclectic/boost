@@ -120,6 +120,19 @@ class TestProviderSelection:
         assert "rag" in note
         assert "VOYAGE_API_KEY" not in note and "OPENAI_API_KEY" not in note
 
+    def test_fallback_note_verbatim(self, sandbox, monkeypatch):
+        # Whole-string pins: the command comes from `dense.extra_hint`, so on
+        # 3.15 the same sentence carries the move instead of a dead install.
+        from boost_cli.core import dense
+        monkeypatch.setattr(dense, "extra_hint", lambda: "CMD")
+        monkeypatch.delenv("BOOST_NO_EMBED", raising=False)
+        assert embed.fallback_note() == (
+            "dense search needs the `[rag]` extra — `CMD`; using the BM25 "
+            "full-content engine")
+        monkeypatch.setenv("BOOST_NO_EMBED", "1")
+        assert embed.fallback_note() == (
+            "dense search is off (BOOST_NO_EMBED) — using the BM25 engine")
+
 
 class TestEmbed:
     def test_none_without_provider(self, sandbox, monkeypatch):

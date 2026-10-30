@@ -190,6 +190,7 @@ deliberately no vectors, for the same reason.
 | What doctor says | What to do |
 |---|---|
 | no backend | the command doctor prints for your install: `pipx inject boost-skill-cli "boost-skill-cli[rag]"` under pipx, `uv tool install "boost-skill-cli[rag]"` under uv tool, `<python> -m pip install "boost-skill-cli[rag]"` under pip |
+| the local model has no onnxruntime wheel for this Python (3.15) | `boost self-update --python 3.13` under pipx or uv tool, which keeps the extra; or set `VOYAGE_API_KEY` / `OPENAI_API_KEY`, which need no local model |
 | no store | `boost reindex --dense` |
 | store is empty | `boost reindex --dense --force` |
 | version, model or dimension changed | `boost reindex --dense --force` |

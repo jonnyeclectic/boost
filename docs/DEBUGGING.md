@@ -231,6 +231,39 @@ plain `upgrade` has already been tried and refused.
 
 ---
 
+## `boost`: bad interpreter after a Homebrew upgrade
+
+```text
+zsh: /Users/you/.local/bin/boost: bad interpreter: /Users/you/.../pipx/venvs/boost-skill-cli/bin/python: no such file or directory
+```
+
+pipx built boost's environment on a Homebrew Python, and Homebrew has since
+removed that formula. Upgrading past `python@3.X` deletes it, so the
+environment's `bin/python` now points into a directory that is gone. Nothing in
+`~/.boost` is affected; only the environment needs rebuilding. boost cannot do
+that for you here, because it cannot start, so run the manager directly:
+
+```bash
+pipx reinstall --python 3.13 --fetch-python=always boost-skill-cli
+# uv: uv tool install --force --managed-python --python 3.13 "boost-skill-cli[rag]"
+```
+
+`pipx reinstall` replays the original install, `[rag]` extra included.
+`--fetch-python=always` downloads a standalone 3.13 into pipx's own directory
+even when Homebrew has one, which keeps the rebuilt environment out of reach of
+the next Homebrew cleanup. It needs pipx 1.18 or later (`brew upgrade pipx`);
+the older `--fetch-missing-python` downloads only when no `python3.13` is on
+PATH, so on most Macs it rebuilds on Homebrew's and the trap is set again.
+Once boost runs again, `boost self-update --python 3.13` does the same rebuild
+for you.
+
+3.13 rather than Homebrew's current `python3`: the `[rag]` extra's local
+embedding model needs onnxruntime, which has no Python 3.15 wheel yet. On 3.15
+the extra installs without it, and `boost doctor` reports semantic search off
+with this same remedy.
+
+---
+
 ## A corrupt config/settings/state file
 
 boost keeps several small JSON files — `~/.boost/config.json`, each agent's

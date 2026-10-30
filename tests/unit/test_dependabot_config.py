@@ -102,8 +102,12 @@ def test_the_root_ignore_list_matches_the_ceilings_pyproject_sets():
 
     with open(PYPROJECT, "rb") as f:
         extras = tomllib.load(f)["project"]["optional-dependencies"]
+    # The version part only: an environment marker's `<` (onnxruntime's
+    # `python_version < '3.15'`) limits where a package installs, not which
+    # release of it, and Dependabot's bumps are still mergeable there.
     held_back = {re.split(r"[<>=!~\[]", req, maxsplit=1)[0].strip()
-                 for reqs in extras.values() for req in reqs if "<" in req}
+                 for reqs in extras.values() for req in reqs
+                 if "<" in req.split(";", 1)[0]}
     assert held_back, "no upper bounds left in pyproject — drop the ignores"
     assert set(pip_entry("/")[2]) == held_back
 

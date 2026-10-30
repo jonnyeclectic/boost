@@ -184,13 +184,19 @@ class TestOneCommand:
 
     def test_no_row_leaks_the_placeholder(self):
         for reason in [*dense._FIX, "not-a-reason"]:
-            assert "{install-extra}" not in dense.fix_hint(reason)
+            hint = dense.fix_hint(reason)
+            for mark in (dense._INSTALL, dense._MOVE, dense._HERE):
+                assert mark not in hint, (reason, mark)
 
     def test_rows_without_the_extra_are_untouched(self, monkeypatch):
         # Detection is paid only by the rows that print the command.
         calls: list = []
         monkeypatch.setattr(dense, "install_extra",
                             lambda: calls.append(1) or "x")
+        monkeypatch.setattr(dense, "extra_hint",
+                            lambda: calls.append(2) or "x")
+        monkeypatch.setattr(dense, "_move_python",
+                            lambda: calls.append(3) or "x")
         assert dense.fix_hint("no-store") == "build it: `boost reindex --dense`"
         assert calls == []
 

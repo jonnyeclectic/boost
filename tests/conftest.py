@@ -678,6 +678,31 @@ def _reset_localembed_failure():
     localembed._fetch_error = ""
 
 
+@pytest.fixture(autouse=True)
+def _no_interpreter_ceiling():
+    """Make every interpreter one onnxruntime has a wheel for, by default.
+
+    `dense.status()` reports `no-local-wheel` instead of `no-key` on a Python
+    at or past `localembed.ONNX_WHEEL_CEILING` that lacks onnxruntime — which
+    is every leg of CI's 3.15 cell. Without this, the tests that pin the
+    `no-key` ladder and the `install_extra` wording would pass on 3.14 and
+    fail on 3.15 for the same code, turning the runner's version into an
+    input. The ceiling's own behaviour is tested by patching it back
+    (`tests/unit/test_rag_python_ceiling.py`), which is the one place the
+    interpreter is meant to matter.
+
+    Set and restored by hand, not through ``monkeypatch``: an autouse fixture
+    that requests it instantiates it ahead of the test's own patches, so its
+    undo then runs after `_repo_root_guard`'s teardown — and a test that
+    patches ``Path.stat`` has the guard fingerprinting through the patch.
+    """
+    from boost_cli.core import localembed
+    shipped = localembed.ONNX_WHEEL_CEILING
+    localembed.ONNX_WHEEL_CEILING = (99, 0)
+    yield
+    localembed.ONNX_WHEEL_CEILING = shipped
+
+
 @pytest.fixture()
 def sandbox(tmp_path, monkeypatch):
     """A fresh fake $HOME; returns its Path."""
