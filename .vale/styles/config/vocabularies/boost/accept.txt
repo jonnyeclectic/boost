@@ -111,6 +111,7 @@ nodeid
 nonces
 npm
 onboards
+onnxruntime
 OpenShift
 OpenSSF
 overclaiming
