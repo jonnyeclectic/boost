@@ -687,6 +687,9 @@ def relocate_extra() -> str | None:
     pipx needs two steps: ``install --force --python`` keeps the existing
     venv's interpreter (pipx 1.18.5's help says so, and a probe stayed on
     3.15), and ``reinstall`` replays the original spec, which has no extra.
+    Its fetch flag is :data:`selfupdate.FETCH_ALWAYS`, unprobed: this renders
+    on every search past the ceiling, and asking pipx its version costs a
+    subprocess each time (see :func:`selfupdate.fetch_flag_here`).
     """
     from . import localembed, selfupdate
     method = selfupdate.detect()
@@ -719,7 +722,7 @@ def extra_hint() -> str:
     """
     from . import localembed, selfupdate
     if (localembed.no_wheel_here()
-            and not any(os.environ.get(e) for e in embed.KEY_ENV.values())):
+            and not embed.any_key()):
         return relocate_extra() or selfupdate.move_command(
             selfupdate.detect(), localembed.RECOMMENDED_PYTHON)
     return install_extra()

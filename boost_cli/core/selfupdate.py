@@ -18,6 +18,7 @@ and :func:`is_behind`.
 from __future__ import annotations
 
 import http.client
+import importlib.util
 import json
 import re
 import shlex
@@ -29,7 +30,11 @@ import urllib.request
 from pathlib import Path
 
 from ..errors import BoostError
-from . import gitutil, nethttp, paths, typedvalue
+
+# `embed` and `localembed` are imported here, not lazily: the relocation path
+# below rebuilds the venv this process runs from, and a module first imported
+# after that would load from a different install than the one already running.
+from . import embed, gitutil, localembed, nethttp, paths, typedvalue
 
 DIST = "boost-skill-cli"
 
@@ -103,7 +108,6 @@ def has_pip() -> bool:
     A venv made by uv (``uv venv``) has no pip unless asked for one, so
     ``sys.executable -m pip`` there is "No module named pip".
     """
-    import importlib.util
     return importlib.util.find_spec("pip") is not None
 
 
@@ -261,6 +265,20 @@ def pipx_version(pipx: str, timeout: float = 10.0) -> tuple[int, ...] | None:
     return int(m.group(1)), int(m.group(2))
 
 
+def fetch_flag_here() -> str:
+    """The fetch flag the pipx on PATH accepts, for a command boost runs.
+
+    No pipx at all gets :data:`FETCH_ALWAYS`: the user installs one first, and
+    a fresh pipx is new enough for it. It costs one ``pipx --version``, so only
+    :func:`reinstall_command` asks it. The hints (:func:`move_command`,
+    ``dense.relocate_extra``) print :data:`FETCH_ALWAYS` without asking: they
+    render on every ``boost search`` an interpreter past the ceiling makes,
+    each one a fresh process, and the README says the flag needs pipx 1.18.
+    """
+    found = shutil.which("pipx")
+    return pipx_fetch_flag(pipx_version(found)) if found else FETCH_ALWAYS
+
+
 def pipx_fetch_flag(version: tuple[int, ...] | None) -> str:
     """The strongest fetch flag a pipx of ``version`` accepts.
 
@@ -361,11 +379,8 @@ def reinstall_command(method: str, python: str,
             hint="e.g. `boost self-update --python %s`" % _recommended())
     version = bool(_PY_VERSION.match(python))
     if method == PIPX:
-        found = shutil.which("pipx")
-        # No pipx here means the user installs one, which is new enough.
-        flag = pipx_fetch_flag(pipx_version(found)) if found else FETCH_ALWAYS
         tail = ["reinstall", "--python", python,
-                *([flag] if version else []), DIST]
+                *([fetch_flag_here()] if version else []), DIST]
         return [_require("pipx", shlex.join(tail)), *tail]
     if method == UV_TOOL:
         managed = ["--managed-python"] if version else []
@@ -385,7 +400,6 @@ def reinstall_command(method: str, python: str,
 
 def _recommended() -> str:
     """The interpreter the hints name — `localembed`'s, so they agree."""
-    from . import localembed
     return localembed.RECOMMENDED_PYTHON
 
 
@@ -410,6 +424,8 @@ def move_command(method: str, python: str) -> str:
         # interpreter this user is trying to leave.
         return ("python%s -m venv --clear .venv && .venv/bin/pip install -e "
                 "'.[rag]'" % py)
+    # FETCH_ALWAYS unprobed: this renders in the search hint (see
+    # `fetch_flag_here`).
     return 'pipx install --python %s %s "%s[rag]"' % (py, FETCH_ALWAYS, DIST)
 
 
@@ -461,6 +477,112 @@ def homebrew_python(base_prefix: str) -> bool:
     ``Cellar/python@3.13/...`` it resolves to, and Linuxbrew's ``opt``.
     """
     return "/opt/python@" in base_prefix or "/Cellar/python@" in base_prefix
+
+
+#: Set in the environment of the `boost quickstart` that a relocation re-execs.
+#: The child sees it and does not relocate again, so a move that left boost on
+#: the same interpreter cannot loop.
+RELOCATED_ENV = "BOOST_RELOCATED"
+
+
+def relocation_reason(method: str | None = None) -> str | None:
+    """Why this install should move to :data:`localembed.RECOMMENDED_PYTHON`,
+    or None when it should stay where it is.
+
+    A wheel cannot run code when pipx installs it, so a plain ``pipx install
+    'boost-skill-cli[rag]'`` on Homebrew's 3.15 lands without onnxruntime and
+    nothing tells the user until a search comes back keyword-only. `boost
+    self-update` and `boost quickstart` ask this and offer the move. All four
+    must hold:
+
+    * this interpreter has no onnxruntime wheel (:func:`localembed.no_wheel_here`);
+    * the ``[rag]`` extra was asked for. sqlite-vec ships only with it, so its
+      presence is the record of that request; without it there is no local
+      model to rescue and the move would only cost a download;
+    * no embedding key is set, since Voyage and OpenAI embed over HTTP and
+      need no onnxruntime;
+    * pipx or uv tool owns the venv, the two managers boost can rebuild.
+
+    Cheap on purpose: no subprocess, and never ``dense.status()``, which opens
+    the store. A Homebrew interpreter that works is not a reason here;
+    :func:`homebrew_python` stays a warning.
+    """
+    if not localembed.no_wheel_here():
+        return None
+    try:
+        if importlib.util.find_spec("sqlite_vec") is None:
+            return None
+    except (ImportError, ValueError):
+        return None
+    if embed.any_key():
+        return None
+    if (detect() if method is None else method) not in (PIPX, UV_TOOL):
+        return None
+    return ("Python %d.%d has no onnxruntime wheel, so the [rag] extra's "
+            "local model cannot run here" % sys.version_info[:2])
+
+
+def relocation_command(method: str) -> list[str]:
+    """The argv that moves this install to the recommended Python.
+
+    :func:`reinstall_command` on :data:`localembed.RECOMMENDED_PYTHON`. pipx
+    reinstall and uv tool install both replay the spec unpinned, so the move
+    also lands on the latest release: one manager call does both jobs.
+    """
+    return reinstall_command(method, localembed.RECOMMENDED_PYTHON)
+
+
+def relocation_offer(method: str, reason: str) -> str:
+    """The sentence both commands print before asking to move.
+
+    Names the manager as a user types it (``uv``, not the ``uv-tool`` label
+    :func:`detect` returns), because that is the tool that will download the
+    interpreter.
+    """
+    manager = "uv" if method == UV_TOOL else method
+    return ("%s. boost can move itself to a Python %s that %s downloads and "
+            "manages, and update in the same step"
+            % (reason, localembed.RECOMMENDED_PYTHON, manager))
+
+
+def relocated() -> bool:
+    """True in the process a relocation re-exec'd (:data:`RELOCATED_ENV`)."""
+    return typedvalue.env_flag(RELOCATED_ENV)
+
+
+def reexec_argv(argv: list[str]) -> list[str] | None:
+    """The argv that runs `boost <argv>` on the rebuilt venv, or None.
+
+    ``sys.executable`` and not the ``boost`` first on PATH, for the reason
+    :func:`observed_version` gives: that can be another install. The venv
+    keeps its path through a reinstall, so this interpreter's path now leads
+    to the new one. None when it does not exist any more, which means the
+    manager did not put a venv back and there is nothing to run.
+    """
+    if not Path(sys.executable).exists():
+        return None
+    return [sys.executable, "-P", "-m", "boost_cli", *argv]
+
+
+def python_report(method: str,
+                  seen: tuple[str, str] | None) -> tuple[str, str | None]:
+    """What to say after a reinstall: an ok line, and a warning or None.
+
+    ``seen`` is :func:`observed_python`'s answer. When it is None, say only
+    that the manager finished, never which Python it chose: a manager may
+    resolve the version it was asked for to something else.
+    """
+    if not seen:
+        return ("reinstalled via %s; run `boost --version` to confirm"
+                % method, None)
+    ok = ("boost now runs on Python %s; `boost doctor` checks semantic search"
+          % seen[0])
+    if not homebrew_python(seen[1]):
+        return ok, None
+    # An older pipx, or a path, can land the venv back on a formula.
+    return ok, ("that Python is Homebrew's (%s), which the next `brew upgrade` "
+                "past it deletes — upgrade pipx to 1.18 or later and re-run "
+                "with a version, so boost fetches its own" % seen[1])
 
 
 def latest_version(timeout: float = 10.0) -> str | None:
@@ -583,8 +705,21 @@ def run_upgrade(cmd: list[str], timeout: float = 300.0):
         detail = ((proc.stderr or "") + (proc.stdout or "")).strip().splitlines()
         raise BoostError(
             "upgrade failed (%s exited %d)" % (Path(cmd[0]).name, proc.returncode),
-            hint=detail[-1] if detail else "re-run the command by hand to see why")
+            hint=last_message(detail) or "re-run the command by hand to see why")
     return proc
+
+
+def last_message(lines: list[str]) -> str:
+    """The manager's final message, re-joined if it wrapped.
+
+    pipx folds a long error into indented continuation lines, so the last line
+    alone was `https://github.com/.../releases/latest.` — the tail of a
+    sentence whose subject ("No executable for ... '3.13'") was two lines up.
+    """
+    start = len(lines) - 1
+    while start > 0 and lines[start][:1].isspace():
+        start -= 1
+    return " ".join(line.strip() for line in lines[start:] if line.strip())
 
 
 def observed_version(timeout: float = 30.0) -> str | None:

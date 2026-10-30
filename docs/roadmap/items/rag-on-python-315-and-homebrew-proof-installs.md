@@ -7,7 +7,7 @@ category: Compat · Install
 complexity: M
 impact: High
 wow: 3
-note: Homebrew removed python@3.14 and stranded the pipx venv; on 3.15 the [rag] extra would not install at all. The extra now installs there, doctor names the gap, and self-update --python moves boost to 3.13
+note: Homebrew removed python@3.14 and stranded the pipx venv; on 3.15 the [rag] extra would not install at all. The extra now installs there, doctor names the gap, and self-update and quickstart offer to move a pipx or uv install to 3.13
 order: 379
 owner: fix/py315-rag
 pr:
@@ -47,6 +47,19 @@ which both install there.
   back from <code>uv-receipt.toml</code> (install, not upgrade: only install rewrites the
   receipt's <code>python</code>). The extra survives either way. pip, uv-pip and checkout
   installs are refused with what to run instead.
+- A plain <code>pipx install "boost-skill-cli[rag]"</code> (or <code>uv tool install</code>)
+  on 3.15 no longer waits for the user to read a hint. A wheel cannot run code at install
+  time, so the first commands that can act do: <code>boost self-update</code> and
+  <code>boost quickstart</code> ask <code>selfupdate.relocation_reason()</code>, which fires
+  only for a pipx or uv tool install, past the ONNX ceiling, with sqlite-vec present (the
+  record that <code>[rag]</code> was asked for) and no API key. After a confirmation,
+  self-update runs the 3.13 reinstall in place of its upgrade (one manager call, which also
+  lands on the latest release), and quickstart runs it and then re-execs itself on the rebuilt
+  venv, with <code>BOOST_RELOCATED=1</code> set so a move that did not take cannot loop.
+  <code>--keep-python</code> on either command skips the offer, and <code>--dry-run</code>
+  prints the command without running it. A working Homebrew interpreter is never moved; that
+  stays a warning. The printed pipx hints now name the fetch flag the pipx on PATH accepts,
+  the same rule the reinstall itself follows.
 - The README recommends installing on a pinned, fetched interpreter, and
   <code>docs/DEBUGGING.md</code> has the one-line recovery for a stranded venv. CI's test matrix
   gains a 3.15 leg, which is advisory: not a required check, and

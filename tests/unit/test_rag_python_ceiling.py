@@ -43,6 +43,18 @@ def _onnx(monkeypatch, present: bool) -> None:
     monkeypatch.setattr(importlib.util, "find_spec", find_spec)
 
 
+@pytest.fixture(autouse=True)
+def new_pipx(monkeypatch):
+    """A pipx on PATH that takes `--fetch-python=always`.
+
+    The hints name the flag the pipx on PATH accepts, so without this the
+    runner's own pipx (or its absence) would be an input to every assertion.
+    """
+    monkeypatch.setattr(selfupdate.shutil, "which",
+                        lambda t: "/opt/bin/" + t)
+    monkeypatch.setattr(selfupdate, "pipx_version", lambda *a, **k: (1, 18))
+
+
 @pytest.fixture
 def ceiling(monkeypatch):
     """Put the shipped ceiling back."""
@@ -323,6 +335,55 @@ class TestExtraHint:
         installed_with(selfupdate.PIPX)
         assert dense.extra_hint() == (
             'pipx inject boost-skill-cli "boost-skill-cli[rag]"')
+
+    @pytest.mark.parametrize("method,hint", [
+        (selfupdate.PIPX,
+         'pipx uninstall boost-skill-cli && pipx install --python 3.13 '
+         '--fetch-python=always "boost-skill-cli[rag]"'),
+        (selfupdate.PIP,
+         'pipx install --python 3.13 --fetch-python=always '
+         '"boost-skill-cli[rag]"'),
+        (selfupdate.UV_PIP,
+         'pipx install --python 3.13 --fetch-python=always '
+         '"boost-skill-cli[rag]"'),
+        (selfupdate.UNKNOWN,
+         'pipx install --python 3.13 --fetch-python=always '
+         '"boost-skill-cli[rag]"'),
+    ])
+    def test_past_the_ceiling_the_hint_never_asks_pipx(
+            self, too_new, no_keys, installed_with, monkeypatch, method,
+            hint):
+        # Every `boost search` on 3.15 renders this hint in a fresh process,
+        # so it names the pipx 1.18 flag rather than pay `pipx --version`.
+        installed_with(method)
+
+        def no_probe(*a, **k):
+            raise AssertionError("pipx --version on the search hint")
+        monkeypatch.setattr(selfupdate, "pipx_version", no_probe)
+        assert dense.extra_hint() == hint
+        dense.fix_hint("no-backend")
+        dense.fix_hint("no-local-wheel")
+
+    def test_no_pipx_on_path_names_the_flag_a_fresh_pipx_takes(
+            self, too_new, no_keys, installed_with, monkeypatch):
+        installed_with(selfupdate.PIP)
+        monkeypatch.setattr(selfupdate.shutil, "which", lambda t: None)
+        assert dense.extra_hint() == (
+            'pipx install --python 3.13 --fetch-python=always '
+            '"boost-skill-cli[rag]"')
+
+    def test_below_the_ceiling_pipx_is_never_asked(self, installed_with,
+                                                    monkeypatch):
+        # The flag costs a subprocess; only an interpreter that needs the
+        # move may pay it, never every search.
+        _onnx(monkeypatch, present=False)
+        installed_with(selfupdate.PIPX)
+
+        def no_probe(*a, **k):
+            raise AssertionError("pipx --version on the hot path")
+        monkeypatch.setattr(selfupdate, "pipx_version", no_probe)
+        dense.extra_hint()
+        dense.fix_hint("no-backend")
 
     def test_unreadable_vectors_still_name_the_plain_extra(self, too_new,
                                                            installed_with):

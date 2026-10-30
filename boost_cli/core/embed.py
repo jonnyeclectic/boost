@@ -234,6 +234,17 @@ def outranking(name: str) -> tuple[str, ...]:
     return tuple(ahead)
 
 
+def any_key() -> bool:
+    """True when any embedding API key in :data:`KEY_ENV` is set.
+
+    Narrower than :func:`available`: it ignores ``BOOST_NO_EMBED`` and the
+    local model, and answers only "would an HTTP provider embed here". That is
+    the question an interpreter with no onnxruntime wheel asks, since a key
+    needs no local model at all.
+    """
+    return any(os.environ.get(env) for env in KEY_ENV.values())
+
+
 def available() -> bool:
     """True when embeddings are enabled and a provider key is present."""
     return provider() is not None

@@ -35,6 +35,7 @@ from ..core import (
     installscan,
     integrity,
     journal,
+    localembed,
     lockfile,
     mcp,
     mcphost,
@@ -2921,11 +2922,21 @@ def cmd_self_update(argv) -> int:
                         "of it, and keep its extras — the way off an "
                         "interpreter Homebrew removed, or one the [rag] "
                         "extra has no wheel for")
+    p.add_argument("--keep-python", action="store_true",
+                   help="skip moving to the recommended Python")
     args = p.parse_args(argv)
 
     method = selfupdate.detect()
     if args.python is not None:
         return _self_update_python(method, args.python, dry_run=args.dry_run)
+    reason = None if args.keep_python else selfupdate.relocation_reason(method)
+    if reason:
+        py = localembed.RECOMMENDED_PYTHON
+        out.warn(selfupdate.relocation_offer(method, reason), wrap=True)
+        if args.dry_run or out.confirm("Move boost to Python %s?" % py):
+            return _self_update_python(method, py, dry_run=args.dry_run)
+        out.info("staying on this Python; `boost self-update --python %s` "
+                 "moves it later" % py, wrap=True)
     if method != selfupdate.GIT:
         return _self_update_package(method, dry_run=args.dry_run)
     return _self_update_git(dry_run=args.dry_run)
@@ -2969,21 +2980,19 @@ def _self_update_python(method: str, python: str, dry_run: bool) -> int:
         return 0
     out.info("reinstalling via %s on Python %s: %s"
              % (method, python, shlex.join(cmd)), wrap=True)
+    # The manager deletes and rebuilds the venv this process runs from, so
+    # from here on only modules already imported may be used.
     selfupdate.run_upgrade(cmd, timeout=selfupdate.REINSTALL_TIMEOUT)
     seen = selfupdate.observed_python()
-    journal.log("self-update", __version__, previous=__version__,
+    new = selfupdate.observed_version()
+    journal.log("self-update", new or __version__, previous=__version__,
                 method=method, python=seen[0] if seen else python)
-    if not seen:
-        out.ok("reinstalled via %s; run `boost --version` to confirm" % method)
-        return 0
-    out.ok("boost now runs on Python %s; `boost doctor` checks semantic "
-           "search" % seen[0])
-    if selfupdate.homebrew_python(seen[1]):
-        # An older pipx, or a path, can land the venv back on a formula.
-        out.warn("that Python is Homebrew's (%s), which the next `brew "
-                 "upgrade` past it deletes — upgrade pipx to 1.18 or later "
-                 "and re-run with a version, so boost fetches its own"
-                 % seen[1], wrap=True)
+    if new and new != __version__:
+        out.ok("boost v%s → v%s" % (__version__, new))
+    ok, warn = selfupdate.python_report(method, seen)
+    out.ok(ok)
+    if warn:
+        out.warn(warn, wrap=True)
     return 0
 
 

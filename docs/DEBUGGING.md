@@ -260,7 +260,10 @@ for you.
 3.13 rather than Homebrew's current `python3`: the `[rag]` extra's local
 embedding model needs onnxruntime, which has no Python 3.15 wheel yet. On 3.15
 the extra installs without it, and `boost doctor` reports semantic search off
-with this same remedy.
+with this same remedy. If boost still starts on 3.15, you don't need the
+command above: `boost quickstart` and `boost self-update` notice a pipx or uv
+install of the extra with no API key set and offer to make the move
+themselves, after asking. `--keep-python` turns the offer off.
 
 ---
 
