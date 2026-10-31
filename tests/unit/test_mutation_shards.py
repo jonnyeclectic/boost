@@ -40,6 +40,9 @@ _spec.loader.exec_module(ms)
     ["scripts/mutation_weights.json"],
     # a non-gate script is no more relevant than before
     ["scripts/build_roadmap.py"],
+    # named like a pytest config file, but it is not one
+    ["docs/pytest.toml.md"],
+    ["docs/notes/.pytest.ini.bak"],
 ])
 def test_irrelevant_changes_skip(changed):
     assert ms.is_relevant(changed) is False
@@ -59,6 +62,14 @@ def test_irrelevant_changes_skip(changed):
     # full-run trigger; that is only reachable if the change is relevant)
     ["pytest.ini"],
     ["tests/unit/pytest.ini"],
+    # ...and so does each of pytest's other config files, outside tests/ too
+    [".pytest.ini"],
+    ["pytest.toml"],
+    [".pytest.toml"],
+    ["docs/pytest.toml"],
+    # shared test support, a full-run trigger in mutation_diff
+    ["tests/_tapped_support.py"],
+    ["tests/make_fixture.py"],
     # mutmut's own configuration
     ["setup.cfg"],
     ["pyproject.toml"],

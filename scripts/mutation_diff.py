@@ -90,6 +90,14 @@ _PARSE_ERRORS = (
     ValueError,
 )
 CI_YML = ".github/workflows/ci.yml"
+#: File names that change how every test runs, wherever they sit: a conftest,
+#: and each config file pytest's rootdir search accepts besides pyproject.toml
+#: and setup.cfg (which have their own, table-level triggers below).
+PYTEST_FILES = ("conftest.py", "pytest.ini", ".pytest.ini", "pytest.toml", ".pytest.toml")
+#: The test tree's shared support: imported by conftest.py or by tests across
+#: the suite, so an edit reaches every test the way a conftest edit does.
+TEST_SUPPORT = PurePosixPath("tests")
+TEST_FIXTURE_BUILDER = "tests/make_fixture.py"
 
 
 def changed_functions(base_src: str | None, head_src: str | None) -> set[str]:
@@ -128,10 +136,38 @@ def _mutmut_section(text: str | None) -> dict[str, str] | None:
     return dict(cp["mutmut"]) if cp.has_section("mutmut") else None
 
 
-def _pytest_table(text: str | None):
+def _toml_table(text: str | None, *keys: str):
+    """`text`'s table at `keys`, None when absent; ValueError when a step is no table.
+
+    A `tool` or `tool.pytest` that is a string or a number would otherwise
+    raise AttributeError out of the planner; it is an unparsable config, and
+    `full_run_reasons` says so.
+    """
     if text is None:
         return None
-    return tomllib.loads(text).get("tool", {}).get("pytest", {}).get("ini_options")
+    node: Any = tomllib.loads(text)
+    for key in keys:
+        if not isinstance(node, dict):
+            raise ValueError("pyproject.toml: %s is not a table" % ".".join(keys))
+        node = node.get(key)
+        if node is None:
+            return None
+    return node
+
+
+def _pytest_table(text: str | None):
+    return _toml_table(text, "tool", "pytest", "ini_options")
+
+
+def _pytest_native_table(text: str | None):
+    # pytest 9 reads its options from [tool.pytest] itself (native TOML
+    # types), beside the older [tool.pytest.ini_options]; compared without
+    # that subtable, which has its own trigger and label -- so a table holding
+    # ini_options alone reads as absent, not as an empty [tool.pytest].
+    table = _toml_table(text, "tool", "pytest")
+    if not isinstance(table, dict):
+        return table
+    return {k: v for k, v in table.items() if k != "ini_options"} or None
 
 
 def _mutmut_table(text: str | None):
@@ -139,9 +175,7 @@ def _mutmut_table(text: str | None):
     # exists and then never reads setup.cfg, so it is the same trigger as
     # setup.cfg [mutmut]: a `do_not_mutate` added here narrows every run,
     # the nightly's included.
-    if text is None:
-        return None
-    return tomllib.loads(text).get("tool", {}).get("mutmut")
+    return _toml_table(text, "tool", "mutmut")
 
 
 def _mutation_jobs(text: str | None):
@@ -160,15 +194,22 @@ def full_run_reasons(
 
     Also the changes the diff scope cannot see and would otherwise pass with
     0 shards: a file in a subpackage of boost_cli/core (mutmut's source_paths
-    is recursive, the scope reads boost_cli/core/*.py only), and any
-    conftest.py or pytest.ini (each changes how every test runs, the reason
-    [tool.pytest.ini_options] is a trigger).
+    is recursive, the scope reads boost_cli/core/*.py only); any conftest.py
+    or pytest config file (`PYTEST_FILES`), each of which changes how every
+    test runs, the reason [tool.pytest.ini_options] and [tool.pytest] are
+    triggers; and the test tree's shared support, `tests/_*.py` and
+    `tests/make_fixture.py`, which reach every test the way a conftest does.
     """
     reasons: list[str] = []
     for p in changed_paths:
         name = PurePosixPath(p)
-        if name.name in ("conftest.py", "pytest.ini"):
+        if name.name in PYTEST_FILES:
             reasons.append(f"{p} changed")
+            continue
+        if p == TEST_FIXTURE_BUILDER or (
+            name.parent == TEST_SUPPORT and name.name.startswith("_") and name.suffix == ".py"
+        ):
+            reasons.append(f"test support changed: {p}")
             continue
         if (name.suffix == ".py" and PurePosixPath(CORE_DIR) in name.parents
                 and str(name.parent) != CORE_DIR):
@@ -206,6 +247,7 @@ def full_run_reasons(
                 found = [
                     f"pyproject.toml [{table}] changed"
                     for table, of in (("tool.pytest.ini_options", _pytest_table),
+                                      ("tool.pytest", _pytest_native_table),
                                       ("tool.mutmut", _mutmut_table))
                     if of(base) != of(head)
                 ]
