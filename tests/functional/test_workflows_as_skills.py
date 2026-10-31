@@ -707,6 +707,31 @@ class TestCopyLinks:
         boost("sync")
         _assert_copy_links(present=(), absent=(*COPY_LINKED, *NATIVE))
 
+    def test_a_narrowed_reinstall_takes_the_wider_installs_links(
+            self, boost, wf_tap):
+        """Narrowed after a wide install, the links the wide one made are
+        not left live with nothing to name or remove them."""
+        boost("install", "reviewer")
+        _assert_copy_links()
+        r = boost("install", "reviewer", "--force", "--agent", "claude-code")
+        assert "windsurf: unlinked its skill copy" in _flat(r.out)
+        _assert_copy_links(present=(), absent=(*COPY_LINKED, *NATIVE))
+        plan = store.sync_plan()
+        assert plan["missing_copy_links"] == plan["stale_copy_links"] == []
+        r = boost("doctor", expect=None)
+        assert "skill copy is linked for" not in _flat(r.out)
+        assert "skill copy is not linked for" not in _flat(r.out)
+        # one made by hand since is named, and sync takes it
+        _link(".windsurf/skills").symlink_to(paths.store_dir() / "reviewer")
+        r = boost("doctor", expect=1)
+        assert ("workflow reviewer's skill copy is linked for windsurf, which "
+                "the workflow's --agent scope leaves out — run `boost sync`"
+                ) in _flat(r.out)
+        r = boost("sync")
+        assert ("unlinked workflow reviewer's skill copy from windsurf, which "
+                "the workflow's --agent scope leaves out") in _flat(r.out)
+        _assert_copy_links(present=(), absent=(*COPY_LINKED, *NATIVE))
+
     def test_no_agent_left_to_link_links_nothing(self, boost, wf_tap):
         boost("config", "set", "agents.windsurf.workflows", "true")
         boost("config", "set", "agents.antigravity.enabled", "false")
@@ -799,7 +824,7 @@ class TestCopyLinks:
             ("reviewer", "claude-code")]
         r = boost("doctor", expect=1)
         assert ("workflow reviewer's skill copy is linked for claude-code, "
-                "beside the workflow's own file there — run `boost sync`"
+                "which has the workflow's own file — run `boost sync`"
                 ) in _flat(r.out)
         r = boost("sync")
         assert ("unlinked workflow reviewer's skill copy from claude-code, "

@@ -1361,15 +1361,16 @@ def cmd_doctor(argv):
         # Its skill copy's links, read as `boost sync` reads them, so the
         # remedy named is the one that runs. A live link to the copy is
         # expected; only a missing one, or one beside the workflow's own
-        # file, is a fault.
+        # file or outside its `--agent` scope, is a fault.
         for agent in store.missing_copy_links(name, entry):
             bad("workflow", "workflow %s's skill copy is not linked for %s — "
                 "run `boost sync`" % (name, agent), wrap=True)
             mat_issues += 1
         for agent in store.stale_copy_links(name, entry):
-            bad("workflow", "workflow %s's skill copy is linked for %s, "
-                "beside the workflow's own file there — run `boost sync`"
-                % (name, agent), wrap=True)
+            bad("workflow", "workflow %s's skill copy is linked for %s, %s — "
+                "run `boost sync`"
+                % (name, agent, store.stale_copy_reason(entry, agent)),
+                wrap=True)
             mat_issues += 1
     # A note, not an issue: the workflow works for every agent with a workflow
     # format. Only an agent that reads skills alone (Codex) misses it.

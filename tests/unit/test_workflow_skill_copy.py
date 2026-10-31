@@ -730,6 +730,30 @@ class TestCopyLinksOnDisk:
         lockfile.set_skill("reviewer", {"tap": "t"})
         assert store.stale_copy_links("reviewer", entry) == []
 
+    def test_under_a_narrowing_every_copy_link_is_stale(self, sandbox):
+        """A declared `--agent` narrowing links nowhere, so a link an
+        earlier, wider install made is stale wherever it is."""
+        _copy_on_disk()
+        entry = _workflow_entry("claude-code", only_agents=["claude-code"])
+        for agent in ("claude-code", "windsurf", "antigravity"):
+            (_agent_dir(agent) / "reviewer").symlink_to(
+                paths.store_dir() / "reviewer")
+        assert store.stale_copy_links("reviewer", entry) == [
+            "claude-code", "windsurf", "antigravity"]
+        entry["only_agents"] = None
+        assert store.stale_copy_links("reviewer", entry) == ["claude-code"]
+
+    def test_the_reason_a_link_is_stale(self, sandbox):
+        entry = _workflow_entry("claude-code", only_agents=["claude-code"],
+                                foreign=[{"agent": "cursor", "slot": "agents",
+                                          "path": "/x"}])
+        assert store.stale_copy_reason(entry, "claude-code") == (
+            "which has the workflow's own file")
+        assert store.stale_copy_reason(entry, "cursor") == (
+            "which has the workflow's own file")
+        assert store.stale_copy_reason(entry, "windsurf") == (
+            "which the workflow's --agent scope leaves out")
+
     def test_unlink_takes_only_links_to_this_copy(self, sandbox, tmp_path):
         _copy_on_disk()
         _copy_on_disk("other")
@@ -815,6 +839,21 @@ class TestCopyLinksThroughInstall:
         res = store.install(_wf(tap), only_agents=["claude-code"])
         assert self._links() == {}
         assert res.copy_linked == []
+
+    def test_a_narrowed_reinstall_takes_every_earlier_link(self, tap):
+        """Narrowed after a wide install: no copy links, the disabled
+        agent's included, and nothing left for doctor or sync to name."""
+        store.install(_wf(tap))
+        cfg = config.load()
+        cfg["agents"]["antigravity"]["enabled"] = False
+        config.save(cfg)
+        res = store.install(_wf(tap), force=True, only_agents=["claude-code"])
+        assert self._links() == {}
+        assert res.copy_linked == []
+        assert res.copy_unlinked == ["windsurf", "antigravity"]
+        entry = lockfile.get_workflow("reviewer")
+        assert store.missing_copy_links("reviewer", entry) == []
+        assert store.stale_copy_links("reviewer", entry) == []
 
     def test_install_reports_what_is_in_the_way(self, tap, tmp_path):
         (_agent_dir("windsurf") / "reviewer").symlink_to(tmp_path)
@@ -998,13 +1037,44 @@ class TestCopyLinksThroughSync:
         assert not os.path.lexists(_agent_dir("cursor") / "reviewer")
         assert os.path.islink(_agent_dir("windsurf") / "reviewer")
 
+    def test_the_mcp_doctor_words_both_keys(self, tap):
+        from boost_cli.commands import configuration
+        store.install(_wf(tap))
+        (_agent_dir("windsurf") / "reviewer").unlink()
+        (_agent_dir("claude-code") / "reviewer").symlink_to(
+            paths.store_dir() / "reviewer")
+        text, _ = configuration._tool_doctor({})
+        assert ("workflow reviewer's skill copy is not linked for windsurf — "
+                "`boost sync` links it") in text
+        assert ("workflow reviewer's skill copy is linked for claude-code, "
+                "which has the workflow's own file — `boost sync` removes "
+                "the link") in text
+
+    def test_a_link_under_a_narrowing_is_named_and_removed(self, tap):
+        store.install(_wf(tap), only_agents=["claude-code"])
+        (_agent_dir("windsurf") / "reviewer").symlink_to(
+            paths.store_dir() / "reviewer")
+        plan = store.sync_plan()
+        assert plan["stale_copy_links"] == [("reviewer", "windsurf")]
+        assert plan["missing_copy_links"] == []
+        line = ("unlink workflow reviewer's skill copy from windsurf, which "
+                "the workflow's --agent scope leaves out")
+        assert store.sync_preview(plan)[-1:] == ["would " + line]
+        assert [a for a in store.sync_apply(plan) if "skill copy" in a] == [
+            line.replace("unlink", "unlinked", 1)]
+        assert not os.path.lexists(_agent_dir("windsurf") / "reviewer")
+
     def test_apply_rechecks_the_lock(self, tap):
-        """A plan from before a narrowing links nothing it now excludes."""
+        """A plan from before a narrowing links nothing it now excludes, and
+        says which link the narrowing took."""
         store.install(_wf(tap))
         (_agent_dir("windsurf") / "reviewer").unlink()
         plan = store.sync_plan()
         entry = lockfile.get_workflow("reviewer")
         entry["only_agents"] = ["claude-code"]
         lockfile.set_workflow("reviewer", entry)
-        assert not any("skill copy" in a for a in store.sync_apply(plan))
+        assert [a for a in store.sync_apply(plan) if "skill copy" in a] == [
+            "unlinked workflow reviewer's skill copy from antigravity, which "
+            "the workflow's --agent scope leaves out"]
         assert not os.path.lexists(_agent_dir("windsurf") / "reviewer")
+        assert not os.path.lexists(_agent_dir("antigravity") / "reviewer")

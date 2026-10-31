@@ -1190,7 +1190,7 @@ _PLAN_LABELS = [
     ("out_of_scope_links", "linked outside declared scope"),
     ("missing_copy_links", "workflow skill copies missing a link"),
     ("stale_copy_links", "workflow skill copies linked beside the "
-                         "workflow's own file"),
+                         "workflow's own file or outside its --agent scope"),
 ]
 
 #: Plan keys whose items are ``(skill, agent)`` pairs rather than paths.
