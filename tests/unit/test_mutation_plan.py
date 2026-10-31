@@ -23,6 +23,7 @@ import io
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -604,7 +605,9 @@ def test_diff_plan_refuses_an_unreadable_blob(tmp_path, git_repo):
     # read as "file deleted" -> empty scope -> pass (review M-3).
     head = git_repo.head({"boost_cli/core/n.py": "def z(y):\n    return y == 13579\n"})
     blob = _git(git_repo.root, "rev-parse", head + ":boost_cli/core/n.py")
-    (git_repo.root / ".git" / "objects" / blob[:2] / blob[2:]).unlink()
+    loose = git_repo.root / ".git" / "objects" / blob[:2] / blob[2:]
+    loose.chmod(loose.stat().st_mode | stat.S_IWRITE)  # git writes it 0444; Windows will not unlink that
+    loose.unlink()
     with pytest.raises(subprocess.CalledProcessError):
         mp.diff_plan(git_repo.root, git_repo.base, head, git_repo.stats)
 
@@ -1045,6 +1048,7 @@ def test_the_planner_exports_whether_the_plan_is_shadow(jobs):
     assert jobs["mutation-plan"]["outputs"]["shadow"] == "${{ steps.plan.outputs.shadow }}"
 
 
+@needs_bash
 class TestPlannerByEvent:
     """Run the `write the plan` step's bash with python and git stubbed."""
 
@@ -1468,7 +1472,16 @@ def test_the_planner_runs_the_mutmut_backed_tests(jobs):
     assert stats < steps.index(step) < plan
 
 
+# mutmut runs the suite from its `mutants/` copy, where every mutated module
+# opens with `from mutmut.mutation.trampoline import ...`. Blocking mutmut there
+# breaks `import boost_cli.core` itself, before any mutmut-backed test is
+# reached, so the probe cannot model "mutmut is absent" in that tree.
+_IN_MUTANTS_COPY = "from mutmut." in (
+    ROOT / "boost_cli" / "core" / "__init__.py").read_text(encoding="utf-8")
+
+
 @needs_bash
+@pytest.mark.skipif(_IN_MUTANTS_COPY, reason="the mutated tree imports mutmut by construction")
 def test_a_required_mutmut_is_an_error_not_a_skip(tmp_path):
     # The fixture's contract, checked from the outside: with mutmut blocked
     # and BOOST_REQUIRE_MUTMUT=1, a mutmut-backed test errors instead of
