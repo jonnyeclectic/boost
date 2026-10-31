@@ -769,6 +769,46 @@ class TestCopyLinksOnDisk:
         assert store.stale_copy_reason(entry, "windsurf") == (
             "which the workflow's --agent scope leaves out")
 
+    def test_a_dir_shared_with_an_agent_holding_its_own_file(self, sandbox):
+        """``~/.claude-personal/skills -> ../.claude/skills`` is claude-code's
+        dir under a second name: decided by name, the copy was linked there
+        for claude-personal and unlinked as claude-code's in the same run."""
+        _copy_on_disk()
+        home = paths.home()
+        (home / ".claude" / "skills").mkdir(parents=True, exist_ok=True)
+        (home / ".claude-personal").mkdir()
+        (home / ".claude-personal" / "skills").symlink_to(
+            os.path.join("..", ".claude", "skills"))
+        cfg = config.load()
+        cfg["agents"]["claude-personal"] = {
+            "dir": "~/.claude-personal/skills", "enabled": True,
+            "skills_only": True}
+        config.save(cfg)
+        entry = _workflow_entry("claude-code", "cursor")
+        assert _linked(entry) == ["windsurf", "antigravity"]
+        assert list(store.copy_link_agents({"claude-code", "cursor"})) == [
+            "windsurf", "antigravity"]
+        assert store.missing_copy_links("reviewer", entry) == [
+            "windsurf", "antigravity"]
+        # a link there is stale, and named once: by the agent with the file
+        (home / ".claude" / "skills" / "reviewer").symlink_to(
+            paths.store_dir() / "reviewer")
+        assert store.stale_copy_links("reviewer", entry) == ["claude-code"]
+        assert store.reconcile_copy_links("reviewer", entry)[2] == [
+            "claude-code"]
+        assert not os.path.lexists(home / ".claude" / "skills" / "reviewer")
+        # With claude-code no longer a linking agent its row still holds the
+        # file, so the profile's name is the one that speaks for the dir.
+        cfg["agents"]["claude-code"]["enabled"] = False
+        config.save(cfg)
+        (home / ".claude" / "skills" / "reviewer").symlink_to(
+            paths.store_dir() / "reviewer")
+        assert store.stale_copy_links("reviewer", entry) == ["claude-personal"]
+        assert store.stale_copy_reason(entry, "claude-personal") == (
+            "whose skills dir is claude-code's, which has the workflow's own "
+            "file")
+        assert "claude-personal" not in _linked(entry)
+
     def test_unlink_takes_only_links_to_this_copy(self, sandbox, tmp_path):
         _copy_on_disk()
         _copy_on_disk("other")
