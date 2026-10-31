@@ -56,12 +56,17 @@ def test_install_names_the_profile_it_left_out(duo):
     out = _flat(duo("install", RULE).out)
     assert ("claude-personal: takes skills only "
             "(agents.claude-personal.skills_only) — not written") in out
+    # the workflow's skill copy is linked into both, so neither is unreached
     out = _flat(duo("install", WORKFLOW).out)
     assert ("claude-personal: takes skills only "
-            "(agents.claude-personal.skills_only) — not written") in out
+            "(agents.claude-personal.skills_only) — skill copy only") in out
     # windsurf's `workflows: false` is boost's own: named, its key not offered
-    assert "windsurf: has no slash-command format — not written" in out
+    assert "windsurf: has no slash-command format — skill copy only" in out
     assert "agents.windsurf.workflows" not in out
+    assert "not written" not in out
+    out = _flat(duo("install", WORKFLOW, "--force", "--no-as-skill").out)
+    assert ("claude-personal: takes skills only "
+            "(agents.claude-personal.skills_only) — not written") in out
     assert not (paths.home() / ".claude-personal" / "agents").exists()
 
 
@@ -72,7 +77,10 @@ def test_doctor_names_it_once_and_counts_no_issue(duo):
     out = _flat(r.out)
     assert ("claude-personal: takes skills only "
             "(agents.claude-personal.skills_only) — not written for rule "
-            "%s, workflow %s" % (RULE, WORKFLOW)) in out
+            "%s;" % RULE) in out
+    assert ("claude-personal: takes skills only "
+            "(agents.claude-personal.skills_only) — skill copy only for "
+            "workflow %s" % WORKFLOW) in out
     # the line under it no longer reads as covering every agent
     assert ("1 rule and 1 workflow fully materialized for every agent "
             "boost writes") in out

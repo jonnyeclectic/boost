@@ -182,11 +182,30 @@ class TestSkippedAgentItems:
         store.install(_rule(tap, name="api-rules", rel="rules/api.mdc"))
         store.install(_workflow(tap), as_skill=False)
         assert store.skipped_agent_items() == [
-            ("antigravity", agents.REASON_SKILLS_ONLY,
+            ("antigravity", agents.REASON_SKILLS_ONLY, False,
              ["rule api-rules", "rule house-rules", "workflow reviewer"]),
-            ("claude-personal", agents.REASON_SKILLS_ONLY,
+            ("claude-personal", agents.REASON_SKILLS_ONLY, False,
              ["rule api-rules", "rule house-rules", "workflow reviewer"]),
-            ("windsurf", agents.REASON_NO_COMMAND_FORMAT,
+            ("windsurf", agents.REASON_NO_COMMAND_FORMAT, False,
+             ["workflow reviewer"])]
+
+    def test_an_agent_the_copy_reaches_is_its_own_group(self, tap):
+        """A workflow's skill copy is linked into exactly the agents it
+        skips (`store.copy_link_targets`), so for the workflow they are not
+        unreached -- and a rule, which has no copy, still is."""
+        _add_agent("claude-personal", skills_only=True)
+        store.install(_rule(tap))
+        store.install(_workflow(tap))
+        assert store.skipped_agent_items() == [
+            ("antigravity", agents.REASON_SKILLS_ONLY, False,
+             ["rule house-rules"]),
+            ("claude-personal", agents.REASON_SKILLS_ONLY, False,
+             ["rule house-rules"]),
+            ("windsurf", agents.REASON_NO_COMMAND_FORMAT, True,
+             ["workflow reviewer"]),
+            ("antigravity", agents.REASON_SKILLS_ONLY, True,
+             ["workflow reviewer"]),
+            ("claude-personal", agents.REASON_SKILLS_ONLY, True,
              ["workflow reviewer"])]
 
     def test_nothing_installed_names_nothing(self, tap):
@@ -244,6 +263,36 @@ class TestSkipLine:
                                 agents.REASON_NO_PROJECT_SCOPE) == (
             "antigravity: has no project scope "
             "(agents.antigravity.project_scope) — not written")
+
+    def test_an_agent_the_skill_copy_reaches_is_not_unwritten(self, sandbox):
+        _add_agent("claude-personal", skills_only=True)
+        assert agents.skip_line("claude-personal", agents.REASON_SKILLS_ONLY,
+                                via_copy=True) == (
+            "claude-personal: takes skills only "
+            "(agents.claude-personal.skills_only) — skill copy only")
+
+    def test_the_report_says_which_agents_got_the_copy(self, tap, capsys):
+        """B2 links a workflow's skill copy into the agents its write set
+        skips; "not written" beside "linked → windsurf" read as a
+        contradiction."""
+        _add_agent("claude-personal", skills_only=True)
+        res = store.install(_workflow(tap))
+        pkg._report_result(res)
+        flat = " ".join(capsys.readouterr().out.split())
+        assert ("claude-personal: takes skills only "
+                "(agents.claude-personal.skills_only) — skill copy only"
+                ) in flat
+        assert "windsurf: has no slash-command format — skill copy only" in flat
+        assert "not written" not in flat
+
+    def test_with_no_copy_the_report_says_not_written(self, tap, capsys):
+        _add_agent("claude-personal", skills_only=True)
+        res = store.install(_workflow(tap), as_skill=False)
+        pkg._report_result(res)
+        flat = " ".join(capsys.readouterr().out.split())
+        assert ("claude-personal: takes skills only "
+                "(agents.claude-personal.skills_only) — not written") in flat
+        assert "skill copy only" not in flat
 
     def test_a_reason_no_flag_decides_names_no_key(self, sandbox):
         assert agents.skip_line("x", agents.REASON_UNKNOWN) == (
