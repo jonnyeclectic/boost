@@ -1063,10 +1063,19 @@ def tapped_template(tmp_path_factory, fixture_tap_src):
 
     The HOME is made by the real command, in-process, under the environment
     ``sandbox`` gives a test (:func:`_sandbox_home`). In-process, not a
-    subprocess, because mutmut attributes a mutant's tests by the calls it sees
-    during stats: a subprocess would hide ``registry.add``, ``catalog.rebuild_tap``
-    and ``gitutil.clone_shallow`` from every test that taps through this
-    fixture and leave them "not checked by any test".
+    subprocess, because mutmut's stats run records trampoline hits in one set
+    and hands the whole set to whichever test's teardown comes next
+    (``mutmut.runners.harness.run_stats``): a subprocess would hide
+    ``registry.add``, ``catalog.rebuild_tap`` and ``gitutil.clone_shallow``
+    from every test, leaving their mutants "not checked by any test".
+
+    What in-process does *not* keep is the old reach. Those functions used to
+    be credited to every test using ``tapped``; now they are credited to the
+    one test that happened to build the template (the first user in the stats
+    run) plus the tests that call them directly, so a mutant there that only a
+    downstream reader of the tapped state (search, list, info) caught is no
+    longer run against that reader. If that costs kills, the fallback is to
+    tap per test while ``MUTANT_UNDER_TEST`` is set.
 
     Nothing in the HOME names its own location. Checked against a real tap:
     ``config.json`` and the catalog cache carry the *source* repo's path (this
