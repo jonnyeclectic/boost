@@ -347,26 +347,25 @@ _K = "boost_cli.core.m.xǁKǁm"
 _SRC = "def a(x):\n    return x + 1\n\n\nclass K:\n    def m(self):\n        return 2\n"
 
 
-def _diff_plan(tmp_path, shards, functions=None, mutants=None):
+def _write_plan(tmp_path, plan):
     path = tmp_path / "plan.json"
-    flat = [p[: -len("__mutmut_*")] for s in shards for p in s]
-    path.write_text(
-        json.dumps(
-            {
-                "gate_set": "diff",
-                "reasons": ["test"],
-                "sets": {
-                    "diff": {
-                        "shards": shards,
-                        "mutants": mutants,
-                        "functions": functions if functions is not None else flat,
-                    }
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
+    path.write_text(json.dumps(plan), encoding="utf-8")
     return str(path)
+
+
+def _diff_plan(tmp_path, shards, mutants, functions=None, counts=None):
+    """A diff plan; `mutants` is required so every test states what it planned."""
+    flat = [p[: -len("__mutmut_*")] for s in shards for p in s]
+    spec = {
+        "shards": shards,
+        "mutants": mutants,
+        "functions": functions if functions is not None else flat,
+    }
+    if counts is not None:
+        spec["counts"] = counts
+    return _write_plan(
+        tmp_path, {"gate_set": "diff", "reasons": ["test"], "sets": {"diff": spec}}
+    )
 
 
 def _meta(source, prefix, index, codes, name="m.py", nested=False):
@@ -407,7 +406,7 @@ def _gate(tmp_path, plan, head_tree, *extra):
 def test_gate_reads_only_in_scope_keys(tmp_path, head_tree, monkeypatch):
     # shard .meta holds None for out-of-scope keys of the same file -> ignored, exit 0
     monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
-    plan = _diff_plan(tmp_path, [[md.pattern(_A)]], mutants=2)
+    plan = _diff_plan(tmp_path, [[md.pattern(_A)]], 2)
     _meta(
         tmp_path / "src",
         "mutation-diff-shard-",
@@ -425,7 +424,7 @@ def test_gate_reads_only_in_scope_keys(tmp_path, head_tree, monkeypatch):
 def test_gate_fails_and_annotates_a_survivor(tmp_path, head_tree, monkeypatch, capsys):
     summary = tmp_path / "summary.md"
     monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
-    plan = _diff_plan(tmp_path, [[md.pattern(_A)], [md.pattern(_K)]])
+    plan = _diff_plan(tmp_path, [[md.pattern(_A)], [md.pattern(_K)]], 3)
     _meta(tmp_path / "src", "mutation-diff-shard-", 0,
           {f"{_A}__mutmut_1": 1, f"{_K}__mutmut_1": None})
     _meta(tmp_path / "src", "mutation-diff-shard-", 1,
@@ -445,7 +444,7 @@ def test_gate_fails_and_annotates_a_survivor(tmp_path, head_tree, monkeypatch, c
 
 def test_gate_annotation_lists_at_most_three(tmp_path, head_tree, monkeypatch, capsys):
     monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
-    plan = _diff_plan(tmp_path, [[md.pattern(_A)]])
+    plan = _diff_plan(tmp_path, [[md.pattern(_A)]], 5)
     _meta(tmp_path / "src", "mutation-diff-shard-", 0,
           {f"{_A}__mutmut_{i}": 0 for i in range(1, 6)})
     assert _gate(tmp_path, plan, head_tree) == 1
@@ -457,13 +456,13 @@ def test_gate_annotation_lists_at_most_three(tmp_path, head_tree, monkeypatch, c
 
 
 def test_gate_missing_shard_is_not_a_pass(tmp_path, head_tree):
-    plan = _diff_plan(tmp_path, [[md.pattern(_A)], [md.pattern(_K)]])
+    plan = _diff_plan(tmp_path, [[md.pattern(_A)], [md.pattern(_K)]], 1)
     _meta(tmp_path / "src", "mutation-diff-shard-", 0, {f"{_A}__mutmut_1": 1})
     assert _gate(tmp_path, plan, head_tree) == 2
 
 
 def test_gate_unrun_in_scope_key_is_exit_2(tmp_path, head_tree):
-    plan = _diff_plan(tmp_path, [[md.pattern(_A)]])
+    plan = _diff_plan(tmp_path, [[md.pattern(_A)]], 2)
     _meta(tmp_path / "src", "mutation-diff-shard-", 0,
           {f"{_A}__mutmut_1": 1, f"{_A}__mutmut_2": None})
     assert _gate(tmp_path, plan, head_tree) == 2
@@ -472,13 +471,13 @@ def test_gate_unrun_in_scope_key_is_exit_2(tmp_path, head_tree):
 def test_gate_function_with_no_keys_is_exit_2(tmp_path, head_tree):
     # The planner counted mutants for it; a shard that produced none ran
     # something else, and scoring the rest would pass on a subset.
-    plan = _diff_plan(tmp_path, [[md.pattern(_A), md.pattern(_K)]])
+    plan = _diff_plan(tmp_path, [[md.pattern(_A), md.pattern(_K)]], 1)
     _meta(tmp_path / "src", "mutation-diff-shard-", 0, {f"{_A}__mutmut_1": 1})
     assert _gate(tmp_path, plan, head_tree) == 2
 
 
 def test_gate_fewer_mutants_than_planned_is_exit_2(tmp_path, head_tree):
-    plan = _diff_plan(tmp_path, [[md.pattern(_A)]], mutants=3)
+    plan = _diff_plan(tmp_path, [[md.pattern(_A)]], 3)
     _meta(tmp_path / "src", "mutation-diff-shard-", 0,
           {f"{_A}__mutmut_1": 1, f"{_A}__mutmut_2": 1})
     assert _gate(tmp_path, plan, head_tree) == 2
@@ -492,13 +491,13 @@ def test_gate_without_a_diff_set_is_exit_2(tmp_path, head_tree):
 
 
 def test_gate_empty_scope_passes_with_no_artifacts(tmp_path, head_tree):
-    plan = _diff_plan(tmp_path, [], functions=[], mutants=0)
+    plan = _diff_plan(tmp_path, [], 0, functions=[])
     assert _gate(tmp_path, plan, head_tree) == 0
 
 
 def test_gate_honours_min_and_small(tmp_path, head_tree, monkeypatch):
     monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
-    plan = _diff_plan(tmp_path, [[md.pattern(_A)]])
+    plan = _diff_plan(tmp_path, [[md.pattern(_A)]], 3)
     _meta(tmp_path / "src", "mutation-diff-shard-", 0,
           {f"{_A}__mutmut_1": 1, f"{_A}__mutmut_2": 1, f"{_A}__mutmut_3": 0})
     assert _gate(tmp_path, plan, head_tree) == 1
@@ -523,7 +522,7 @@ def test_def_line(src, mangled, line):
 
 
 def test_compare_flags_a_flip_and_excludes_timeouts(tmp_path, capsys):
-    plan = _diff_plan(tmp_path, [[md.pattern(_A)]])
+    plan = _diff_plan(tmp_path, [[md.pattern(_A)]], 4)
     _meta(tmp_path / "full", "mutation-full-shard-", 0,
           {f"{_A}__mutmut_{i}": None for i in range(1, 5)} | {"other": 0})
     _meta(tmp_path / "full", "mutation-full-shard-", 1,
@@ -542,7 +541,7 @@ def test_compare_flags_a_flip_and_excludes_timeouts(tmp_path, capsys):
 
 
 def test_compare_agreement_exits_0(tmp_path, capsys):
-    plan = _diff_plan(tmp_path, [[md.pattern(_A)]])
+    plan = _diff_plan(tmp_path, [[md.pattern(_A)]], 1)
     _meta(tmp_path / "full", "mutation-full-shard-", 0, {f"{_A}__mutmut_1": 1})
     _meta(tmp_path / "diff", "mutation-diff-shard-", 0, {f"{_A}__mutmut_1": 1})
     assert md.main(["compare", "--plan", plan, "--full-source", str(tmp_path / "full"),
@@ -551,7 +550,7 @@ def test_compare_agreement_exits_0(tmp_path, capsys):
 
 
 def test_compare_counts_a_key_missing_from_the_full_run_as_disagreement(tmp_path, capsys):
-    plan = _diff_plan(tmp_path, [[md.pattern(_A)]])
+    plan = _diff_plan(tmp_path, [[md.pattern(_A)]], 1)
     _meta(tmp_path / "full", "mutation-full-shard-", 0, {f"{_A}__mutmut_1": None})
     _meta(tmp_path / "diff", "mutation-diff-shard-", 0, {f"{_A}__mutmut_1": 1})
     assert md.main(["compare", "--plan", plan, "--full-source", str(tmp_path / "full"),
@@ -560,7 +559,7 @@ def test_compare_counts_a_key_missing_from_the_full_run_as_disagreement(tmp_path
 
 
 def test_compare_with_no_full_shards_is_exit_2(tmp_path):
-    plan = _diff_plan(tmp_path, [[md.pattern(_A)]])
+    plan = _diff_plan(tmp_path, [[md.pattern(_A)]], 1)
     _meta(tmp_path / "diff", "mutation-diff-shard-", 0, {f"{_A}__mutmut_1": 1})
     (tmp_path / "full").mkdir()
     assert md.main(["compare", "--plan", plan, "--full-source", str(tmp_path / "full"),
@@ -569,7 +568,7 @@ def test_compare_with_no_full_shards_is_exit_2(tmp_path):
 
 def test_gate_runs_as_a_script(tmp_path):
     # A fresh process, as CI runs it: nothing has registered the module first.
-    plan = _diff_plan(tmp_path, [], functions=[], mutants=0)
+    plan = _diff_plan(tmp_path, [], 0, functions=[])
     proc = subprocess.run(
         [sys.executable, str(_P), "gate", "--plan", plan, "--source",
          str(tmp_path / "src"), "--prefix", "mutation-diff-shard-"],
@@ -577,3 +576,150 @@ def test_gate_runs_as_a_script(tmp_path):
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "0/0 killed" in proc.stdout
+
+
+# -- fix round 1: the gate validates the plan before it scores --------------
+
+_PA = "boost_cli.core.m.x_a__mutmut_*"
+
+
+@pytest.mark.parametrize(
+    "spec,meta,complaint",
+    [
+        # Each of the first five exited 0 before validation (review I-1).
+        ({}, None, "shards"),
+        ({"shards": None, "mutants": 0, "functions": []}, None, "shards"),
+        ({"shards": [], "mutants": "12", "functions": []}, None, "mutants"),
+        # 1 of N keys present: with no integer count nothing noticed the gap,
+        # and the gate printed 1/1 killed, PASS.
+        ({"shards": [[_PA]], "mutants": None, "functions": [_A]},
+         {f"{_A}__mutmut_1": 1}, "mutants"),
+        ({"shards": [[_PA], []], "mutants": 1, "functions": [_A]},
+         {f"{_A}__mutmut_1": 1}, "shard 1"),
+        # ...and the neighbours of those shapes.
+        ({"shards": [[_PA]], "mutants": True, "functions": [_A]},
+         {f"{_A}__mutmut_1": 1}, "mutants"),
+        ({"shards": [], "mutants": -1, "functions": []}, None, "mutants"),
+        # `mutants: 0` with work planned would make the `<` check vacuous.
+        ({"shards": [[_PA]], "mutants": 0, "functions": [_A]},
+         {f"{_A}__mutmut_1": 1}, "mutants"),
+        ({"shards": [], "mutants": 3, "functions": []}, None, "mutants"),
+        ({"shards": [[_PA, 7]], "mutants": 1, "functions": [_A]},
+         {f"{_A}__mutmut_1": 1}, "shard 0"),
+        ({"shards": [_PA], "mutants": 1, "functions": [_A]},
+         {f"{_A}__mutmut_1": 1}, "shard 0"),
+        ({"shards": [], "mutants": 0}, None, "functions"),
+        ({"shards": [], "mutants": 0, "functions": [None]}, None, "functions"),
+        ({"shards": [], "mutants": 0, "functions": "x"}, None, "functions"),
+        ([], None, "sets.diff"),
+    ],
+)
+def test_gate_refuses_a_malformed_diff_set(tmp_path, head_tree, capsys, spec, meta, complaint):
+    plan = _write_plan(tmp_path, {"gate_set": "diff", "sets": {"diff": spec}})
+    if meta is not None:
+        _meta(tmp_path / "src", "mutation-diff-shard-", 0, meta)
+    assert _gate(tmp_path, plan, head_tree) == 2
+    out = capsys.readouterr().out
+    assert "malformed plan" in out and complaint in out, out
+
+
+@pytest.mark.parametrize("plan", [[], "diff", {"sets": []}, {"sets": None}])
+def test_gate_refuses_a_plan_that_is_not_a_mapping(tmp_path, head_tree, capsys, plan):
+    assert _gate(tmp_path, _write_plan(tmp_path, plan), head_tree) == 2
+    assert "malformed plan" in capsys.readouterr().out
+
+
+def test_compare_refuses_a_malformed_diff_set(tmp_path, capsys):
+    plan = _write_plan(tmp_path, {"sets": {"diff": {"shards": None}}})
+    assert md.main(["compare", "--plan", plan, "--full-source", str(tmp_path / "f"),
+                    "--diff-source", str(tmp_path / "d")]) == 2
+    assert "malformed plan" in capsys.readouterr().out
+
+
+def test_gate_per_function_counts_catch_an_offsetting_shortfall(tmp_path, head_tree, capsys):
+    # The total matches (3 == 3), but `a` lost a mutant and `K.m` gained one:
+    # only per-function counts can tell (review M-4).
+    plan = _diff_plan(tmp_path, [[md.pattern(_A), md.pattern(_K)]], 3,
+                      counts={_A: 2, _K: 1})
+    _meta(tmp_path / "src", "mutation-diff-shard-", 0,
+          {f"{_A}__mutmut_1": 1, f"{_K}__mutmut_1": 1, f"{_K}__mutmut_2": 1})
+    assert _gate(tmp_path, plan, head_tree) == 2
+    assert f"{_A}: planner counted 2 mutants; shards hold 1" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    "counts",
+    [
+        {_A: 1},              # sums to 1, the plan says 2
+        {_A: 1, "other": 1},  # keyed by a function no shard runs
+        {_A: "2"},
+        {_A: 0},
+        [_A],
+    ],
+)
+def test_gate_refuses_inconsistent_counts(tmp_path, head_tree, capsys, counts):
+    plan = _diff_plan(tmp_path, [[_PA]], 2, counts=counts)
+    _meta(tmp_path / "src", "mutation-diff-shard-", 0,
+          {f"{_A}__mutmut_1": 1, f"{_A}__mutmut_2": 1})
+    assert _gate(tmp_path, plan, head_tree) == 2
+    out = capsys.readouterr().out
+    assert "malformed plan" in out and "counts" in out
+
+
+def test_gate_with_exact_counts_passes(tmp_path, head_tree):
+    plan = _diff_plan(tmp_path, [[_PA]], 2, counts={_A: 2})
+    _meta(tmp_path / "src", "mutation-diff-shard-", 0,
+          {f"{_A}__mutmut_1": 1, f"{_A}__mutmut_2": 1})
+    assert _gate(tmp_path, plan, head_tree) == 0
+
+
+# -- fix round 1: escaping (review M-1) and compare ordering (M-2) ----------
+
+
+def test_gate_escapes_the_annotation_file_property(tmp_path, head_tree, monkeypatch, capsys):
+    # A PR-controlled file name must not be able to inject `,line=9` (or a
+    # newline) into the workflow command's properties.
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    q = "boost_cli.core.a,line=9.x_f"
+    plan = _diff_plan(tmp_path, [[md.pattern(q)]], 1)
+    _meta(tmp_path / "src", "mutation-diff-shard-", 0, {f"{q}__mutmut_1": 0},
+          name="a,line=9.py")
+    assert _gate(tmp_path, plan, head_tree) == 1
+    (warning,) = [x for x in capsys.readouterr().out.splitlines()
+                  if x.startswith("::warning")]
+    assert warning.startswith("::warning file=boost_cli/core/a%2Cline=9.py,line=1::")
+
+
+def test_gate_escapes_raw_keys_on_every_output_line(tmp_path, head_tree, monkeypatch, capsys):
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    plan = _diff_plan(tmp_path, [[_PA]], 1)
+    _meta(tmp_path / "src", "mutation-diff-shard-", 0,
+          {f"{_A}__mutmut_1\n::error::injected": None})
+    assert _gate(tmp_path, plan, head_tree) == 2
+    out = capsys.readouterr().out
+    assert not any(line.startswith("::error") for line in out.splitlines()), out
+    assert "%0A::error::injected" in out
+
+
+def test_compare_escapes_raw_keys(tmp_path, capsys):
+    plan = _diff_plan(tmp_path, [[_PA]], 1)
+    key = f"{_A}__mutmut_1\n::error::injected"
+    _meta(tmp_path / "full", "mutation-full-shard-", 0, {key: 0})
+    _meta(tmp_path / "diff", "mutation-diff-shard-", 0, {key: 1})
+    assert md.main(["compare", "--plan", plan, "--full-source", str(tmp_path / "full"),
+                    "--diff-source", str(tmp_path / "diff")]) == 1
+    out = capsys.readouterr().out
+    assert not any(line.startswith("::error") for line in out.splitlines()), out
+
+
+def test_compare_counts_a_one_sided_timeout_as_disagreement(tmp_path, capsys):
+    # Absent on one side is a missing result, not a timeout to excuse (M-2).
+    plan = _diff_plan(tmp_path, [[_PA]], 2)
+    _meta(tmp_path / "full", "mutation-full-shard-", 0, {f"{_A}__mutmut_1": 1})
+    _meta(tmp_path / "diff", "mutation-diff-shard-", 0,
+          {f"{_A}__mutmut_1": 1, f"{_A}__mutmut_2": 36})
+    assert md.main(["compare", "--plan", plan, "--full-source", str(tmp_path / "full"),
+                    "--diff-source", str(tmp_path / "diff")]) == 1
+    out = capsys.readouterr().out
+    assert "agree 1, disagree 1, excluded-timeouts 0" in out
+    assert "full=absent diff=timeout" in out

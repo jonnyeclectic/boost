@@ -429,6 +429,84 @@ def _read_codes(meta: Path) -> dict[str, Any]:
     return json.loads(meta.read_text(encoding="utf-8")).get("exit_code_by_key") or {}
 
 
+def _functions_of(shards: list[list[str]]) -> list[str]:
+    return [p[: -len(MUTANT_SEP + "*")] for shard in shards for p in shard]
+
+
+def _count(value: Any) -> bool:
+    # `True` is an int to isinstance; a count of True is a bug, not a 1.
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def validate_plan(plan: Any) -> tuple[dict[str, Any] | None, list[str]]:
+    """The plan's `diff` set if it is well-formed, else every way it is not.
+
+    Scoring trusts this shape completely, and every malformed shape it used
+    to accept scored as a pass: `{}` and `shards: null` read as an empty
+    scope, and a `mutants` that is not an integer switched off the only check
+    that notices a shard which ran part of a function (1 of N keys present
+    scored 1/1 killed, PASS). So nothing is scored until all of it holds:
+
+    * `shards` is a list of non-empty lists of `<qualified>__mutmut_*` strings
+      (an empty shard is one the planner never emits, see mutation_plan.py);
+    * `mutants` is an int >= 0, and is 0 exactly when there are no shards, so
+      a `0` can't make the shortfall check vacuous;
+    * `functions` is a list of strings;
+    * `counts`, when present (the planner always writes it), maps exactly the
+      shards' functions to positive ints that sum to `mutants`.
+    """
+    if not isinstance(plan, dict):
+        return None, ["the plan is not a JSON object"]
+    sets = plan.get("sets")
+    if not isinstance(sets, dict):
+        return None, ["`sets` is not an object"]
+    if "diff" not in sets:
+        return None, ["the plan has no `sets.diff` to score"]
+    spec = sets["diff"]
+    if not isinstance(spec, dict):
+        return None, ["`sets.diff` is not an object"]
+
+    problems: list[str] = []
+    shards = spec.get("shards")
+    shards_ok = isinstance(shards, list)
+    if not shards_ok:
+        problems.append(f"`shards` is {shards!r}, not a list")
+    else:
+        for i, shard in enumerate(shards):
+            if not isinstance(shard, list) or not shard:
+                problems.append(f"shard {i} is {shard!r}, not a non-empty list")
+                shards_ok = False
+                continue
+            for pat in shard:
+                if not isinstance(pat, str) or not pat.endswith(MUTANT_SEP + "*"):
+                    problems.append(f"shard {i}: {pat!r} is not a function pattern")
+                    shards_ok = False
+
+    mutants = spec.get("mutants")
+    if not _count(mutants) or mutants < 0:
+        problems.append(f"`mutants` is {mutants!r}, not an integer >= 0")
+    elif isinstance(shards, list) and (mutants == 0) != (not shards):
+        problems.append(f"`mutants` is {mutants} but {len(shards)} shards are planned")
+
+    functions = spec.get("functions")
+    if not isinstance(functions, list) or not all(isinstance(f, str) for f in functions):
+        problems.append(f"`functions` is {functions!r}, not a list of strings")
+
+    if "counts" in spec:
+        counts = spec["counts"]
+        if not isinstance(counts, dict) or not all(
+            isinstance(k, str) and _count(v) and v > 0 for k, v in counts.items()
+        ):
+            problems.append("`counts` is not an object of positive integers")
+        elif shards_ok and set(counts) != set(_functions_of(shards)):
+            problems.append("`counts` names different functions than the shards run")
+        elif _count(mutants) and sum(counts.values()) != mutants:
+            problems.append(
+                f"`counts` sums to {sum(counts.values())}, but `mutants` is {mutants}"
+            )
+    return (None if problems else spec), problems
+
+
 def collect_diff(
     spec: dict[str, Any], source: Path, prefix: str
 ) -> tuple[dict[str, int | None], list[str]]:
@@ -439,17 +517,17 @@ def collect_diff(
     reports them `None`, having been asked to run something else. Only keys
     with the function's exact `__mutmut_` prefix are taken, so out-of-scope
     functions of the same file — `None` in every diff shard — are never read.
+
+    `spec` must have passed `validate_plan`.
     """
     codes: dict[str, int | None] = {}
     problems: list[str] = []
-    for index, shard in enumerate(spec.get("shards") or []):
+    per_function = spec.get("counts") or {}
+    for index, shard in enumerate(spec["shards"]):
         if not (source / f"{prefix}{index}").is_dir():
             problems.append(f"shard {index}: no artifact at {source}/{prefix}{index}")
             continue
         for pat in shard:
-            if not pat.endswith(MUTANT_SEP + "*"):
-                problems.append(f"shard {index}: {pat!r} is not a function pattern")
-                continue
             q = pat[: -len(MUTANT_SEP + "*")]
             path, _ = split_qualified(q)
             meta = ms.shard_meta(source, prefix, index, _core_rel(path))
@@ -461,24 +539,47 @@ def collect_diff(
             }
             if not mine:
                 problems.append(f"shard {index}: no mutants of {q} (planned, never run)")
+            elif q in per_function and len(mine) < per_function[q]:
+                # Exact per function: a total alone hides one function's
+                # shortfall behind another's surplus.
+                problems.append(
+                    f"{q}: planner counted {per_function[q]} mutants; shards hold {len(mine)}"
+                )
             codes.update(mine)
-    planned = spec.get("mutants")
-    if isinstance(planned, int) and len(codes) < planned:
-        problems.append(f"planner counted {planned} mutants; shards hold {len(codes)}")
+    # `<`, not `!=`: a surplus is still scored in full, and making it an error
+    # needs Task 7 to prove the planner and the shards mutate the same tree.
+    if len(codes) < spec["mutants"]:
+        problems.append(
+            f"planner counted {spec['mutants']} mutants; shards hold {len(codes)}"
+        )
     return codes, problems
 
 
 def _escape(message: str) -> str:
-    # GitHub workflow-command data escaping: without it a `%` or newline in a
-    # mutant name would truncate or corrupt the annotation.
+    """Workflow-command *data* escaping, for anything printed that a PR controls.
+
+    Mutant keys and paths come from PR-controlled file names. Unescaped, a
+    newline in one starts a new stdout line, which the runner would read as a
+    workflow command of the PR's choosing.
+    """
     return message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
 
 
+def _escape_property(value: str) -> str:
+    """Workflow-command *property* escaping: data escaping plus `:` and `,`.
+
+    Without it a core file named `a,line=9.py` rewrites the annotation's own
+    `line=` property.
+    """
+    return _escape(value).replace(":", "%3A").replace(",", "%2C")
+
+
 def cmd_gate(args: argparse.Namespace) -> int:
-    plan = json.loads(Path(args.plan).read_text(encoding="utf-8"))
-    spec = (plan.get("sets") or {}).get("diff")
+    spec, invalid = validate_plan(json.loads(Path(args.plan).read_text(encoding="utf-8")))
     if spec is None:
-        print("mutation diff gate: the plan has no `diff` set to score")
+        print("mutation diff gate: INCOMPLETE — malformed plan, refusing to score:")
+        for p in invalid:
+            print(f"  - {_escape(p)}")
         return 2
     codes, problems = collect_diff(spec, Path(args.source), args.prefix)
     v = score(codes)
@@ -520,7 +621,11 @@ def cmd_gate(args: argparse.Namespace) -> int:
         names = ", ".join(f"{k} ({lost[k]})" for k in keys[:3])
         print(
             "::warning file=%s,line=%d::%s"
-            % (path, where, _escape(f"{q}: {len(keys)} mutants not killed: {names}"))
+            % (
+                _escape_property(path),
+                where,
+                _escape(f"{q}: {len(keys)} mutants not killed: {names}"),
+            )
         )
 
     if problems:
@@ -535,15 +640,15 @@ def cmd_gate(args: argparse.Namespace) -> int:
         verdict, rc = f"FAIL — {pct:.1f}% < {args.min:.1f}% minimum", 1
     print(f"mutation diff gate: {verdict}")
     for p in problems:
-        print(f"  - {p}")
+        print(f"  - {_escape(p)}")
     for k in v.unrun[:20]:
-        print(f"  - unrun: {k}")
+        print(f"  - unrun: {_escape(k)}")
 
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:
         body = [f"### Mutation (diff scope): {verdict}", "", line, ""]
-        body += [f"- `{k}` — {status}" for k, status in lost.items()]
-        body += [f"- {p}" for p in problems]
+        body += [f"- `{_escape(k)}` — {status}" for k, status in lost.items()]
+        body += [f"- {_escape(p)}" for p in problems]
         with open(summary, "a", encoding="utf-8") as fh:
             fh.write("\n".join(body) + "\n")
     return rc
@@ -584,14 +689,14 @@ def _collect_full(
 
 def cmd_compare(args: argparse.Namespace) -> int:
     plan = json.loads(Path(args.plan).read_text(encoding="utf-8"))
-    spec = (plan.get("sets") or {}).get("diff")
+    spec, invalid = validate_plan(plan)
     if spec is None:
-        print("mutation diff compare: the plan has no `diff` set")
+        print("mutation diff compare: malformed plan, refusing to compare:")
+        for p in invalid:
+            print(f"  - {_escape(p)}")
         return 2
     diff, problems = collect_diff(spec, Path(args.diff_source), args.diff_prefix)
-    functions = [
-        p[: -len(MUTANT_SEP + "*")] for shard in spec.get("shards") or [] for p in shard
-    ]
+    functions = _functions_of(spec["shards"])
     files = {_core_rel(split_qualified(q)[0]) for q in functions}
     full_all, full_problems = _collect_full(
         plan, Path(args.full_source), args.full_prefix, files
@@ -606,13 +711,13 @@ def cmd_compare(args: argparse.Namespace) -> int:
     agree, disagree, timeouts = [], [], []
     for key in sorted(set(diff) | set(full)):
         f, d = name(full, key), name(diff, key)
-        if "timeout" in (f, d):
+        # A missing result first: a timeout on one side does not excuse the
+        # other side never having run the mutant at all.
+        if {f, d} & {"absent", "not checked"}:
+            disagree.append(f"{key}: full={f} diff={d}")
+        elif "timeout" in (f, d):
             timeouts.append(f"{key}: full={f} diff={d}")
-        elif (
-            f not in ("absent", "not checked")
-            and d not in ("absent", "not checked")
-            and (f == "killed") == (d == "killed")
-        ):
+        elif (f == "killed") == (d == "killed"):
             agree.append(key)
         else:
             disagree.append(f"{key}: full={f} diff={d}")
@@ -621,11 +726,11 @@ def cmd_compare(args: argparse.Namespace) -> int:
         f"agree {len(agree)}, disagree {len(disagree)}, excluded-timeouts {len(timeouts)}"
     )
     for line in disagree:
-        print(f"  disagree: {line}")
+        print(f"  disagree: {_escape(line)}")
     for line in timeouts:
-        print(f"  excluded timeout: {line}")
+        print(f"  excluded timeout: {_escape(line)}")
     for p in problems:
-        print(f"  - {p}")
+        print(f"  - {_escape(p)}")
     if problems:
         return 2
     return 1 if disagree else 0

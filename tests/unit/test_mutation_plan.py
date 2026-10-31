@@ -363,6 +363,25 @@ def test_diff_plan_runs_as_a_script(tmp_path, git_repo):
     assert json.loads(out.read_text(encoding="utf-8"))["gate_set"] == "diff"
 
 
+def test_diff_plan_records_per_function_counts(tmp_path, git_repo):
+    head = git_repo.head({"boost_cli/core/m.py": _M_BASE.replace("+ 1", "+ 2")})
+    diff = plan_diff(tmp_path, git_repo, head)["sets"]["diff"]
+    assert set(diff["counts"]) == {"boost_cli.core.m.x_a", "boost_cli.core.m.x_b"}
+    assert sum(diff["counts"].values()) == diff["mutants"]
+    assert all(n > 0 for n in diff["counts"].values())
+
+
+def test_diff_plan_refuses_an_unreadable_blob(tmp_path, git_repo):
+    # A path that is in the tree but whose blob git cannot produce (a partial
+    # clone whose lazy fetch failed; here, a deleted loose object) must not
+    # read as "file deleted" -> empty scope -> pass (review M-3).
+    head = git_repo.head({"boost_cli/core/n.py": "def z(y):\n    return y == 13579\n"})
+    blob = _git(git_repo.root, "rev-parse", head + ":boost_cli/core/n.py")
+    (git_repo.root / ".git" / "objects" / blob[:2] / blob[2:]).unlink()
+    with pytest.raises(subprocess.CalledProcessError):
+        mp.diff_plan(git_repo.root, git_repo.base, head, git_repo.stats)
+
+
 def test_diff_plan_refuses_an_unknown_revision(tmp_path, git_repo):
     # A bad SHA must not read as "every file missing" -> empty scope -> pass.
     with pytest.raises(subprocess.CalledProcessError):

@@ -22,7 +22,8 @@ The plan
      "reasons":  ["why this plan, in words a reviewer can check"],
      "sets":     {"<set>": {"shards": [[pattern, ...], ...],
                             "mutants": <int> | null,
-                            "functions": [qualified, ...]}}}   # diff only
+                            "functions": [qualified, ...],     # diff only
+                            "counts": {qualified: <int>}}}}    # diff only
 
 ``sets`` is keyed by name so a run can carry more than one: ``full`` (the
 committed 24-way pack of every mutant in ``boost_cli/core``) and ``diff`` (the
@@ -118,10 +119,12 @@ def _load_diff():
     return module
 
 
-def _git(root: Path, *args: str) -> subprocess.CompletedProcess:
+def _git(root: Path, *args: str) -> bytes:
     # An argv list, never a shell string: mangled method names (`xǁKǁm`) and
-    # paths go through untouched by word-splitting or globbing.
-    return subprocess.run(["git", *args], cwd=root, capture_output=True)
+    # paths go through untouched by word-splitting or globbing. check=True:
+    # a git failure fails the planner, and so the required `mutation` check.
+    return subprocess.run(["git", "--literal-pathspecs", *args], cwd=root,
+                          check=True, capture_output=True).stdout
 
 
 def git_reader(root: Path, base: str, head: str):
@@ -130,18 +133,24 @@ def git_reader(root: Path, base: str, head: str):
     Both revisions are verified up front. Without that, a typo'd or unfetched
     SHA makes every ``git show`` fail, every file reads as absent, the scope
     comes out empty, and an empty scope is a pass.
+
+    For the same reason "absent" is decided from the *tree* (``ls-tree``, which
+    needs no blobs), never from ``git show`` failing: in a partial clone whose
+    lazy blob fetch fails, a changed core file would otherwise read as deleted.
+    A path the tree lists but git cannot read is an error.
     """
     revs = {"base": base, "head": head}
     for rev in revs.values():
-        subprocess.run(["git", "rev-parse", "--verify", "--quiet", rev + "^{commit}"],
-                       cwd=root, check=True, capture_output=True)
+        _git(root, "rev-parse", "--verify", "--quiet", rev + "^{commit}")
     cache: dict[tuple[str, str], str | None] = {}
 
     def read(rev: str, path: str) -> str | None:
         key = (revs[rev], path)
         if key not in cache:
-            proc = _git(root, "show", "%s:%s" % key)
-            cache[key] = proc.stdout.decode("utf-8") if proc.returncode == 0 else None
+            listed = _git(root, "ls-tree", "--full-tree", "--name-only", "-z",
+                          key[0], "--", path).split(b"\0")
+            cache[key] = (_git(root, "show", "%s:%s" % key).decode("utf-8")
+                          if path.encode("utf-8") in listed else None)
         return cache[key]
 
     return read
@@ -153,10 +162,8 @@ def changed_paths(root: Path, base: str, head: str) -> list[str]:
     ``-z`` so ``core.quotePath`` cannot octal-escape a non-ASCII path into a
     name that matches nothing.
     """
-    out = subprocess.run(["git", "diff", "--name-only", "--no-renames", "-z",
-                          base, head], cwd=root, check=True,
-                         capture_output=True).stdout.decode("utf-8")
-    return [p for p in out.split("\0") if p]
+    out = _git(root, "diff", "--name-only", "--no-renames", "-z", base, head)
+    return [p for p in out.decode("utf-8").split("\0") if p]
 
 
 def diff_plan(root: Path, base: str, head: str, stats: Path, *,
@@ -219,7 +226,10 @@ def diff_plan(root: Path, base: str, head: str, stats: Path, *,
         "gate_set": "diff",
         "reasons": [why],
         "sets": {"diff": {"shards": shard_patterns_, "mutants": total,
-                          "functions": scope}},
+                          "functions": scope,
+                          # Per-function, so the gate can tell one function's
+                          # shortfall from another's surplus.
+                          "counts": {q: counts[q] for q in sorted(counts)}}},
     }
     if shadow:
         plan["sets"]["full"] = full_plan(root, shards, [])["sets"]["full"]
