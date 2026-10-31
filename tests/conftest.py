@@ -471,9 +471,16 @@ _GEOMETRY_ENV = ("COLUMNS", "LINES")
 
 
 def _drop_inherited_geometry() -> None:
-    """Remove the :data:`_GEOMETRY_ENV` variables this process inherited."""
+    """Remove the :data:`_GEOMETRY_ENV` variables, from the C environment too.
+
+    ``os.environ.pop`` alone is not enough in the process readline ran in:
+    the variables were set below ``os.environ``, which never held them, so
+    the pop is a no-op and every child process still inherited LINES=24
+    (seen in the serial free-threaded canary).
+    """
     for name in _GEOMETRY_ENV:
         os.environ.pop(name, None)
+        os.unsetenv(name)
 
 
 _SESSION_HOME: list[Path] = []
