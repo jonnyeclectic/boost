@@ -1,6 +1,6 @@
 # CI speed: getting a PR from green to released in under an hour
 
-Status: draft, awaiting approval. No `ci.yml` change before approval.
+Status: approved 2026-10-31 (options: B with red-nightly fallback; old survivors count).
 
 ## Why
 
