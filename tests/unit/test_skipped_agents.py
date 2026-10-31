@@ -12,6 +12,7 @@ antigravity row) got no subagent and no rule, and nothing said so.
 from __future__ import annotations
 
 import os
+import sys
 
 import pytest
 
@@ -328,6 +329,15 @@ def _unstattable_marker(monkeypatch):
     monkeypatch.setattr(os, "stat", stat)
 
 
+#: On Windows ``os.path.isfile`` is ``nt._path_isfile`` (Python 3.12+), which
+#: asks the OS without calling ``os.stat``, so the fake above never reaches the
+#: probe -- and a directory the user cannot search is POSIX permission
+#: semantics in the first place.
+needs_posix_stat = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="os.path.isfile bypasses os.stat on Windows")
+
+
 class TestClaudeProfileRows:
     def test_a_skills_only_row_beside_a_claude_json_is_named(self, sandbox):
         _profile()
@@ -371,6 +381,7 @@ class TestClaudeProfileRows:
             "first — in a repo Claude Code reads `.claude/` under any "
             "profile, never `.claude-personal/`")
 
+    @needs_posix_stat
     def test_a_marker_it_cannot_stat_is_not_a_profile(self, sandbox,
                                                       monkeypatch):
         """Under a dir that is not searchable, ``Path.is_file`` raises
@@ -382,6 +393,7 @@ class TestClaudeProfileRows:
         _unstattable_marker(monkeypatch)
         assert agents.claude_profile_rows() == []
 
+    @needs_posix_stat
     def test_doctor_finishes_its_report_over_it(self, sandbox, monkeypatch,
                                                 capsys):
         """Doctor asks this on every run: a raise there was exit 70 and a
