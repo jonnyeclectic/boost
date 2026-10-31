@@ -24,7 +24,18 @@ on:
   workflow_dispatch: {}   # manual release button, same pipeline
 
 concurrency:
-  group: release
+  group: ${{ (github.event_name == 'workflow_dispatch' || github.event.workflow_run.event == 'push') && 'release' || format('release-ignored-{0}', github.run_id) }}
+  # Only a run that can release queues in `release`: a ci push run, or the
+  # manual button above. ci also completes on main from its nightly and from
+  # dispatches, and each of those fires this workflow too -- its guard skips
+  # it, but only after it has joined the group. GitHub keeps one running and
+  # one pending run per group and a third arrival cancels the pending one, so
+  # in a shared group a nightly finishing while merge B's release waited
+  # behind A's cancelled B's. Every other run gets a group of its own, keyed on
+  # its run id, so it neither waits for a release nor displaces one. For push
+  # runs the group is still the constant `release`, so `false` below means
+  # exactly what it did: a release is never cancelled mid-upload, and they run
+  # one at a time (the guard's idempotence relies on that).
   cancel-in-progress: false
 
 # Least privilege at the workflow level. While this workflow had exactly one
