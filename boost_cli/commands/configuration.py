@@ -2119,9 +2119,10 @@ def _tool_doctor(args: dict):
             "workflow %s's skill copy is not linked for %s — `boost sync` "
             "links it" % (n, a) for n, a in rows],
         "stale_copy_links": lambda rows: [
-            "workflow %s's skill copy is linked for %s, beside the "
-            "workflow's own file there — `boost sync` removes the link"
-            % (n, a) for n, a in rows],
+            "workflow %s's skill copy is linked for %s, %s — `boost sync` "
+            "removes the link"
+            % (n, a, store.stale_copy_reason(lockfile.get_workflow(n) or {},
+                                             a)) for n, a in rows],
         "unrecorded_store": unrecorded,
     }
     for key, vals in plan.items():

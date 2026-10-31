@@ -5995,11 +5995,13 @@ def _install_workflow(entry: dict, force: bool = False,
         raise
     # After it: a link to a copy this run kept goes only from an agent that
     # now holds the workflow's own file, and every link to one it retired
-    # goes. A copy kept because it was edited keeps its links.
-    if copy_row is not None:
+    # goes. A copy kept because it was edited keeps its links. A declared
+    # narrowing links nowhere, so it takes every link a wider install made,
+    # a disabled agent's too: nothing else would name or remove those.
+    if copy_row is not None and not record.get("only_agents"):
         copy_unlinked = unlink_skill_copy(name,
                                           only=stale_copy_links(name, record))
-    elif _copy_row(existing) is not None:
+    elif copy_row is not None or _copy_row(existing) is not None:
         copy_unlinked = unlink_skill_copy(name)
     else:
         copy_unlinked = []
@@ -6557,15 +6559,27 @@ def missing_copy_links(name: str, entry: dict) -> list[str]:
 
 
 def stale_copy_links(name: str, entry: dict) -> list[str]:
-    """The linking agents holding boost's link to ``name``'s copy beside a
-    file of the workflow's own: the procedure twice, which `boost sync`
-    removes. A disabled agent keeps its link, as it keeps a skill's."""
+    """The linking agents holding boost's link to ``name``'s copy where it
+    does not belong, which `boost sync` removes: beside a file of the
+    workflow's own (the procedure twice), and anywhere under a declared
+    ``--agent`` narrowing, which links nowhere -- so a link a wider install
+    made does not outlive it. A disabled agent keeps its link, as it keeps a
+    skill's. :func:`stale_copy_reason` says which, per agent."""
     if not _owns_copy(name, entry):
         return []
     own = _holds_its_own(entry)
+    narrowed = bool(entry.get("only_agents"))
     return [a for a, adir in agents.linking_agents().items()
-            if a in own and is_boost_link(adir / name)
+            if (narrowed or a in own) and is_boost_link(adir / name)
             and links_to_store_dir(adir / name, name)]
+
+
+def stale_copy_reason(entry: dict, agent: str) -> str:
+    """Why :func:`stale_copy_links` names ``agent``, as the clause doctor,
+    sync and the MCP doctor all end their line with."""
+    if agent in _holds_its_own(entry):
+        return "which has the workflow's own file"
+    return "which the workflow's --agent scope leaves out"
 
 
 def link_skill_copy(name: str, entry: dict) -> InstallResult | None:
@@ -8392,7 +8406,8 @@ def sync_plan() -> dict[str, list]:
                       workflow's skill copy sync can make
                       (:func:`missing_copy_links`)
       stale_copy_links: (workflow, agent) pairs where that link sits beside
-                      the workflow's own file (:func:`stale_copy_links`)
+                      the workflow's own file, or outside a declared
+                      ``--agent`` narrowing (:func:`stale_copy_links`)
 
     The copy links are a workflow's, so they have keys of their own:
     ``missing_links`` is repaired through the skills section of the lock,
@@ -9096,10 +9111,11 @@ def sync_preview(plan: dict[str, list]) -> list[str]:
     lines += hold_legacy_copies(dry=True)
     lines += backfill_tap_urls(dry=True)
     lines += backfill_row_hashes(dry=True)
-    lines += ["would " + _COPY_LINKED.replace("linked", "link", 1) % pair
+    lines += [_COPY_WOULD_LINK % pair
               for pair in plan.get("missing_copy_links", ())]
-    lines += ["would " + _COPY_UNLINKED.replace("unlinked", "unlink", 1) % pair
-              for pair in plan.get("stale_copy_links", ())]
+    lines += [_COPY_WOULD_UNLINK % (n, a, stale_copy_reason(
+                  lockfile.get_workflow(n) or {}, a))
+              for n, a in plan.get("stale_copy_links", ())]
     return lines
 
 
@@ -9776,8 +9792,10 @@ def sync_apply(plan: dict[str, list]) -> list[str]:
         linked, _problems, unlinked = reconcile_copy_links(name, entry)
         actions += [_COPY_LINKED % (n, a) for n, a in missing
                     if n == name and a in linked]
-        actions += [_COPY_UNLINKED % (n, a) for n, a in stale
-                    if n == name and a in unlinked]
+        # Every link taken, planned or not: one a narrowing since the plan
+        # made stale goes too, and is not taken silently.
+        actions += [_COPY_UNLINKED % (name, a, stale_copy_reason(entry, a))
+                    for a in unlinked]
     # After the re-materializations above, which record their own hashes.
     actions.extend(backfill_row_hashes())
     if actions:
@@ -9786,5 +9804,7 @@ def sync_apply(plan: dict[str, list]) -> list[str]:
 
 
 _COPY_LINKED = "linked workflow %s's skill copy → %s"
-_COPY_UNLINKED = ("unlinked workflow %s's skill copy from %s, which has the "
-                  "workflow's own file")
+_COPY_WOULD_LINK = "would link workflow %s's skill copy → %s"
+#: The last ``%s`` is :func:`stale_copy_reason`'s clause.
+_COPY_UNLINKED = "unlinked workflow %s's skill copy from %s, %s"
+_COPY_WOULD_UNLINK = "would unlink workflow %s's skill copy from %s, %s"
