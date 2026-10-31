@@ -427,6 +427,21 @@ def mutant_address_cap(mutant: str | None, mapped: int | None,
     return mapped + headroom
 
 
+def _under_mutmut() -> bool:
+    """Whether mutmut is driving this run -- any non-empty ``MUTANT_UNDER_TEST``.
+
+    mutmut 3.8.0 sets the variable around every pass that runs tests: ``stats``
+    while it records which test reaches which function, ``fail`` for its
+    forced-failure check, and the mutant's own name (``<module>.<name>__mutmut_N``)
+    in each mutant's worker; it sets ``""`` for the clean pass that runs no
+    mutant, and that pass has nothing to attribute, so it counts as an ordinary
+    run (``mutmut/__main__.py``, ``mutmut/workers/isolation.py``). Read from
+    ``os.environ`` rather than through mutmut's accessor: the suite must not
+    import mutmut, which is not in the ordinary test requirements.
+    """
+    return bool(os.environ.get("MUTANT_UNDER_TEST"))
+
+
 def _mapped_bytes() -> int | None:
     """This process's virtual size from ``/proc/self/statm``, or ``None``."""
     try:
@@ -1069,13 +1084,15 @@ def tapped_template(tmp_path_factory, fixture_tap_src):
     ``registry.add``, ``catalog.rebuild_tap`` and ``gitutil.clone_shallow``
     from every test, leaving their mutants "not checked by any test".
 
-    What in-process does *not* keep is the old reach. Those functions used to
-    be credited to every test using ``tapped``; now they are credited to the
-    one test that happened to build the template (the first user in the stats
-    run) plus the tests that call them directly, so a mutant there that only a
-    downstream reader of the tapped state (search, list, info) caught is no
-    longer run against that reader. If that costs kills, the fallback is to
-    tap per test while ``MUTANT_UNDER_TEST`` is set.
+    What in-process does *not* keep is the old reach: those functions used to
+    be credited to every test using ``tapped``, and would now be credited to the
+    one test that happened to build the template plus the tests that call them
+    directly, so a mutant there that only a downstream reader of the tapped
+    state (search, list, info) caught would no longer be run against that
+    reader. So when mutmut is driving (:func:`_under_mutmut`) ``tapped`` does
+    not use this fixture at all and taps per test, as it did before -- the
+    speed-up is for the ``tests`` job, and the mutation job keeps the
+    attribution its gate was calibrated on.
 
     Nothing in the HOME names its own location. Checked against a real tap:
     ``config.json`` and the catalog cache carry the *source* repo's path (this
@@ -1147,22 +1164,39 @@ def restore_tapped_home(tapped_template):
 
 
 @pytest.fixture()
-def tapped(boost, sandbox, fixture_tap_src, restore_tapped_home):
+def tapped(request, boost, sandbox, fixture_tap_src):
     """Sandbox with the fixture tap added. Returns the tap's source path.
 
-    A copy of ``tapped_template`` rather than a ``boost tap`` per test, unless
-    the HOME already holds something: ``boost tap`` *adds a row* to whatever
-    ``config.json`` is there, and a copy would overwrite it, so a test that
-    seeds the HOME before asking for ``tapped`` keeps the old behaviour.
+    A copy of ``tapped_template`` rather than a ``boost tap`` per test -- except
+    in two cases that run the real command, as this fixture did before the
+    template existed:
+
+    * **mutmut is driving the run** (:func:`_under_mutmut`). mutmut maps a
+      mutant to the tests that reached its function in the stats pass, and
+      hands a pass's hits to the one test whose teardown comes next. A copy
+      reaches none of ``registry.add``, ``catalog.rebuild_tap`` or
+      ``gitutil.clone_shallow``, so behind the template those mutants would
+      keep one ``tapped`` test instead of ~117 unit ones, and any a downstream
+      reader (search, list, info) alone caught could survive. The mutation gate
+      is a kill-count floor, so the speed-up stays out of its way.
+    * **the HOME already holds something.** ``boost tap`` *adds a row* to
+      whatever ``config.json`` is there, and a copy would overwrite it, so a
+      test that seeds the HOME before asking for ``tapped`` keeps the old
+      behaviour.
+
+    The template is requested from inside the branch that uses it, not named in
+    the signature: a fixture in the signature is built whether or not the body
+    reaches for it, and under mutmut that would tap a template nothing reads,
+    in a run where the tap is the code under mutation.
     """
     from boost_cli.core import paths
     assert paths.boost_home() == sandbox / ".boost", (
         "a copied tap lands under the sandbox HOME, but boost state resolves"
         " to %s -- BOOST_HOME was set before `tapped` ran" % paths.boost_home())
-    if any(sandbox.iterdir()):
+    if _under_mutmut() or any(sandbox.iterdir()):
         boost("tap", fixture_tap_src)
     else:
-        restore_tapped_home(sandbox)
+        request.getfixturevalue("restore_tapped_home")(sandbox)
     return fixture_tap_src
 
 

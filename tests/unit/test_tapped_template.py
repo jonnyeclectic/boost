@@ -11,18 +11,32 @@ is only a faithful substitute if three things hold, and each is pinned here:
 * nothing a test does to its copy can reach the template, or the test after it
   would start from a HOME the previous one had edited;
 * the things that key off file times and git's index still read "just tapped".
+
+Under mutmut the copy is bypassed -- ``tapped`` runs the real command per test,
+as it did before the template existed -- and that is pinned here too.
 """
 from __future__ import annotations
 
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
+import conftest
 import pytest
 
 from boost_cli.core import catalog, logs, registry
+
+# These pin conftest plumbing, which mutmut never mutates, but each one taps (or
+# builds the template), so under mutmut they would join the test set of every
+# tap-path mutant for nothing -- and the template ones assume the copy path that
+# mutmut turns off, so in its stats run they would fail and abort the run. The
+# clean-test pass sets the variable to "" and does run them.
+pytestmark = pytest.mark.skipif(
+    conftest._under_mutmut(),
+    reason="mutmut run: `tapped` taps per test, so the template is not in play")
 
 
 def _fingerprint(root: Path) -> dict[str, tuple]:
@@ -247,3 +261,91 @@ class TestTheTemplateBelongsToItsWorker:
             self, tapped_template, sandbox):
         assert tapped_template.resolve() != sandbox.resolve()
         assert tapped_template.resolve() != Path(os.environ["HOME"]).resolve()
+
+
+@pytest.fixture()
+def copies_into(monkeypatch):
+    """The destination of every top-level ``shutil.copytree`` the test makes.
+
+    ``copytree`` recurses through the module attribute, so a spy on it is also
+    called once per subdirectory; only the outermost call is recorded.
+    """
+    real, dests, running = shutil.copytree, [], []
+
+    def spy(src, dst, *args, **kwargs):
+        if not running:
+            dests.append(Path(dst))
+        running.append(None)
+        try:
+            return real(src, dst, *args, **kwargs)
+        finally:
+            running.pop()
+
+    monkeypatch.setattr(shutil, "copytree", spy)
+    return dests
+
+
+class TestMutmutTapsForRealAndEverythingElseCopies:
+    """``tapped`` copies the template unless mutmut is driving the run.
+
+    mutmut decides which tests run against a mutant from the functions each
+    test reached in its stats pass, and credits a pass's hits to one test
+    (``mutmut.runners.harness.run_stats``). A copy reaches none of
+    ``registry.add``, ``catalog.rebuild_tap`` or ``gitutil.clone_shallow``, so
+    behind the template those mutants lose every ``tapped`` test but one.
+    mutmut says it is driving through ``MUTANT_UNDER_TEST`` -- ``stats`` while
+    it records, ``fail`` for its forced-failure check, the mutant's own name
+    for a mutant run (``mutmut/__main__.py``, ``workers/isolation.py``) -- and
+    sets it to the empty string for the clean pass that runs no mutant.
+    The fixtures below set it *before* ``tapped`` is requested: a fixture reads
+    the environment when it is set up, not when the test body runs.
+    """
+
+    @pytest.fixture()
+    def mutmut_stats(self, monkeypatch):
+        monkeypatch.setenv("MUTANT_UNDER_TEST", "stats")
+
+    @pytest.fixture()
+    def mutmut_clean_pass(self, monkeypatch):
+        monkeypatch.setenv("MUTANT_UNDER_TEST", "")
+
+    @pytest.mark.parametrize("value", [
+        "stats", "fail", "list_all_tests",
+        "boost_cli.core.registry.x_add__mutmut_3"])
+    def test_every_value_mutmut_drives_with_counts(self, monkeypatch, value):
+        monkeypatch.setenv("MUTANT_UNDER_TEST", value)
+        assert conftest._under_mutmut() is True
+
+    @pytest.mark.parametrize("value", [None, ""])
+    def test_unset_and_the_clean_pass_do_not(self, monkeypatch, value):
+        if value is None:
+            monkeypatch.delenv("MUTANT_UNDER_TEST", raising=False)
+        else:
+            monkeypatch.setenv("MUTANT_UNDER_TEST", value)
+        assert conftest._under_mutmut() is False
+
+    def test_under_mutmut_the_tap_is_real_and_the_template_untouched(
+            self, mutmut_stats, copies_into, tapped, sandbox, request):
+        # Neither the template nor the function copying it was even built for
+        # this test -- a session fixture requested here would be tapped under
+        # mutmut and credited to whichever test came next.
+        assert "tapped_template" not in request.fixturenames
+        assert "restore_tapped_home" not in request.fixturenames
+        assert copies_into == []
+        # ...and the HOME is nonetheless a tapped one.
+        tap = registry.get("fixture-tap")
+        assert tap.is_cloned and not tap.is_broken_clone
+        assert tap.path == sandbox / ".boost" / "repos" / "fixture-tap"
+        assert catalog.cache_is_fresh(tap) is True
+        assert _git(tap.path, "status", "--porcelain") == ""
+
+    def test_outside_mutmut_the_template_is_copied(
+            self, copies_into, tapped, sandbox, request):
+        assert "tapped_template" in request.fixturenames
+        assert copies_into == [sandbox]
+
+    def test_the_clean_pass_copies_too(
+            self, mutmut_clean_pass, copies_into, tapped, sandbox):
+        # "" means mutmut is running the suite with no mutant active, so there
+        # is no attribution to protect -- the same as an ordinary pytest run.
+        assert copies_into == [sandbox]
