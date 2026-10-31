@@ -1067,6 +1067,7 @@ case " $* " in
   *" none "*) plan='{"gate_set":null,"reasons":["n"],"sets":{}}' ;;
   *) plan='{"gate_set":"full","reasons":[],"sets":{"full":{"shards":[["a"]]}}}' ;;
 esac
+[ -n "$PLAN_OVERRIDE" ] && plan="$PLAN_OVERRIDE"
 [ -n "$out" ] && echo "$plan" > "$out"
 exit 0
 '''
@@ -1140,6 +1141,105 @@ exit 0
         assert not any("mutation_plan.py base " in line for line in log)
         assert outputs["gate_set"] == ""
         assert outputs["shadow"] == "false"
+
+    def test_a_proven_push_plans_nothing_and_names_the_run(self, planner):
+        # `proven` said this tree is the one a green PR run tested: no shards,
+        # and a reason that says which run, not "nothing changed".
+        plan, _, outputs = planner("push", relevant="false", PROVEN="true",
+                                   PR_RUN_ID="4242")
+        assert "scripts/mutation_plan.py none --reason proven by PR run 4242 " in plan
+        assert outputs["gate_set"] == ""
+        assert outputs["shadow"] == "false"
+
+    def test_an_unproven_irrelevant_push_keeps_its_old_reason(self, planner):
+        plan, _, _ = planner("push", relevant="false")
+        # The tail only: the stub logs its own path, which holds the test name.
+        reason = plan.split(" none ", 1)[1]
+        assert "proven" not in reason
+        assert reason.startswith("--reason no change under boost_cli/")
+
+    @pytest.mark.parametrize("event", ["schedule", "workflow_dispatch"])
+    def test_a_whole_codebase_run_plans_full_and_says_so(self, planner, event):
+        plan, _, outputs = planner(event)
+        assert "python3 scripts/mutation_plan.py full --shards 24 " in plan
+        assert "whole-codebase run (%s)" % event in plan
+        assert outputs["gate_set"] == "full"
+
+    def test_the_plan_reason_is_one_line_for_the_gate_summary(self, planner):
+        _, _, outputs = planner("push", relevant="false")
+        assert outputs["reason"] == "n"
+
+    def test_a_reason_with_a_newline_cannot_start_another_output(self, planner, tmp_path):
+        # A raw newline in `reason=` would end that output and let the rest of
+        # the line set any other one, e.g. gate_set.
+        plan = {"gate_set": None, "sets": {},
+                "reasons": ["a\ngate_set=full", "b\r", "x" * 600]}
+        _, _, outputs = planner("push", relevant="false",
+                                PLAN_OVERRIDE=json.dumps(plan))
+        assert outputs["gate_set"] == ""
+        assert outputs["reason"].startswith("a gate_set=full; b ; xxx")
+        assert len(outputs["reason"]) == 500
+        out = (tmp_path / "github_output").read_text(encoding="utf-8")
+        assert sum(line.startswith("gate_set=") for line in out.splitlines()) == 1
+
+
+class TestScopeByEvent:
+    """Run the `can the mutation score have changed?` step's bash, stubbed."""
+
+    @pytest.fixture
+    def scope(self, jobs, tmp_path):
+        step = _step(jobs["mutation-plan"], step_id="scope")
+        bin_dir = tmp_path / "bin"
+        calls = tmp_path / "calls.log"
+        _stub(bin_dir / "git", 'echo "git $*" >> "$CALLS"\nexit 0\n')
+        _stub(bin_dir / "python3", 'echo "python3 $*" >> "$CALLS"\necho true\n')
+
+        def run(event: str, **extra: str):
+            out = tmp_path / "github_output"
+            out.write_text("", encoding="utf-8")
+            calls.write_text("", encoding="utf-8")
+            env = {"PATH": "%s%s%s" % (bin_dir, os.pathsep, os.environ["PATH"]),
+                   "CALLS": str(calls), "GITHUB_OUTPUT": str(out), "EVENT": event,
+                   "BASE": "base0" if event != "schedule" else "", "HEAD": "head0"}
+            env.update(extra)
+            proc = _bash(step, tmp_path, env)
+            assert proc.returncode == 0, proc.stdout + proc.stderr
+            return _outputs(out), calls.read_text(encoding="utf-8").splitlines()
+        return run
+
+    def test_the_step_reads_proven_through_env(self, jobs):
+        env = _step(jobs["mutation-plan"], step_id="scope")["env"]
+        assert env["EVENT"] == "${{ github.event_name }}"
+        assert env["SKIP"] == "${{ needs.proven.outputs.skip }}"
+        assert env["PR_RUN_ID"] == "${{ needs.proven.outputs.pr_run_id }}"
+
+    def test_a_proven_push_collects_nothing(self, scope):
+        # relevant=false is what skips the stats run, the planner tests and
+        # the stats upload: the 15 minutes this push does not need.
+        outputs, calls = scope("push", SKIP="true", PR_RUN_ID="4242")
+        assert outputs == {"relevant": "false", "proven": "true"}
+        assert calls == []
+
+    @pytest.mark.parametrize("skip", ["false", ""])
+    def test_an_unproven_push_asks_the_diff(self, scope, skip):
+        outputs, calls = scope("push", SKIP=skip)
+        assert outputs == {"relevant": "true"}
+        assert any("mutation_shards.py scope" in c for c in calls), calls
+
+    @pytest.mark.parametrize("event", ["pull_request", "merge_group"])
+    def test_skip_means_nothing_off_a_push(self, scope, event):
+        # `proven` never runs there, so a stray value must not be trusted.
+        outputs, _ = scope(event, SKIP="true", PR_RUN_ID="1")
+        assert "proven" not in outputs
+        assert outputs["relevant"] == "true"
+
+    @pytest.mark.parametrize("event", ["schedule", "workflow_dispatch"])
+    def test_a_whole_codebase_run_is_always_relevant(self, scope, event):
+        # Decided by the event, not by `github.event.before` happening to be
+        # empty: even with a base to diff against, the nightly runs it all.
+        outputs, calls = scope(event, BASE="base0")
+        assert outputs == {"relevant": "true"}
+        assert calls == []
 
 
 FULL2 = '[{"set":"full","index":0},{"set":"full","index":1}]'

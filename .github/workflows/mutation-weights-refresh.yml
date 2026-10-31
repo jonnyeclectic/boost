@@ -72,14 +72,30 @@ jobs:
     # repository. ci.yml runs `on: pull_request`, so a fork PR opened from a
     # branch named `main` produces a ci run whose head_branch is `main` and
     # satisfies that filter — and this job holds contents:write plus
-    # pull-requests:write. Requiring the triggering run to be a `push` from THIS
-    # repository closes it. The `workflow_dispatch` arm stays first: on a manual
-    # dispatch `github.event.workflow_run` is null and every field under it
-    # evaluates empty.
+    # pull-requests:write. Requiring the triggering run to be a `push`,
+    # `schedule` or `workflow_dispatch` run from THIS repository closes it: a
+    # pull request can start none of the three. The `workflow_dispatch` arm
+    # stays first: on a manual dispatch of THIS workflow
+    # `github.event.workflow_run` is null and every field under it evaluates
+    # empty.
+    #
+    # Why three events and not `push` alone. ci.yml's `mutation-weights`
+    # upload comes only from a full whole-codebase run, and a push to main
+    # whose tree a green PR run already tested now skips the shards (its plan
+    # is `none`), so most pushes carry no weights at all. The nightly
+    # (`schedule`) and a hand-started ci run (`workflow_dispatch`) always plan
+    # the full run, and without them the weights would refresh only on the
+    # rare unproven push. `head_branch == 'main'` is stated again even though
+    # `branches: [main]` above already filters on it, because a ci dispatch
+    # may name any branch, and weights measured on a feature branch's tree
+    # must not be packed into main's.
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event.workflow_run.conclusion == 'success' &&
-       github.event.workflow_run.event == 'push' &&
+       (github.event.workflow_run.event == 'push' ||
+        github.event.workflow_run.event == 'schedule' ||
+        github.event.workflow_run.event == 'workflow_dispatch') &&
+       github.event.workflow_run.head_branch == 'main' &&
        github.event.workflow_run.head_repository.full_name == github.repository)
     runs-on: ubuntu-latest
     # Nothing here embeds, runs tests, or clones a corpus — it downloads 16 KB,
@@ -105,8 +121,14 @@ jobs:
       - name: which run measured the mutants
         id: source
         # `github.event.workflow_run.id` is empty on a manual dispatch, so that
-        # path asks for the most recent successful `ci` on main instead. Both
-        # end at a run id, which is the only thing the download needs.
+        # path has to find a run. "The newest green `ci` on main" is the wrong
+        # one now: most pushes are proven by their PR run and upload no
+        # weights, so it asks each candidate's artifacts instead of guessing
+        # which event carries them, and takes the newest that holds an
+        # unexpired `mutation-weights`. Only the three events the workflow_run
+        # guard accepts -- `--branch main` also matches a fork PR raised from a
+        # branch called main. Finding none leaves the id empty, and the
+        # download below waits for one.
         env:
           GH_TOKEN: ${{ github.token }}
           TRIGGERING: ${{ github.event.workflow_run.id }}
@@ -115,18 +137,29 @@ jobs:
           set -euo pipefail
           id="$TRIGGERING"
           if [ -z "$id" ]; then
-            id="$(gh run list --repo "$REPO" --workflow ci.yml --branch main \
-                    --status success --limit 1 --json databaseId \
-                    -q '.[0].databaseId')"
+            candidates="$(gh run list --repo "$REPO" --workflow ci.yml --branch main \
+                    --status success --limit 30 --json databaseId,event \
+                    -q '.[] | select(.event == "push" or .event == "schedule" or .event == "workflow_dispatch") | .databaseId')"
+            for candidate in $candidates; do
+              held="$(gh api "repos/$REPO/actions/runs/$candidate/artifacts?name=mutation-weights" \
+                        -q '[.artifacts[] | select(.expired | not)] | length')"
+              if [ "${held:-0}" -gt 0 ]; then id="$candidate"; break; fi
+            done
           fi
           echo "run-id=$id" >> "$GITHUB_OUTPUT"
-          echo "measuring run $id"
+          if [ -n "$id" ]; then
+            echo "measuring run $id"
+          else
+            echo "no green ci run on main holds an unexpired mutation-weights artifact"
+          fi
       - name: download the measured hints
         id: fetch
+        if: steps.source.outputs.run-id != ''
         # `continue-on-error`, because "that run did not reach the mutation
         # gate" is the ordinary case, not a fault: ci.yml skips the whole gate
-        # when nothing mutable changed, and then there is no artifact to take.
-        # Failing the job there would alert on a docs-only merge every time.
+        # when nothing mutable changed, and runs no shards on a push whose tree
+        # a green PR run already tested, and then there is no artifact to
+        # take. Failing the job there would alert on most merges.
         continue-on-error: true
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -139,10 +172,19 @@ jobs:
         env:
           RUN_ID: ${{ steps.source.outputs.run-id }}
         run: |
+          if [ -z "$RUN_ID" ]; then
+            {
+              echo "No green \`ci\` run on main among the newest thirty holds an"
+              echo "unexpired \`mutation-weights\` artifact; run the whole-codebase"
+              echo "mutation run (dispatch ci.yml on main) and try again."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           {
             echo "Run \`$RUN_ID\` published no \`mutation-weights\` artifact —"
-            echo "it did not reach the mutation gate (nothing mutable changed),"
-            echo "or the artifact has passed its 7-day retention."
+            echo "it ran no full mutation run (nothing mutable changed, or a"
+            echo "push proven by its PR run), or the artifact has passed its"
+            echo "7-day retention."
           } >> "$GITHUB_STEP_SUMMARY"
       - name: is the committed plan far enough behind to be worth a PR
         id: drift

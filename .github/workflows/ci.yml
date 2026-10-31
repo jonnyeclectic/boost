@@ -10,6 +10,19 @@ on:
   # never triggers the release workflow — publish still fires only on the real
   # push to main. Enabling the queue itself is a repo Setting (see CONTRIBUTING).
   merge_group:
+  # The whole-codebase mutation run. A pull request's gate is moving to the
+  # functions it changed, and a push to main whose tree a green PR run already
+  # tested skips the suite and the shards (`proven` below), so this is where
+  # the whole of boost_cli/core is still scored against 80%: the mutation jobs
+  # only, always the full 24-shard plan. 09:30 UTC is clear of the 04:00-08:00
+  # weekly crons and the `shards` bursts. A red or missing nightly turns the
+  # proven-tree skip off (scripts/ci_proven_tree.py), and ci-failure-issue.yml
+  # already watches `ci`, so a red one opens the tracking issue.
+  # publish.yml ignores both events: it releases only from a `push` run.
+  schedule:
+    - cron: "30 9 * * *"
+  # The same run by hand, e.g. to clear a red nightly without waiting a day.
+  workflow_dispatch:
 
 # Least-privilege default for any job that doesn't declare its own block. Every
 # job below currently does — and a job-level block REPLACES this one rather than
@@ -48,12 +61,34 @@ permissions:
 # then leave a main commit whose ci never completes, so workflow_run never fires
 # and that commit never releases. A sha is unique per commit, so main and the
 # merge queue simply never share a group.
+#
+# The EVENT is in the key too. A nightly runs on main's tip, which is usually
+# the sha the last push ran on, and keyed on the sha alone the two would share
+# a group: a release run would wait behind a two-hour whole-codebase run, and
+# a dispatch arriving third would cancel whichever was pending. Per event, a
+# push only ever queues behind a push of the same commit, which never happens.
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.sha }}
+  group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# WHICH JOB RUNS ON WHICH EVENT. A nightly or a dispatch is the whole-codebase
+# mutation run and nothing else, so every job outside mutation-plan,
+# mutation-shard and mutation carries `github.event_name != 'schedule' &&
+# github.event_name != 'workflow_dispatch'`, or is pull_request-only already.
+# On a push to main, `proven` decides whether the suite, the shards and the
+# coverage collection have already been done by the PR run; lint (with
+# zizmor), evals, install-smoke, bdd and onnx-inference run regardless.
+#
+# A job that needs `proven` says `!cancelled()`, never the implicit
+# `success()`: `proven` is SKIPPED on every pull request, a job whose need was
+# skipped is skipped with it, and a skipped required check reads as passing.
+# That implicit `success()` also looks past the direct needs at every
+# ancestor (actions/runner#491), so mutation-shard, two levels down, says it
+# too. tests/unit/test_ci_proven_tree.py evaluates every job's `if:` for each
+# event and fails on a job that runs, or is skipped, where its table says not.
 jobs:
   lint:
+    if: github.event_name != 'schedule' && github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -70,6 +105,37 @@ jobs:
         with:
           fetch-depth: 0    # tags for setuptools-scm version resolution
           persist-credentials: false
+      # What this pull_request run builds, in a name the push can ask for.
+      # The checkout above has no `ref:`, so HEAD is github.sha: the merge of
+      # the PR head into the base the PR had when this run started -- which
+      # every job here checks out too. `proven` (scripts/ci_proven_tree.py)
+      # skips a push's suite and shards only when the PR run it names carries
+      # `tested-tree-<the pushed commit's tree>`. A head SHA alone does not
+      # say which base a run merged it into: a PR retargeted to main after
+      # its run (a base change starts no new run), or one head open into two
+      # bases, leaves a green run that built head + another branch.
+      #
+      # Here, in `lint`, because lint runs on every pull_request, once per
+      # run (no matrix: an artifact name is unique per run), and its result
+      # is part of the run's conclusion. Kept 14 days, at least as long as a
+      # PR run may prove a tree for (MAX_PR_RUN_AGE, 13 days), so the record
+      # cannot expire first. The tree reaches the name through a step output,
+      # never through `${{ }}` inside `run:`.
+      - name: record the tree this pull_request run builds
+        id: tested
+        if: github.event_name == 'pull_request'
+        run: |
+          tree="$(git rev-parse --verify 'HEAD^{tree}')"
+          printf '%s\n' "$tree" > "$RUNNER_TEMP/tested-tree"
+          echo "tree=$tree" >> "$GITHUB_OUTPUT"
+      - name: publish the tree this run builds (proves a push of it)
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tested-tree-${{ steps.tested.outputs.tree }}
+          path: ${{ runner.temp }}/tested-tree
+          if-no-files-found: error
+          retention-days: 14
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
@@ -314,6 +380,7 @@ jobs:
     # network and NO API key — it generates its own corpus and taps it into a
     # disposable BOOST_HOME — so it must stay green even when GitHub is having a
     # bad day. Pure stdlib; nothing to install beyond Python and git.
+    if: github.event_name != 'schedule' && github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
     # Measured well under a minute (corpus + BM25 index + 36 queries x 2 engines
     # + a 10k-resample bootstrap, all stdlib); 15 is slack for a cold runner.
@@ -335,7 +402,56 @@ jobs:
       - name: evaluation harness gate (floors + significance)
         run: python scripts/eval_gate.py --run
 
+  # Is this push to main a tree CI has already proven? In 17 of the last 17
+  # merges the merge commit's tree was byte-identical to a PR head whose `ci`
+  # run was green, and main ran the whole suite and every shard again before
+  # publish.yml could release. scripts/ci_proven_tree.py answers yes only when
+  # that tree equality holds, the PR head's own first-attempt pull_request run
+  # succeeded and carries a live `tested-tree-<this commit's tree>` artifact
+  # (uploaded by `lint`: the run built exactly this tree, not the head merged
+  # into some other base), and the newest nightly on main is green and under
+  # 48 h old; any missing fact, API error or rate limit is `skip=false`. The
+  # artifact listing needs `actions: read`, which the job already holds for
+  # the runs. It always exits 0,
+  # so its outputs are the verdict -- and if the job fails anyway they are
+  # empty, which every consumer below reads as "run everything".
+  #
+  # Push only. On every other event this job is skipped, which is why the
+  # jobs that need it say `!cancelled()` (see the note above `lint`).
+  proven:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    # A handful of API calls with their own timeouts; `tests` waits on this.
+    timeout-minutes: 5
+    permissions:
+      contents: read        # the checkout that carries the script
+      actions: read         # the PR head's ci runs, and the nightly's
+      pull-requests: read   # the PRs associated with this commit
+    outputs:
+      skip: ${{ steps.decide.outputs.skip }}
+      pr_run_id: ${{ steps.decide.outputs.pr_run_id }}
+    steps:
+      - name: harden runner (egress audit)
+        uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: did a green PR run already test this tree?
+        id: decide
+        # Stdlib only, so the runner's python3 is enough: no setup-python, no
+        # install, nothing between the push and the verdict `tests` waits on.
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 scripts/ci_proven_tree.py --sha "$GITHUB_SHA"
+
   tests:
+    needs: proven
+    # Skipped only on an explicit `skip == 'true'`: a pull request (proven
+    # skipped, output empty) and a push whose proven job failed (empty again)
+    # both test. Never on a nightly or a dispatch, which are mutation only.
+    if: ${{ !cancelled() && github.event_name != 'schedule' && github.event_name != 'workflow_dispatch' && needs.proven.outputs.skip != 'true' }}
     runs-on: ${{ matrix.os }}
     # One cap for nine cells was one cap for three very different machines.
     # Over 40 ci runs (every attempt, 2026-09-28) the per-cell medians were
@@ -369,8 +485,10 @@ jobs:
     # The 3.15 cells are advisory (see the matrix comment): a red one must not
     # fail the ci run, because publish.yml releases only on its `success`.
     continue-on-error: ${{ matrix.python == '3.15' }}
+    # Read only: the badge push moved to `coverage-badge`, so twelve cells no
+    # longer hold a token that can write the repository for one cell's step.
     permissions:
-      contents: write  # coverage badge push (main only)
+      contents: read
     defaults:
       run:
         # Windows' default runner shell is pwsh; Git for Windows ships a bash
@@ -474,10 +592,12 @@ jobs:
             | tee /tmp/pytest.out || rc=$?
           grep -E '^(FAILED|ERROR) ' /tmp/pytest.out | sed 's/^/::error::/' || true
           exit "$rc"
-      - name: publish coverage report (for patch-coverage)
+      - name: publish coverage report (for patch-coverage and the badge)
         # Default `success()` on purpose, never `always()`: a red suite must
         # leave NO artifact, so patch-coverage fails on the missing download
-        # instead of gating a diff against a half-run suite's report.
+        # instead of gating a diff against a half-run suite's report. The
+        # 14 days are also how long a proven push on main can still read a
+        # PR run's report for the badge (see `coverage-badge`).
         if: matrix.os == 'ubuntu-latest' && matrix.python == '3.12'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -523,15 +643,90 @@ jobs:
               echo "- **Smoke suite:** ${SMOKE}"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
-      - name: publish coverage badge
-        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.12' && github.ref == 'refs/heads/main'
+
+  # The README's coverage badge: a one-file orphan `badges` branch, force-
+  # pushed from main. This was the last step of the ubuntu-3.12 `tests` cell,
+  # which put `contents: write` on all twelve cells and stops existing on a
+  # proven push, when the suite is skipped. So it is its own job, the only one
+  # in this workflow that can write, and it reads the `coverage-report`
+  # artifact from wherever the suite last ran on this tree: this run, or the
+  # PR run `proven` names (same tree, so the same number).
+  #
+  # `always()` so it runs on a proven push, where `tests` is skipped -- and
+  # therefore it judges for itself, first: this run's suite succeeded, or the
+  # suite was skipped because `proven` said so and named a run. Anything else
+  # (a red or cancelled suite, a failed `proven`) is a red job, never a green
+  # badge-less one, and so is a missing artifact: no step here continues on
+  # error.
+  #
+  # The JOB does. The badge is cosmetic, and a red one must not decide whether
+  # main releases: publish.yml fires on the run's conclusion, and job-level
+  # continue-on-error leaves this job red on the run page while the run
+  # concludes on the real gates. (In the tests cell a failed badge push used to
+  # hold the release.) The PR run's report is kept 14 days; ci_proven_tree.py
+  # stops counting a PR run as proof after 13, so a proven push never names one
+  # whose artifact has expired.
+  coverage-badge:
+    needs: [proven, tests]
+    if: ${{ always() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write   # force-push the badges branch
+      actions: read     # download coverage-report from the proving PR run
+    steps:
+      - name: harden runner (egress audit)
+        uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
+        with:
+          egress-policy: audit
+      - name: which run measured this tree
+        id: source
+        env:
+          TESTS: ${{ needs.tests.result }}
+          SKIP: ${{ needs.proven.outputs.skip }}
+          PR_RUN_ID: ${{ needs.proven.outputs.pr_run_id }}
         run: |
-          PCT=$("$VENV_BIN/python" -c "import json; print(round(json.load(open('coverage.json'))['totals']['percent_covered']))")
-          mkdir /tmp/badges && cd /tmp/badges
+          if [ "$TESTS" = success ] && [ "$SKIP" != true ]; then
+            echo "from=this" >> "$GITHUB_OUTPUT"
+          elif [ "$TESTS" = skipped ] && [ "$SKIP" = true ] && [ -n "$PR_RUN_ID" ]; then
+            echo "coverage from PR run $PR_RUN_ID, which tested this exact tree"
+            echo "from=pr" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::no coverage to publish: tests '$TESTS', proven skip '$SKIP', PR run '$PR_RUN_ID'"
+            exit 1
+          fi
+      - name: coverage-report from this run
+        if: steps.source.outputs.from == 'this'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: coverage-report
+      # The same pin mutation-weights-refresh.yml downloads another run's
+      # artifact with; `run-id` needs `github-token` (and `actions: read`).
+      - name: coverage-report from the proving PR run
+        if: steps.source.outputs.from == 'pr'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: coverage-report
+          run-id: ${{ needs.proven.outputs.pr_run_id }}
+          github-token: ${{ github.token }}
+      - name: publish coverage badge
+        # Moved from the tests cell. Same badge, same branch, same force-push;
+        # the token and repository arrive through env (zizmor's template-
+        # injection rule), python3 replaces the cell's venv, and the job sets
+        # its own git identity because no `git identity` step ran here.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          PCT=$(python3 -c "import json; print(round(json.load(open('coverage.json'))['totals']['percent_covered']))")
+          mkdir "$RUNNER_TEMP/badges" && cd "$RUNNER_TEMP/badges"
           printf '{"schemaVersion":1,"label":"coverage","message":"%s%%","color":"brightgreen"}\n' "$PCT" > coverage.json
           git init -q -b badges
+          git config user.email ci@boost.test
+          git config user.name "Boost CI"
           git add coverage.json && git commit -qm "coverage ${PCT}%"
-          git push -qf "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" badges:badges
+          git push -qf "https://x-access-token:${GH_TOKEN}@github.com/${REPO}" badges:badges
 
   # The mutation gate runs ~10.5k mutants over boost_cli/core. As one job it took
   # ~26 minutes — three times the next-longest job in CI — so it alone decided how
@@ -560,6 +755,13 @@ jobs:
   # and per-mutant results are compared against it in an advisory step, until
   # enough runs agree for the diff gate to bind.
   #
+  # By event: a push to main that `proven` vouches for plans `none` with the
+  # reason "proven by PR run <id>" and collects no stats, so no shard starts
+  # and `mutation` reports the planner's reason; any other push plans full. A
+  # nightly or a dispatch plans full, always: with pushes able to skip, that
+  # run is where the whole codebase is held to 80%, and with an unproven push
+  # it is the only full run whose `mutation-weights` the refresh workflow takes.
+  #
   # `mutation` is the context named in .github/required-checks.txt, so it must run
   # and report on every pull request. Neither path-filtering it nor letting
   # `needs:` skip it is acceptable — a required check that never reports leaves
@@ -568,6 +770,10 @@ jobs:
   # inspection of what the upstream jobs did: `always()` on its own would report a
   # failed shard as a green required check.
   mutation-plan:
+    needs: proven
+    # Every event, including the ones where `proven` is skipped (all but
+    # push) or failed (empty outputs, so the plan is decided as before).
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     # The scope check takes seconds. A relevant change then pays mutant
     # generation plus one `Running stats` pass of tests/unit -- the 5.5-8.8
@@ -583,6 +789,9 @@ jobs:
       # `mutation` keys its comparison on. A step's `if:` cannot look inside
       # the matrix JSON, so the planner says it in one word.
       shadow: ${{ steps.plan.outputs.shadow }}
+      # The plan's reasons on one line, for `mutation`'s summary when there is
+      # nothing to run -- "proven by PR run <id>" is not "nothing changed".
+      reason: ${{ steps.plan.outputs.reason }}
     steps:
       - name: harden runner (egress audit)
         uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
@@ -602,7 +811,30 @@ jobs:
         env:
           BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
           HEAD: ${{ github.sha }}
+          EVENT: ${{ github.event_name }}
+          SKIP: ${{ needs.proven.outputs.skip }}
+          PR_RUN_ID: ${{ needs.proven.outputs.pr_run_id }}
         run: |
+          # A proven push: the PR run already tested this exact tree, and the
+          # nightly holds the whole codebase to 80%. relevant=false is what
+          # skips the stats run, the planner tests and the stats upload below.
+          # Push only -- `proven` runs nowhere else, so a value seen on any
+          # other event is not its verdict.
+          if [ "$EVENT" = push ] && [ "$SKIP" = true ]; then
+            echo "proven by PR run $PR_RUN_ID — nothing to collect"
+            echo "relevant=false" >> "$GITHUB_OUTPUT"
+            echo "proven=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # The whole-codebase run is relevant by definition, whatever the
+          # event payload happens to carry as a base.
+          case "$EVENT" in
+            schedule|workflow_dispatch)
+              echo "whole-codebase run ($EVENT) — the full gate"
+              echo "relevant=true" >> "$GITHUB_OUTPUT"
+              exit 0
+              ;;
+          esac
           # Fail safe. With no usable base commit (a first push, a force push, a
           # shallow clone) we cannot prove the score is unchanged, so run the
           # whole gate. A wasted 26 minutes is a far better outcome than a gate
@@ -701,6 +933,8 @@ jobs:
         id: plan
         env:
           RELEVANT: ${{ steps.scope.outputs.relevant }}
+          PROVEN: ${{ steps.scope.outputs.proven }}
+          PR_RUN_ID: ${{ needs.proven.outputs.pr_run_id }}
           EVENT: ${{ github.event_name }}
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
@@ -710,8 +944,12 @@ jobs:
               --out mutation-plan.json
           }
           if [ "$RELEVANT" != "true" ]; then
-            python3 scripts/mutation_plan.py none \
-              --reason "no change under boost_cli/, tests/, or the mutation configuration" \
+            if [ "$PROVEN" = "true" ]; then
+              reason="proven by PR run $PR_RUN_ID"
+            else
+              reason="no change under boost_cli/, tests/, or the mutation configuration"
+            fi
+            python3 scripts/mutation_plan.py none --reason "$reason" \
               --out mutation-plan.json
           else
             case "$EVENT" in
@@ -736,6 +974,9 @@ jobs:
                   plan_full "no diff base for $EVENT at $GITHUB_SHA, so no diff scope"
                 fi
                 ;;
+              schedule|workflow_dispatch)
+                plan_full "whole-codebase run ($EVENT)"
+                ;;
               *)
                 plan_full "a mutation-relevant path changed, or there was no usable base commit"
                 ;;
@@ -745,10 +986,16 @@ jobs:
           MATRIX="$(python3 scripts/mutation_plan.py matrix --plan mutation-plan.json)"
           GATE_SET="$(jq -r '.gate_set // ""' mutation-plan.json)"
           SHADOW="$(jq -r '.sets | has("full") and has("diff")' mutation-plan.json)"
+          # One line, whatever the reasons hold: a newline would end this
+          # output and start another.
+          REASON="$(jq -r '(.reasons // []) | join("; ")' mutation-plan.json)"
+          REASON="${REASON//[$'\r\n']/ }"
+          REASON="${REASON:0:500}"
           {
             echo "matrix=$MATRIX"
             echo "gate_set=$GATE_SET"
             echo "shadow=$SHADOW"
+            echo "reason=$REASON"
           } >> "$GITHUB_OUTPUT"
       - name: upload the plan
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -768,7 +1015,11 @@ jobs:
 
   mutation-shard:
     needs: mutation-plan
-    if: needs.mutation-plan.outputs.matrix != '[]'
+    # The planner's result is spelled out because `!cancelled()` replaces the
+    # implicit `success()` -- which this job cannot keep: it would look past
+    # mutation-plan to `proven`, skipped on every pull request, and skip the
+    # shards there too. Same meaning as before: a green planner with work.
+    if: ${{ !cancelled() && needs.mutation-plan.result == 'success' && needs.mutation-plan.outputs.matrix != '[]' }}
     # mutmut needs 3.11+; one representative environment keeps CI fast
     runs-on: ubuntu-latest
     # WHY 75 AND NOT 45 — the record from `5769dd94` (2026-09-01), past-tensed
@@ -1197,12 +1448,17 @@ jobs:
             echo "::error::a shadow plan must gate on the full set, not '$GATE_SET'"
             exit 1
           fi
-      - name: nothing mutable changed
+      # Reached only past the step above, so the planner succeeded: an empty
+      # gate set here is the planner's own `none`, never a failed planner's
+      # empty output. Its reason is either "no change under boost_cli/ ..."
+      # or "proven by PR run <id>".
+      - name: nothing to mutate
         if: needs.mutation-plan.outputs.gate_set == ''
+        env:
+          REASON: ${{ needs.mutation-plan.outputs.reason }}
         run: |
-          echo "No change under boost_cli/, tests/, or the mutation configuration,"
-          echo "so the mutation score is identical to the base commit's."
-          echo "- **Mutation:** skipped — no mutable code changed" >> "$GITHUB_STEP_SUMMARY"
+          echo "The plan runs no mutants: $REASON"
+          echo "- **Mutation:** skipped — $REASON" >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: needs.mutation-plan.outputs.gate_set == 'full'
         with:
@@ -1376,6 +1632,7 @@ jobs:
     # broken artifact: missing package-data, a bad entry point, or an undeclared
     # runtime dependency only surface in the built wheel. A merge to main cuts a
     # PyPI release, so build the real wheel + sdist and install what a user gets.
+    if: github.event_name != 'schedule' && github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -1576,6 +1833,7 @@ jobs:
   # documented .github/required-checks.txt path instead of quietly turning an
   # existing required check into the gate for a second suite.
   bdd:
+    if: github.event_name != 'schedule' && github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -1626,6 +1884,7 @@ jobs:
     # the value here is the model contract, which is platform-independent. The
     # matrix keeps testing that a machine WITHOUT the extra degrades cleanly,
     # which is the more common user state.
+    if: github.event_name != 'schedule' && github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
