@@ -9,6 +9,8 @@ worth pinning are the ones a shard cannot check for itself:
   re-derives that pack to know which shard owned which file;
 * an empty plan yields an empty matrix, and an empty shard yields a failure
   rather than an empty argv (``mutmut run`` with no pattern runs everything);
+* a diff shard names its mutants exactly, and its argv reaches mutmut one
+  entry per argument, never word-split or globbed;
 * the required ``mutation`` check goes red when the planner does, rather than
   reading a missing plan as "nothing to do".
 """
@@ -177,28 +179,57 @@ def test_matrix_keeps_an_empty_shard(tmp_path):
         {"set": "full", "index": 0}, {"set": "full", "index": 1}]
 
 
-def test_patterns_prints_one_shard_space_joined(tmp_path):
-    plan = write_plan(tmp_path, {"full": {"shards": [["a.*", "b.x_f__mutmut_*"], ["c.*"]]}})
-    assert run_cli("patterns", "--plan", plan, "--set", "full", "--index", "0") \
-        == "a.* b.x_f__mutmut_*\n"
-    assert run_cli("patterns", "--plan", plan, "--set", "full", "--index", "1") \
-        == "c.*\n"
+def test_patterns_writes_one_shard_nul_separated(tmp_path):
+    # One entry per argument, each ended by a NUL: a name holding a space or
+    # a newline (its module part is a file name a PR chose) stays one entry.
+    odd = "boost_cli.core.a b\nc.x_f__mutmut_1"
+    plan = write_plan(tmp_path, {"full": {"shards": [["a.*", odd], ["c.*"]]}})
+    out = tmp_path / "args"
+    printed = run_cli("patterns", "--plan", plan, "--set", "full", "--index", "0",
+                      "--out", str(out))
+    assert out.read_bytes() == b"a.*\0" + odd.encode() + b"\0"
+    # The log line is JSON, so the newline cannot start a workflow command.
+    assert printed == "2 arguments: %s\n" % json.dumps(["a.*", odd])
+    run_cli("patterns", "--plan", plan, "--set", "full", "--index", "1", "--out", str(out))
+    assert out.read_bytes() == b"c.*\0"
+
+
+def test_patterns_has_no_space_joined_form(tmp_path):
+    # Word-splitting stdout is how the step used to build mutmut's argv.
+    plan = write_plan(tmp_path, {"full": {"shards": [["a*"]]}})
+    with pytest.raises(SystemExit):
+        mp.main(["patterns", "--plan", plan, "--set", "full", "--index", "0"])
 
 
 def test_patterns_refuse_an_empty_shard(tmp_path, capsys):
     plan = write_plan(tmp_path, {"full": {"shards": [["a*"], []]}})
-    assert mp.main(["patterns", "--plan", plan, "--set", "full", "--index", "1"]) == 1
+    out = tmp_path / "args"
+    assert mp.main(["patterns", "--plan", plan, "--set", "full", "--index", "1",
+                    "--out", str(out)]) == 1
     captured = capsys.readouterr()
     assert captured.out == ""
     assert "no patterns" in captured.err
+    assert not out.exists()
 
 
 @pytest.mark.parametrize("name, index", [("diff", 0), ("full", 2), ("full", -1)])
 def test_patterns_refuse_an_unknown_set_or_index(tmp_path, capsys, name, index):
     plan = write_plan(tmp_path, {"full": {"shards": [["a*"], ["b*"]]}})
+    out = tmp_path / "args"
     assert mp.main(["patterns", "--plan", plan, "--set", name,
-                    "--index", str(index)]) == 1
+                    "--index", str(index), "--out", str(out)]) == 1
     assert capsys.readouterr().out == ""
+    assert not out.exists()
+
+
+@pytest.mark.parametrize("entry", ["", "a\0b", 7, None])
+def test_patterns_refuse_an_entry_that_is_not_one_argument(tmp_path, capsys, entry):
+    plan = write_plan(tmp_path, {"full": {"shards": [["a*", entry]]}})
+    out = tmp_path / "args"
+    assert mp.main(["patterns", "--plan", plan, "--set", "full", "--index", "0",
+                    "--out", str(out)]) == 1
+    assert "not one argument each" in capsys.readouterr().err
+    assert not out.exists()
 
 
 def test_a_missing_plan_is_an_error_not_an_empty_matrix(tmp_path):
@@ -320,10 +351,13 @@ def test_diff_plan_scopes_changed_functions_and_direct_callers(tmp_path, git_rep
     # The diff set alone: the full run no longer rides along on a PR.
     assert list(plan["sets"]) == ["diff"]
     assert diff["functions"] == ["boost_cli.core.m.x_a", "boost_cli.core.m.x_b"]
-    patterns = sorted(p for shard in diff["shards"] for p in shard)
-    assert patterns == ["boost_cli.core.m.x_a__mutmut_*",
-                        "boost_cli.core.m.x_b__mutmut_*"]
-    assert diff["mutants"] > 0
+    # Every mutant named exactly, as mutmut's own generator names it at head.
+    md = mp._load_diff()
+    with md.mutmut_config(git_repo.root):
+        at_head = md.mutant_names("boost_cli/core/m.py", _M_BASE.replace("+ 1", "+ 2"))
+    names = [n for shard in diff["shards"] for n in shard]
+    assert sorted(names) == sorted(at_head["x_a"] + at_head["x_b"])
+    assert len(names) == len(set(names)) == diff["mutants"] > 0
     assert all(diff["shards"]), "no empty shard may reach `patterns`"
 
 
@@ -332,10 +366,13 @@ def test_diff_plan_method_names_survive_into_patterns(tmp_path, git_repo):
     head = git_repo.head({"boost_cli/core/m.py": _M_BASE.replace("2 if", "4 if")})
     plan = plan_diff(tmp_path, git_repo, head)
     (shard,) = plan["sets"]["diff"]["shards"]
-    assert shard == ["boost_cli.core.m.xǁKǁm__mutmut_*"]
-    # And the argv the shard gets keeps the name whole.
-    assert run_cli("patterns", "--plan", str(tmp_path / "plan.json"),
-                   "--set", "diff", "--index", "0") == "boost_cli.core.m.xǁKǁm__mutmut_*\n"
+    q = "boost_cli.core.m.xǁKǁm"
+    assert shard == ["%s__mutmut_%d" % (q, i) for i in range(1, len(shard) + 1)]
+    # And the argv the shard gets keeps every name whole.
+    out = tmp_path / "args"
+    run_cli("patterns", "--plan", str(tmp_path / "plan.json"),
+            "--set", "diff", "--index", "0", "--out", str(out))
+    assert out.read_bytes() == b"".join(n.encode("utf-8") + b"\0" for n in shard)
 
 
 @pytest.mark.usefixtures("needs_mutmut")
@@ -345,12 +382,12 @@ def test_diff_plan_new_file_and_deleted_function(tmp_path, git_repo):
         "boost_cli/core/n.py": "def z(y):\n    return y == 1\n",
     })
     plan = plan_diff(tmp_path, git_repo, head)
-    patterns = [p for shard in plan["sets"]["diff"]["shards"] for p in shard]
+    names = [n for shard in plan["sets"]["diff"]["shards"] for n in shard]
     # c is gone at head: nothing of it to mutate and no caller to find, so it
     # is out of scope, and not a reason to run everything either.
     assert plan["gate_set"] == "diff"
     assert plan["sets"]["diff"]["functions"] == ["boost_cli.core.n.x_z"]
-    assert patterns == ["boost_cli.core.n.x_z__mutmut_*"]
+    assert {n.rpartition("__mutmut_")[0] for n in names} == {"boost_cli.core.n.x_z"}
 
 
 # A function mutmut makes no mutants of is never trampolined, so the stats'
@@ -426,7 +463,37 @@ def test_diff_plan_never_emits_an_empty_shard(tmp_path, git_repo):
     plan = mp.diff_plan(git_repo.root, git_repo.base, head, git_repo.stats,
                         per_shard=1)
     assert plan["sets"]["diff"]["mutants"] > 1
-    assert plan["sets"]["diff"]["shards"] == [[md.pattern("boost_cli.core.m.x_c")]]
+    (shard,) = plan["sets"]["diff"]["shards"]
+    assert shard == ["boost_cli.core.m.x_c__mutmut_%d" % i for i in range(1, len(shard) + 1)]
+    assert len(shard) == plan["sets"]["diff"]["mutants"]
+    assert md.validate_plan(plan)[1] == []
+
+
+@pytest.mark.usefixtures("needs_mutmut")
+def test_no_diff_shard_names_more_than_max_names(tmp_path, git_repo, monkeypatch):
+    # The cap on one shard's argv. Lowered so a small fixture reaches it: the
+    # scope (a, b) packs one function per shard when MAX_NAMES is the larger
+    # function's count, and goes full when it is below it.
+    md = mp._load_diff()
+    monkeypatch.setattr(mp, "_load_diff", lambda: md)
+    head = git_repo.head({"boost_cli/core/m.py": _M_BASE.replace("+ 1", "+ 2")})
+    counts = mp.diff_plan(git_repo.root, git_repo.base, head,
+                          git_repo.stats)["sets"]["diff"]["counts"]
+    widest = max(counts.values())
+    assert sum(counts.values()) > widest, "the fixture must need two shards"
+
+    monkeypatch.setattr(md, "MAX_NAMES", widest)
+    plan = mp.diff_plan(git_repo.root, git_repo.base, head, git_repo.stats)
+    assert plan["gate_set"] == "diff"
+    assert len(plan["sets"]["diff"]["shards"]) == 2
+    assert all(len(s) <= widest for s in plan["sets"]["diff"]["shards"])
+
+    monkeypatch.setattr(md, "MAX_NAMES", widest - 1)
+    plan = mp.diff_plan(git_repo.root, git_repo.base, head, git_repo.stats, shards=2)
+    assert plan["gate_set"] == "full"
+    assert plan["reasons"] == [
+        "diff scope: %d mutants in 2 functions do not pack into %d shards of at "
+        "most %d mutant names" % (sum(counts.values()), md.MAX_SHARDS, widest - 1)]
 
 
 @pytest.mark.usefixtures("needs_mutmut")
@@ -471,10 +538,7 @@ def _shard_results(tmp_path: Path, spec: dict, survivor: str | None = None) -> P
     for index, shard in enumerate(spec["shards"]):
         codes: dict = {"boost_cli.core.m.x_c__mutmut_1": None,
                        "boost_cli.core.m.xǁKǁm__mutmut_1": None}
-        for pat in shard:
-            q = pat[: -len("__mutmut_*")]
-            codes.update({"%s__mutmut_%d" % (q, n): 1
-                          for n in range(1, spec["counts"][q] + 1)})
+        codes.update(dict.fromkeys(shard, 1))
         if survivor in codes:
             codes[survivor] = 0
         meta = source / ("mutation-diff-shard-%d" % index) / "m.py.meta"
@@ -897,6 +961,60 @@ def _outputs(path: Path) -> dict:
                 path.read_text(encoding="utf-8").splitlines() if "=" in line)
 
 
+def _shard_step_tree(tmp_path: Path, plan: dict) -> tuple[Path, Path, dict]:
+    """A workspace for the shard step: the real planner as ``python3``, and
+    a ``mutmut`` that records its argv NUL-separated instead of mutating."""
+    (tmp_path / "scripts").symlink_to(ROOT / "scripts", target_is_directory=True)
+    bindir = tmp_path / "bin"
+    _stub(bindir / "python3", 'exec "%s" "$@"\n' % sys.executable)
+    argv = tmp_path / "mutmut-argv"
+    _stub(tmp_path / ".venv" / "bin" / "mutmut", "printf '%%s\\0' \"$@\" > '%s'\n" % argv)
+    runner_temp = tmp_path / "runner-temp"
+    (runner_temp / "mutation-stats").mkdir(parents=True)
+    (runner_temp / "mutation-stats" / "mutmut-stats.json").write_text("{}", encoding="utf-8")
+    (runner_temp / "mutation-plan").mkdir()
+    (runner_temp / "mutation-plan" / "mutation-plan.json").write_text(
+        json.dumps(plan), encoding="utf-8")
+    env = {"RUNNER_TEMP": str(runner_temp), "SET": "diff",
+           "PATH": "%s:%s" % (bindir, os.environ["PATH"])}
+    return argv, runner_temp, env
+
+
+@needs_bash
+def test_the_shard_step_passes_each_planned_name_as_one_argument(jobs, tmp_path):
+    # A diff shard's names carry a module part from a file name the PR chose:
+    # a space must not split one, a `*` must not glob against the checkout,
+    # and a newline must not end one.
+    names = ["boost_cli.core.m.x_a__mutmut_1",
+             "boost_cli.core.a b.x_f__mutmut_2",
+             "boost_cli.core.m*.x_g__mutmut_1",
+             "boost_cli.core.n\nl.x_h__mutmut_1"]
+    (tmp_path / "boost_cli.core.mX.x_g__mutmut_1").write_text("", encoding="utf-8")
+    step = _step(jobs["mutation-shard"], runs="mutation_plan.py patterns")
+    argv, _, env = _shard_step_tree(
+        tmp_path, {"gate_set": "diff", "reasons": ["test"],
+                   "sets": {"diff": {"shards": [names]}}})
+    proc = _bash(step, tmp_path, env | {"SHARD": "0"})
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert argv.read_bytes().split(b"\0")[:-1] == (
+        [b"run", b"--"] + [n.encode("utf-8") for n in names])
+    assert (tmp_path / "mutants" / "mutmut-stats.json").exists()
+
+
+@needs_bash
+@pytest.mark.parametrize("shard", ["1", "7"])
+def test_the_shard_step_never_runs_mutmut_with_no_names(jobs, tmp_path, shard):
+    # `mutmut run` with no names runs every mutant: an empty or unknown shard
+    # must fail the step before mutmut starts.
+    step = _step(jobs["mutation-shard"], runs="mutation_plan.py patterns")
+    argv, _, env = _shard_step_tree(
+        tmp_path, {"gate_set": "diff", "reasons": ["test"],
+                   "sets": {"diff": {"shards": [["a.x_f__mutmut_1"], []]}}})
+    proc = _bash(step, tmp_path, env | {"SHARD": shard})
+    assert proc.returncode != 0
+    assert not argv.exists(), "mutmut ran with no names"
+
+
 def test_no_mutation_job_expands_an_expression_inside_run(jobs):
     # zizmor's template-injection class, wholesale: every `${{ }}` a `run:`
     # needs goes through `env:` -- matrix values and job outputs included.
@@ -1297,8 +1415,8 @@ def test_the_diff_gate_step_is_the_verdict(jobs, tmp_path, request, case, rc, ve
     if case == "empty scope":
         spec = {"shards": [], "mutants": 0, "functions": [], "counts": {}}
     else:
-        spec = {"shards": [[q + "__mutmut_*"]], "mutants": 2, "functions": [q],
-                "counts": {q: 2}}
+        spec = {"shards": [[q + "__mutmut_1", q + "__mutmut_2"]], "mutants": 2,
+                "functions": [q], "counts": {q: 2}}
     (runner_temp / "mutation-plan" / "mutation-plan.json").write_text(json.dumps(
         {"gate_set": "diff", "reasons": ["test"], "sets": {"diff": spec}}),
         encoding="utf-8")

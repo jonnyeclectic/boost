@@ -16,8 +16,8 @@ backstop for those.
 The scope functions are pure: the caller supplies file text through
 `read(rev, path)` and the dependency map from `mutants/mutmut-stats.json`.
 `mutation_plan.py diff` is that caller; it packs the scope with
-`pack_functions` and runs each function's mutants by the explicit pattern
-`pattern()` writes, so no cached verdict is ever trusted.
+`pack_functions` and names every mutant a shard runs exactly, as
+`mutant_names` lists them, so no cached verdict is ever trusted.
 
 Two CLIs read the shards' results back:
 
@@ -45,6 +45,7 @@ import importlib.util
 import json
 import math
 import os
+import re
 import sys
 import tomllib
 from collections.abc import Callable, Iterator
@@ -259,6 +260,16 @@ MUTANT_SEP = "__mutmut_"
 #: Mutants per diff shard, and the most diff shards one run may ask for.
 PER_SHARD = 1500
 MAX_SHARDS = 16
+#: The most mutant names one diff shard may pass to `mutmut run`. A hard cap,
+#: where PER_SHARD is only the sizing target: packing balances measured time,
+#: so without it one cheap-per-mutant bin could take far more names than
+#: PER_SHARD. The longest name in boost_cli/core today is 72 bytes, so 1500
+#: of them is ~110 KB of argv against a Linux runner's 2 MB ARG_MAX. It also
+#: bounds mutmut's own filter, which fnmatches every key of every file against
+#: every name it was given: 1500 names x 51,182 keys measured 12.3 s.
+MAX_NAMES = 1500
+#: One exact mutant name: `<qualified>__mutmut_<n>`, all on one line.
+_MUTANT_NAME = re.compile(r"[^\r\n]+%s[1-9][0-9]*" % re.escape(MUTANT_SEP))
 
 
 def split_qualified(qualified: str) -> tuple[str, str]:
@@ -298,30 +309,34 @@ def mutmut_config(root: Path) -> Iterator[None]:
         mutmut_configuration._config = previous
 
 
-def mutant_counts(path: str, src: str) -> dict[str, int]:
-    """Mangled function -> number of mutants mutmut generates for it.
+def mutant_names(path: str, src: str) -> dict[str, list[str]]:
+    """Mangled function -> the exact names of the mutants mutmut generates for it.
 
-    mutmut's own generator, so the count is the one `mutmut run` will produce
-    for the same source and config (call under `mutmut_config`). A function
-    with nothing to mutate (`pass`) is absent, not zero.
+    mutmut's own generator, so the names are the keys `mutmut run` will
+    produce for the same source and config (call under `mutmut_config`), each
+    qualified the way mutmut keys its results (`qualify`). A function with
+    nothing to mutate (`pass`) is absent, not an empty list.
+
+    The shards pass these names, not a `<function>__mutmut_*` glob: mutmut
+    picks the clean run's tests by looking each name's function up in
+    `tests_by_mangled_function_name`, and a glob is fnmatched against those
+    keys -- which carry no `__mutmut_` suffix, so it matches none and the clean
+    run falls back to the whole unit suite (mutmut 3.8.0,
+    `tests_for_mutant_names`).
     """
     from mutmut.mutation.file_mutation import mutate_file_contents
 
-    out: dict[str, int] = {}
+    out: dict[str, list[str]] = {}
     for name in mutate_file_contents(path, src).mutant_names:
         head, sep, _ = name.rpartition(MUTANT_SEP)
         if sep:
-            out[head] = out.get(head, 0) + 1
+            out.setdefault(head, []).append(qualify(path, name))
     return out
 
 
-def pattern(qualified: str) -> str:
-    """The `mutmut run` argument that selects exactly this function's mutants.
-
-    Anchored on mutmut's suffix, so `x_install` cannot swallow
-    `x_install_from_path`.
-    """
-    return qualified + MUTANT_SEP + "*"
+def mutant_counts(path: str, src: str) -> dict[str, int]:
+    """Mangled function -> number of mutants mutmut generates for it (see `mutant_names`)."""
+    return {f: len(names) for f, names in mutant_names(path, src).items()}
 
 
 def ms_per_mutant(root: Path, functions: list[str]) -> dict[str, float]:
@@ -355,6 +370,7 @@ def pack_functions(
     ms_per_mutant: dict[str, float],
     per_shard: int = PER_SHARD,
     cap: int = MAX_SHARDS,
+    max_names: int = MAX_NAMES,
 ) -> list[list[str]]:
     """Pack qualified functions into `min(cap, ceil(total / per_shard))` shards.
 
@@ -362,6 +378,12 @@ def pack_functions(
     unmeasured function), ties broken by name, so the same scope always packs
     the same way. A bin can come back empty when one function outweighs the
     shard size — a function cannot be split — and the planner drops those.
+
+    A function goes only to a bin it fits in by mutant count (`max_names`,
+    or any empty bin); when none has room a bin is added, up to `cap`. Past
+    `cap` it goes to the least-loaded bin regardless, and that bin is over
+    `max_names` -- which the planner refuses, rather than hand a shard more
+    names than its argv was sized for.
     """
     live = {f: n for f, n in counts.items() if n > 0}
     total = sum(live.values())
@@ -372,10 +394,19 @@ def pack_functions(
     weight = {f: n * ms_per_mutant.get(f, mean) for f, n in live.items()}
     bins: list[list[str]] = [[] for _ in range(k)]
     load = [0.0] * k
+    size = [0] * k
     for f in sorted(live, key=lambda f: (-weight[f], f)):
-        i = load.index(min(load))
+        n = live[f]
+        room = [i for i in range(len(bins)) if not bins[i] or size[i] + n <= max_names]
+        if not room and len(bins) < cap:
+            bins.append([])
+            load.append(0.0)
+            size.append(0)
+            room = [len(bins) - 1]
+        i = min(room or range(len(bins)), key=lambda i: (load[i], i))
         bins[i].append(f)
         load[i] += weight[f]
+        size[i] += n
     return bins
 
 
@@ -487,8 +518,14 @@ def _read_codes(meta: Path) -> dict[str, Any]:
     return json.loads(meta.read_text(encoding="utf-8")).get("exit_code_by_key") or {}
 
 
+def function_of(name: str) -> str:
+    """`boost_cli.core.m.x_a__mutmut_3` -> `boost_cli.core.m.x_a`."""
+    return name.rpartition(MUTANT_SEP)[0]
+
+
 def _functions_of(shards: list[list[str]]) -> list[str]:
-    return [p[: -len(MUTANT_SEP + "*")] for shard in shards for p in shard]
+    """Every function the shards run, once each, in the order first named."""
+    return list(dict.fromkeys(function_of(n) for shard in shards for n in shard))
 
 
 def _count(value: Any) -> bool:
@@ -505,15 +542,17 @@ def validate_plan(plan: Any) -> tuple[dict[str, Any] | None, list[str]]:
     that notices a shard which ran part of a function (1 of N keys present
     scored 1/1 killed, PASS). So nothing is scored until all of it holds:
 
-    * `shards` is a list of non-empty lists of `<qualified>__mutmut_*` strings
-      (an empty shard is one the planner never emits, see mutation_plan.py);
+    * `shards` is a list of non-empty lists of exact mutant names,
+      `<qualified>__mutmut_<n>` (an empty shard is one the planner never
+      emits, see mutation_plan.py), no name twice and every function's names
+      in one shard, since the gate reads a function from that shard alone;
     * `mutants` is an int >= 0, and is 0 exactly when there are no shards, so
       a `0` can't make the shortfall check vacuous;
     * `functions` is a list of strings;
-    * `counts` maps exactly the shards' functions to positive ints that sum
-      to `mutants`. Required, because the planner always writes it, and
-      without it a total alone would let one function's shortfall hide
-      behind another's surplus.
+    * `counts` maps exactly the shards' functions to positive ints, each the
+      number of names the shards carry for it, that sum to `mutants`.
+      Required, because the planner always writes it, and without it a total
+      alone would let one function's shortfall hide behind another's surplus.
     """
     if not isinstance(plan, dict):
         return None, ["the plan is not a JSON object"]
@@ -529,6 +568,9 @@ def validate_plan(plan: Any) -> tuple[dict[str, Any] | None, list[str]]:
     problems: list[str] = []
     shards = spec.get("shards")
     shards_ok = isinstance(shards, list)
+    owner: dict[str, int] = {}  # function -> the one shard that runs it
+    named: dict[str, int] = {}  # function -> how many of its mutants are named
+    seen: set[str] = set()
     if not shards_ok:
         problems.append(f"`shards` is {shards!r}, not a list")
     else:
@@ -537,10 +579,21 @@ def validate_plan(plan: Any) -> tuple[dict[str, Any] | None, list[str]]:
                 problems.append(f"shard {i} is {shard!r}, not a non-empty list")
                 shards_ok = False
                 continue
-            for pat in shard:
-                if not isinstance(pat, str) or not pat.endswith(MUTANT_SEP + "*"):
-                    problems.append(f"shard {i}: {pat!r} is not a function pattern")
+            for name in shard:
+                if not isinstance(name, str) or not _MUTANT_NAME.fullmatch(name):
+                    problems.append(f"shard {i}: {name!r} is not an exact mutant name")
                     shards_ok = False
+                    continue
+                if name in seen:
+                    problems.append(f"shard {i}: {name} is named twice")
+                    shards_ok = False
+                    continue
+                seen.add(name)
+                q = function_of(name)
+                if owner.setdefault(q, i) != i:
+                    problems.append(f"shard {i}: {q} is split across shards {owner[q]} and {i}")
+                    shards_ok = False
+                named[q] = named.get(q, 0) + 1
 
     mutants = spec.get("mutants")
     if not _count(mutants) or mutants < 0:
@@ -560,8 +613,12 @@ def validate_plan(plan: Any) -> tuple[dict[str, Any] | None, list[str]]:
             isinstance(k, str) and _count(v) and v > 0 for k, v in counts.items()
         ):
             problems.append("`counts` is not an object of positive integers")
-        elif shards_ok and set(counts) != set(_functions_of(shards)):
+        elif shards_ok and set(counts) != set(named):
             problems.append("`counts` names different functions than the shards run")
+        elif shards_ok and any(counts[q] != named[q] for q in counts):
+            problems.append("`counts` disagrees with the names the shards run: " + ", ".join(
+                f"{q} counted {counts[q]}, named {named[q]}"
+                for q in sorted(counts) if counts[q] != named[q]))
         elif _count(mutants) and sum(counts.values()) != mutants:
             problems.append(
                 f"`counts` sums to {sum(counts.values())}, but `mutants` is {mutants}"
@@ -575,41 +632,56 @@ def collect_diff(
     """In-scope exit codes from the diff shards, and every reason they are incomplete.
 
     Each function belongs to exactly one shard (the planner packed it there),
-    so its keys are read from that shard's `.meta` only: every other shard
-    reports them `None`, having been asked to run something else. Only keys
-    with the function's exact `__mutmut_` prefix are taken, so out-of-scope
-    functions of the same file — `None` in every diff shard — are never read.
+    so its mutants are read from that shard's `.meta` only: every other shard
+    reports them `None`, having been asked to run something else. Exactly the
+    names the plan lists are read, so out-of-scope functions of the same file
+    -- `None` in every diff shard -- never are.
+
+    Per function, the shard's keys must be exactly the planned names. One
+    missing is a mutant never run. One extra is a mutant mutmut generated that
+    the planner never named, so the shard did not run it either: the planner
+    and the shard disagree about the function, and its score would be a
+    subset's. A total alone hides one function's shortfall behind another's
+    surplus, so both checks are per function.
 
     `spec` must have passed `validate_plan`.
     """
     codes: dict[str, int | None] = {}
     problems: list[str] = []
-    per_function = spec["counts"]
     for index, shard in enumerate(spec["shards"]):
         if not (source / f"{prefix}{index}").is_dir():
             problems.append(f"shard {index}: no artifact at {source}/{prefix}{index}")
             continue
-        for pat in shard:
-            q = pat[: -len(MUTANT_SEP + "*")]
+        planned: dict[str, list[str]] = {}
+        for name in shard:
+            planned.setdefault(function_of(name), []).append(name)
+        for q, names in planned.items():
             path, _ = split_qualified(q)
             meta = ms.shard_meta(source, prefix, index, _core_rel(path))
             if meta is None:
                 problems.append(f"shard {index}: no {path}.meta for {q}")
                 continue
-            mine = {
+            held = {
                 k: v for k, v in _read_codes(meta).items() if k.startswith(q + MUTANT_SEP)
             }
-            if not mine:
+            if not held:
                 problems.append(f"shard {index}: no mutants of {q} (planned, never run)")
-            elif len(mine) < per_function[q]:
-                # Exact per function: a total alone hides one function's
-                # shortfall behind another's surplus.
+                continue
+            missing = [n for n in names if n not in held]
+            extra = sorted(set(held) - set(names))
+            if missing:
                 problems.append(
-                    f"{q}: planner counted {per_function[q]} mutants; shards hold {len(mine)}"
+                    f"{q}: planner counted {len(names)} mutants; shards hold "
+                    f"{len(names) - len(missing)} of them, missing {', '.join(missing[:3])}"
                 )
-            codes.update(mine)
-    # `<`, not `!=`: a surplus is still scored in full, and making it an error
-    # needs Task 7 to prove the planner and the shards mutate the same tree.
+            if extra:
+                problems.append(
+                    f"{q}: shard {index} holds {len(extra)} mutants the planner never "
+                    f"named: {', '.join(extra[:3])}"
+                )
+            codes.update({n: held[n] for n in names if n in held})
+    # Implied by the per-function checks above; kept so the plan's own total
+    # is checked against what was read, whatever the shards' layout.
     if len(codes) < spec["mutants"]:
         problems.append(
             f"planner counted {spec['mutants']} mutants; shards hold {len(codes)}"

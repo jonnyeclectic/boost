@@ -20,14 +20,18 @@ The plan
 
     {"gate_set": "full" | "diff" | null,
      "reasons":  ["why this plan, in words a reviewer can check"],
-     "sets":     {"<set>": {"shards": [[pattern, ...], ...],
+     "sets":     {"<set>": {"shards": [[selector, ...], ...],
                             "mutants": <int> | null,
                             "functions": [qualified, ...],     # diff only
                             "counts": {qualified: <int>}}}}    # diff only
 
 ``sets`` is keyed by name: ``full`` (the committed 24-way pack of every
-mutant in ``boost_cli/core``) or ``diff`` (the mutants of the functions a PR
-changed plus their direct callers, see ``mutation_diff.py``). ``gate_set``
+mutant in ``boost_cli/core``, selected by fnmatch patterns such as
+``boost_cli.core.store.*``) or ``diff`` (the mutants of the functions a PR
+changed plus their direct callers, see ``mutation_diff.py``, each named
+exactly -- ``boost_cli.core.store.x_install__mutmut_3`` -- because mutmut
+picks a shard's clean-run tests from exact names and falls back to the whole
+unit suite for a ``__mutmut_*`` glob). ``gate_set``
 names the set the required ``mutation`` check scores, and a plan carries that
 set alone. Two plans mean "nothing to score": ``null`` (``none``: nothing
 mutable changed) and ``"diff"`` with ``sets.diff.shards == []`` (core changed,
@@ -45,7 +49,8 @@ Usage
   mutation_plan.py diff --base SHA --head SHA --stats mutants/mutmut-stats.json \
                         --out PLAN                  # the PR's functions, or full
   mutation_plan.py matrix --plan PLAN               # [{"set":..,"index":..}, ...]
-  mutation_plan.py patterns --plan PLAN --set S --index I   # one shard's argv
+  mutation_plan.py patterns --plan PLAN --set S --index I --out FILE
+                                                    # one shard's argv, NUL-separated
 """
 from __future__ import annotations
 
@@ -238,18 +243,19 @@ def diff_plan(root: Path, base: str, head: str, stats: Path, *,
     for q in scope:
         path, mangled = md.split_qualified(q)
         by_file.setdefault(path, []).append((q, mangled))
-    counts: dict[str, int] = {}
+    names: dict[str, list[str]] = {}
     with md.mutmut_config(root):
         for path, funcs in sorted(by_file.items()):
             src = read("head", path)
             if src is None:
                 continue  # the file is gone at head: nothing left to mutate
-            per_function = md.mutant_counts(path, src)
+            per_function = md.mutant_names(path, src)
             for q, mangled in funcs:
                 # A deleted function, or one with nothing to mutate, gets no
-                # pattern: mutmut asserts when a pattern matches no mutant.
+                # names: mutmut asserts when its filter matches no mutant.
                 if per_function.get(mangled):
-                    counts[q] = per_function[mangled]
+                    names[q] = per_function[mangled]
+    counts = {q: len(n) for q, n in names.items()}
 
     # Callers come only from mutmut's `function_dependencies`, and mutmut adds
     # an edge only when a trampolined function is called -- and trampolines
@@ -266,26 +272,35 @@ def diff_plan(root: Path, base: str, head: str, stats: Path, *,
             "changed function has no mutants, so its callers are unknown: %s" % q
             for q in blind])
 
-    bins = md.pack_functions(counts, md.ms_per_mutant(root, list(counts)),
-                             per_shard=per_shard or md.PER_SHARD)
     # `matrix` keeps an empty shard on purpose (it would be a slice of the full
     # pack that nobody ran). Here an empty bin is only arithmetic — one
     # function can't be split across shards — and every function is already
     # in a non-empty bin, so dropping it loses nothing and keeps `patterns`
     # from failing that shard.
-    shard_patterns_ = [[md.pattern(q) for q in b] for b in bins if b]
+    bins = [b for b in md.pack_functions(counts, md.ms_per_mutant(root, list(counts)),
+                                         per_shard=per_shard or md.PER_SHARD,
+                                         max_names=md.MAX_NAMES) if b]
     total = sum(counts.values())
+    # Each name is one argument to `mutmut run`, so a shard's argv is bounded
+    # by MAX_NAMES. A scope too big to pack under it is most of the core, and
+    # the full run is the plan for that.
+    widest = max((sum(counts[q] for q in b) for b in bins), default=0)
+    if widest > md.MAX_NAMES:
+        return full_plan(root, shards, [
+            "diff scope: %d mutants in %d functions do not pack into %d shards of "
+            "at most %d mutant names" % (total, len(counts), md.MAX_SHARDS, md.MAX_NAMES)])
+    shard_names = [[n for q in b for n in names[q]] for b in bins]
     # Every changed function has mutants by now (see `blind`), so a scope
     # with none is one where no function changed.
     if total:
         why = ("diff scope: %d mutants in %d functions (changed + direct callers), "
-               "%d shards" % (total, len(counts), len(shard_patterns_)))
+               "%d shards" % (total, len(counts), len(shard_names)))
     else:
         why = "diff scope: no boost_cli/core function changed"
     return {
         "gate_set": "diff",
         "reasons": [why],
-        "sets": {"diff": {"shards": shard_patterns_, "mutants": total,
+        "sets": {"diff": {"shards": shard_names, "mutants": total,
                           "functions": scope,
                           # Per-function, so the gate can tell one function's
                           # shortfall from another's surplus.
@@ -312,7 +327,7 @@ def matrix(plan: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def shard_patterns(plan: dict[str, Any], name: str, index: int) -> list[str]:
-    """One shard's patterns, or ``[]`` for an unknown set or index."""
+    """One shard's selectors (patterns or exact names), or ``[]`` for an unknown set or index."""
     spec = plan["sets"].get(name)
     if spec is None or not 0 <= index < len(spec["shards"]):
         return []
@@ -362,10 +377,13 @@ def main(argv: list[str]) -> int:
     m = sub.add_parser("matrix", help="print the shard matrix as compact JSON")
     m.add_argument("--plan", required=True)
 
-    p = sub.add_parser("patterns", help="print one shard's patterns, space-joined")
+    p = sub.add_parser("patterns",
+                       help="write one shard's `mutmut run` arguments to --out, NUL-separated")
     p.add_argument("--plan", required=True)
     p.add_argument("--set", required=True, dest="name")
     p.add_argument("--index", type=int, required=True)
+    p.add_argument("--out", required=True,
+                   help="file to write the arguments to, each ended by a NUL byte")
 
     args = ap.parse_args(argv)
 
@@ -404,16 +422,33 @@ def main(argv: list[str]) -> int:
         print(json.dumps(matrix(_read(args.plan)), separators=(",", ":")))
         return 0
 
-    # patterns. Every word printed here becomes an argument to `mutmut run`,
+    # patterns. Every entry written here becomes one argument to `mutmut run`,
     # and `mutmut run` with no argument runs EVERY mutant — so an empty answer
-    # is a failure with nothing on stdout, never an empty line the shell would
+    # is a failure that writes no file, never an empty list the shell would
     # turn into an unfiltered 26-minute run.
+    #
+    # A file of NUL-terminated entries, not words on stdout: a diff shard names
+    # up to MAX_NAMES mutants, and their module part comes from a file name the
+    # PR chose, so it may hold a space, a glob character or a newline. The step
+    # reads the file into a bash array with `read -d ''` and passes it quoted,
+    # so no entry is ever word-split or globbed, and only a NUL -- which no
+    # path can hold -- ends one.
     patterns = shard_patterns(_read(args.plan), args.name, args.index)
     if not patterns:
         print("mutation_plan patterns: set %r shard %d has no patterns"
               % (args.name, args.index), file=sys.stderr)
         return 1
-    print(" ".join(patterns))
+    bad = [p for p in patterns if not isinstance(p, str) or not p or "\0" in p]
+    if bad:
+        # A NUL would end an entry early, splitting one argument in two.
+        print("mutation_plan patterns: set %r shard %d has entries that are not "
+              "one argument each: %s" % (args.name, args.index, json.dumps(bad[:3])),
+              file=sys.stderr)
+        return 1
+    Path(args.out).write_bytes(b"".join(p.encode("utf-8") + b"\0" for p in patterns))
+    # For the log: JSON, so a newline in a name stays `\n` on one line and
+    # cannot start a workflow command.
+    print("%d arguments: %s" % (len(patterns), json.dumps(patterns, ensure_ascii=False)))
     return 0
 
 
