@@ -683,12 +683,20 @@ def test_a_merge_whose_second_parent_is_not_the_pr_head_falls_back(merged):
 
 
 def test_a_merge_of_some_other_head_falls_back(merged):
-    # Two parents, but the second is not the head the event names (a stale
-    # head.sha, or a merge commit built from a different push).
+    # Two parents, but the second is not the head the event names: the PR
+    # moved on to c3 after `merge` was built from c1. The merge base of main
+    # and c3 is c0, not the merge's first parent c2, so the SHA itself says
+    # which path was taken -- the reason text alone could not.
+    _git(merged.root, "checkout", "-q", "feature")
+    c3 = merged._commit("d.txt", "3")
+    _git(merged.root, "checkout", "-q", "main")
+    first, _ = _git(merged.root, "rev-list", "--parents", "-n1",
+                    merged.merge).split()[1:]
+    assert first == merged.c2
     base, why = mp.diff_base(merged.root, "pull_request", merged.merge,
-                             base_sha=merged.c2, head_sha=merged.c2)
-    assert base == merged.c2      # merge-base(c2, c2)
-    assert "merge base" in why
+                             base_sha=merged.c2, head_sha=c3)
+    assert base == merged.c0 != first
+    assert "merge base" in why and "not the PR head" in why
 
 
 def test_an_abbreviated_head_sha_still_matches_the_second_parent(merged):
@@ -1421,7 +1429,10 @@ def test_the_diff_gate_step_is_the_verdict(jobs, tmp_path, request, case, rc, ve
             encoding="utf-8")
         core = tmp_path / "boost_cli" / "core"
         core.mkdir(parents=True)
-        (core / "m.py").write_text("def a(x):\n    return x + 1\n", encoding="utf-8")
+        # `def a` on line 4, so the annotation's line can only come from
+        # reading this checkout: a wrong --root falls back to line 1.
+        (core / "m.py").write_text("import os\n\n\ndef a(x):\n    return x + 1\n",
+                                   encoding="utf-8")
     summary = tmp_path / "summary.md"
     proc = _bash(step, tmp_path, {"RUNNER_TEMP": str(runner_temp),
                                   "GITHUB_WORKSPACE": str(tmp_path),
@@ -1432,7 +1443,7 @@ def test_the_diff_gate_step_is_the_verdict(jobs, tmp_path, request, case, rc, ve
     # inside an advisory report.
     assert "### Mutation (diff scope): %s" % verdict in summary.read_text(encoding="utf-8")
     if case == "survivor":
-        assert "::warning file=boost_cli/core/m.py,line=1::" in proc.stdout
+        assert "::warning file=boost_cli/core/m.py,line=4::" in proc.stdout
 
 
 def _summary(jobs, tmp_path: Path, plan: dict, matrix: str, reason: str) -> str:
@@ -1487,6 +1498,9 @@ def test_an_empty_diff_scope_says_no_core_function_changed(jobs, tmp_path):
     assert "**Mutants:** 0" in text
     assert "**Shards:** 0" in text
     assert "no core function changed" in text
+    # The summary runs before the gate, so it says what there is to score and
+    # leaves the verdict to the gate step (a malformed plan still fails it).
+    assert "passes" not in text
 
 
 @needs_bash
