@@ -1289,16 +1289,18 @@ jobs:
           # No pipefail under this job's default shell, so exit codes are
           # captured, never read through a pipe.
           set +e
+          # --no-annotations: an advisory gate posting a ::warning on every
+          # changed function of every PR is noise; the report lists them.
+          # --root stays, so binding it later is one flag removed.
           GITHUB_STEP_SUMMARY="$gate_md" .venv/bin/python scripts/mutation_diff.py gate \
             --plan "$plan" --source shard-results/diff --prefix mutation-diff-shard- \
-            --root "$GITHUB_WORKSPACE" > "$RUNNER_TEMP/gate.txt" 2>&1
+            --root "$GITHUB_WORKSPACE" --no-annotations > "$RUNNER_TEMP/gate.txt" 2>&1
           gate_rc=$?
           .venv/bin/python scripts/mutation_diff.py compare --plan "$plan" \
             --full-source shard-results/full --diff-source shard-results/diff \
             > "$RUNNER_TEMP/compare.txt" 2>&1
           compare_rc=$?
           set -e
-          # To the log as well: the gate's ::warning lines become annotations.
           cat "$RUNNER_TEMP/gate.txt" "$RUNNER_TEMP/compare.txt"
           {
             echo "## Diff-gate shadow"

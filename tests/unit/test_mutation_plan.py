@@ -925,6 +925,8 @@ def test_only_the_shadow_step_continues_on_error(jobs):
     assert ".venv/bin/python scripts/mutation_diff.py compare " in run
     assert ".venv/bin/python scripts/mutation_diff.py gate " in run
     assert '--root "$GITHUB_WORKSPACE"' in run
+    # Advisory: no ::warning on every changed function of every PR.
+    assert " --no-annotations" in run
     # Nowhere else: in shadow the diff gate is data, never the verdict.
     others = "\n".join(s.get("run", "") for s in job["steps"] if s is not shadow)
     assert "mutation_diff.py" not in others

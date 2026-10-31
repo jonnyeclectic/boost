@@ -500,6 +500,28 @@ def test_gate_fails_and_annotates_a_survivor(tmp_path, head_tree, monkeypatch, c
 
 
 @pytest.mark.usefixtures("needs_mutmut")
+def test_gate_no_annotations_keeps_the_verdict_and_summary(
+        tmp_path, head_tree, monkeypatch, capsys):
+    # Shadow mode: the diff gate decides nothing yet, so it must not post a
+    # warning on every changed function of every PR -- but its verdict, exit
+    # code and summary are the data the shadow report compares.
+    summary = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    plan = _diff_plan(tmp_path, [[md.pattern(_A)], [md.pattern(_K)]], 3)
+    _meta(tmp_path / "src", "mutation-diff-shard-", 0,
+          {f"{_A}__mutmut_1": 1, f"{_K}__mutmut_1": None})
+    _meta(tmp_path / "src", "mutation-diff-shard-", 1,
+          {f"{_A}__mutmut_1": None, f"{_K}__mutmut_1": 0, f"{_K}__mutmut_2": 33})
+    assert _gate(tmp_path, plan, head_tree, "--no-annotations") == 1
+    out = capsys.readouterr().out
+    assert "::" not in out, out
+    assert "mutation diff gate: FAIL" in out
+    text = summary.read_text(encoding="utf-8")
+    assert "1/3 killed" in text
+    assert f"{_K}__mutmut_1" in text and f"{_K}__mutmut_2" in text
+
+
+@pytest.mark.usefixtures("needs_mutmut")
 def test_gate_annotation_lists_at_most_three(tmp_path, head_tree, monkeypatch, capsys):
     monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
     plan = _diff_plan(tmp_path, [[md.pattern(_A)]], 5)
