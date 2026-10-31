@@ -6573,11 +6573,14 @@ def link_skill_copy(name: str, entry: dict) -> InstallResult | None:
 
     None when there is no target: ``link_agents`` takes an empty ``only`` as
     every agent, which would link the copy beside claude-code's own file.
-    ``keep_theirs``: a symlink of the user's at the path is left, as a
-    conflict, never re-pointed at the store.
+    None, too, while the copy's file is not on disk -- a release whose stash
+    had nothing to restore, a store that refused the write and kept the old
+    row -- where every link would dangle; the missing copy is a missing
+    materialization, whose repair links. ``keep_theirs``: a symlink of the
+    user's at the path is left, as a conflict, never re-pointed at the store.
     """
     targets = copy_link_targets(name, entry)
-    if not targets:
+    if not targets or not os.path.isfile(_copy_row(entry)["path"]):
         return None
     return link_agents(name, only=list(targets), keep_theirs=True)
 

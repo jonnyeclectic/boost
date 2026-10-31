@@ -10,10 +10,11 @@ from __future__ import annotations
 
 import hashlib
 import os
+from pathlib import Path
 
 import pytest
 
-from boost_cli.core import config, lockfile, paths, store
+from boost_cli.core import config, lockfile, paths, store, util
 
 ROW = {"agent": None, "slot": "skill", "path": "", "sha256": ""}
 
@@ -886,6 +887,39 @@ class TestCopyLinksThroughInstall:
         store.release_materialized("workflow", "reviewer",
                                    lockfile.get_workflow("reviewer"))
         assert set(self._links()) == {"windsurf", "antigravity"}
+
+    def test_release_links_nothing_to_a_copy_it_did_not_restore(self, tap):
+        """A copy gone before quarantine stashes no content, so release
+        writes no file -- and a link to it would dangle."""
+        store.install(_wf(tap))
+        util.remove_path(paths.store_dir() / "reviewer")
+        store.quarantine_materialized("workflow", "reviewer",
+                                      lockfile.get_workflow("reviewer"))
+        assert self._links() == {}
+        store.release_materialized("workflow", "reviewer",
+                                   lockfile.get_workflow("reviewer"))
+        assert not (paths.store_dir() / "reviewer").exists()
+        assert self._links() == {}
+        assert store.link_skill_copy(
+            "reviewer", lockfile.get_workflow("reviewer")) is None
+
+    def test_a_copy_the_store_refused_is_not_linked(self, tap, monkeypatch):
+        """`_skill_copy` keeps the old row when the store refuses the write,
+        whether or not its file is still there."""
+        store.install(_wf(tap))
+        util.remove_path(paths.store_dir() / "reviewer")
+        store.unlink_skill_copy("reviewer")
+        write = util.atomic_write_text
+
+        def refuse(path, *a, **k):
+            if paths.store_dir() / "reviewer" in Path(path).parents:
+                raise PermissionError(13, "Permission denied")
+            return write(path, *a, **k)
+        monkeypatch.setattr(util, "atomic_write_text", refuse)
+        res = store.install(_wf(tap), force=True)
+        assert store._copy_row(lockfile.get_workflow("reviewer")) is not None
+        assert res.copy_linked == []
+        assert self._links() == {}
 
     def test_backfill_links_what_it_writes(self, tap):
         store.install(_wf(tap), as_skill=False)
