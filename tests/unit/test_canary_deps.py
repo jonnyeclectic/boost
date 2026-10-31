@@ -42,9 +42,11 @@ weekly ``floors`` cron went red on 2026-09-30 with the same seventeen
 its venv by hand, and this file had been written to read exactly one job —
 ``jobs["canary"]`` in ci.yml — so it had nothing to say about the second
 place the same mistake lives. :func:`_harness_jobs` now finds them by shape
-rather than by name: **six** jobs across three workflow files run
+rather than by name: **five** jobs across three workflow files run
 ``tests/unit``/``tests/functional`` out of a venv they assemble themselves,
-and a seventh is covered before it is written.
+and a sixth is covered before it is written. (There were six until
+``ci.yml:patch-coverage`` stopped running the suite and started downloading
+the ``tests`` matrix's coverage report instead.)
 
 Six, not five. An earlier draft of this file said five and claimed "the sixth
 is covered before it is written" — while ``ci.yml:onnx-inference``, which
@@ -443,10 +445,9 @@ def _installs(run: str, interpreter: str | None = None) -> set[str]:
     Explicitly named ones, plus everything a committed ``-r`` file pins —
     without the second half, every job that installs from
     ``requirements/*.txt`` would read as installing nothing at all and so
-    look broken. That is **four** of the six harness jobs —
-    ``ci.yml:{tests,patch-coverage,onnx-inference}`` and
-    ``sonarcloud.yml:sonar-analyze`` — not the three an earlier draft of
-    this docstring counted, plus ``floors.yml:lowest``, which reads a
+    look broken. That is **three** of the five harness jobs —
+    ``ci.yml:{tests,onnx-inference}`` and ``sonarcloud.yml:sonar-analyze``
+    — plus ``floors.yml:lowest``, which reads a
     ``requirements-lowest.txt`` it generates a step earlier. A number in
     prose that nothing checks is how that got stale;
     ``test_which_jobs_install_from_a_requirements_file`` now pins both sets
@@ -630,11 +631,13 @@ def _canary_targets(run: str) -> list[Path]:
 
 
 #: Every job that assembles its own venv and runs the suite in it, as
-#: ``workflow:job``. Pinned so a seventh is a decision: a new one that this
+#: ``workflow:job``. Pinned so a sixth is a decision: a new one that this
 #: file has never seen is exactly the shape both regressions took.
+#: ``ci.yml:patch-coverage`` left this set when it stopped running the suite:
+#: it downloads ``tests (ubuntu-latest, 3.12)``'s coverage.xml and runs only
+#: diff-cover, so there is no suite import for its venv to be missing.
 HARNESS_JOBS = {
     "ci.yml:tests",            # the required coverage gate (-r test-tools.txt)
-    "ci.yml:patch-coverage",   # diff-cover (-r coverage-tools.txt)
     "ci.yml:canary",           # 3.14t free-threaded, explicit pip line
     "ci.yml:onnx-inference",   # one file out of tests/unit, own venv, .[rag]
     "floors.yml:lowest",       # uv lowest-direct, explicit pip line
@@ -1367,7 +1370,7 @@ jobs:
                         elif arg.endswith(".txt"):
                             generated.add(f"{wf}:{job}")
         assert committed == {
-            "ci.yml:tests", "ci.yml:patch-coverage", "ci.yml:onnx-inference",
+            "ci.yml:tests", "ci.yml:onnx-inference",
             "sonarcloud.yml:sonar-analyze",
         }
         assert generated == {"floors.yml:lowest"}

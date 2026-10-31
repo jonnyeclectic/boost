@@ -190,6 +190,10 @@ diff-cover==10.6.0 \
     --hash=sha256:8d1194dfb537f70480ac97c9c45dd40721cf4c326c9903fbe997db67a4db6195 \
     --hash=sha256:a701553060f72d59b81f9cb1645b75ef66204427eb9dd99873c91092220e52ce
     # via -r requirements/coverage-tools.in
+execnet==2.1.2 \
+    --hash=sha256:63d83bfdd9a23e35b9c6a3261412324f964c2ec8dcd8d3c6916ee9373e0befcd \
+    --hash=sha256:67fba928dd5a544b783f6056f449e5e3931a5c378b128bc18501f7ea79e296ec
+    # via pytest-xdist
 hypothesis==6.168.3 \
     --hash=sha256:01768a03a30dc54df7fe457c0b34016c84d598fa00d5965ededab93ba4eb3408 \
     --hash=sha256:0369f5df055f96e117ab12e5f249668ff144731ab5280bc7a205fdf81f990b89 \
@@ -399,9 +403,14 @@ pytest==9.1.1 \
     # via
     #   -r requirements/test-tools.in
     #   pytest-cov
+    #   pytest-xdist
 pytest-cov==7.1.0 \
     --hash=sha256:30674f2b5f6351aa09702a9c8c364f6a01c27aae0c1366ae8016160d1efc56b2 \
     --hash=sha256:a0461110b7865f9a271aa1b51e516c9a95de9d696734a2f71e3e78f46e1d4678
+    # via -r requirements/test-tools.in
+pytest-xdist==3.8.0 \
+    --hash=sha256:202ca578cfeb7370784a8c33d6d05bc6e13b4f25b5053c30a152269fd10f0b88 \
+    --hash=sha256:7e578125ec9bc6050861aa93f2d59f1d8d085595d6551c2c90b6f4fad8d3a9f1
     # via -r requirements/test-tools.in
 pyyaml==6.0.3 \
     --hash=sha256:00c4bdeba853cc34e7dd471f16b4114f4162dc03e6b7afcc2128711f0eca823c \
