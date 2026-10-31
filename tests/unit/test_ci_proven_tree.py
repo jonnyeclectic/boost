@@ -1550,6 +1550,7 @@ SCENARIOS = {
 #: of its `write the plan` step -- empty exactly when `proven` said skip -- and
 #: that step's bash is run against the same inputs in test_mutation_plan.py.
 ONE_SHARD = '[{"set":"full","index":0}]'
+ONE_DIFF_SHARD = '[{"set":"diff","index":0}]'
 
 
 def _outcome(name: str, scenario: dict) -> tuple[str, dict]:
@@ -1560,8 +1561,12 @@ def _outcome(name: str, scenario: dict) -> tuple[str, dict]:
         return result, {"skip": skip, "pr_run_id": run_id}
     if name == "mutation-plan":
         proven = scenario.get("proven", ("", "", ""))
-        matrix = "[]" if proven[1] == "true" else ONE_SHARD
-        return "success", {"matrix": matrix, "gate_set": "" if matrix == "[]" else "full"}
+        if proven[1] == "true":
+            return "success", {"matrix": "[]", "gate_set": ""}
+        # A PR or queue entry binds on its diff set; everything else is full.
+        if scenario["event"] in ("pull_request", "merge_group"):
+            return "success", {"matrix": ONE_DIFF_SHARD, "gate_set": "diff"}
+        return "success", {"matrix": ONE_SHARD, "gate_set": "full"}
     return "success", {}
 
 
