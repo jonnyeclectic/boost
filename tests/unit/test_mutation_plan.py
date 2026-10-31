@@ -1045,6 +1045,7 @@ def test_the_planner_exports_whether_the_plan_is_shadow(jobs):
     assert jobs["mutation-plan"]["outputs"]["shadow"] == "${{ steps.plan.outputs.shadow }}"
 
 
+@needs_bash
 class TestPlannerByEvent:
     """Run the `write the plan` step's bash with python and git stubbed."""
 
