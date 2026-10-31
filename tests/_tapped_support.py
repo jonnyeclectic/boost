@@ -1,13 +1,19 @@
 # Copyright the boost contributors.
 # SPDX-License-Identifier: Apache-2.0
-"""What the `tapped` fixture's template needs that is not a fixture.
+"""What ``conftest.py`` and the test modules both need that is not a fixture.
+
+The `tapped` fixture's template, and the git setting ``pytest_configure``
+applies to the whole process tree (`disable_git_auto_maintenance`), whose
+own tests call it directly.
 
 A module of its own, not names in ``conftest.py``, because a test module has no
 safe way to reach a conftest: ``import conftest`` resolves to whichever
 ``conftest.py`` was imported last, and a bare ``pytest`` imports
 ``tests/langchain/conftest.py`` after ``tests/conftest.py`` -- so
 ``conftest._under_mutmut()`` evaluated at import time raised ``AttributeError``
-and aborted the whole collection. This name is unique, so it cannot be shadowed.
+and aborted the whole collection, and ``conftest._disable_git_auto_maintenance``
+raised it in ``pytest tests/langchain tests/unit/test_git_auto_maintenance_off.py``.
+This name is unique, so it cannot be shadowed.
 
 Definitions only; nothing here runs at import.
 """
@@ -18,7 +24,7 @@ import os
 import shutil
 import subprocess
 import sys
-from collections.abc import Mapping
+from collections.abc import Mapping, MutableMapping
 from pathlib import Path
 
 
@@ -35,6 +41,37 @@ def under_mutmut() -> bool:
     import mutmut, which is not in the ordinary test requirements.
     """
     return bool(os.environ.get("MUTANT_UNDER_TEST"))
+
+
+def disable_git_auto_maintenance(
+        environ: MutableMapping[str, str] = os.environ) -> None:
+    """Run every child ``git`` with ``maintenance.auto=false``.
+
+    ``git commit``/``fetch``/``merge``/``rebase`` otherwise leave a DETACHED
+    ``git maintenance run --auto`` behind, which creates and deletes
+    ``.git/objects/maintenance.lock`` after the command returned; a test that
+    then ``copytree``s the repo lists the lock, finds it gone, and raises
+    ``shutil.Error``. Measured under ``pytest -n auto`` (git 2.56): two tests
+    errored in three runs, and passed serially. ``maintenance.auto`` stops the
+    process from starting at all, so ``gc.auto=0`` would add nothing — the
+    detached run takes the lock before it checks any task's condition.
+
+    Environment rather than a ``~/.gitconfig``: it survives the ``sandbox``
+    fixture's per-test HOME and tests that set ``GIT_CONFIG_GLOBAL=/dev/null``,
+    and reaches boost's own git calls. Appends to any ``GIT_CONFIG_COUNT``
+    entries already present, and is idempotent, because an xdist worker
+    inherits the controller's environment and then configures again.
+    """
+    try:
+        count = int(environ.get("GIT_CONFIG_COUNT", "0"))
+    except ValueError:
+        count = 0
+    if any(environ.get("GIT_CONFIG_KEY_%d" % i) == "maintenance.auto"
+           for i in range(count)):
+        return
+    environ["GIT_CONFIG_KEY_%d" % count] = "maintenance.auto"
+    environ["GIT_CONFIG_VALUE_%d" % count] = "false"
+    environ["GIT_CONFIG_COUNT"] = str(count + 1)
 
 
 #: What the ``sandbox`` fixture sets that bears on a tap, spelled out for a child
