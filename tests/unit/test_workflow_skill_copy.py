@@ -664,6 +664,21 @@ class TestCopyLinksOnDisk:
         for agent in ("claude-code", "cursor"):
             assert not (_agent_dir(agent) / "reviewer").is_symlink()
 
+    def test_only_limits_the_targets_and_empty_is_none(self, sandbox):
+        _copy_on_disk()
+        entry = _workflow_entry("claude-code", "cursor")
+        res = store.link_skill_copy("reviewer", entry, only=["windsurf",
+                                                             "cursor"])
+        assert res is not None
+        assert res.linked == ["windsurf"]
+        assert not os.path.lexists(_agent_dir("antigravity") / "reviewer")
+        assert not os.path.lexists(_agent_dir("cursor") / "reviewer")
+        # `link_agents` reads an empty `only` as every agent: never passed
+        assert store.link_skill_copy("reviewer", entry, only=[]) is None
+        assert store.reconcile_copy_links("reviewer", entry, only=[]) == (
+            [], [], [])
+        assert not os.path.lexists(_agent_dir("antigravity") / "reviewer")
+
     def test_no_target_means_no_link_anywhere(self, sandbox):
         """An empty `only` is every agent to `link_agents`, so the call is
         never made with one."""
@@ -927,6 +942,21 @@ class TestCopyLinksThroughInstall:
                                    lockfile.get_workflow("reviewer"))
         assert set(self._links()) == {"windsurf", "antigravity"}
 
+    def test_release_names_a_link_it_could_not_make(self, tap, tmp_path):
+        store.install(_wf(tap))
+        store.quarantine_materialized("workflow", "reviewer",
+                                      lockfile.get_workflow("reviewer"))
+        (_agent_dir("windsurf") / "reviewer").symlink_to(tmp_path)
+        problems: list[str] = []
+        store.release_materialized("workflow", "reviewer",
+                                   lockfile.get_workflow("reviewer"),
+                                   problems=problems)
+        assert problems == ["~/.windsurf/skills/reviewer is in the way and "
+                            "is not boost's — left alone"]
+        assert set(self._links()) == {"windsurf", "antigravity"}
+        assert os.path.realpath(_agent_dir("windsurf") / "reviewer") == \
+            os.path.realpath(tmp_path)
+
     def test_release_links_nothing_to_a_copy_it_did_not_restore(self, tap):
         """A copy gone before quarantine stashes no content, so release
         writes no file -- and a link to it would dangle."""
@@ -1022,6 +1052,36 @@ class TestCopyLinksThroughSync:
         assert lockfile.get_skill("reviewer") is None
         plan = store.sync_plan()
         assert plan["missing_copy_links"] == plan["stale_copy_links"] == []
+
+    def test_apply_links_only_what_the_plan_named(self, tap, tmp_path):
+        """The user's own link at windsurf is not a fault doctor counts, so
+        repairing antigravity must not report it -- or exit 1 over it."""
+        store.install(_wf(tap))
+        (_agent_dir("windsurf") / "reviewer").unlink()
+        (_agent_dir("windsurf") / "reviewer").symlink_to(tmp_path)
+        (_agent_dir("antigravity") / "reviewer").unlink()
+        plan = store.sync_plan()
+        assert plan["missing_copy_links"] == [("reviewer", "antigravity")]
+        actions = store.sync_apply(plan)
+        assert [a for a in actions if "skill copy" in a] == [
+            "linked workflow reviewer's skill copy → antigravity"]
+        assert not any(store.is_unrepaired(a) for a in actions)
+
+    def test_apply_names_a_planned_link_it_could_not_make(self, tap,
+                                                          tmp_path):
+        store.install(_wf(tap))
+        (_agent_dir("windsurf") / "reviewer").unlink()
+        plan = store.sync_plan()
+        assert plan["missing_copy_links"] == [("reviewer", "windsurf")]
+        # the user's link lands between the plan and the repair
+        (_agent_dir("windsurf") / "reviewer").symlink_to(tmp_path)
+        lines = [a for a in store.sync_apply(plan) if "skill copy" in a]
+        assert lines == [
+            "workflow reviewer's skill copy was not linked: ~/.windsurf/"
+            "skills/reviewer is in the way and is not boost's — left alone"]
+        assert store.is_unrepaired(lines[0])
+        assert os.path.realpath(_agent_dir("windsurf") / "reviewer") == \
+            os.path.realpath(tmp_path)
 
     def test_a_legacy_narrowed_entry_never_links_cursor(self, tap):
         """A row from before `only_agents` was recorded: sync links the
