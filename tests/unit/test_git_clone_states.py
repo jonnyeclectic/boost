@@ -171,6 +171,15 @@ class TestStaleLocks:
         assert gitutil.stale_locks(owned[1]) == []
 
 
+#: WindowsPath equality folds case, so a toplevel that differs by case alone
+#: already equals the path and the branch that asks `samefile` is never
+#: reached there. Ubuntu runs these; they are its mutant killers.
+_CASE_BLIND_PATHS = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="WindowsPath equality folds case: the case-only branch is never "
+           "reached")
+
+
 class TestOwnedClone:
     def test_a_clone_in_the_repos_dir(self, owned):
         assert gitutil.owned_clone(owned[1]) is True
@@ -228,10 +237,12 @@ class TestOwnedClone:
         monkeypatch.setattr(gitutil, "run", fake)
         monkeypatch.setattr(gitutil.os.path, "samefile", same)
 
+    @_CASE_BLIND_PATHS
     @pytest.mark.parametrize("same", [True, False])
     def test_a_case_only_respelling_is_asked_of_the_filesystem(
             self, owned, monkeypatch, same):
-        # Runs on any disk: git's answer differs from the path by case alone.
+        # Runs on any POSIX disk: git's answer differs from the path by case
+        # alone. On Windows the paths compare equal and `samefile` is moot.
         real = owned[1].resolve()
         self._toplevel(monkeypatch, real.parent / real.name.swapcase(),
                        lambda a, b: same)
@@ -245,6 +256,7 @@ class TestOwnedClone:
         self._toplevel(monkeypatch, real.parent, lambda a, b: True)
         assert gitutil.owned_clone(owned[1]) is False
 
+    @_CASE_BLIND_PATHS
     def test_a_filesystem_error_is_not_ownership(self, owned, monkeypatch):
         def gone(a, b):
             raise OSError("vanished")

@@ -216,8 +216,13 @@ class TestTapCommandSkip:
         registry.add(str(first))
         capsys.readouterr()
         assert taps_cmd.cmd_tap([str(tmp_path / "IDSKIP-SAME")]) == 0
-        assert ("IDSKIP-SAME already tapped as idskip-same"
-                in capsys.readouterr().out)
+        out = capsys.readouterr().out
+        if sys.platform == "win32":
+            # `resolve()` may answer in the case on disk there, making the
+            # spec's name the configured one. Not yet seen on a Windows run.
+            assert "already tapped" in out and "idskip-same" in out
+        else:
+            assert "IDSKIP-SAME already tapped as idskip-same" in out
         assert [t["name"] for t in config.get("taps")] == ["idskip-same"]
 
     def test_add_many_skips_a_local_case_variant(self, sandbox, tmp_path):

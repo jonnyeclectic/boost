@@ -430,12 +430,21 @@ class TestUnlistedClones:
         assert registry.unlisted_clones() == [(clone, str(fixture_tap_src))]
 
 
+#: WindowsPath equality folds case, so there `repos/o__r == repos/O__R` and a
+#: case variant is the tap's own clone before the disk is asked — the answer
+#: NTFS needs, where the two cannot coexist. Ubuntu runs these.
+_NOT_WINDOWS = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="WindowsPath equality folds case: a case variant is the tap's own clone")
+
+
 class TestLeftoverOfAConfiguredTap:
     """A clone whose name is a configured tap's in another case."""
 
+    @_NOT_WINDOWS
     def test_names_the_tap_to_update_not_a_tap_command_that_does_nothing(
             self, sandbox):
-        # Neither spelling exists, so this holds whether or not the disk
+        # Neither spelling exists, so the disk is never asked whether it
         # folds case: `boost tap <url>` answers "already tapped" here.
         _add_row("O/R", "https://github.com/O/R")
         clone = paths.repos_dir() / "o__r"
@@ -452,6 +461,29 @@ class TestLeftoverOfAConfiguredTap:
         clone = paths.repos_dir() / "o__other"
         assert registry.readd_hint(clone, "https://github.com/o/other") == (
             "`boost tap https://github.com/o/other`")
+
+    @_NOT_WINDOWS
+    def test_a_clone_of_another_source_is_not_the_tap_s_leftover(
+            self, sandbox):
+        # `boost update O/R` never restores what this clone held; its own
+        # source is what re-adds it.
+        _add_row("O/R", "https://github.com/O/R")
+        clone = paths.repos_dir() / "o__r"
+        url = "https://github.com/other/r"
+        assert registry.readd_hint(clone, url) == "`boost tap %s`" % url
+        assert registry.unlisted_clone_line(clone, url) == (
+            "%s is a tap clone no configured tap lists, so boost reads "
+            "nothing from it — re-add it with `boost tap %s`, or delete the "
+            "directory" % (paths.tilde(clone), url))
+
+    @_NOT_WINDOWS
+    def test_a_tap_name_holding_the_separator_is_matched_on_its_dir_name(
+            self, sandbox):
+        # `my__tap` maps back to `my/tap`, which no tap is called, and an
+        # origin-less clone has no source to disagree with.
+        _add_row("my__tap", "https://github.com/me/my__tap")
+        clone = paths.repos_dir() / "MY__TAP"
+        assert registry.readd_hint(clone, "") == "`boost update my__tap`"
 
     @pytest.mark.skipif(sys.platform == "win32", reason="symlinks")
     def test_the_tap_s_own_dir_is_never_offered_for_deletion(self, sandbox):
