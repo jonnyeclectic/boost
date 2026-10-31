@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 # Copyright the boost contributors.
 # SPDX-License-Identifier: Apache-2.0
 """Which boost_cli/core functions did a PR change, and what forces a full mutation run?
@@ -12,20 +13,62 @@ Scope covers function bodies only: an edit to module-level code (a constant, an
 import) names no function and so adds nothing; the nightly full run is the
 backstop for those.
 
-Pure functions only: the caller supplies file text through `read(rev, path)`
-and the dependency map from `mutants/mutmut-stats.json`.
+The scope functions are pure: the caller supplies file text through
+`read(rev, path)` and the dependency map from `mutants/mutmut-stats.json`.
+`mutation_plan.py diff` is that caller; it packs the scope with
+`pack_functions` and runs each function's mutants by the explicit pattern
+`pattern()` writes, so no cached verdict is ever trusted.
+
+Two CLIs read the shards' results back:
+
+  mutation_diff.py gate --plan PLAN --source DIR --prefix mutation-diff-shard-
+                        [--min 80] [--small 10] [--root ROOT]
+      Score the diff set: exit 0 pass, 1 fail, 2 unrun or missing results.
+  mutation_diff.py compare --plan PLAN --full-source DIR --diff-source DIR
+      Per-mutant agreement between a full run and a diff run of the same SHA;
+      exit 1 on any killed/not-killed disagreement (timeouts excluded).
 """
 
 from __future__ import annotations
 
+import argparse
 import ast
 import configparser
+import contextlib
+import importlib.util
+import json
+import math
+import os
+import sys
 import tomllib
-from collections.abc import Callable
-from pathlib import PurePosixPath
+from collections.abc import Callable, Iterator
+from dataclasses import dataclass, field
+from pathlib import Path, PurePosixPath
+from typing import Any
 
 import yaml
-from mutmut.mutation.file_mutation import compute_function_hashes
+from mutmut import configuration as mutmut_configuration
+from mutmut.mutation.file_mutation import compute_function_hashes, mutate_file_contents
+from mutmut.mutation.trampoline_templates import mangle_function_name
+from mutmut.stats import status_by_exit_code
+from mutmut.utils.file_utils import change_cwd
+
+ROOT = Path(__file__).resolve().parent.parent
+
+
+def _load_shards():
+    """Import ``mutation_shards`` from beside this file (``scripts/`` is no package)."""
+    spec = importlib.util.spec_from_file_location(
+        "mutation_shards", Path(__file__).resolve().parent / "mutation_shards.py"
+    )
+    if spec is None or spec.loader is None:
+        raise ImportError("cannot load mutation_shards.py beside %s" % __file__)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+ms = _load_shards()
 
 CORE_DIR = "boost_cli/core"
 # Specific parse failures only; a bare except would hide real bugs. ValueError is
@@ -155,3 +198,467 @@ def diff_scope(
                 for k in changed_functions(read("base", p), read("head", p))
             }
     return sorted(funcs | direct_callers(deps, funcs))
+
+
+# --------------------------------------------------------------------------
+# Counting and packing (the planner's half)
+# --------------------------------------------------------------------------
+
+#: What mutmut appends to a mangled function name to name one of its mutants.
+MUTANT_SEP = "__mutmut_"
+#: Mutants per diff shard, and the most diff shards one run may ask for.
+PER_SHARD = 1500
+MAX_SHARDS = 16
+
+
+def split_qualified(qualified: str) -> tuple[str, str]:
+    """`boost_cli.core.store.xǁA.Bǁm` -> (`boost_cli/core/store.py`, `xǁA.Bǁm`).
+
+    The inverse of `qualify`. A plain `rpartition(".")` would cut a nested
+    class's key (`xǁA.Bǁm`) in half, so a method key splits on its `.xǁ`.
+    """
+    i = qualified.find(".x" + ms.METHODS)
+    if i >= 0:
+        module, mangled = qualified[:i], qualified[i + 1 :]
+    else:
+        module, _, mangled = qualified.rpartition(".")
+    return module.replace(".", "/") + ".py", mangled
+
+
+@contextlib.contextmanager
+def mutmut_config(root: Path) -> Iterator[None]:
+    """Load mutmut's config from `root`'s setup.cfg for the duration, then put back.
+
+    `mutate_file_contents` reads `config().do_not_mutate_patterns`, and mutmut
+    caches its config process-wide from whatever cwd the first call ran in —
+    outside a directory with a `[mutmut]` section it raises instead. The
+    previous config is restored because the unit suite also runs *inside*
+    mutmut, where that global belongs to the run doing the mutating.
+    """
+    previous = mutmut_configuration._config
+    mutmut_configuration._config = None
+    try:
+        with change_cwd(root):
+            mutmut_configuration.config()
+        yield
+    finally:
+        mutmut_configuration._config = previous
+
+
+def mutant_counts(path: str, src: str) -> dict[str, int]:
+    """Mangled function -> number of mutants mutmut generates for it.
+
+    mutmut's own generator, so the count is the one `mutmut run` will produce
+    for the same source and config (call under `mutmut_config`). A function
+    with nothing to mutate (`pass`) is absent, not zero.
+    """
+    out: dict[str, int] = {}
+    for name in mutate_file_contents(path, src).mutant_names:
+        head, sep, _ = name.rpartition(MUTANT_SEP)
+        if sep:
+            out[head] = out.get(head, 0) + 1
+    return out
+
+
+def pattern(qualified: str) -> str:
+    """The `mutmut run` argument that selects exactly this function's mutants.
+
+    Anchored on mutmut's suffix, so `x_install` cannot swallow
+    `x_install_from_path`.
+    """
+    return qualified + MUTANT_SEP + "*"
+
+
+def ms_per_mutant(root: Path, functions: list[str]) -> dict[str, float]:
+    """Measured milliseconds per mutant for the functions a previous run timed.
+
+    `mutation_weights.json` records a function's total time and its mutant
+    count from the same full run, so the ratio is that run's per-mutant cost —
+    which ranges 14x across one file (see `load_symbol_durations`). Methods are
+    not recorded there and fall back to the mean in `pack_functions`.
+    """
+    durations = ms.load_symbol_durations(root)
+    recorded = ms.load_symbol_weights(root)
+    out: dict[str, float] = {}
+    for q in functions:
+        path, mangled = split_qualified(q)
+        if not mangled.startswith("x_"):
+            continue
+        try:
+            rel = PurePosixPath(path).relative_to(CORE_DIR).as_posix()
+        except ValueError:
+            continue
+        spent = durations.get(rel, {}).get(mangled[2:])
+        count = recorded.get(rel, {}).get(mangled[2:])
+        if spent and count:
+            out[q] = spent / count
+    return out
+
+
+def pack_functions(
+    counts: dict[str, int],
+    ms_per_mutant: dict[str, float],
+    per_shard: int = PER_SHARD,
+    cap: int = MAX_SHARDS,
+) -> list[list[str]]:
+    """Pack qualified functions into `min(cap, ceil(total / per_shard))` shards.
+
+    Longest-processing-time first on `count * ms_per_mutant` (the mean for an
+    unmeasured function), ties broken by name, so the same scope always packs
+    the same way. A bin can come back empty when one function outweighs the
+    shard size — a function cannot be split — and the planner drops those.
+    """
+    live = {f: n for f, n in counts.items() if n > 0}
+    total = sum(live.values())
+    if total == 0:
+        return []
+    k = min(cap, math.ceil(total / per_shard))
+    mean = (sum(ms_per_mutant.values()) / len(ms_per_mutant)) if ms_per_mutant else 1.0
+    weight = {f: n * ms_per_mutant.get(f, mean) for f, n in live.items()}
+    bins: list[list[str]] = [[] for _ in range(k)]
+    load = [0.0] * k
+    for f in sorted(live, key=lambda f: (-weight[f], f)):
+        i = load.index(min(load))
+        bins[i].append(f)
+        load[i] += weight[f]
+    return bins
+
+
+# --------------------------------------------------------------------------
+# Scoring (the gate's half)
+# --------------------------------------------------------------------------
+
+
+@dataclass
+class Verdict:
+    killed: int
+    denominator: int
+    unrun: list[str] = field(default_factory=list)
+    survivors: list[str] = field(default_factory=list)
+    timeouts: list[str] = field(default_factory=list)
+
+
+def status_of(code: int | None) -> str:
+    """mutmut's status name for an exit code, without growing its defaultdict.
+
+    Indexing `status_by_exit_code` with an unknown code inserts it; reading the
+    factory instead gives the same answer ("suspicious") and leaves mutmut's
+    table as it was.
+    """
+    if code in status_by_exit_code:
+        return status_by_exit_code[code]
+    factory = status_by_exit_code.default_factory
+    return factory() if factory is not None else "suspicious"
+
+
+def score(codes: dict[str, int | None]) -> Verdict:
+    """Count exactly as `mutation_gate.py` does: killed / (total - skipped).
+
+    `mutation_gate.py` scores mutmut's export-cicd-stats, where `killed` is the
+    `"killed"` status alone (exit 1 and 3) and the denominator is every mutant
+    but the `"skipped"` ones (34). So no tests (5/33), suspicious, timeouts,
+    segfaults and `caught by type check` (37) all count against the score.
+    The one deliberate difference: a `None` ("not checked") is not scored at
+    all but reported as unrun, and `passes` fails closed on it.
+    """
+    v = Verdict(killed=0, denominator=0)
+    for key in sorted(codes):
+        code = codes[key]
+        if code is None:
+            v.unrun.append(key)
+            continue
+        status = status_of(code)
+        if status == "skipped":
+            continue
+        v.denominator += 1
+        if status == "killed":
+            v.killed += 1
+        elif status == "survived":
+            v.survivors.append(key)
+        elif status == "timeout":
+            v.timeouts.append(key)
+    return v
+
+
+def passes(v: Verdict, min_pct: float = 80.0, small: int = 10) -> bool:
+    """>= `min_pct` killed; below `small` mutants, every one must be killed.
+
+    The small rule exists because one equivalent mutant out of three reads as
+    66.7%. Nothing to score (zero denominator, nothing unrun) is a pass.
+    """
+    if v.unrun:
+        return False
+    if v.denominator == 0:
+        return True
+    if v.denominator < small:
+        return v.killed == v.denominator
+    return 100 * v.killed >= min_pct * v.denominator
+
+
+def def_line(src: str, mangled: str) -> int | None:
+    """Line of the `def` that mutmut keys as `mangled`, walking as mutmut does."""
+    try:
+        tree = ast.parse(src)
+    except (SyntaxError, ValueError):
+        return None
+
+    def visit(stmts: list[ast.stmt], class_name: str) -> int | None:
+        for node in stmts:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                key = mangle_function_name(name=node.name, class_name=class_name or None)
+                if key == mangled:
+                    return node.lineno
+            elif isinstance(node, ast.ClassDef):
+                found = visit(
+                    node.body,
+                    node.name if not class_name else f"{class_name}.{node.name}",
+                )
+                if found is not None:
+                    return found
+        return None
+
+    return visit(tree.body, "")
+
+
+def _core_rel(path: str) -> str:
+    """`boost_cli/core/store.py` -> `store.py`, the name `shard_meta` takes."""
+    return PurePosixPath(path).relative_to(CORE_DIR).as_posix()
+
+
+def _read_codes(meta: Path) -> dict[str, Any]:
+    return json.loads(meta.read_text(encoding="utf-8")).get("exit_code_by_key") or {}
+
+
+def collect_diff(
+    spec: dict[str, Any], source: Path, prefix: str
+) -> tuple[dict[str, int | None], list[str]]:
+    """In-scope exit codes from the diff shards, and every reason they are incomplete.
+
+    Each function belongs to exactly one shard (the planner packed it there),
+    so its keys are read from that shard's `.meta` only: every other shard
+    reports them `None`, having been asked to run something else. Only keys
+    with the function's exact `__mutmut_` prefix are taken, so out-of-scope
+    functions of the same file — `None` in every diff shard — are never read.
+    """
+    codes: dict[str, int | None] = {}
+    problems: list[str] = []
+    for index, shard in enumerate(spec.get("shards") or []):
+        if not (source / f"{prefix}{index}").is_dir():
+            problems.append(f"shard {index}: no artifact at {source}/{prefix}{index}")
+            continue
+        for pat in shard:
+            if not pat.endswith(MUTANT_SEP + "*"):
+                problems.append(f"shard {index}: {pat!r} is not a function pattern")
+                continue
+            q = pat[: -len(MUTANT_SEP + "*")]
+            path, _ = split_qualified(q)
+            meta = ms.shard_meta(source, prefix, index, _core_rel(path))
+            if meta is None:
+                problems.append(f"shard {index}: no {path}.meta for {q}")
+                continue
+            mine = {
+                k: v for k, v in _read_codes(meta).items() if k.startswith(q + MUTANT_SEP)
+            }
+            if not mine:
+                problems.append(f"shard {index}: no mutants of {q} (planned, never run)")
+            codes.update(mine)
+    planned = spec.get("mutants")
+    if isinstance(planned, int) and len(codes) < planned:
+        problems.append(f"planner counted {planned} mutants; shards hold {len(codes)}")
+    return codes, problems
+
+
+def _escape(message: str) -> str:
+    # GitHub workflow-command data escaping: without it a `%` or newline in a
+    # mutant name would truncate or corrupt the annotation.
+    return message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+
+
+def cmd_gate(args: argparse.Namespace) -> int:
+    plan = json.loads(Path(args.plan).read_text(encoding="utf-8"))
+    spec = (plan.get("sets") or {}).get("diff")
+    if spec is None:
+        print("mutation diff gate: the plan has no `diff` set to score")
+        return 2
+    codes, problems = collect_diff(spec, Path(args.source), args.prefix)
+    v = score(codes)
+    lost = {
+        k: status_of(c)
+        for k, c in sorted(codes.items())
+        if c is not None and status_of(c) not in ("killed", "skipped")
+    }
+    pct = 100.0 * v.killed / v.denominator if v.denominator else 100.0
+    line = (
+        "mutation diff gate: %d/%d killed (%.1f%%) over %d functions — "
+        "survived %d, timeout %d, other unkilled %d, unrun %d"
+        % (
+            v.killed,
+            v.denominator,
+            pct,
+            len(spec.get("functions") or []),
+            len(v.survivors),
+            len(v.timeouts),
+            len(lost) - len(v.survivors) - len(v.timeouts),
+            len(v.unrun),
+        )
+    )
+    print(line)
+
+    # One annotation per function that lost mutants, at its `def` in the head
+    # source — the function is the unit mutmut regenerated, so it is the unit
+    # a reviewer acts on.
+    by_function: dict[str, list[str]] = {}
+    for key in lost:
+        by_function.setdefault(key.rpartition(MUTANT_SEP)[0], []).append(key)
+    for q, keys in sorted(by_function.items()):
+        path, mangled = split_qualified(q)
+        try:
+            src = (Path(args.root) / path).read_text(encoding="utf-8")
+        except OSError:
+            src = ""
+        where = def_line(src, mangled) or 1
+        names = ", ".join(f"{k} ({lost[k]})" for k in keys[:3])
+        print(
+            "::warning file=%s,line=%d::%s"
+            % (path, where, _escape(f"{q}: {len(keys)} mutants not killed: {names}"))
+        )
+
+    if problems:
+        verdict, rc = "INCOMPLETE — refusing to gate on partial results", 2
+    elif v.unrun:
+        verdict, rc = f"INCOMPLETE — {len(v.unrun)} in-scope mutants unrun", 2
+    elif passes(v, args.min, args.small):
+        verdict, rc = "PASS", 0
+    elif v.denominator < args.small:
+        verdict, rc = f"FAIL — fewer than {args.small} mutants, so every one must be killed", 1
+    else:
+        verdict, rc = f"FAIL — {pct:.1f}% < {args.min:.1f}% minimum", 1
+    print(f"mutation diff gate: {verdict}")
+    for p in problems:
+        print(f"  - {p}")
+    for k in v.unrun[:20]:
+        print(f"  - unrun: {k}")
+
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary:
+        body = [f"### Mutation (diff scope): {verdict}", "", line, ""]
+        body += [f"- `{k}` — {status}" for k, status in lost.items()]
+        body += [f"- {p}" for p in problems]
+        with open(summary, "a", encoding="utf-8") as fh:
+            fh.write("\n".join(body) + "\n")
+    return rc
+
+
+def _collect_full(
+    plan: dict[str, Any], source: Path, prefix: str, files: set[str]
+) -> tuple[dict[str, Any], list[str]]:
+    """Union each file's codes across every full shard: first non-None wins.
+
+    The same rule `mutation_shards.py merge` applies, because a full shard
+    writes every key of every file and `None` against the ones it did not own.
+    """
+    full = (plan.get("sets") or {}).get("full")
+    if full is not None:
+        indexes = list(range(len(full.get("shards") or [])))
+    else:
+        indexes = sorted(
+            int(d.name[len(prefix) :])
+            for d in source.glob(prefix + "*")
+            if d.is_dir() and d.name[len(prefix) :].isdigit()
+        )
+    problems = [] if indexes else [f"no full shards under {source}/{prefix}*"]
+    codes: dict[str, Any] = {}
+    for i in indexes:
+        if not (source / f"{prefix}{i}").is_dir():
+            problems.append(f"full shard {i}: no artifact at {source}/{prefix}{i}")
+            continue
+        for rel in sorted(files):
+            meta = ms.shard_meta(source, prefix, i, rel)
+            if meta is None:
+                continue
+            for k, c in _read_codes(meta).items():
+                if codes.get(k) is None:
+                    codes[k] = c
+    return codes, problems
+
+
+def cmd_compare(args: argparse.Namespace) -> int:
+    plan = json.loads(Path(args.plan).read_text(encoding="utf-8"))
+    spec = (plan.get("sets") or {}).get("diff")
+    if spec is None:
+        print("mutation diff compare: the plan has no `diff` set")
+        return 2
+    diff, problems = collect_diff(spec, Path(args.diff_source), args.diff_prefix)
+    functions = [
+        p[: -len(MUTANT_SEP + "*")] for shard in spec.get("shards") or [] for p in shard
+    ]
+    files = {_core_rel(split_qualified(q)[0]) for q in functions}
+    full_all, full_problems = _collect_full(
+        plan, Path(args.full_source), args.full_prefix, files
+    )
+    problems += full_problems
+    prefixes = tuple(q + MUTANT_SEP for q in functions)
+    full = {k: c for k, c in full_all.items() if k.startswith(prefixes)}
+
+    def name(side: dict[str, Any], key: str) -> str:
+        return "absent" if key not in side else status_of(side[key])
+
+    agree, disagree, timeouts = [], [], []
+    for key in sorted(set(diff) | set(full)):
+        f, d = name(full, key), name(diff, key)
+        if "timeout" in (f, d):
+            timeouts.append(f"{key}: full={f} diff={d}")
+        elif (
+            f not in ("absent", "not checked")
+            and d not in ("absent", "not checked")
+            and (f == "killed") == (d == "killed")
+        ):
+            agree.append(key)
+        else:
+            disagree.append(f"{key}: full={f} diff={d}")
+
+    print(
+        f"agree {len(agree)}, disagree {len(disagree)}, excluded-timeouts {len(timeouts)}"
+    )
+    for line in disagree:
+        print(f"  disagree: {line}")
+    for line in timeouts:
+        print(f"  excluded timeout: {line}")
+    for p in problems:
+        print(f"  - {p}")
+    if problems:
+        return 2
+    return 1 if disagree else 0
+
+
+def main(argv: list[str]) -> int:
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    g = sub.add_parser("gate", help="score the diff set's shard results")
+    g.add_argument("--plan", required=True)
+    g.add_argument("--source", required=True, help="dir holding <prefix><i>/ artifacts")
+    g.add_argument("--prefix", required=True)
+    g.add_argument("--min", type=float, default=80.0, help="minimum kill %%")
+    g.add_argument("--small", type=int, default=10,
+                   help="below this many mutants, every one must be killed")
+    g.add_argument("--root", default=str(ROOT),
+                   help="head checkout, for annotation line numbers")
+
+    c = sub.add_parser("compare", help="diff run vs full run, per in-scope mutant")
+    c.add_argument("--plan", required=True)
+    c.add_argument("--full-source", required=True)
+    c.add_argument("--diff-source", required=True)
+    c.add_argument("--full-prefix", default="mutation-full-shard-")
+    c.add_argument("--diff-prefix", default="mutation-diff-shard-")
+
+    args = ap.parse_args(argv)
+    if args.cmd == "gate":
+        return cmd_gate(args)
+    return cmd_compare(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

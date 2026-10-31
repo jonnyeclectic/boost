@@ -18,22 +18,28 @@ The plan
 --------
 ::
 
-    {"gate_set": "full" | null,
+    {"gate_set": "full" | "diff" | null,
      "reasons":  ["why this plan, in words a reviewer can check"],
      "sets":     {"<set>": {"shards": [[pattern, ...], ...],
-                            "mutants": <int> | null}}}
+                            "mutants": <int> | null,
+                            "functions": [qualified, ...]}}}   # diff only
 
-``sets`` is keyed by name so a run can carry more than one: today there is
-only ``full`` (the committed 24-way pack of every mutant in ``boost_cli/core``),
-and the diff-scoped gate adds ``diff`` alongside it. ``gate_set`` names the set
-the required ``mutation`` check scores; ``null`` means nothing mutable changed
-and there is nothing to score. ``matrix`` and ``patterns`` are generic over set
-names on purpose, so a new set needs a planner change and nothing else.
+``sets`` is keyed by name so a run can carry more than one: ``full`` (the
+committed 24-way pack of every mutant in ``boost_cli/core``) and ``diff`` (the
+mutants of the functions a PR changed plus their direct callers, see
+``mutation_diff.py``). ``gate_set`` names the set the required ``mutation``
+check scores. Two plans mean "nothing to score": ``null`` (``none``: nothing
+mutable changed) and ``"diff"`` with ``sets.diff.shards == []`` (core changed,
+but no function body did, or the ones that did have no mutants left).
+``matrix`` and ``patterns`` are generic over set names on purpose, so a new set
+needs a planner change and nothing else.
 
 Usage
 -----
   mutation_plan.py full --shards 24 --out PLAN      # every mutant, committed pack
   mutation_plan.py none --reason TEXT --out PLAN    # nothing to run, and why
+  mutation_plan.py diff --base SHA --head SHA --stats mutants/mutmut-stats.json \
+                        [--shadow] --out PLAN       # the PR's functions, or full
   mutation_plan.py matrix --plan PLAN               # [{"set":..,"index":..}, ...]
   mutation_plan.py patterns --plan PLAN --set S --index I   # one shard's argv
 """
@@ -42,6 +48,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -90,6 +97,136 @@ def full_plan(root: Path, shards: int, reasons: list[str]) -> dict[str, Any]:
                           # never zero.
                           "mutants": None}},
     }
+
+
+def _load_diff():
+    """Import ``mutation_diff`` lazily, only for the ``diff`` subcommand.
+
+    It imports mutmut and PyYAML at module level; ``matrix`` and ``patterns``
+    run in every shard and the planner tests must run where PyYAML is absent,
+    so neither may pay for an import they never use.
+    """
+    spec = importlib.util.spec_from_file_location(
+        "mutation_diff", Path(__file__).resolve().parent / "mutation_diff.py")
+    if spec is None or spec.loader is None:
+        raise ImportError("cannot load mutation_diff.py beside %s" % __file__)
+    module = importlib.util.module_from_spec(spec)
+    # Registered before it runs: `@dataclass` looks its own module up in
+    # sys.modules, and an unregistered module crashes it at import.
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _git(root: Path, *args: str) -> subprocess.CompletedProcess:
+    # An argv list, never a shell string: mangled method names (`xǁKǁm`) and
+    # paths go through untouched by word-splitting or globbing.
+    return subprocess.run(["git", *args], cwd=root, capture_output=True)
+
+
+def git_reader(root: Path, base: str, head: str):
+    """``read(rev, path)`` over two commits: the file's text, or ``None`` if absent.
+
+    Both revisions are verified up front. Without that, a typo'd or unfetched
+    SHA makes every ``git show`` fail, every file reads as absent, the scope
+    comes out empty, and an empty scope is a pass.
+    """
+    revs = {"base": base, "head": head}
+    for rev in revs.values():
+        subprocess.run(["git", "rev-parse", "--verify", "--quiet", rev + "^{commit}"],
+                       cwd=root, check=True, capture_output=True)
+    cache: dict[tuple[str, str], str | None] = {}
+
+    def read(rev: str, path: str) -> str | None:
+        key = (revs[rev], path)
+        if key not in cache:
+            proc = _git(root, "show", "%s:%s" % key)
+            cache[key] = proc.stdout.decode("utf-8") if proc.returncode == 0 else None
+        return cache[key]
+
+    return read
+
+
+def changed_paths(root: Path, base: str, head: str) -> list[str]:
+    """Paths changed between two commits; a rename is a delete plus an add.
+
+    ``-z`` so ``core.quotePath`` cannot octal-escape a non-ASCII path into a
+    name that matches nothing.
+    """
+    out = subprocess.run(["git", "diff", "--name-only", "--no-renames", "-z",
+                          base, head], cwd=root, check=True,
+                         capture_output=True).stdout.decode("utf-8")
+    return [p for p in out.split("\0") if p]
+
+
+def diff_plan(root: Path, base: str, head: str, stats: Path, *,
+              shadow: bool = False, shards: int = FULL_SHARDS,
+              per_shard: int | None = None) -> dict[str, Any]:
+    """The diff-scoped plan for ``base..head``, or the full one when forced.
+
+    A full-run trigger (``mutation_diff.full_run_reasons``) returns exactly
+    the ``full`` plan with those reasons. Otherwise every mutant of every
+    in-scope function is counted with mutmut's own generator at ``head`` and
+    packed by measured time; ``--shadow`` also carries the full set and gates
+    on it, so the two can be compared on one SHA before the diff gate binds.
+    """
+    md = _load_diff()
+    read = git_reader(root, base, head)
+    changed = changed_paths(root, base, head)
+    reasons = md.full_run_reasons(changed, read)
+    if reasons:
+        return full_plan(root, shards, reasons)
+
+    # A stats file without the key would scope no callers at all; refuse
+    # rather than under-scope (a KeyError fails the planner, so `mutation`).
+    deps = json.loads(Path(stats).read_text(encoding="utf-8"))["function_dependencies"]
+    scope = md.diff_scope(changed, read, deps)
+
+    by_file: dict[str, list[tuple[str, str]]] = {}
+    for q in scope:
+        path, mangled = md.split_qualified(q)
+        by_file.setdefault(path, []).append((q, mangled))
+    counts: dict[str, int] = {}
+    with md.mutmut_config(root):
+        for path, funcs in sorted(by_file.items()):
+            src = read("head", path)
+            if src is None:
+                continue  # the file is gone at head: nothing left to mutate
+            per_function = md.mutant_counts(path, src)
+            for q, mangled in funcs:
+                # A deleted function, or one with nothing to mutate, gets no
+                # pattern: mutmut asserts when a pattern matches no mutant.
+                if per_function.get(mangled):
+                    counts[q] = per_function[mangled]
+
+    bins = md.pack_functions(counts, md.ms_per_mutant(root, list(counts)),
+                             per_shard=per_shard or md.PER_SHARD)
+    # `matrix` keeps an empty shard on purpose (it would be a slice of the full
+    # pack that nobody ran). Here an empty bin is only arithmetic — one
+    # function can't be split across shards — and every function is already
+    # in a non-empty bin, so dropping it loses nothing and keeps `patterns`
+    # from failing that shard.
+    shard_patterns_ = [[md.pattern(q) for q in b] for b in bins if b]
+    total = sum(counts.values())
+    if total:
+        why = ("diff scope: %d mutants in %d functions (changed + direct callers), "
+               "%d shards" % (total, len(counts), len(shard_patterns_)))
+    elif scope:
+        why = "diff scope: %d functions in scope, none with mutants" % len(scope)
+    else:
+        why = "diff scope: no boost_cli/core function changed"
+    plan: dict[str, Any] = {
+        "gate_set": "diff",
+        "reasons": [why],
+        "sets": {"diff": {"shards": shard_patterns_, "mutants": total,
+                          "functions": scope}},
+    }
+    if shadow:
+        plan["sets"]["full"] = full_plan(root, shards, [])["sets"]["full"]
+        plan["gate_set"] = "full"
+        plan["reasons"].append("shadow: gating on the full run; the diff set "
+                               "runs alongside for comparison")
+    return plan
 
 
 def none_plan(reason: str) -> dict[str, Any]:
@@ -142,6 +279,17 @@ def main(argv: list[str]) -> int:
     n.add_argument("--reason", required=True)
     n.add_argument("--out", required=True)
 
+    d = sub.add_parser("diff", help="plan the PR's changed functions (or full)")
+    d.add_argument("--base", required=True, help="merge-base SHA")
+    d.add_argument("--head", required=True, help="PR head SHA")
+    d.add_argument("--stats", required=True, help="mutants/mutmut-stats.json")
+    d.add_argument("--shadow", action="store_true",
+                   help="also plan the full set, and gate on it")
+    d.add_argument("--shards", type=int, default=FULL_SHARDS,
+                   help="full set's width when forced or shadowed")
+    d.add_argument("--root", default=str(ROOT), help="repo root (default: this checkout)")
+    d.add_argument("--out", required=True)
+
     m = sub.add_parser("matrix", help="print the shard matrix as compact JSON")
     m.add_argument("--plan", required=True)
 
@@ -160,6 +308,13 @@ def main(argv: list[str]) -> int:
         return 0
     if args.cmd == "none":
         _write(args.out, none_plan(args.reason))
+        return 0
+    if args.cmd == "diff":
+        if args.shards < 1:
+            ap.error("--shards must be at least 1")
+        _write(args.out, diff_plan(Path(args.root), args.base, args.head,
+                                   Path(args.stats), shadow=args.shadow,
+                                   shards=args.shards))
         return 0
     if args.cmd == "matrix":
         # One line, no spaces: it is written to $GITHUB_OUTPUT as `matrix=...`

@@ -19,6 +19,9 @@ import contextlib
 import importlib.util
 import io
 import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -183,6 +186,196 @@ def test_a_missing_plan_is_an_error_not_an_empty_matrix(tmp_path):
     # A missing plan must not read as `[]` — that is the "nothing to do" answer.
     with pytest.raises(FileNotFoundError):
         mp.main(["matrix", "--plan", str(tmp_path / "absent.json")])
+
+
+# --------------------------------------------------------------------------
+# diff
+# --------------------------------------------------------------------------
+
+_M_BASE = (
+    "def a(x):\n    return x + 1\n\n\n"
+    "def b(x):\n    return a(x) * 2\n\n\n"
+    "def c(x):\n    return x - 1\n\n\n"
+    "class K:\n    def m(self):\n        return 2 if self else 3\n"
+)
+
+
+def _git(repo: Path, *args: str) -> str:
+    # Identity and config come from here, never from the machine's global or
+    # system config, so the fixture behaves the same on any runner. The
+    # GIT_CONFIG_COUNT injection conftest makes (maintenance.auto=false) is
+    # inherited from os.environ untouched.
+    env = dict(os.environ)
+    env.update({
+        "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_AUTHOR_NAME": "Test", "GIT_AUTHOR_EMAIL": "test@example.com",
+        "GIT_COMMITTER_NAME": "Test", "GIT_COMMITTER_EMAIL": "test@example.com",
+    })
+    return subprocess.run(["git", "-C", str(repo), "-c", "commit.gpgsign=false",
+                           *args], check=True, capture_output=True, text=True,
+                          env=env).stdout.strip()
+
+
+class GitRepo:
+    """A two-commit repo: ``base`` holds ``boost_cli/core/m.py``; ``head(files)``
+    commits ``files`` on top of it and returns the new SHA."""
+
+    def __init__(self, root: Path):
+        self.root = root
+        root.mkdir()
+        _git(root, "init", "-q", "-b", "main")
+        self.write({
+            "setup.cfg": "[mutmut]\nsource_paths = boost_cli/core/\n",
+            "boost_cli/__init__.py": "",
+            "boost_cli/core/__init__.py": "",
+            "boost_cli/core/m.py": _M_BASE,
+        })
+        self.base = self._commit("base")
+        # mutmut's dependency map: callee -> callers, already qualified.
+        self.stats = root.parent / "mutmut-stats.json"
+        self.stats.write_text(json.dumps({"function_dependencies": {
+            "boost_cli.core.m.x_a": ["boost_cli.core.m.x_b"]}}), encoding="utf-8")
+
+    def write(self, files: dict) -> None:
+        for rel, text in files.items():
+            path = self.root / rel
+            if text is None:
+                path.unlink()
+                continue
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text, encoding="utf-8")
+
+    def _commit(self, msg: str) -> str:
+        _git(self.root, "add", "-A")
+        _git(self.root, "commit", "-q", "--allow-empty", "-m", msg)
+        return _git(self.root, "rev-parse", "HEAD")
+
+    def head(self, files: dict) -> str:
+        self.write(files)
+        return self._commit("head")
+
+
+@pytest.fixture
+def git_repo(tmp_path):
+    return GitRepo(tmp_path / "repo")
+
+
+def plan_diff(tmp_path, repo: GitRepo, head: str, *extra: str) -> dict:
+    out = tmp_path / "plan.json"
+    assert mp.main(["diff", "--base", repo.base, "--head", head,
+                    "--stats", str(repo.stats), "--root", str(repo.root),
+                    "--shards", "2", "--out", str(out), *extra]) == 0
+    return json.loads(out.read_text(encoding="utf-8"))
+
+
+def test_diff_plan_with_a_trigger_is_full(tmp_path, git_repo):
+    head = git_repo.head({"scripts/mutation_new.py": "x = 1\n",
+                          "boost_cli/core/m.py": _M_BASE.replace("+ 1", "+ 2")})
+    plan = plan_diff(tmp_path, git_repo, head)
+    assert plan["gate_set"] == "full"
+    assert plan["reasons"] == ["scripts/mutation_new.py changed"]
+    assert list(plan["sets"]) == ["full"]
+    assert plan["sets"]["full"]["shards"] == [["boost_cli.core.m.*"], []]
+
+
+def test_diff_plan_with_no_core_change_has_zero_shards(tmp_path, git_repo):
+    head = git_repo.head({"README.md": "docs\n",
+                          "tests/unit/test_m.py": "def test(): pass\n",
+                          # a comment is not a change to mutmut's AST hash
+                          "boost_cli/core/m.py": "# note\n" + _M_BASE})
+    plan = plan_diff(tmp_path, git_repo, head)
+    assert plan["gate_set"] == "diff"
+    assert plan["sets"]["diff"]["shards"] == []
+    assert plan["sets"]["diff"]["mutants"] == 0
+    assert plan["reasons"]
+    assert run_cli("matrix", "--plan", str(tmp_path / "plan.json")) == "[]\n"
+
+
+def test_diff_plan_scopes_changed_functions_and_direct_callers(tmp_path, git_repo):
+    head = git_repo.head({"boost_cli/core/m.py": _M_BASE.replace("+ 1", "+ 2")})
+    plan = plan_diff(tmp_path, git_repo, head)
+    diff = plan["sets"]["diff"]
+    assert plan["gate_set"] == "diff"
+    assert diff["functions"] == ["boost_cli.core.m.x_a", "boost_cli.core.m.x_b"]
+    patterns = sorted(p for shard in diff["shards"] for p in shard)
+    assert patterns == ["boost_cli.core.m.x_a__mutmut_*",
+                        "boost_cli.core.m.x_b__mutmut_*"]
+    assert diff["mutants"] > 0
+    assert all(diff["shards"]), "no empty shard may reach `patterns`"
+
+
+def test_diff_plan_method_names_survive_into_patterns(tmp_path, git_repo):
+    head = git_repo.head({"boost_cli/core/m.py": _M_BASE.replace("2 if", "4 if")})
+    plan = plan_diff(tmp_path, git_repo, head)
+    (shard,) = plan["sets"]["diff"]["shards"]
+    assert shard == ["boost_cli.core.m.xǁKǁm__mutmut_*"]
+    # And the argv the shard gets keeps the name whole.
+    assert run_cli("patterns", "--plan", str(tmp_path / "plan.json"),
+                   "--set", "diff", "--index", "0") == "boost_cli.core.m.xǁKǁm__mutmut_*\n"
+
+
+def test_diff_plan_new_file_and_deleted_function(tmp_path, git_repo):
+    head = git_repo.head({
+        "boost_cli/core/m.py": _M_BASE.replace(
+            "def c(x):\n    return x - 1\n", "def c(x):\n    pass\n"),
+        "boost_cli/core/n.py": "def z(y):\n    return y == 1\n",
+    })
+    plan = plan_diff(tmp_path, git_repo, head)
+    patterns = [p for shard in plan["sets"]["diff"]["shards"] for p in shard]
+    # c changed but has no mutants left: listed in scope, never a pattern
+    # (a pattern matching nothing makes mutmut assert and the shard die).
+    assert "boost_cli.core.m.x_c" in plan["sets"]["diff"]["functions"]
+    assert patterns == ["boost_cli.core.n.x_z__mutmut_*"]
+
+
+def test_diff_plan_never_emits_an_empty_shard(tmp_path, git_repo):
+    # One function, so packing at 1 mutant/shard asks for more shards than
+    # there are functions; the extra bins must not reach the matrix.
+    head = git_repo.head({"boost_cli/core/m.py": _M_BASE.replace("- 1", "- 9")})
+    md = mp._load_diff()
+    plan = mp.diff_plan(git_repo.root, git_repo.base, head, git_repo.stats,
+                        per_shard=1)
+    assert plan["sets"]["diff"]["mutants"] > 1
+    assert plan["sets"]["diff"]["shards"] == [[md.pattern("boost_cli.core.m.x_c")]]
+
+
+def test_shadow_plan_gates_on_full_and_runs_both(tmp_path, git_repo):
+    head = git_repo.head({"boost_cli/core/m.py": _M_BASE.replace("+ 1", "+ 2")})
+    plan = plan_diff(tmp_path, git_repo, head, "--shadow")
+    assert plan["gate_set"] == "full"
+    assert set(plan["sets"]) == {"diff", "full"}
+    assert plan["sets"]["full"]["shards"] == [["boost_cli.core.m.*"], []]
+    assert plan["sets"]["diff"]["shards"]
+    sets = {e["set"] for e in json.loads(run_cli("matrix", "--plan",
+                                                 str(tmp_path / "plan.json")))}
+    assert sets == {"diff", "full"}
+
+
+def test_diff_plan_runs_as_a_script(tmp_path, git_repo):
+    # CI runs it as `python scripts/mutation_plan.py diff`, a fresh process
+    # where nothing else has imported mutation_diff first.
+    head = git_repo.head({"boost_cli/core/m.py": _M_BASE.replace("+ 1", "+ 2")})
+    out = tmp_path / "plan.json"
+    subprocess.run([sys.executable, str(ROOT / "scripts" / "mutation_plan.py"),
+                    "diff", "--base", git_repo.base, "--head", head,
+                    "--stats", str(git_repo.stats), "--root", str(git_repo.root),
+                    "--out", str(out)], check=True, capture_output=True)
+    assert json.loads(out.read_text(encoding="utf-8"))["gate_set"] == "diff"
+
+
+def test_diff_plan_refuses_an_unknown_revision(tmp_path, git_repo):
+    # A bad SHA must not read as "every file missing" -> empty scope -> pass.
+    with pytest.raises(subprocess.CalledProcessError):
+        mp.main(["diff", "--base", "0" * 40, "--head", git_repo.base,
+                 "--stats", str(git_repo.stats), "--root", str(git_repo.root),
+                 "--out", str(tmp_path / "plan.json")])
+
+
+def test_diff_plan_refuses_stats_without_dependencies(tmp_path, git_repo):
+    head = git_repo.head({"boost_cli/core/m.py": _M_BASE.replace("+ 1", "+ 2")})
+    git_repo.stats.write_text("{}", encoding="utf-8")
+    with pytest.raises(KeyError):
+        mp.diff_plan(git_repo.root, git_repo.base, head, git_repo.stats)
 
 
 # --------------------------------------------------------------------------
