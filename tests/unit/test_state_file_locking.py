@@ -20,7 +20,16 @@ from pathlib import Path
 
 import pytest
 
-from boost_cli.core import builtin, config, paths, policy, projectlock, registry, util
+from boost_cli.core import (
+    builtin,
+    config,
+    jsonstate,
+    paths,
+    policy,
+    projectlock,
+    registry,
+    util,
+)
 from boost_cli.errors import BoostError
 
 # Every child's cwd: under the mutation gate the child's import is mutmut's
@@ -168,6 +177,29 @@ class TestHeldElsewhere:
             "another boost process has held the project lock for over 0.2s"
         assert projectlock.lock_path(repo).read_bytes() == before
 
+    def test_project_remove_reads_nothing_before_the_lock(self, sandbox, hold,
+                                                          monkeypatch):
+        # remove_skill's corrupt check used to read the file unlocked. On
+        # Windows a read that lands inside another process's os.replace is
+        # refused (Permission denied), which surfaced as "project lock is
+        # corrupt" and failed test_project_lock_removals_and_writes_interleave
+        # on windows-latest. Every read of the file must sit under the guard,
+        # where no writer can be mid-replace.
+        repo = sandbox / "repo"
+        projectlock.set_skill(repo, "a", {"version": "1"})
+        hold(projectlock.guard_path(repo))
+        monkeypatch.setattr(util, "FILE_LOCK_TIMEOUT", 0.2)
+        reads: list[Path] = []
+        real = jsonstate.read_object
+
+        def spy(path, *a, **kw):
+            reads.append(Path(path))
+            return real(path, *a, **kw)
+        monkeypatch.setattr(jsonstate, "read_object", spy)
+        with pytest.raises(BoostError, match="held the project lock"):
+            projectlock.remove_skill(repo, "a")
+        assert reads == []
+
     def test_config_waits_and_names_itself(self, sandbox, hold, monkeypatch):
         config.set_value("x.y", "1")
         before = paths.config_path().read_bytes()
@@ -253,6 +285,20 @@ class TestMutate:
         p.write_text("{nope", encoding="utf-8")
         with pytest.raises(BoostError, match="project lock is corrupt"):
             projectlock.mutate(tmp_path, lambda lock: None)
+        assert p.read_text(encoding="utf-8") == "{nope"
+
+    def test_project_mutate_refuses_corrupt_before_fn_runs(self, tmp_path):
+        # A no-op fn must not turn an unreadable lock into "nothing to do":
+        # remove_skill of an absent name relies on this to keep refusing.
+        p = projectlock.lock_path(tmp_path)
+        p.parent.mkdir()
+        p.write_text("{nope", encoding="utf-8")
+        seen: list[dict] = []
+        with pytest.raises(BoostError, match="project lock is corrupt"):
+            projectlock.mutate(tmp_path, lambda lock: seen.append(lock) or False)
+        assert seen == []
+        with pytest.raises(BoostError, match="project lock is corrupt"):
+            projectlock.remove_skill(tmp_path, "absent")
         assert p.read_text(encoding="utf-8") == "{nope"
 
     def test_project_mutate_exception_writes_nothing(self, tmp_path):

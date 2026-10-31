@@ -1091,6 +1091,8 @@ def cmd_merge(args: argparse.Namespace) -> int:
         # reported below, exactly as a dropped whole file already was.
         codes: dict[str, object] = {}
         extras: dict[str, dict[str, object]] = {}
+        hashes: dict[str, object] = {}
+        disagree = False
         missing = []
         for shard in sorted(shards):
             src = shard_meta(Path(args.source), args.prefix, shard, name)
@@ -1101,6 +1103,14 @@ def cmd_merge(args: argparse.Namespace) -> int:
             for key, value in (data.get("exit_code_by_key") or {}).items():
                 if codes.get(key) is None:
                     codes[key] = value
+            # hash_by_function_name is what a later diff-scoped run compares
+            # against the merge base to find changed functions. Every shard
+            # mutates the whole tree, so the same function legitimately shows up
+            # in several shards with the SAME hash; a different hash means the
+            # shards ran different sources, and merging them would hide that.
+            for key, value in (data.get("hash_by_function_name") or {}).items():
+                if hashes.setdefault(key, value) != value:
+                    disagree = True
             # Carry the parallel per-key maps mutmut writes, so a merged .meta
             # is shaped exactly like an unsharded one.
             for field in ("type_check_error_by_key", "durations_by_key",
@@ -1109,6 +1119,9 @@ def cmd_merge(args: argparse.Namespace) -> int:
                 for key, value in (data.get(field) or {}).items():
                     if bucket.get(key) is None:
                         bucket[key] = value
+        if disagree:
+            problems.append("%s: shards disagree on function hashes" % name)
+            continue
         if missing:
             problems.append("%s: no results from shard%s %s under %s/%s*"
                             % (name, "" if len(missing) == 1 else "s",
@@ -1124,7 +1137,8 @@ def cmd_merge(args: argparse.Namespace) -> int:
             continue
         dest = dest_dir / (name + ".meta")
         dest.parent.mkdir(parents=True, exist_ok=True)
-        payload = {"exit_code_by_key": codes}
+        payload = {"exit_code_by_key": codes,
+                   "hash_by_function_name": hashes}
         for field in ("type_check_error_by_key", "durations_by_key",
                       "estimated_durations_by_key"):
             payload[field] = extras.get(field, {})
