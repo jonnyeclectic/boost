@@ -9,8 +9,10 @@ never re-cloned it.
 """
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
+import sys
 
 import pytest
 
@@ -287,11 +289,32 @@ class TestUnfinishedClones:
         monkeypatch.setattr(gitutil, "has_git", lambda: False)
         assert registry.unfinished_clones() == []
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="symlinks")
+    def test_another_name_for_a_listed_clone_is_listed(
+            self, boost, fixture_tap_src, tmp_path):
+        # The case-folding bug on any filesystem: `repos/leonxlnx__x` beside a
+        # configured `Leonxlnx/x` is one directory under two names, and only
+        # the filesystem can say so — a spelling test called it debris.
+        boost("tap", _copy_tap(fixture_tap_src, tmp_path, "health-alias"))
+        tap = registry.get("health-alias")
+        _break(tap)
+        repos = paths.repos_dir()
+        (repos / "zz-alias").symlink_to(tap.path, target_is_directory=True)
+        (repos / "o__half" / ".git").mkdir(parents=True)
+        assert registry.unfinished_clones() == [repos / "o__half"]
+
 
 def _drop_from_config(name):
     from boost_cli.core import config
     config.mutate(lambda cfg: cfg.__setitem__(
         "taps", [t for t in cfg["taps"] if t["name"] != name]))
+
+
+def _add_row(name, url):
+    """A config row for `name` and nothing on disk: no clone, no cache."""
+    from boost_cli.core import config
+    config.mutate(lambda cfg: cfg.setdefault("taps", []).append(
+        {"name": name, "url": url, "curated": False}))
 
 
 class TestUnlistedClones:
@@ -366,3 +389,111 @@ class TestUnlistedClones:
         boost("tap", two)
         r = boost("doctor")
         assert "2 taps cloned" in r.out
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="symlinks")
+    def test_another_name_for_a_listed_clone_is_listed(
+            self, boost, fixture_tap_src, tmp_path):
+        boost("tap", _copy_tap(fixture_tap_src, tmp_path, "ul-alias"))
+        lost = _copy_tap(fixture_tap_src, tmp_path, "ul-gone")
+        boost("tap", lost)
+        _drop_from_config("ul-gone")
+        repos = paths.repos_dir()
+        (repos / "zz-alias").symlink_to(registry.get("ul-alias").path,
+                                        target_is_directory=True)
+        assert registry.unlisted_clones() == [(repos / "ul-gone", str(lost))]
+
+    def test_a_case_variant_of_a_listed_clone_is_listed(
+            self, boost, fixture_tap_src, tmp_path):
+        boost("tap", _copy_tap(fixture_tap_src, tmp_path, "UL-Case"))
+        tap = registry.get("UL-Case")
+        variant = tap.path.parent / tap.path.name.swapcase()
+        if not variant.exists():
+            pytest.skip("this filesystem is case-sensitive")
+        os.rename(tap.path, variant)
+        names = [d.name for d in paths.repos_dir().iterdir()]
+        assert "ul-cASE" in names and "UL-Case" not in names
+        assert registry.unlisted_clones() == []
+        assert "no configured tap lists" not in boost("doctor", expect=None).out
+
+    def test_a_case_variant_is_still_an_orphan_on_a_case_sensitive_fs(
+            self, sandbox, fixture_tap_src):
+        # Identity, not casefold: on ext4 `repos/o__r` is not tap O/R's clone,
+        # which is missing, and folding case would hide both.
+        _add_row("O/R", "https://github.com/O/R")
+        repos = paths.repos_dir()
+        repos.mkdir(parents=True, exist_ok=True)
+        clone = repos / "o__r"
+        subprocess.run(["git", "clone", "-q", str(fixture_tap_src), str(clone)],
+                       check=True, capture_output=True)
+        if (repos / "O__R").exists():
+            pytest.skip("this filesystem folds case")
+        assert registry.unlisted_clones() == [(clone, str(fixture_tap_src))]
+
+
+class TestLeftoverOfAConfiguredTap:
+    """A clone whose name is a configured tap's in another case."""
+
+    def test_names_the_tap_to_update_not_a_tap_command_that_does_nothing(
+            self, sandbox):
+        # Neither spelling exists, so this holds whether or not the disk
+        # folds case: `boost tap <url>` answers "already tapped" here.
+        _add_row("O/R", "https://github.com/O/R")
+        clone = paths.repos_dir() / "o__r"
+        url = "https://github.com/o/r"
+        assert registry.readd_hint(clone, url) == "`boost update O/R`"
+        assert registry.unlisted_clone_line(clone, url) == (
+            "%s is a leftover of tap O/R, whose clone is %s, so boost reads "
+            "nothing from it — run `boost update O/R`, then delete the "
+            "directory" % (paths.tilde(clone),
+                           paths.tilde(paths.repos_dir() / "O__R")))
+
+    def test_an_unrelated_name_still_gets_the_tap_command(self, sandbox):
+        _add_row("O/R", "https://github.com/O/R")
+        clone = paths.repos_dir() / "o__other"
+        assert registry.readd_hint(clone, "https://github.com/o/other") == (
+            "`boost tap https://github.com/o/other`")
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="symlinks")
+    def test_the_tap_s_own_dir_is_never_offered_for_deletion(self, sandbox):
+        _add_row("O/R", "https://github.com/O/R")
+        repos = paths.repos_dir()
+        real = repos / "O__R"
+        real.mkdir(parents=True)
+        url = "https://github.com/o/r"
+        # `o__r` is `O__R` itself on a case-folding disk and a symlink to it
+        # elsewhere; `zz-alias` is another name entirely.
+        for alias in (repos / "o__r", repos / "zz-alias"):
+            if not alias.exists():
+                alias.symlink_to(real, target_is_directory=True)
+            assert registry.readd_hint(alias, url) == "`boost update O/R`"
+            assert registry.unlisted_clone_line(alias, url) == (
+                "%s is tap O/R's own clone under another name, so boost "
+                "already reads it — leave it in place" % paths.tilde(alias))
+
+
+class TestUpdateThroughACaseVariantClone:
+    def test_update_cleans_a_planted_file(self, boost, tmp_path):
+        up = tmp_path / "Case-Up"
+        (up / "skills" / "demo").mkdir(parents=True)
+        (up / "skills" / "demo" / "SKILL.md").write_text(
+            "---\nname: demo\ndescription: d\n---\nbody\n", encoding="utf-8")
+        ident = ["-c", "user.email=t@t", "-c", "user.name=t",
+                 "-c", "maintenance.auto=false"]
+        subprocess.run(["git", "init", "-q", "-b", "main", str(up)],
+                       check=True, capture_output=True)
+        for argv in (["add", "-A"], [*ident, "commit", "-qm", "init"]):
+            subprocess.run(["git", "-C", str(up), *argv], check=True,
+                           capture_output=True)
+        boost("tap", up)
+        tap = registry.get("Case-Up")
+        variant = tap.path.parent / tap.path.name.swapcase()
+        if not variant.exists():
+            pytest.skip("this filesystem is case-sensitive")
+        os.rename(tap.path, variant)
+        evil = variant / "skills" / "evil" / "SKILL.md"
+        evil.parent.mkdir(parents=True)
+        evil.write_text("---\nname: evil\ndescription: planted\n---\nx\n",
+                        encoding="utf-8")
+        boost("update")
+        assert not evil.exists()
+        boost("info", "evil", expect=1)

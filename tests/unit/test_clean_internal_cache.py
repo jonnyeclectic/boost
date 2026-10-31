@@ -18,8 +18,13 @@ without registering it — the same falsifiable-convention shape as
 """
 from __future__ import annotations
 
+import os
+import sys
+
+import pytest
+
 from boost_cli.commands import discovery
-from boost_cli.core import complete, dense, paths, rag
+from boost_cli.core import complete, dense, paths, rag, registry
 
 
 def _seed_cache(names: list[str]) -> dict:
@@ -79,6 +84,41 @@ class TestDerivedIndexesSurviveClean:
 
         assert all(f.exists() for f in live)
         assert not dead.exists()
+
+
+def _live_cache():
+    [live] = [f for f in sorted(paths.cache_dir().glob("*.json"))
+              if f.name not in paths.INTERNAL_CACHE_FILES]
+    return live
+
+
+class TestALiveCacheUnderAnotherName:
+    """A configured tap's catalog is live whatever the disk spells it."""
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="symlinks")
+    def test_another_name_for_a_live_cache_is_not_stale(
+            self, boost, tapped, sandbox):
+        # Any filesystem: the stem test sees `zz-alias`, the disk sees one file.
+        live = _live_cache()
+        alias = paths.cache_dir() / "zz-alias.json"
+        alias.symlink_to(live)
+        dead = _seed_cache(["gone__repo.json"])["gone__repo.json"]
+        assert registry.stale_caches([alias, dead, live]) == [dead]
+        res = boost("clean", "--dry-run")
+        assert "zz-alias" not in res.out
+        assert "gone__repo" in res.out
+
+    def test_a_case_variant_of_a_live_cache_is_not_stale(
+            self, boost, tapped, sandbox):
+        live = _live_cache()
+        variant = live.with_name(live.stem.swapcase() + live.suffix)
+        if not variant.exists():
+            pytest.skip("this filesystem is case-sensitive")
+        os.rename(live, variant)
+        assert registry.stale_caches(
+            sorted(paths.cache_dir().glob("*.json"))) == []
+        res = boost("clean", "--dry-run")
+        assert "stale tap cache" not in res.out
 
 
 class TestInternalCacheRegistryHasNoDrift:

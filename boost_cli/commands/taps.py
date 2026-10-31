@@ -102,7 +102,8 @@ def _print_held(plan: list[dict]) -> int:
     rc = 0
     for row in plan:
         if row.get("skipped"):
-            out.info(out.role("%s already tapped" % row["name"], "muted"))
+            out.info(out.role(registry.already_tapped(
+                row["name"], row.get("tapped_as", row["name"])), "muted"))
         elif not row.get("todo"):
             out.warn("would not tap %s: %s" % (row["name"], row["error"]),
                      wrap=True)
@@ -144,7 +145,7 @@ def _skip_if_already_tapped(spec: str) -> bool:
                 and registry.same_source(t.url, url)), None)
     if hit is None:
         return False
-    out.info(out.role("%s already tapped" % hit.name, "muted"))
+    out.info(out.role(registry.already_tapped(name, hit.name), "muted"))
     return True
 
 
@@ -168,7 +169,8 @@ def _tap_all(urls: list[str], jobs: int | None,
     for res in results:
         name = res["name"]
         if res.get("skipped"):
-            out.info(out.role("%s already tapped" % name, "muted"))
+            out.info(out.role(registry.already_tapped(
+                name, res.get("tapped_as", name)), "muted"))
             continue
         if not res.get("ok"):
             out.warn("could not tap %s: %s" % (name, res.get("error", "")),
