@@ -1120,9 +1120,11 @@ def agent_names(kind: str, entry: dict | None) -> list[str]:
     two presentations of the same fact that happened to disagree.
 
     A workflow's skill copy (:func:`is_skill_copy`) is a row too, and names no
-    agent: it sits in the canonical store, reached by whichever agents read
-    that. It is left out here, because ``None`` sorted beside agent names
-    raises, and printing it as ``?`` names an agent that does not exist.
+    agent: it sits in the canonical store, reached by the agents that read
+    that and, through a link, by the linking agents that got no workflow file
+    of their own (``store.copy_link_targets``, derived and never recorded).
+    It is left out here, because ``None`` sorted beside agent names raises,
+    and printing it as ``?`` names an agent that does not exist.
     """
     if not entry:
         return []

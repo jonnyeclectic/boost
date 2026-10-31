@@ -697,11 +697,18 @@ def cmd_quarantine(argv):
         else:
             skipped: list[str] = []
             theirs: list[str] = []
+            unlinked: list[str] = []
             restored = store.release_materialized(kind, name, entry,
                                                   skipped=skipped,
-                                                  foreign=theirs)
+                                                  foreign=theirs,
+                                                  problems=unlinked)
             out.ok("released %s %s (restored: %s)"
                    % (kind, name, ", ".join(restored) or "none"))
+            # Install's words for a link to its skill copy something of the
+            # user's holds the place of.
+            for line in unlinked:
+                out.warn("%s: skill copy not linked: %s" % (name, line),
+                         wrap=True)
             for d in skipped:
                 out.info("not restored as a skill: %s now holds something "
                          "else — left alone" % paths.tilde(d), wrap=True)

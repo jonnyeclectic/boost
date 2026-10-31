@@ -704,6 +704,13 @@ def cmd_doctor(argv):
                          "boost does not link into it"
                          % (aname, _tilde(spec["dir"]),
                             agents.display_name(aname)), wrap=True)
+        # A note, not an issue: `skills_only` is the user's own setting, and
+        # boost honours it. It is said because a profile copied from the
+        # antigravity row loses every subagent, command and rule with no
+        # line anywhere saying so (`store.skipped_agents`).
+        for aname in agents.claude_profile_rows():
+            rep.note("agent-config", agents.claude_profile_note(aname),
+                     wrap=True)
     for aname, err in agent_errs:
         key = "agents.%s.dir" % aname
         bad("agent-config", "%s: %s — %s, or set a path with `boost config set "
@@ -1351,6 +1358,20 @@ def cmd_doctor(argv):
                 mat_issues += 1
         if mat_issues == before:
             mat_issues += _drifted("workflow", name, entry, bad)
+        # Its skill copy's links, read as `boost sync` reads them, so the
+        # remedy named is the one that runs. A live link to the copy is
+        # expected; only a missing one, or one beside the workflow's own
+        # file or outside its `--agent` scope, is a fault.
+        for agent in store.missing_copy_links(name, entry):
+            bad("workflow", "workflow %s's skill copy is not linked for %s — "
+                "run `boost sync`" % (name, agent), wrap=True)
+            mat_issues += 1
+        for agent in store.stale_copy_links(name, entry):
+            bad("workflow", "workflow %s's skill copy is linked for %s, %s — "
+                "run `boost sync`"
+                % (name, agent, store.stale_copy_reason(entry, agent)),
+                wrap=True)
+            mat_issues += 1
     # A note, not an issue: the workflow works for every agent with a workflow
     # format. Only an agent that reads skills alone (Codex) misses it.
     unreached = store.workflows_without_skill_copy() if agents_ok else []
@@ -1375,6 +1396,20 @@ def cmd_doctor(argv):
                  % (len(off), _s(len(off)), "s" if len(off) == 1 else "",
                     ", ".join(shown), _mat_remedy(off)),
                  wrap=True)
+    # The agents the note above cannot see: excluded from the write set from
+    # the start, so they never got a row to be stale. A note for the same
+    # reason that one is -- the config said so -- and each agent once, with
+    # the items it skips, rather than a line per item.
+    left_out = store.skipped_agent_items() if agents_ok else []
+    if left_out:
+        rep.note("skipped-agents", "; ".join(
+            "%s for %s" % (agents.skip_line(agent, why, via_copy=copied),
+                           ", ".join(items[:_MAT_NOTE_SHOWN]
+                                     + (["and %d more"
+                                         % (len(items) - _MAT_NOTE_SHOWN)]
+                                        if len(items) > _MAT_NOTE_SHOWN
+                                        else [])))
+            for agent, why, copied, items in left_out), wrap=True)
     # The per-row note above answers "which row, which agent, why". This
     # answers a different question the surfaces had nowhere to put: skip every
     # row an item has and the item reached no agent at all. `rep.note`, not
@@ -1417,10 +1452,11 @@ def cmd_doctor(argv):
                 bits.append("%d workflow%s" % (quarantined_workflows,
                                                _s(quarantined_workflows)))
             note = " (%s quarantined)" % " and ".join(bits)
-        if off:
+        if off or left_out:
             # Without this the line reads as a flat contradiction of the note
             # right above it: "fully materialized" is true of the agents boost
-            # writes, and that is now a smaller set than the rows record.
+            # writes, and that is now a smaller set than the rows record --
+            # or than the agents a skill reaches.
             note += " for every agent boost writes"
         # Counted over the items that reach at least one agent. The suffix
         # above is what the note said this line contradicted -- "fully

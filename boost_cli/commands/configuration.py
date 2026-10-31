@@ -208,7 +208,6 @@ def cmd_clean(argv) -> int:
             and store.points_into_store(link)
         )
 
-    configured = {t.safe_name for t in registry.list_taps()}
     # With config.json unreadable or corrupt, the tap list is DEFAULTS' empty
     # one, so every tap's cache read as stale and was deleted — on a file
     # whose bytes, under a mode-000 config, still list every one of them.
@@ -220,11 +219,13 @@ def cmd_clean(argv) -> int:
         # Skip boost's own derived artifacts. They live in the same directory and
         # end in .json, but no tap is named `rag_index` or `discovery`, so the
         # stem test alone called both stale and deleted them every run — see
-        # paths.INTERNAL_CACHE_FILES.
+        # paths.INTERNAL_CACHE_FILES. A live tap's cache spelled in another
+        # case on disk is the same file, and `stale_caches` asks the disk.
         items.extend(
             (f, "stale tap cache", f.stat().st_size)
-            for f in sorted(paths.cache_dir().glob("*.json"))
-            if f.stem not in configured and f.name not in paths.INTERNAL_CACHE_FILES
+            for f in registry.stale_caches([
+                c for c in sorted(paths.cache_dir().glob("*.json"))
+                if c.name not in paths.INTERNAL_CACHE_FILES])
         )
 
     if paths.lock_history_dir().is_dir():
@@ -1994,9 +1995,12 @@ def _install_lines(res: store.InstallResult, entry: dict) -> list[str]:
     # A workflow's copy in the skill store is how a skills-only agent reaches
     # it; an agent told nothing concludes the same as above.
     if res.skill_copy is not None:
-        lines.append("as a skill: %s" % res.skill_copy)
+        lines.append("as a skill: %s%s" % (
+            res.skill_copy, " (linked for %s)" % ", ".join(res.copy_linked)
+            if res.copy_linked else ""))
     if res.skill_note:
         lines.append(res.skill_note)
+    lines += ["skill copy not linked: %s" % why for why in res.copy_blocked]
     # Skill-only, as `boost install` prints it: a rule or workflow has no
     # score, and "quality score: 0/100" told the agent a valid one scored zero.
     if res.kind == "skill":
@@ -2111,6 +2115,14 @@ def _tool_doctor(args: dict):
         "out_of_scope_links": lambda rows: [
             "%s is linked for %s, outside its declared scope — `boost sync "
             "--prune` removes the link" % (n, a) for n, a in rows],
+        "missing_copy_links": lambda rows: [
+            "workflow %s's skill copy is not linked for %s — `boost sync` "
+            "links it" % (n, a) for n, a in rows],
+        "stale_copy_links": lambda rows: [
+            "workflow %s's skill copy is linked for %s, %s — `boost sync` "
+            "removes the link"
+            % (n, a, store.stale_copy_reason(lockfile.get_workflow(n) or {},
+                                             a)) for n, a in rows],
         "unrecorded_store": unrecorded,
     }
     for key, vals in plan.items():

@@ -4,8 +4,11 @@
 
 A workflow lands in each agent's ``agents/`` or ``commands/`` dir, which an
 agent that reads only skills (Codex) never opens. So boost also writes
-``~/.agents/skills/<name>/SKILL.md``, recorded on the workflow's own lock entry
-and never linked into an agent — those agents already have the workflow file.
+``~/.agents/skills/<name>/SKILL.md``, recorded on the workflow's own lock
+entry, and links it into each linking agent that got no workflow file of its
+own (windsurf, antigravity, a ``skills_only`` profile). Claude Code and Cursor
+hold the workflow file already and get no link: that would be the procedure
+twice.
 """
 from __future__ import annotations
 
@@ -18,7 +21,7 @@ from pathlib import Path
 
 import pytest
 
-from boost_cli.core import lockfile, paths, policy, registry, store
+from boost_cli.core import config, lockfile, paths, policy, registry, store
 from boost_cli.errors import BoostError
 
 AGENT = ("---\nname: reviewer\nversion: 1.0.0\n"
@@ -65,22 +68,41 @@ def _sha(text):
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+#: The default agents' skills dirs: the two that get no workflow file of
+#: their own, and the two that hold ``agents/reviewer.md``.
+COPY_LINKED = (".windsurf/skills", ".gemini/antigravity-cli/skills")
+NATIVE = (".claude/skills", ".cursor/skills")
+
+
+def _link(d):
+    return paths.home() / d / "reviewer"
+
+
+def _assert_copy_links(present=COPY_LINKED, absent=NATIVE):
+    want = os.path.realpath(paths.store_dir() / "reviewer")
+    for d in present:
+        assert _link(d).is_symlink(), d
+        assert os.path.realpath(_link(d)) == want, d
+    for d in absent:
+        assert not os.path.lexists(_link(d)), d
+
+
 class TestInstall:
-    def test_writes_the_copy_records_it_last_and_links_nothing(self, boost,
-                                                               wf_tap):
+    def test_writes_the_copy_records_it_last_and_links_it_where_no_file_goes(
+            self, boost, wf_tap):
         r = boost("install", "reviewer")
         assert _copy().read_text(encoding="utf-8") == WANT
-        assert "as a skill → ~/.agents/skills/reviewer" in _flat(r.out)
+        assert ("as a skill → ~/.agents/skills/reviewer, linked → windsurf · "
+                "antigravity") in _flat(r.out)
         rows = _rows()
         assert rows[-1] == {"agent": None, "slot": "skill",
                             "path": str(_copy()), "sha256": _sha(WANT)}
         assert all(m["slot"] == "agents" for m in rows[:-1])
-        # The native file is still verbatim, and no agent gets a skill link.
+        # The native file is still verbatim. Only the agents that got no
+        # workflow file of their own get a link to the copy.
         assert (paths.home() / ".claude" / "agents" / "reviewer.md").read_text(
             encoding="utf-8") == AGENT
-        for d in (".claude/skills", ".cursor/skills", ".windsurf/skills",
-                  ".gemini/antigravity-cli/skills"):
-            assert not (paths.home() / d / "reviewer").exists()
+        _assert_copy_links()
         # Not a skill: the skills section stays empty, and as_skill is only
         # recorded when a flag said so.
         assert lockfile.get_skill("reviewer") is None
@@ -182,6 +204,12 @@ class TestCollision:
         assert not any(m["slot"] == "skill" for m in _rows())
         # and the skill's own uninstall later is untouched by the workflow
         assert "reviewer" not in store.workflow_owned_store_names()
+        # The skill's links are the skill's: the workflow's install and
+        # uninstall take none of them.
+        everywhere = (*COPY_LINKED, *NATIVE)
+        _assert_copy_links(present=everywhere, absent=())
+        boost("uninstall", "reviewer", "--kind", "workflow", "--yes")
+        _assert_copy_links(present=everywhere, absent=())
 
     def test_a_foreign_dir_is_left_alone(self, boost, wf_tap):
         mine = paths.store_dir() / "reviewer"
@@ -312,8 +340,15 @@ class TestNotAnUnrecordedSkill:
         assert not (paths.home() / ".claude" / "skills" / "reviewer").exists()
         assert lockfile.get_skill("reviewer") is None
         r = boost("doctor", expect=None)
-        assert "reviewer" not in _flat(r.out)
         assert "not reachable as skill" not in _flat(r.out)
+        # Nothing calls the copy a skill to adopt or link. The one check that
+        # does name the workflow is the note saying which agents its own
+        # config leaves it out of (windsurf, antigravity) -- about the
+        # workflow, not the copy.
+        r = boost("doctor", "--json", expect=None)
+        checks = [c for c in json.loads(r.out)["checks"]
+                  if c["name"] != "skipped-agents"]
+        assert "reviewer" not in json.dumps(checks)
 
     def test_sync_rewrites_a_deleted_copy(self, boost, wf_tap):
         boost("install", "reviewer")
@@ -351,10 +386,13 @@ class TestHealBackfill:
         assert not (paths.store_dir() / "reviewer").exists()
 
         r = boost("heal", "--as-skill")
-        assert "wrote workflow reviewer's skill copy" in _flat(r.out)
+        assert ("wrote workflow reviewer's skill copy to ~/.agents/skills/"
+                "reviewer and linked it → windsurf · antigravity"
+                ) in _flat(r.out)
         assert _copy().read_text(encoding="utf-8") == WANT
         assert _rows()[-1]["slot"] == "skill"
         assert store.workflows_without_skill_copy() == []
+        _assert_copy_links()
 
     def test_backfill_reads_the_installed_text_not_a_moved_tap(self, boost,
                                                                wf_tap):
@@ -640,3 +678,204 @@ class TestASkillAndAWorkflowShareAName:
         assert not any(m["slot"] == "skill" for m in _rows())
         assert (paths.home() / ".claude" / "agents" / "reviewer.md").read_text(
             encoding="utf-8") == AGENT
+
+
+class TestCopyLinks:
+    """The copy is linked into each linking agent that gets no workflow file
+    of its own -- before, those agents got the procedure in no form."""
+
+    def test_a_skills_only_profile_gets_a_link_and_no_agent_file(
+            self, boost, wf_tap):
+        cfg = config.load()
+        cfg["agents"]["claude-personal"] = {
+            "dir": "~/.claude-personal/skills", "enabled": True,
+            "project_scope": False, "skills_only": True}
+        config.save(cfg)
+        r = boost("install", "reviewer")
+        assert ("linked → windsurf · antigravity · claude-personal"
+                in _flat(r.out))
+        _assert_copy_links(present=(*COPY_LINKED, ".claude-personal/skills"))
+        assert not (paths.home() / ".claude-personal" / "agents").exists()
+
+    def test_a_narrowed_install_links_nothing(self, boost, wf_tap):
+        """``link_agents`` reads an empty ``only`` as every agent, so a
+        narrowing that leaves no target must not reach it at all."""
+        r = boost("install", "reviewer", "--agent", "claude-code")
+        assert "linked →" not in _flat(r.out)
+        _assert_copy_links(present=(), absent=(*COPY_LINKED, *NATIVE))
+        # and sync does not add them behind the narrowing
+        boost("sync")
+        _assert_copy_links(present=(), absent=(*COPY_LINKED, *NATIVE))
+
+    def test_a_narrowed_reinstall_takes_the_wider_installs_links(
+            self, boost, wf_tap):
+        """Narrowed after a wide install, the links the wide one made are
+        not left live with nothing to name or remove them."""
+        boost("install", "reviewer")
+        _assert_copy_links()
+        r = boost("install", "reviewer", "--force", "--agent", "claude-code")
+        assert "windsurf: unlinked its skill copy" in _flat(r.out)
+        _assert_copy_links(present=(), absent=(*COPY_LINKED, *NATIVE))
+        plan = store.sync_plan()
+        assert plan["missing_copy_links"] == plan["stale_copy_links"] == []
+        r = boost("doctor", expect=None)
+        assert "skill copy is linked for" not in _flat(r.out)
+        assert "skill copy is not linked for" not in _flat(r.out)
+        # one made by hand since is named, and sync takes it
+        _link(".windsurf/skills").symlink_to(paths.store_dir() / "reviewer")
+        r = boost("doctor", expect=1)
+        assert ("workflow reviewer's skill copy is linked for windsurf, which "
+                "the workflow's --agent scope leaves out — run `boost sync`"
+                ) in _flat(r.out)
+        r = boost("sync")
+        assert ("unlinked workflow reviewer's skill copy from windsurf, which "
+                "the workflow's --agent scope leaves out") in _flat(r.out)
+        _assert_copy_links(present=(), absent=(*COPY_LINKED, *NATIVE))
+
+    def test_no_agent_left_to_link_links_nothing(self, boost, wf_tap):
+        boost("config", "set", "agents.windsurf.workflows", "true")
+        boost("config", "set", "agents.antigravity.enabled", "false")
+        r = boost("install", "reviewer")
+        assert "linked →" not in _flat(r.out)
+        assert (paths.home() / ".windsurf" / "agents" / "reviewer.md").is_file()
+        _assert_copy_links(present=(), absent=(*COPY_LINKED, *NATIVE))
+
+    def test_the_users_own_link_is_kept_and_named(self, boost, wf_tap,
+                                                  tmp_path):
+        mine = tmp_path / "my-reviewer"
+        mine.mkdir()
+        _link(".windsurf/skills").parent.mkdir(parents=True)
+        _link(".windsurf/skills").symlink_to(mine)
+        r = boost("install", "reviewer")
+        assert ("reviewer: skill copy not linked: ~/.windsurf/skills/reviewer "
+                "is in the way and is not boost's — left alone"
+                ) in _flat(r.out)
+        assert os.path.realpath(_link(".windsurf/skills")) == str(
+            mine.resolve())
+        _assert_copy_links(present=(".gemini/antigravity-cli/skills",))
+        # neither sync nor uninstall takes it
+        boost("sync")
+        boost("uninstall", "reviewer", "--yes")
+        assert os.path.realpath(_link(".windsurf/skills")) == str(
+            mine.resolve())
+
+    def test_uninstall_leaves_no_dangling_link(self, boost, wf_tap):
+        boost("install", "reviewer")
+        boost("uninstall", "reviewer", "--yes")
+        _assert_copy_links(present=(), absent=(*COPY_LINKED, *NATIVE))
+
+    def test_an_edited_copy_uninstall_keeps_keeps_its_links(self, boost,
+                                                           wf_tap):
+        boost("install", "reviewer")
+        _copy().write_text(WANT + "my notes\n", encoding="utf-8")
+        boost("uninstall", "reviewer", "--yes")
+        _assert_copy_links()
+
+    @pytest.mark.parametrize("how", ["flag", "config"])
+    def test_retiring_the_copy_takes_its_links(self, boost, wf_tap, how):
+        boost("install", "reviewer")
+        if how == "flag":
+            boost("install", "reviewer", "--force", "--no-as-skill")
+        else:
+            boost("config", "set", "workflows_as_skills", "false")
+            boost("reinstall", "reviewer")
+        _assert_copy_links(present=(), absent=(*COPY_LINKED, *NATIVE))
+
+    @pytest.mark.parametrize("repair", ["reinstall", "sync"])
+    def test_an_agent_moved_into_the_workflow_set_loses_its_link(
+            self, boost, wf_tap, repair):
+        boost("install", "reviewer")
+        boost("config", "set", "agents.windsurf.workflows", "true")
+        boost(repair, *(("reviewer",) if repair == "reinstall" else ()))
+        assert (paths.home() / ".windsurf" / "agents" / "reviewer.md").is_file()
+        _assert_copy_links(present=(".gemini/antigravity-cli/skills",),
+                           absent=(".windsurf/skills", *NATIVE))
+        plan = store.sync_plan()
+        assert plan["missing_copy_links"] == plan["stale_copy_links"] == []
+
+    def test_a_deleted_link_is_named_and_sync_restores_it(self, boost,
+                                                          wf_tap):
+        boost("install", "reviewer")
+        _link(".windsurf/skills").unlink()
+        plan = store.sync_plan()
+        assert plan["missing_copy_links"] == [("reviewer", "windsurf")]
+        assert plan["missing_links"] == []
+        r = boost("doctor", expect=1)
+        assert ("workflow reviewer's skill copy is not linked for windsurf — "
+                "run `boost sync`") in _flat(r.out)
+        r = boost("sync", "--diff")
+        assert "reviewer → windsurf" in _flat(r.out)
+        r = boost("heal", "--dry-run")
+        assert ("would link workflow reviewer's skill copy → windsurf"
+                in _flat(r.out))
+        r = boost("sync")
+        assert ("linked workflow reviewer's skill copy → windsurf"
+                in _flat(r.out))
+        _assert_copy_links()
+        assert lockfile.get_skill("reviewer") is None
+        assert store.sync_plan()["missing_copy_links"] == []
+
+    def test_a_link_beside_the_workflows_own_file_is_named_and_removed(
+            self, boost, wf_tap):
+        boost("install", "reviewer")
+        _link(".claude/skills").parent.mkdir(parents=True, exist_ok=True)
+        _link(".claude/skills").symlink_to(paths.store_dir() / "reviewer")
+        assert store.sync_plan()["stale_copy_links"] == [
+            ("reviewer", "claude-code")]
+        r = boost("doctor", expect=1)
+        assert ("workflow reviewer's skill copy is linked for claude-code, "
+                "which has the workflow's own file — run `boost sync`"
+                ) in _flat(r.out)
+        r = boost("sync")
+        assert ("unlinked workflow reviewer's skill copy from claude-code, "
+                "which has the workflow's own file") in _flat(r.out)
+        _assert_copy_links()
+
+    def test_quarantine_takes_the_links_and_release_restores_them(
+            self, boost, wf_tap):
+        boost("install", "reviewer")
+        boost("quarantine", "reviewer")
+        _assert_copy_links(present=(), absent=(*COPY_LINKED, *NATIVE))
+        boost("quarantine", "--release", "reviewer")
+        _assert_copy_links()
+
+    def test_release_names_a_link_the_users_own_link_holds(
+            self, boost, wf_tap, tmp_path):
+        boost("install", "reviewer")
+        boost("quarantine", "reviewer")
+        _link(".windsurf/skills").symlink_to(tmp_path)
+        r = boost("quarantine", "--release", "reviewer")
+        assert ("reviewer: skill copy not linked: ~/.windsurf/skills/reviewer "
+                "is in the way and is not boost's — left alone"
+                ) in _flat(r.out + r.err)
+        _assert_copy_links(present=(".gemini/antigravity-cli/skills",))
+
+    def test_release_of_a_copy_gone_before_quarantine_links_nothing(
+            self, boost, wf_tap):
+        boost("install", "reviewer")
+        shutil.rmtree(paths.store_dir() / "reviewer")
+        boost("quarantine", "reviewer")
+        boost("quarantine", "--release", "reviewer")
+        _assert_copy_links(present=(), absent=(*COPY_LINKED, *NATIVE))
+
+    def test_dry_run_names_the_links(self, boost, wf_tap):
+        r = boost("install", "reviewer", "--dry-run")
+        assert ("as a skill → ~/.agents/skills/reviewer, linked → windsurf · "
+                "antigravity") in _flat(r.out)
+        r = boost("install", "reviewer", "--dry-run", "--agent", "cursor")
+        assert "as a skill → ~/.agents/skills/reviewer" in _flat(r.out)
+        assert "linked →" not in _flat(r.out)
+
+    def test_live_copy_links_are_nobodys_problem(self, boost, wf_tap):
+        boost("install", "reviewer")
+        _assert_copy_links()
+        assert store.stale_links(lockfile.installed(), True) == []
+        assert store.duplicate_discovery() == []
+        r = boost("doctor", "--json", expect=None)
+        checks = [c for c in json.loads(r.out)["checks"]
+                  if c["name"] != "skipped-agents"]
+        assert "reviewer" not in json.dumps(checks)
+        r = boost("heal", "--dry-run")
+        assert "reviewer" not in _flat(r.out)
+        r = boost("health", "--json")
+        assert "reviewer" not in r.out

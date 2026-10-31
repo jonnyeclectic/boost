@@ -88,6 +88,15 @@ class InstallResult:
     # What a written workflow file could not carry over for one agent
     # (:func:`workflows.render_notes`), worded by core, printed by the command.
     render_notes: list[str] = field(default_factory=list)
+    # ``(agent, reason)`` for a rule or workflow: the agents a skill would
+    # reach that this kind's write set leaves out by their own config
+    # (:func:`skipped_agents`). No row is recorded for them, so this is the
+    # install report's only way to say so.
+    skipped_agents: list[tuple[str, str]] = field(default_factory=list)
+    # ``agent: how to run it`` for a workflow written somewhere ``/<name>``
+    # does not reach (:func:`workflows.invocation_hint`) -- a Claude Code
+    # subagent. Worded by core, printed by the install report.
+    invocation: list[str] = field(default_factory=list)
     score: int = 0
     upgraded: bool = False
     kind: str = "skill"
@@ -122,6 +131,14 @@ class InstallResult:
     # it.
     skill_copy: Path | None = None
     skill_note: str | None = None
+    # Its links (:func:`copy_link_targets`): the agents linked to it, why a
+    # target was not (:func:`copy_link_problems`), and the agents whose link
+    # this run took back -- the copy retired, or the agent now holds a file
+    # of the workflow's own. Kept apart from `linked`, `conflicts` and the
+    # rest, which say what became of the workflow's own files.
+    copy_linked: list[str] = field(default_factory=list)
+    copy_blocked: list[str] = field(default_factory=list)
+    copy_unlinked: list[str] = field(default_factory=list)
     # Symlinks in the skill's source the copy left out (:func:`_copy_tree`):
     # one leading to nothing, or out of the tap. Core words each; the command
     # prints them.
@@ -1817,6 +1834,74 @@ def unmaterialized_agents(kind: str, entry: dict) -> list[str]:
         r["agent"] for r in (*foreign_rows(entry), *declined_rows(entry))}
     return [a for a in writes
             if a not in have and (not declared or a in declared)]
+
+
+def skipped_agents(kind: str, entry: dict) -> list[tuple[str, str]]:
+    """``(agent, reason)`` for every agent ``entry``'s scope reaches with a
+    skill that ``kind``'s write set leaves out by the agent's own config.
+
+    The sibling of :func:`unmaterialized_agents`, for the agents that one
+    cannot see: it asks which agents boost *writes* and has no row for, and
+    an agent :func:`agents.materializing_agents` or
+    :func:`agents.workflow_agents` excludes (``skills_only``, ``workflows:
+    false``) is not one of them. It never gets a row either, so every
+    reporter that walks the rows missed it: install listed only the agents it
+    wrote, and doctor called the item fully materialized while a Claude Code
+    profile added as ``skills_only`` got no subagent and no rule at all.
+
+    The agents asked are the ones a skill reaches -- :func:`agents.
+    linking_agents` at user scope, :func:`agents.project_agents` in a repo --
+    so an agent that reads the store natively (Codex, which reaches a
+    workflow through its skill copy) is not reported as missing it. Within a
+    declared ``--agent`` narrowing only, so this never widens one. An agent
+    any row already names is left to that row: a materialization row the
+    agent stopped taking is :func:`unwritten_materializations`'s, and a
+    ``foreign`` or ``declined`` row has its own wording. Empty for a skill,
+    and for a quarantined or stranded entry, whose artifacts are absent on
+    purpose. Unlike :func:`unmaterialized_agents` an entry with no rows is
+    still judged: an item every agent skips is exactly one with none.
+    """
+    if (kind not in ("rule", "workflow") or entry.get("quarantined")
+            or scopes.stranded(entry)):
+        return []
+    base = entry.get("base")
+    reach = agents.linking_agents() if base is None else agents.project_agents()
+    declared = entry.get("only_agents")
+    have = {m.get("agent") for m in entry.get("materializations") or ()} | {
+        r["agent"] for r in (*foreign_rows(entry), *declined_rows(entry))}
+    skipped = []
+    for agent in reach:
+        if agent in have or (declared and agent not in declared):
+            continue
+        why = agents.materialization_skip_reason(kind, base, agent)
+        if why is not None:
+            skipped.append((agent, why))
+    return skipped
+
+
+def skipped_agent_items() -> list[tuple[str, str, bool, list[str]]]:
+    """``(agent, reason, via_copy, ["rule x", "workflow y", …])`` over every
+    installed rule and workflow: :func:`skipped_agents`, grouped by agent for
+    `boost doctor`, which names each agent once rather than once per item.
+
+    ``via_copy`` splits an agent's items in two: a workflow whose skill copy
+    is linked into the agent (:func:`copy_link_targets`) reaches it after
+    all, as a skill, and a rule -- or a workflow with no copy -- does not.
+
+    In the order first met -- rules before workflows, each section by name --
+    so two runs print the same line.
+    """
+    found: dict[tuple[str, str, bool], list[str]] = {}
+    for kind, section in (("rule", lockfile.installed_rules()),
+                          ("workflow", lockfile.installed_workflows())):
+        for name, entry in sorted(section.items()):
+            copied = (copy_link_targets(name, entry) if kind == "workflow"
+                      else {})
+            for agent, why in skipped_agents(kind, entry):
+                found.setdefault((agent, why, agent in copied), []).append(
+                    "%s %s" % (kind, name))
+    return [(agent, why, copied, items)
+            for (agent, why, copied), items in found.items()]
 
 
 def unwritten_materializations() -> list[tuple[str, str, str, str]]:
@@ -4931,6 +5016,7 @@ def _install_rule(entry: dict, force: bool = False,
     res.conflicts = conflicts
     res.upgraded = existing is not None
     res.scope = scope
+    res.skipped_agents = skipped_agents("rule", record)
     return res
 
 
@@ -5420,6 +5506,9 @@ def quarantine_materialized(kind: str, name: str, entry: dict) -> list[str]:
             path.unlink()
             if lockfile.is_skill_copy(m):
                 _rmdir_quietly(path.parent)
+    # Its links would dangle into the dir just removed; a release relinks.
+    if _copy_row(entry) is not None:
+        unlink_skill_copy(name)
     journal.log("quarantine", name)
     return affected
 
@@ -5463,7 +5552,8 @@ def _taken_while_held(path: Path, content: str) -> bool:
 
 def release_materialized(kind: str, name: str, entry: dict,
                          skipped: list[str] | None = None,
-                         foreign: list[str] | None = None) -> list[str]:
+                         foreign: list[str] | None = None,
+                         problems: list[str] | None = None) -> list[str]:
     """Restore what :func:`quarantine_materialized` removed, byte-for-byte.
 
     A stash record whose ``content`` is None (the artifact was already gone at
@@ -5477,6 +5567,9 @@ def release_materialized(kind: str, name: str, entry: dict,
     ``materializations`` to the entry's ``foreign`` record, exactly as an
     install records it, so uninstall never deletes it and `boost sync` writes
     the item once the path is free. Its path is appended to ``foreign``.
+
+    A workflow's skill copy is linked again (:func:`link_skill_copy`), and
+    why a link was not made is appended to ``problems``, in install's words.
     """
     from . import rules
     # The stash names absolute paths under the row's base, so releasing a
@@ -5552,6 +5645,12 @@ def release_materialized(kind: str, name: str, entry: dict,
     entry["quarantined"] = False
     entry.pop("quarantine_stash", None)
     lockfile.set_entry(kind, name, entry)
+    # The copy is back (or forgotten, if something took its dir): its links
+    # come back with it.
+    if kind == "workflow":
+        res = link_skill_copy(name, entry)
+        if res is not None and problems is not None:
+            problems += copy_link_problems(res)
     journal.log("release", name)
     return restored
 
@@ -5744,6 +5843,7 @@ def _install_workflow(entry: dict, force: bool = False,
     foreign_record: list[dict] = []
     declined: list[tuple[str, str]] = []
     render_notes: list[str] = []
+    invocation: list[str] = []
     # From ``materializations`` only: a ``foreign`` row names the user's file.
     owned = {m.get("path") for m in (existing or {}).get("materializations")
              or () if not lockfile.is_skill_copy(m)}
@@ -5808,6 +5908,9 @@ def _install_workflow(entry: dict, force: bool = False,
             linked.append(agent)
             render_notes += ["%s: %s" % (agent, note) for note in
                              workflows.render_notes(agent, slot, raw)]
+            hint = workflows.invocation_hint(agent, slot, name, raw)
+            if hint is not None:
+                invocation.append("%s: %s" % (agent, hint))
 
         # A path this run no longer writes for an agent it did write (the source
         # moved from commands/ to agents/): the old file is a live slash command
@@ -5882,14 +5985,32 @@ def _install_workflow(entry: dict, force: bool = False,
             **({"foreign": foreign_record} if foreign_record else {}),
             **({"declined": declined_record} if declined_record else {}),
         }
+        # Before the row, so a run that fails to record it takes a fresh
+        # copy's links back with the copy.
+        copy_links = (link_skill_copy(name, record) if copy_row is not None
+                      else None)
         lockfile.set_workflow(name, record)
     except BaseException:
         if not _row_landed(lockfile.get_workflow, name, record):
             _undo_writes(undo)
             if copy_dir is not None and not copy_dir_existed:
                 with contextlib.suppress(OSError):
+                    unlink_skill_copy(name)
+                with contextlib.suppress(OSError):
                     util.remove_path(copy_dir)
         raise
+    # After it: a link to a copy this run kept goes only from an agent that
+    # now holds the workflow's own file, and every link to one it retired
+    # goes. A copy kept because it was edited keeps its links. A declared
+    # narrowing links nowhere, so it takes every link a wider install made,
+    # a disabled agent's too: nothing else would name or remove those.
+    if copy_row is not None and not record.get("only_agents"):
+        copy_unlinked = unlink_skill_copy(name,
+                                          only=stale_copy_links(name, record))
+    elif copy_row is not None or _copy_row(existing) is not None:
+        copy_unlinked = unlink_skill_copy(name)
+    else:
+        copy_unlinked = []
     journal.log("install", name, tap=entry["tap"], version=entry.get("version"), via=via)
 
     res = InstallResult(
@@ -5903,10 +6024,16 @@ def _install_workflow(entry: dict, force: bool = False,
     res.foreign = foreign
     res.declined = declined
     res.render_notes = render_notes
+    res.invocation = invocation
+    res.skipped_agents = skipped_agents("workflow", record)
     res.upgraded = existing is not None
     res.scope = scope
     res.skill_copy = Path(copy_row["path"]).parent if copy_row else None
     res.skill_note = copy_note
+    if copy_links is not None:
+        res.copy_linked = copy_links.linked
+        res.copy_blocked = copy_link_problems(copy_links)
+    res.copy_unlinked = copy_unlinked
     return res
 
 
@@ -5922,12 +6049,15 @@ def _install_workflow(entry: dict, force: bool = False,
 # `boost verify` hash it and `boost sync` rewrite it when it goes missing,
 # with no second code path for any of them.
 #
-# It is never linked. The agents boost links skills into already get the
-# workflow's own file, and a link would show them the procedure twice.
-# Antigravity takes no workflow and so gets neither — not linking it there is
-# the cost of one rule for every linking agent. Gemini reads the store
-# natively and gets its own agent file too; nothing boost writes can hide a
-# store dir from it.
+# It is linked into each linking agent that got no file of the workflow's
+# own: a ``skills_only`` agent (antigravity, a Claude Code profile added that
+# way) or one with no slash-command format (windsurf). Those agents got the
+# procedure in no form while the copy sat unlinked in the store. The agents
+# that hold the workflow's own file (claude-code, cursor) get no link, which
+# would show them the procedure twice. Gemini reads the store natively and
+# gets its own agent file too; nothing boost writes can hide a store dir from
+# it. The set is derived from the lock row each time, never recorded
+# (:func:`copy_link_targets`); see "Copy links" below.
 #
 # User scope only. Project scope has no canonical store — a project skill is
 # a real dir per agent (`_install_project_skill`) — so the equivalent would be
@@ -6338,6 +6468,247 @@ def _skill_copy(name: str, slot: str, raw: str, existing: dict | None,
              "sha256": _text_sha(text)}, None)
 
 
+# --------------------------------------------------------------------------
+# Copy links: the copy reaches the linking agents with no file of their own
+# --------------------------------------------------------------------------
+# Derived, never recorded. The targets are the enabled linking agents less
+# every agent the workflow set writes (:func:`agents.workflow_agents`) and
+# every agent the lock row names -- a file written (or refused), the user's
+# own file at the path (``foreign``). An agent the set writes with no row yet
+# is due its file from the next `boost sync`; in an entry from before
+# ``only_agents`` was recorded it is one an `--agent` narrowing left out,
+# since those rows are the narrowing's only record. Neither is linked. So a
+# config change that moves an agent into the workflow set takes its link back
+# at the reinstall or sync that writes its file. No row per link:
+# :func:`lockfile.is_skill_copy` matches the slot alone, and a ``skill`` row
+# naming an agent would be misread wherever rows are walked.
+#
+# A ``declined`` agent (one that would reject the file) is of the workflow set
+# too, so it gets no link either. Only Gemini declines today
+# (:func:`workflows.render_problem`), and Gemini is no linking agent; should a
+# linking agent ever decline, it would get the procedure in no form, and
+# linking it here is the fix.
+#
+# Removing them is the other way round: a sweep that asks no config at all,
+# over every dir boost may have linked into, taking only boost's link to this
+# copy's own store dir (:func:`unlink_skill_copy`). A link derived from config
+# would be stranded by the next config change.
+#
+# A declared ``--agent`` narrowing links nowhere, and sweeps any link an
+# earlier, wider install made: `--agent` names only agents that take the
+# workflow's file, so no narrowing can name a copy-link agent, and
+# ``link_agents`` reads an empty ``only`` as every agent.
+#
+# "Beside a file of the workflow's own" is decided by the physical skills dir
+# (:func:`agents.dir_identity`), never by agent name alone. A Claude Code
+# profile whose ``~/.claude-personal/skills`` is a symlink to
+# ``~/.claude/skills`` is a second name for claude-code's dir: a copy link made
+# for the profile lands beside claude-code's own file. Decided by name, the
+# targets linked it there and the stale sweep, seeing claude-code's path,
+# removed it in the same run -- every sync linked and unlinked again, and
+# doctor never went green. So such an agent is no target, and a link there is
+# stale.
+
+
+def _holds_its_own(entry: dict) -> set:
+    """The agents ``entry``'s row decided for itself: written or refused,
+    the user's own file at the path, or declined."""
+    return ({m.get("agent") for m in entry.get("materializations") or ()}
+            | {r["agent"] for r in (*foreign_rows(entry),
+                                    *declined_rows(entry))})
+
+
+def _owns_copy(name: str, entry: dict) -> bool:
+    """Whether ``entry`` has a live skill copy at store/``name`` that no skill
+    of that name has taken -- the precondition for linking to it, or taking
+    a link to it as the workflow's."""
+    return (_copy_row(entry) is not None and not entry.get("quarantined")
+            and lockfile.get_skill(name) is None)
+
+
+def _holder_dirs(have: Collection[str]) -> set[object]:
+    """The physical skills dirs (:func:`agents.dir_identity`) of ``have``,
+    the agents with a file of the workflow's own."""
+    known = agents.known_agents()
+    return {agents.dir_identity(known[a]["dir"]) for a in have if a in known}
+
+
+def copy_link_agents(have: Collection[str],
+                     narrowed: bool = False) -> dict[str, Path]:
+    """The linking agents a workflow's copy goes to: all but ``have``, the
+    agents with a file of the workflow's own, and any whose skills dir is
+    physically one of theirs. None when ``narrowed``.
+
+    The dry run (`boost install -n`) and the real one both come here, so they
+    name the same agents."""
+    if narrowed:
+        return {}
+    shared = _holder_dirs(have)
+    return {a: d for a, d in agents.linking_agents().items()
+            if a not in have and agents.dir_identity(d) not in shared}
+
+
+def copy_link_targets(name: str, entry: dict | None) -> dict[str, Path]:
+    """The agents workflow ``name``'s skill copy is linked into, from its row:
+    the linking agents the workflow set does not write and the row does not
+    name (see "Copy links" above).
+
+    None for an entry with no copy, a quarantined one, one whose store dir a
+    skill took, or one that asks for no copy (a copy kept only because it was
+    edited), and none under a declared ``--agent`` narrowing.
+    """
+    entry = entry or {}
+    if not _owns_copy(name, entry) or not wants_skill_copy(None, entry):
+        return {}
+    writes = agents.workflow_agents(entry.get("base"))
+    return copy_link_agents(_holds_its_own(entry) | set(writes),
+                            narrowed=bool(entry.get("only_agents")))
+
+
+def _copy_link_wrong(link: Path, name: str) -> bool:
+    """Whether ``link`` is a copy link sync should make: nothing is there,
+    or boost's link leads elsewhere or nowhere. The user's own link, a file
+    or a dir is theirs."""
+    if not os.path.lexists(link):
+        return True
+    return is_boost_link(link) and not _already_links(link,
+                                                      skill_store_dir(name))
+
+
+def missing_copy_links(name: str, entry: dict) -> list[str]:
+    """The targets whose copy link `boost sync` makes: the copy is on disk,
+    the agent's dir takes writes, and nothing of the user's is in the way.
+
+    A copy that is gone is a missing materialization, whose reinstall links.
+    """
+    copy = _copy_row(entry)
+    if copy is None or not os.path.isfile(copy.get("path", "")):
+        return []
+    return [a for a, adir in copy_link_targets(name, entry).items()
+            if paths.refuses_writes(adir) is None
+            and _copy_link_wrong(adir / name, name)]
+
+
+def stale_copy_links(name: str, entry: dict) -> list[str]:
+    """The linking agents holding boost's link to ``name``'s copy where it
+    does not belong, which `boost sync` removes: beside a file of the
+    workflow's own (the procedure twice) -- in that agent's skills dir, or in
+    one that is physically the same dir under another agent's name -- and
+    anywhere under a declared ``--agent`` narrowing, which links nowhere -- so
+    a link a wider install made does not outlive it. A disabled agent keeps
+    its link, as it keeps a skill's. :func:`stale_copy_reason` says which, per
+    agent.
+
+    One physical link is named once, by the agent with the file of its own
+    where there is one, so doctor's lines and the dry run's match what the
+    sweep removes."""
+    if not _owns_copy(name, entry):
+        return []
+    own = _holds_its_own(entry)
+    shared = _holder_dirs(own)
+    narrowed = bool(entry.get("only_agents"))
+    hits = [(a, agents.dir_identity(adir))
+            for a, adir in agents.linking_agents().items()
+            if (narrowed or a in own or agents.dir_identity(adir) in shared)
+            and is_boost_link(adir / name)
+            and links_to_store_dir(adir / name, name)]
+    speaker: dict[object, str] = {}
+    for a, key in sorted(hits, key=lambda hit: hit[0] not in own):
+        speaker.setdefault(key, a)
+    return [a for a, key in hits if speaker[key] == a]
+
+
+def stale_copy_reason(entry: dict, agent: str) -> str:
+    """Why :func:`stale_copy_links` names ``agent``, as the clause doctor,
+    sync and the MCP doctor all end their line with."""
+    own = _holds_its_own(entry)
+    if agent in own:
+        return "which has the workflow's own file"
+    adir = agents.linking_agents().get(agent)
+    if adir is not None:
+        key = agents.dir_identity(adir)
+        known = agents.known_agents()
+        # `own` holds the copy row's agent too, which is None
+        holder = next((a for a in sorted(a for a in own if a in known)
+                       if agents.dir_identity(known[a]["dir"]) == key), None)
+        if holder is not None:
+            return ("whose skills dir is %s's, which has the workflow's own "
+                    "file" % holder)
+    return "which the workflow's --agent scope leaves out"
+
+
+def link_skill_copy(name: str, entry: dict,
+                    only: Collection[str] | None = None
+                    ) -> InstallResult | None:
+    """Link ``name``'s copy into :func:`copy_link_targets` -- those in
+    ``only``, when given, which is how `boost sync` links just the agents its
+    plan named.
+
+    None when there is no target: ``link_agents`` takes an empty ``only`` as
+    every agent, which would link the copy beside claude-code's own file.
+    None, too, while the copy's file is not on disk -- a release whose stash
+    had nothing to restore, a store that refused the write and kept the old
+    row -- where every link would dangle; the missing copy is a missing
+    materialization, whose repair links. ``keep_theirs``: a symlink of the
+    user's at the path is left, as a conflict, never re-pointed at the store.
+    """
+    targets = [a for a in copy_link_targets(name, entry)
+               if only is None or a in only]
+    copy = _copy_row(entry)
+    if not targets or copy is None or not os.path.isfile(copy["path"]):
+        return None
+    return link_agents(name, only=targets, keep_theirs=True)
+
+
+def unlink_skill_copy(name: str,
+                      only: Collection[str] | None = None) -> list[str]:
+    """Remove boost's links to workflow ``name``'s copy; the agents unlinked.
+
+    Asks no config: every dir boost may have linked into -- each agent's,
+    enabled or not, its former dirs, and a native-store dir it once linked
+    into -- so a link made under an earlier config is found. Only a boost
+    link to this copy's own store dir goes, live or dangling; nothing at all
+    while a skill of that name owns the dir. ``only`` limits it to those
+    agents. A link that refuses removal is left for the stale-link sweep.
+    """
+    if lockfile.get_skill(name) is not None:
+        return []
+    removed: list[str] = []
+    for agent, adir in (*agents.unlinking_agents().items(),
+                        *agents.former_link_dirs(),
+                        *agents.remembered_native_dirs()):
+        link = adir / name
+        if ((only is None or agent in only) and is_boost_link(link)
+                and links_to_store_dir(link, name)):
+            with contextlib.suppress(OSError):
+                link.unlink()
+                if agent not in removed:
+                    removed.append(agent)
+    return removed
+
+
+def reconcile_copy_links(name: str, entry: dict,
+                         only: Collection[str] | None = None
+                         ) -> tuple[list[str], list[str], list[str]]:
+    """Link ``name``'s copy where its row wants it (within ``only``, as
+    :func:`link_skill_copy`) and unlink it where :func:`stale_copy_links`
+    says: ``(linked, problems, unlinked)``."""
+    res = link_skill_copy(name, entry, only=only)
+    unlinked = unlink_skill_copy(name, only=stale_copy_links(name, entry))
+    if res is None:
+        return [], [], unlinked
+    return res.linked, copy_link_problems(res), unlinked
+
+
+def copy_link_problems(res: InstallResult) -> list[str]:
+    """Why a copy link from ``res`` was not made, one line each."""
+    return [*("%s is in the way and is not boost's — left alone"
+              % paths.tilde(p) for p in res.conflicts),
+            *("%s — %s" % unwritable_refusal(d) for d in res.unwritable),
+            *("%s — %s" % link_refusal(d, b) for d, b in res.blocked),
+            *("%s — %s" % symlink_refusal(d) for d in res.unlinkable)]
+
+
 def _installed_raw(entry: dict) -> str | None:
     """The source text a workflow was installed from, or None if it is gone.
 
@@ -6662,8 +7033,15 @@ def backfill_skill_copies(dry: bool = False) -> list[str]:
     for name, entry, raw in _backfill_candidates():
         dest = skill_store_dir(name)
         if dry:
-            lines.append("would write workflow %s's skill copy to %s"
-                         % (name, paths.tilde(dest)))
+            # The run's copy row, as far as the targets read one: by its slot
+            # (`lockfile.is_skill_copy`), so the targets are the run's.
+            will = copy_link_targets(name, entry | {"materializations": [
+                *(entry.get("materializations") or ()),
+                {"slot": workflows.SLOT_SKILL}]})
+            lines.append("would write workflow %s's skill copy to %s%s"
+                         % (name, paths.tilde(dest),
+                            " and link it → %s" % " · ".join(will)
+                            if will else ""))
             continue
         slot = entry.get("slot") or workflows.detect_slot(
             entry.get("source_file", ""))
@@ -6675,8 +7053,13 @@ def backfill_skill_copies(dry: bool = False) -> list[str]:
         entry["materializations"] = [*(entry.get("materializations") or ()),
                                      row]
         lockfile.set_workflow(name, entry)
-        lines.append("wrote workflow %s's skill copy to %s"
-                     % (name, paths.tilde(dest)))
+        linked, problems, _gone = reconcile_copy_links(name, entry)
+        lines.append("wrote workflow %s's skill copy to %s%s"
+                     % (name, paths.tilde(dest),
+                        " and linked it → %s" % " · ".join(linked)
+                        if linked else ""))
+        lines += ["workflow %s: skill copy not linked: %s" % (name, why)
+                  for why in problems]
     return lines
 
 
@@ -6729,6 +7112,10 @@ def _uninstall_workflow(name: str, workflow: dict) -> dict:
             with contextlib.suppress(OSError):   # not empty: someone's file
                 parent.rmdir()
     lockfile.remove_workflow(name)
+    # Its links go with a copy that went, and stay with an edited one kept:
+    # they lead to the user's file now.
+    if copies and not any(m.get("path") in kept for m in copies):
+        unlink_skill_copy(name)
     journal.log("uninstall", name)
     res = _materialized_result(name, removed, workflow, "workflow", gone)
     if kept:
@@ -8079,6 +8466,16 @@ def sync_plan() -> dict[str, list]:
                       merely missing
       out_of_scope_links: (skill, agent) pairs linked outside a declared
                       ``--agent`` narrowing — reported, never auto-removed
+      missing_copy_links: (workflow, agent) pairs whose link to the
+                      workflow's skill copy sync can make
+                      (:func:`missing_copy_links`)
+      stale_copy_links: (workflow, agent) pairs where that link sits beside
+                      the workflow's own file, or outside a declared
+                      ``--agent`` narrowing (:func:`stale_copy_links`)
+
+    The copy links are a workflow's, so they have keys of their own:
+    ``missing_links`` is repaired through the skills section of the lock,
+    which records no workflow.
 
     ``blocked_links`` exists because lumping it into ``missing_links`` made
     ``boost sync`` promise a repair it could never perform. ``link_agents``
@@ -8110,7 +8507,8 @@ def sync_plan() -> dict[str, list]:
             "unreadable_store": [], "misnamed_store": [],
             "workflow_copies": [], "rule_blocks": [],
             "plugin_duplicates": [], "unrecorded_store": [],
-            "missing_materializations": [], "out_of_scope_links": []}
+            "missing_materializations": [], "out_of_scope_links": [],
+            "missing_copy_links": [], "stale_copy_links": []}
     for name, entry in lock.items():
         sdir = skill_store_dir(name)
         # A directory with no SKILL.md counts as missing, not as healthy. The
@@ -8204,7 +8602,17 @@ def sync_plan() -> dict[str, list]:
     plan.update(sort_unrecorded(lock, integ))
     plan["plugin_duplicates"] = plugin_duplicates(lock, coverage)
     plan["stale_links"] = stale_links(lock, vouches)
-    return _plan_materializations(plan)
+    return _plan_copy_links(_plan_materializations(plan))
+
+
+def _plan_copy_links(plan: dict[str, list]) -> dict[str, list]:
+    """Fill the plan's copy-link keys from each workflow's row, and return it."""
+    for name, entry in sorted(lockfile.installed_workflows().items()):
+        plan["missing_copy_links"] += [(name, a)
+                                       for a in missing_copy_links(name, entry)]
+        plan["stale_copy_links"] += [(name, a)
+                                     for a in stale_copy_links(name, entry)]
+    return plan
 
 
 def stale_links(lock: dict, vouches: bool) -> list[str]:
@@ -8729,7 +9137,9 @@ def sync_preview(plan: dict[str, list]) -> list[str]:
 
     Only the buckets whose repair *branches* live here; `missing_links` and
     `stale_links` do one unconditional thing each and stay with their caller,
-    which filters them against the links it has already reported.
+    which filters them against the links it has already reported. A
+    workflow's copy links are worded here, in the run's own words, since
+    `heal --dry-run` has no other line for them.
     """
     lines = []
     integ = lockfile.check()
@@ -8765,6 +9175,11 @@ def sync_preview(plan: dict[str, list]) -> list[str]:
     lines += hold_legacy_copies(dry=True)
     lines += backfill_tap_urls(dry=True)
     lines += backfill_row_hashes(dry=True)
+    lines += [_COPY_WOULD_LINK % pair
+              for pair in plan.get("missing_copy_links", ())]
+    lines += [_COPY_WOULD_UNLINK % (n, a, stale_copy_reason(
+                  lockfile.get_workflow(n) or {}, a))
+              for n, a in plan.get("stale_copy_links", ())]
     return lines
 
 
@@ -9428,8 +9843,40 @@ def sync_apply(plan: dict[str, list]) -> list[str]:
         # (`unwritable_agent_dirs`, `blocked_agent_dirs`), with its remedy.
         if not res.unwritable and not res.blocked and not res.conflicts:
             actions.append(mat.applied)
+    # After the re-materializations above: the reinstall of a workflow whose
+    # copy went missing links it, and one that wrote an agent's file takes
+    # that agent's copy link. Asked again of the lock, so a link the plan
+    # named and a run since made unwanted is not made.
+    missing = plan.get("missing_copy_links", [])
+    stale = plan.get("stale_copy_links", [])
+    for name in dict.fromkeys(n for n, _a in (*missing, *stale)):
+        entry = lockfile.get_workflow(name)
+        if entry is None:
+            continue
+        # Only the links the plan named: a target whose path the user's own
+        # link or file holds is not a fault doctor counts, and linking every
+        # target reported it, and failed the run, whenever another agent's
+        # link needed repair.
+        linked, problems, unlinked = reconcile_copy_links(
+            name, entry, only=[a for n, a in missing if n == name])
+        actions += [_COPY_LINKED % (name, a) for a in linked]
+        # A planned link refused since: a repair not made, so a warning, and
+        # `sync` and `heal` exit 1 over it (`is_unrepaired`).
+        actions += [_COPY_NOT_LINKED % (name, why) for why in problems]
+        # Every link taken, planned or not: one a narrowing since the plan
+        # made stale goes too, and is not taken silently.
+        actions += [_COPY_UNLINKED % (name, a, stale_copy_reason(entry, a))
+                    for a in unlinked]
     # After the re-materializations above, which record their own hashes.
     actions.extend(backfill_row_hashes())
     if actions:
         journal.log("sync", "%d fixes" % len(actions))
     return actions
+
+
+_COPY_LINKED = "linked workflow %s's skill copy → %s"
+_COPY_WOULD_LINK = "would link workflow %s's skill copy → %s"
+_COPY_NOT_LINKED = "workflow %s's skill copy" + _NOT_LINKED_MARK + "%s"
+#: The last ``%s`` is :func:`stale_copy_reason`'s clause.
+_COPY_UNLINKED = "unlinked workflow %s's skill copy from %s, %s"
+_COPY_WOULD_UNLINK = "would unlink workflow %s's skill copy from %s, %s"

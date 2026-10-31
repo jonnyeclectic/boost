@@ -325,11 +325,15 @@ class TestGeminiDynamicContent:
         assert workflows.gemini_command_notes(
             "---\ndescription: uses @{x}\n---\nplain\n") == []
 
-    def test_notes_are_for_gemini_commands_only(self):
+    def test_trigger_notes_are_for_gemini_commands_only(self):
+        # Claude Code's subagent slot has notes of its own (a `tools` line
+        # naming no Claude tool, see test_claude_agent_tools); never these.
         raw = "stash@{0}\n"
         assert workflows.render_notes("gemini", workflows.SLOT_COMMANDS, raw)
         assert workflows.render_notes("gemini", workflows.SLOT_AGENTS, raw) == []
         assert workflows.render_notes("claude-code", workflows.SLOT_COMMANDS,
+                                      raw) == []
+        assert workflows.render_notes("claude-code", workflows.SLOT_AGENTS,
                                       raw) == []
         # Claude keeps the tap's bytes.
         assert workflows.render("claude-code", workflows.SLOT_COMMANDS, "x",

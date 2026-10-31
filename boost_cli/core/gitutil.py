@@ -452,6 +452,15 @@ def owned_clone(repo: Path) -> bool:
     agrees it is the top of its work tree. The last is what stops a plain
     directory there (the builtin tap) from resolving to an enclosing repo — a
     ``$HOME`` kept in git — and cleaning *that*.
+
+    git names its top in the case on disk, and ``resolve()`` keeps whatever
+    case it was given, so on APFS a tap configured as ``Leonxlnx/x`` over a
+    clone at ``repos/leonxlnx__x`` failed the last check and was never
+    cleaned. A respelling that differs **by case alone** is put to the
+    filesystem; any other is refused without asking, because ``samefile``
+    compares only ``(st_dev, st_ino)`` and a mount that reports inode 0 (some
+    FAT, SMB and FUSE ones) calls every two paths on it one file — which
+    would let the enclosing repo through.
     """
     try:
         root = paths.repos_dir().resolve()
@@ -467,7 +476,9 @@ def owned_clone(repo: Path) -> bool:
     if proc.returncode != 0:
         return False
     try:
-        return Path(proc.stdout.strip()).resolve() == real
+        top = Path(proc.stdout.strip()).resolve()
+        return top == real or (str(top).casefold() == str(real).casefold()
+                               and os.path.samefile(top, real))
     except OSError:
         return False
 
