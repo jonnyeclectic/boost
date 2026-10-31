@@ -621,13 +621,20 @@ jobs:
   # therefore it judges for itself, first: this run's suite succeeded, or the
   # suite was skipped because `proven` said so and named a run. Anything else
   # (a red or cancelled suite, a failed `proven`) is a red job, never a green
-  # badge-less one, and so is a missing artifact: no continue-on-error. That
-  # keeps today's exposure, where a failed badge push reddened the tests cell
-  # and held the release, and adds one case: a PR run whose 14-day artifact
-  # has expired. See the task report before relaxing it.
+  # badge-less one, and so is a missing artifact: no step here continues on
+  # error.
+  #
+  # The JOB does. The badge is cosmetic, and a red one must not decide whether
+  # main releases: publish.yml fires on the run's conclusion, and job-level
+  # continue-on-error leaves this job red on the run page while the run
+  # concludes on the real gates. (In the tests cell a failed badge push used to
+  # hold the release.) The PR run's report is kept 14 days; ci_proven_tree.py
+  # stops counting a PR run as proof after 13, so a proven push never names one
+  # whose artifact has expired.
   coverage-badge:
     needs: [proven, tests]
     if: ${{ always() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    continue-on-error: true
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
