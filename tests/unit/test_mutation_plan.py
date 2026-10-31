@@ -1187,6 +1187,7 @@ exit 0
         assert sum(line.startswith("gate_set=") for line in out.splitlines()) == 1
 
 
+@needs_bash
 class TestScopeByEvent:
     """Run the `can the mutation score have changed?` step's bash, stubbed."""
 
