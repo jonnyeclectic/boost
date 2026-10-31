@@ -145,7 +145,9 @@ def main() -> int:
     # this script has exited. The suite `copytree`s this repo straight away,
     # lists the lock, finds it gone, and raises `shutil.Error` — measured under
     # `pytest -n auto` with git 2.56 (test_drift_hint, one run in three).
-    # Repo-local, so every copy and clone-source of the fixture inherits it.
+    # Repo-local, so every `copytree` of the fixture inherits it; a `git clone`
+    # does not (it writes a fresh .git/config), which is why the suite also
+    # sets it process-wide in conftest's `_disable_git_auto_maintenance`.
     run("git", "config", "maintenance.auto", "false")
     run("git", "add", "-A")
     run("git", "commit", "-qm", "fixture skills")
