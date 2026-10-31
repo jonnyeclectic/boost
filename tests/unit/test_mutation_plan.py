@@ -443,6 +443,12 @@ class MergedRepo:
         self.c2 = self._commit("c.txt", "2")
         _git(root, "merge", "-q", "--no-ff", "-m", "merge", "feature")
         self.merge = _git(root, "rev-parse", "HEAD")
+        # The same two commits merged the other way round: main into the
+        # branch, so the PR head is the FIRST parent and main the second.
+        _git(root, "checkout", "-q", "-b", "reversed", self.c1)
+        _git(root, "merge", "-q", "--no-ff", "-m", "reversed", self.c2)
+        self.reversed = _git(root, "rev-parse", "HEAD")
+        _git(root, "checkout", "-q", "main")
 
     def _commit(self, name: str, text: str) -> str:
         (self.root / name).write_text(text, encoding="utf-8")
@@ -461,6 +467,33 @@ def test_a_pr_merge_commit_diffs_against_its_first_parent(merged):
     # base.sha is deliberately stale (c0): the merge commit's parent wins.
     base, why = mp.diff_base(merged.root, "pull_request", merged.merge,
                              base_sha=merged.c0, head_sha=merged.c1)
+    assert base == merged.c2
+    assert "first parent" in why
+
+
+def test_a_merge_whose_second_parent_is_not_the_pr_head_falls_back(merged):
+    # Parents reversed: trusting parents[0] would make the PR head the base,
+    # and the scope would be main's interim changes with the PR's own dropped
+    # -- narrower, silently, under a gate that binds (Task 7 review M2).
+    base, why = mp.diff_base(merged.root, "pull_request", merged.reversed,
+                             base_sha=merged.c2, head_sha=merged.c1)
+    assert base == merged.c0
+    assert "merge base" in why
+    assert "second parent" in why
+
+
+def test_a_merge_of_some_other_head_falls_back(merged):
+    # Two parents, but the second is not the head the event names (a stale
+    # head.sha, or a merge commit built from a different push).
+    base, why = mp.diff_base(merged.root, "pull_request", merged.merge,
+                             base_sha=merged.c2, head_sha=merged.c2)
+    assert base == merged.c2      # merge-base(c2, c2)
+    assert "merge base" in why
+
+
+def test_an_abbreviated_head_sha_still_matches_the_second_parent(merged):
+    base, why = mp.diff_base(merged.root, "pull_request", merged.merge,
+                             base_sha=merged.c0, head_sha=merged.c1[:12])
     assert base == merged.c2
     assert "first parent" in why
 
@@ -488,17 +521,22 @@ def test_no_other_event_has_a_diff_base(merged, event):
                      head_sha=merged.c1)
 
 
-@pytest.mark.parametrize("event, sha, base_sha", [
-    ("pull_request", "0" * 40, "c2"),        # the commit under test is unknown
-    ("pull_request", "c1", ""),              # no merge commit, and no base to widen to
-    ("merge_group", "merge", ""),            # the queue sent no base
-    ("merge_group", "merge", "0" * 40),      # or one this clone lacks
+@pytest.mark.parametrize("event, sha, base_sha, head_sha", [
+    ("pull_request", "0" * 40, "c2", "c1"),     # the commit under test is unknown
+    ("pull_request", "c1", "", "c1"),           # no merge commit, and no base to widen to
+    # A merge commit, but no head to check its second parent against: the
+    # first parent is no longer taken on trust, and there is nothing to widen to.
+    ("pull_request", "merge", "c2", ""),
+    ("pull_request", "merge", "c2", "0" * 40),
+    ("merge_group", "merge", "", "c1"),         # the queue sent no base
+    ("merge_group", "merge", "0" * 40, "c1"),   # or one this clone lacks
 ])
-def test_an_unusable_sha_is_an_error_never_a_guess(merged, event, sha, base_sha):
+def test_an_unusable_sha_is_an_error_never_a_guess(merged, event, sha, base_sha, head_sha):
     sha = getattr(merged, sha, sha)
     base_sha = getattr(merged, base_sha, base_sha)
+    head_sha = getattr(merged, head_sha, head_sha)
     with pytest.raises(subprocess.CalledProcessError):
-        mp.diff_base(merged.root, event, sha, base_sha=base_sha, head_sha=merged.c1)
+        mp.diff_base(merged.root, event, sha, base_sha=base_sha, head_sha=head_sha)
 
 
 def test_base_prints_the_sha_alone_and_logs_why(merged, capsys):

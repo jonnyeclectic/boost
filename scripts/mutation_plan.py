@@ -173,13 +173,17 @@ def diff_base(root: Path, event: str, sha: str, *, base_sha: str,
     """The commit to diff ``sha`` against, and a line saying how it was chosen.
 
     ``sha`` is the commit the shards check out. On a pull request that is
-    GitHub's merge commit (``refs/pull/N/merge``), whose first parent is the
-    base it was merged onto: diffing against it is the PR's change exactly as
-    applied to the tree the shards test. When ``sha`` is not a two-parent
-    merge, the merge base of the event's base and head stands in. It is wider
-    whenever main has moved since the branch point (main's interim changes
-    join the scope), which is the safe direction. A merge-queue entry is
-    built on ``base_sha``, so that is its base.
+    GitHub's merge commit (``refs/pull/N/merge``), whose parents are the base
+    it was merged onto and then the PR head: diffing against the first is the
+    PR's change exactly as applied to the tree the shards test. That parent is
+    taken only when the second one IS the event's head. Merged the other way
+    round, the first parent would be the PR head itself, and the scope would
+    silently invert to main's interim changes with the PR's own dropped -- a
+    narrower gate that still binds. Anything else (not two parents, or a
+    second parent that is not the head) gets the merge base of the event's
+    base and head. It is wider whenever main has moved since the branch point
+    (main's interim changes join the scope), which is the safe direction. A
+    merge-queue entry is built on ``base_sha``, so that is its base.
 
     Every git failure propagates (``check=True``): an unknown or empty SHA
     must stop the diff plan, and ci.yml then plans the full run instead.
@@ -187,12 +191,17 @@ def diff_base(root: Path, event: str, sha: str, *, base_sha: str,
     if event == "pull_request":
         line = _git(root, "rev-list", "--parents", "-n1", sha + "^{commit}")
         parents = line.decode("utf-8").split()[1:]
-        if len(parents) == 2:
+        # Resolved, so an abbreviated head still compares; an empty or
+        # unknown one fails here rather than waving the first parent through.
+        head = _git(root, "rev-parse", "--verify", head_sha + "^{commit}")
+        head = head.decode("utf-8").strip()
+        if len(parents) == 2 and parents[1] == head:
             return parents[0], "first parent of %s (the PR as merged)" % sha
+        why = ("%s has %d parents, not 2" % (sha, len(parents)) if len(parents) != 2
+               else "%s's second parent is %s, not the PR head" % (sha, parents[1]))
         base = _git(root, "merge-base", base_sha, head_sha).decode("utf-8").strip()
-        return base, ("merge base of %s and %s (%s has %d parents, not 2; "
-                      "wider than the PR alone)"
-                      % (base_sha, head_sha, sha, len(parents)))
+        return base, ("merge base of %s and %s (%s; wider than the PR alone)"
+                      % (base_sha, head_sha, why))
     if event == "merge_group":
         base = _git(root, "rev-parse", "--verify", base_sha + "^{commit}")
         return base.decode("utf-8").strip(), "merge_group base_sha %s" % base_sha
