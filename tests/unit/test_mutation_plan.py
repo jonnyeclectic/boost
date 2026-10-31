@@ -20,6 +20,7 @@ import importlib.util
 import io
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -531,3 +532,359 @@ def test_shard_artifacts_are_named_by_set(jobs):
                  if s.get("uses", "").startswith("actions/download-artifact")]
     assert "mutation-full-shard-*" in downloads
     assert "--prefix mutation-full-shard-" in _run_text(jobs["mutation"])
+    assert "mutation-diff-shard-*" in downloads
+
+
+# --------------------------------------------------------------------------
+# ci.yml wiring: shadow mode (full binds, diff runs alongside and is compared)
+# --------------------------------------------------------------------------
+#
+# The static checks pin where things are; the bash-driven ones below run the
+# steps' own shell, with stubs for python and git, because what matters is the
+# exit code each combination of upstream results produces, and a regex over a
+# `case` statement cannot tell `exit 1` in the wrong arm from the right one.
+
+needs_bash = pytest.mark.skipif(
+    sys.platform == "win32" or not shutil.which("bash") or not shutil.which("jq"),
+    reason="runs a workflow step's bash, which needs bash and jq (ubuntu runners have both)")
+
+MUTATION_JOBS = ("mutation-plan", "mutation-shard", "mutation")
+
+
+def _step(job: dict, *, name: str | None = None, step_id: str | None = None,
+          runs: str | None = None) -> dict:
+    found = [s for s in job["steps"]
+             if (name is None or s.get("name") == name)
+             and (step_id is None or s.get("id") == step_id)
+             and (runs is None or runs in s.get("run", ""))]
+    assert len(found) == 1, "expected one step (name=%r id=%r runs=%r), found %d" % (
+        name, step_id, runs, len(found))
+    return found[0]
+
+
+def _uploads(job: dict) -> dict:
+    return {s["with"]["name"]: s for s in job["steps"]
+            if s.get("uses", "").startswith("actions/upload-artifact")}
+
+
+def _downloads(job: dict) -> dict:
+    return {s["with"].get("pattern") or s["with"].get("name"): s for s in job["steps"]
+            if s.get("uses", "").startswith("actions/download-artifact")}
+
+
+def _stub(path: Path, body: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("#!/bin/bash\n" + body, encoding="utf-8")
+    path.chmod(0o755)
+
+
+def _bash(step: dict, cwd: Path, env: dict) -> subprocess.CompletedProcess:
+    # `bash -e {0}` is what an ubuntu runner runs a `run:` with when the job
+    # sets no `shell:` -- note: no pipefail, which is why the shadow step must
+    # capture exit codes itself rather than pipe through tee.
+    script = cwd / "step.sh"
+    script.write_text(step["run"], encoding="utf-8")
+    full = {"PATH": os.environ["PATH"], "HOME": str(cwd)}
+    full.update(env)
+    return subprocess.run(["bash", "-e", str(script)], cwd=cwd, env=full,
+                          capture_output=True, text=True)
+
+
+def _outputs(path: Path) -> dict:
+    return dict(line.split("=", 1) for line in
+                path.read_text(encoding="utf-8").splitlines() if "=" in line)
+
+
+def test_no_mutation_job_expands_an_expression_inside_run(jobs):
+    # zizmor's template-injection class, wholesale: every `${{ }}` a `run:`
+    # needs goes through `env:` -- matrix values and job outputs included.
+    for name in MUTATION_JOBS:
+        for step in jobs[name]["steps"]:
+            assert "${{" not in step.get("run", ""), (name, step.get("name"))
+
+
+def test_the_planner_checkout_has_every_object(jobs):
+    # The diff planner reads base and head blobs with `git show`; a shallow
+    # or blob-filtered clone makes that fail (or, worse, a lazy fetch fail).
+    (checkout,) = [s for s in jobs["mutation-plan"]["steps"]
+                   if s.get("uses", "").startswith("actions/checkout")]
+    assert checkout["with"]["fetch-depth"] == 0
+    assert "filter" not in checkout["with"]
+
+
+def test_the_planner_takes_the_merge_base_from_the_events_own_shas(jobs):
+    step = _step(jobs["mutation-plan"], step_id="plan")
+    env = step["env"]
+    assert env["EVENT"] == "${{ github.event_name }}"
+    assert env["BASE_SHA"] == ("${{ github.event.pull_request.base.sha"
+                               " || github.event.merge_group.base_sha }}")
+    assert env["HEAD_SHA"] == ("${{ github.event.pull_request.head.sha"
+                               " || github.event.merge_group.head_sha }}")
+    assert 'git merge-base "$BASE_SHA" "$HEAD_SHA"' in step["run"]
+
+
+def test_the_planner_exports_whether_the_plan_is_shadow(jobs):
+    assert jobs["mutation-plan"]["outputs"]["shadow"] == "${{ steps.plan.outputs.shadow }}"
+
+
+class TestPlannerByEvent:
+    """Run the `write the plan` step's bash with python and git stubbed."""
+
+    @pytest.fixture
+    def planner(self, jobs, tmp_path):
+        step = _step(jobs["mutation-plan"], step_id="plan")
+        bin_dir = tmp_path / "bin"
+        calls = tmp_path / "calls.log"
+        # One stub for both interpreters: it logs which one ran ($0) and writes
+        # a plan of the shape the real subcommand would, so the step's own jq
+        # and matrix lines run against something real.
+        stub = r'''
+echo "$0 $*" >> "$CALLS"
+out=""; prev=""
+for a in "$@"; do [ "$prev" = "--out" ] && out="$a"; prev="$a"; done
+case " $* " in
+  *" matrix "*) echo '[{"set":"full","index":0}]'; exit 0 ;;
+  *" --shadow "*) plan='{"gate_set":"full","reasons":[],"sets":{"diff":{"shards":[]},"full":{"shards":[["a"]]}}}' ;;
+  *" none "*) plan='{"gate_set":null,"reasons":["n"],"sets":{}}' ;;
+  *) plan='{"gate_set":"full","reasons":[],"sets":{"full":{"shards":[["a"]]}}}' ;;
+esac
+[ -n "$out" ] && echo "$plan" > "$out"
+exit 0
+'''
+        _stub(bin_dir / "python3", stub)
+        _stub(tmp_path / ".venv" / "bin" / "python", stub)
+        _stub(bin_dir / "git", r'''
+echo "git $*" >> "$CALLS"
+if [ "$1" = merge-base ]; then
+  [ -n "$MB_FAIL" ] && exit 128
+  echo forkpoint0; exit 0
+fi
+exit 0
+''')
+
+        def run(event: str, relevant: str = "true", **extra: str):
+            out = tmp_path / "github_output"
+            out.write_text("", encoding="utf-8")
+            env = {"PATH": "%s%s%s" % (bin_dir, os.pathsep, os.environ["PATH"]),
+                   "CALLS": str(calls), "GITHUB_OUTPUT": str(out),
+                   "GITHUB_SHA": "mergecommit0", "EVENT": event, "RELEVANT": relevant,
+                   "BASE_SHA": "basetip0" if event != "push" else "",
+                   "HEAD_SHA": "prhead0" if event != "push" else ""}
+            env.update(extra)
+            proc = _bash(step, tmp_path, env)
+            assert proc.returncode == 0, proc.stdout + proc.stderr
+            log = calls.read_text(encoding="utf-8").splitlines()
+            calls.unlink()
+            plans = [line for line in log if "--out mutation-plan.json" in line]
+            assert len(plans) == 1, log
+            return plans[0], log, _outputs(out)
+        return run
+
+    @pytest.mark.parametrize("event", ["pull_request", "merge_group"])
+    def test_prs_and_the_queue_plan_diff_in_shadow(self, planner, event):
+        plan, log, outputs = planner(event)
+        assert plan.startswith(".venv/bin/python scripts/mutation_plan.py diff "), plan
+        assert " --shadow " in plan + " "
+        assert " --shards 24 " in plan
+        # The branch point comes from the event's own base and head ...
+        assert "git merge-base basetip0 prhead0" in log
+        assert " --base forkpoint0 " in plan
+        # ... but the far end is the commit every shard checks out and the
+        # stats were taken at. The PR head would count mutants of a tree no
+        # shard mutates, and the gate refuses a shortfall as INCOMPLETE.
+        assert " --head mergecommit0 " in plan
+        assert " --stats mutants/mutmut-stats.json " in plan
+        assert outputs["shadow"] == "true"
+        assert outputs["gate_set"] == "full"
+
+    @pytest.mark.parametrize("event", ["push", "schedule", "workflow_dispatch"])
+    def test_everything_else_plans_full(self, planner, event):
+        plan, log, outputs = planner(event)
+        assert "python3 scripts/mutation_plan.py full --shards 24 " in plan
+        assert not any("merge-base" in line for line in log)
+        assert outputs["shadow"] == "false"
+        assert outputs["gate_set"] == "full"
+
+    def test_no_merge_base_falls_back_to_full(self, planner):
+        # A missing or unfetched base must widen the gate, never empty it.
+        plan, _, outputs = planner("pull_request", MB_FAIL="1")
+        assert "scripts/mutation_plan.py full --shards 24 " in plan
+        assert outputs["shadow"] == "false"
+
+    @pytest.mark.parametrize("event", ["pull_request", "push"])
+    def test_an_irrelevant_change_plans_nothing(self, planner, event):
+        plan, log, outputs = planner(event, relevant="false")
+        assert "scripts/mutation_plan.py none " in plan
+        assert not any("merge-base" in line for line in log)
+        assert outputs["gate_set"] == ""
+        assert outputs["shadow"] == "false"
+
+
+FULL2 = '[{"set":"full","index":0},{"set":"full","index":1}]'
+SHADOW3 = ('[{"set":"full","index":0},{"set":"full","index":1},'
+           '{"set":"diff","index":0}]')
+
+
+@needs_bash
+@pytest.mark.parametrize("plan, shards, matrix, gate_set, shadow, rc", [
+    # nothing mutable changed: the only green with no shards
+    ("success", "skipped", "[]", "", "false", 0),
+    # the planner did not finish: its empty outputs must not read as "none"
+    ("failure", "skipped", "", "", "", 1),
+    ("cancelled", "skipped", "", "", "", 1),
+    # push: full plan
+    ("success", "success", FULL2, "full", "false", 0),
+    ("success", "failure", FULL2, "full", "false", 1),
+    ("success", "cancelled", FULL2, "full", "false", 1),
+    # PR / merge_group: shadow plan. A failed DIFF shard is red too -- the
+    # matrix is one job, and a comparison with a hole in it is not one.
+    ("success", "success", SHADOW3, "full", "true", 0),
+    ("success", "failure", SHADOW3, "full", "true", 1),
+    ("success", "cancelled", SHADOW3, "full", "true", 1),
+    # a full gate with nothing to score
+    ("success", "skipped", "[]", "full", "false", 1),
+    # `diff` is legal in the plan but nothing here binds on it yet
+    ("success", "success", '[{"set":"diff","index":0}]', "diff", "false", 1),
+    ("success", "skipped", "[]", "diff", "false", 1),
+    # unknown, and a shadow plan that would not gate on the full set
+    ("success", "success", FULL2, "bogus", "false", 1),
+    ("success", "success", SHADOW3, "", "true", 1),
+])
+def test_the_gate_is_conclusive_for_every_upstream_outcome(
+        jobs, tmp_path, plan, shards, matrix, gate_set, shadow, rc):
+    step = _step(jobs["mutation"], name="upstream jobs must be conclusive")
+    assert "if" not in step, "the conclusive check must never be skipped"
+    assert step["env"]["SHADOW"] == "${{ needs.mutation-plan.outputs.shadow }}"
+    proc = _bash(step, tmp_path, {"PLAN": plan, "SHARDS": shards, "MATRIX": matrix,
+                                  "GATE_SET": gate_set, "SHADOW": shadow})
+    assert proc.returncode == rc, proc.stdout + proc.stderr
+    if rc:
+        assert "::error::" in proc.stdout
+
+
+def test_full_and_diff_results_download_to_separate_dirs(jobs):
+    job = jobs["mutation"]
+    downloads = _downloads(job)
+    full, diff = downloads["mutation-full-shard-*"], downloads["mutation-diff-shard-*"]
+    full_dir, diff_dir = full["with"]["path"], diff["with"]["path"]
+    assert full_dir != diff_dir
+    assert not full_dir.startswith(diff_dir) and not diff_dir.startswith(full_dir)
+    assert full["if"] == "needs.mutation-plan.outputs.gate_set == 'full'"
+    assert diff["if"] == "needs.mutation-plan.outputs.shadow == 'true'"
+    # Every consumer reads the dir its set landed in.
+    merge = _step(job, runs="mutation_shards.py merge")["run"]
+    assert "--source %s " % full_dir in merge
+    assert "--prefix mutation-full-shard-" in merge
+    shadow = _step(job, step_id="shadow")["run"]
+    assert "--full-source %s " % full_dir in shadow
+    assert "--diff-source %s " % diff_dir in shadow
+    assert "--source %s " % diff_dir in shadow
+    assert "--prefix mutation-diff-shard-" in shadow
+    # The gate and compare read the plan the shards ran from.
+    assert downloads["mutation-plan"]["if"] == "needs.mutation-plan.outputs.shadow == 'true'"
+
+
+def test_only_the_shadow_step_continues_on_error(jobs):
+    job = jobs["mutation"]
+    lenient = [s for s in job["steps"] if s.get("continue-on-error")]
+    assert [s.get("id") for s in lenient] == ["shadow"]
+    shadow = lenient[0]
+    assert shadow["continue-on-error"] is True
+    assert shadow["if"] == "needs.mutation-plan.outputs.shadow == 'true'"
+    run = shadow["run"]
+    assert ".venv/bin/python scripts/mutation_diff.py compare " in run
+    assert ".venv/bin/python scripts/mutation_diff.py gate " in run
+    assert '--root "$GITHUB_WORKSPACE"' in run
+    # Nowhere else: in shadow the diff gate is data, never the verdict.
+    others = "\n".join(s.get("run", "") for s in job["steps"] if s is not shadow)
+    assert "mutation_diff.py" not in others
+
+
+def test_the_binding_gate_is_the_one_gate_set_names(jobs):
+    job = jobs["mutation"]
+    gate = _step(job, runs="scripts/mutation_gate.py")
+    assert gate["if"] == "needs.mutation-plan.outputs.gate_set == 'full'"
+    assert "continue-on-error" not in gate
+    # The merge it scores comes from full shards only, and is what the weights
+    # are measured from: a diff run's partial weights would repack on a sliver.
+    assert "--into mutants " in _step(job, runs="mutation_shards.py merge")["run"]
+    weights = _uploads(job)["mutation-weights"]
+    assert weights["if"] == "needs.mutation-plan.outputs.gate_set == 'full'"
+    assert "--source mutants" in _step(job, runs="mutation_shards.py weights")["run"]
+
+
+def test_the_shadow_report_is_summarised_and_uploaded(jobs):
+    job = jobs["mutation"]
+    run = _step(job, step_id="shadow")["run"]
+    assert "Diff-gate shadow" in run
+    assert '>> "$GITHUB_STEP_SUMMARY"' in run
+    report = _uploads(job)["mutation-shadow-report"]
+    assert report["with"]["path"] == "mutation-shadow-report.md"
+    assert report["if"] == "needs.mutation-plan.outputs.shadow == 'true'"
+    assert "continue-on-error" not in report
+    # After the shadow step, before the merge: a red full gate is exactly the
+    # run whose report is worth reading.
+    names = [s.get("id") or s.get("name") or s.get("uses") for s in job["steps"]]
+    order = [names.index("shadow"), names.index(report.get("name")),
+             names.index(_step(job, runs="mutation_shards.py merge")["name"])]
+    assert order == sorted(order)
+
+
+@needs_bash
+@pytest.mark.parametrize("gate_rc, compare_rc, rc", [
+    (0, 0, 0),
+    (1, 0, 0),   # the diff gate says FAIL: data for the comparison, not an error
+    (0, 1, 1),   # a killed/not-killed disagreement: the step goes red, visibly
+    (0, 2, 1),   # an incomplete comparison
+    (2, 2, 1),   # unrun diff results
+    (2, 0, 1),
+])
+def test_the_shadow_step_fails_visibly_on_disagreement(
+        jobs, tmp_path, gate_rc, compare_rc, rc):
+    step = _step(jobs["mutation"], step_id="shadow")
+    _stub(tmp_path / ".venv" / "bin" / "python", r'''
+case "$*" in
+  *"mutation_diff.py gate "*)
+    echo "mutation diff gate: stub"
+    [ -n "$GITHUB_STEP_SUMMARY" ] && echo "### Mutation (diff scope): STUB" >> "$GITHUB_STEP_SUMMARY"
+    exit "$GATE_RC" ;;
+  *"mutation_diff.py compare "*)
+    echo "agree 7, disagree 0, excluded-timeouts 0"
+    exit "$COMPARE_RC" ;;
+esac
+exit 99
+''')
+    summary = tmp_path / "summary.md"
+    runner_temp = tmp_path / "runner-temp"
+    runner_temp.mkdir()
+    proc = _bash(step, tmp_path, {
+        "GATE_RC": str(gate_rc), "COMPARE_RC": str(compare_rc),
+        "GITHUB_STEP_SUMMARY": str(summary), "RUNNER_TEMP": str(runner_temp),
+        "GITHUB_WORKSPACE": str(tmp_path)})
+    assert proc.returncode == rc, proc.stdout + proc.stderr
+    report = (tmp_path / "mutation-shadow-report.md").read_text(encoding="utf-8")
+    assert report.startswith("## Diff-gate shadow\n")
+    assert "agree 7, disagree 0, excluded-timeouts 0" in report
+    # The diff gate's own summary lands in the report, not as a top-level
+    # verdict in the job summary a reader would take for the binding one.
+    assert "### Mutation (diff scope): STUB" in report
+    assert summary.read_text(encoding="utf-8") == report
+
+
+@needs_bash
+@pytest.mark.parametrize("present, rc", [
+    (["full/mutation-full-shard-0", "full/mutation-full-shard-1",
+      "diff/mutation-diff-shard-0"], 0),
+    (["full/mutation-full-shard-0", "full/mutation-full-shard-1"], 1),
+    (["full/mutation-full-shard-0", "diff/mutation-diff-shard-0"], 1),
+])
+def test_every_planned_shard_must_have_uploaded(jobs, tmp_path, present, rc):
+    job = jobs["mutation"]
+    step = _step(job, name="every planned shard uploaded results")
+    assert step["if"] == "needs.mutation-plan.outputs.gate_set == 'full'"
+    assert "continue-on-error" not in step
+    root = Path(_downloads(job)["mutation-full-shard-*"]["with"]["path"]).parent
+    for rel in present:
+        (tmp_path / root / rel).mkdir(parents=True)
+    proc = _bash(step, tmp_path, {"MATRIX": SHADOW3})
+    assert proc.returncode == rc, proc.stdout + proc.stderr
