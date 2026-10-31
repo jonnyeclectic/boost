@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 import shutil
 import sqlite3
+import stat
 import subprocess
 import sys
 import tempfile
@@ -973,7 +974,28 @@ def fixture_tap_src(tmp_path_factory):
     subprocess.run(
         [sys.executable, str(ROOT / "tests" / "make_fixture.py"), str(dest)],
         check=True, capture_output=True)
+    _make_objects_writable(dest)
     return dest
+
+
+def _make_objects_writable(repo: Path) -> None:
+    """Clear the read-only bit git puts on every file under ``.git/objects``.
+
+    `boost tap` of this repo is a local `git clone`, which hardlinks those
+    files, so every clone in the session shares their read-only inodes, and a
+    `copytree` of the repo copies the mode. Windows will not unlink a
+    read-only file, so a test's `shutil.rmtree(tap.path)` (an upstream or clone
+    "deleted out from under us") raised PermissionError. Run serially, test
+    order hid it: the first test whose clone went through `util.rmtree`
+    (`untap`, `update`'s cleanup) had its read-only retry chmod the shared
+    inodes, and every clone after that in the process could be deleted. Under
+    pytest-xdist each worker has its own fixture repo and its own order, and
+    seventeen tests failed across the Windows cells. Clearing the bit once here
+    gives every clone the state those tests used to inherit by luck.
+    """
+    for path in (repo / ".git" / "objects").rglob("*"):
+        if path.is_file():
+            path.chmod(path.stat().st_mode | stat.S_IWRITE)
 
 
 class _MinisignSigner:
