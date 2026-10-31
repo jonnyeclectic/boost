@@ -1368,7 +1368,16 @@ def test_the_planner_runs_the_mutmut_backed_tests(jobs):
     assert stats < steps.index(step) < plan
 
 
+# mutmut runs the suite from its `mutants/` copy, where every mutated module
+# opens with `from mutmut.mutation.trampoline import ...`. Blocking mutmut there
+# breaks `import boost_cli.core` itself, before any mutmut-backed test is
+# reached, so the probe cannot model "mutmut is absent" in that tree.
+_IN_MUTANTS_COPY = "from mutmut." in (
+    ROOT / "boost_cli" / "core" / "__init__.py").read_text(encoding="utf-8")
+
+
 @needs_bash
+@pytest.mark.skipif(_IN_MUTANTS_COPY, reason="the mutated tree imports mutmut by construction")
 def test_a_required_mutmut_is_an_error_not_a_skip(tmp_path):
     # The fixture's contract, checked from the outside: with mutmut blocked
     # and BOOST_REQUIRE_MUTMUT=1, a mutmut-backed test errors instead of
