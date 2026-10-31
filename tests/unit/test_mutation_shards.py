@@ -53,6 +53,12 @@ def test_irrelevant_changes_skip(changed):
     # a new assertion can kill a survivor without touching any source
     ["tests/unit/test_store.py"],
     ["tests/conftest.py"],
+    ["conftest.py"],
+    # pytest reads a pytest.ini before pyproject.toml's ini options, so it
+    # changes how every test runs wherever it sits (mutation_diff makes it a
+    # full-run trigger; that is only reachable if the change is relevant)
+    ["pytest.ini"],
+    ["tests/unit/pytest.ini"],
     # mutmut's own configuration
     ["setup.cfg"],
     ["pyproject.toml"],

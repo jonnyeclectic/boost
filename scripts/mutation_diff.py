@@ -133,6 +133,16 @@ def _pytest_table(text: str | None):
     return tomllib.loads(text).get("tool", {}).get("pytest", {}).get("ini_options")
 
 
+def _mutmut_table(text: str | None):
+    # mutmut 3.8.0 (configuration.py) returns [tool.mutmut] when the table
+    # exists and then never reads setup.cfg, so it is the same trigger as
+    # setup.cfg [mutmut]: a `do_not_mutate` added here narrows every run,
+    # the nightly's included.
+    if text is None:
+        return None
+    return tomllib.loads(text).get("tool", {}).get("mutmut")
+
+
 def _mutation_jobs(text: str | None):
     if text is None:
         return None
@@ -145,10 +155,24 @@ def _mutation_jobs(text: str | None):
 def full_run_reasons(
     changed_paths: list[str], read: Callable[[str, str], str | None]
 ) -> list[str]:
-    """Changed files that change how every mutant is run; empty means no trigger."""
+    """Changed files that change how every mutant is run; empty means no trigger.
+
+    Also the changes the diff scope cannot see and would otherwise pass with
+    0 shards: a file in a subpackage of boost_cli/core (mutmut's source_paths
+    is recursive, the scope reads boost_cli/core/*.py only), and any
+    conftest.py or pytest.ini (each changes how every test runs, the reason
+    [tool.pytest.ini_options] is a trigger).
+    """
     reasons: list[str] = []
     for p in changed_paths:
         name = PurePosixPath(p)
+        if name.name in ("conftest.py", "pytest.ini"):
+            reasons.append(f"{p} changed")
+            continue
+        if (name.suffix == ".py" and PurePosixPath(CORE_DIR) in name.parents
+                and str(name.parent) != CORE_DIR):
+            reasons.append(f"core subpackage file changed: {p}")
+            continue
         if _is_core_module(p):
             # compute_function_hashes swallows SyntaxError and returns {}, which
             # would read as "no function changed" and fail open. Say so instead.
@@ -166,25 +190,29 @@ def full_run_reasons(
                 hit = _mutmut_section(read("base", p)) != _mutmut_section(
                     read("head", p)
                 )
-                why = "setup.cfg [mutmut] changed"
+                found = ["setup.cfg [mutmut] changed"] if hit else []
             elif p == "requirements/mutation-tools.txt" or (
                 name.parent == PurePosixPath("scripts")
                 and name.name.startswith("mutation_")
                 and name.suffix == ".py"
             ):
-                hit, why = True, f"{p} changed"
+                found = [f"{p} changed"]
             elif p == CI_YML:
                 hit = _mutation_jobs(read("base", p)) != _mutation_jobs(read("head", p))
-                why = "ci.yml jobs.mutation* changed"
+                found = ["ci.yml jobs.mutation* changed"] if hit else []
             elif p == "pyproject.toml":
-                hit = _pytest_table(read("base", p)) != _pytest_table(read("head", p))
-                why = "pyproject.toml [tool.pytest.ini_options] changed"
+                base, head = read("base", p), read("head", p)
+                found = [
+                    f"pyproject.toml [{table}] changed"
+                    for table, of in (("tool.pytest.ini_options", _pytest_table),
+                                      ("tool.mutmut", _mutmut_table))
+                    if of(base) != of(head)
+                ]
             else:
                 continue
         except _PARSE_ERRORS:
-            hit, why = True, f"{p} unparsable"
-        if hit:
-            reasons.append(why)
+            found = [f"{p} unparsable"]
+        reasons.extend(found)
     return reasons
 
 
