@@ -19,7 +19,15 @@ only when all three facts hold:
    before now. The age bound is the badge's: on a proven push ci.yml publishes
    the coverage badge from that run's ``coverage-report`` artifact, which is
    kept 14 days, so an older run cannot stand in for this push's tests. A full
-   run then measures its own;
+   run then measures its own. And that run carries a live (unexpired)
+   artifact named ``tested-tree-<this commit's tree>``. Every ``pull_request``
+   run uploads one (ci.yml's ``lint`` job), named for ``HEAD^{tree}`` of the
+   merge commit it checked out -- the tree it actually built. A run is found
+   by its head SHA, and a head SHA does not say which base the run merged it
+   into: a PR retargeted to ``main`` after its run (a base change starts no
+   new run) or the same head open into a second base can leave a green run
+   that built ``head + another branch``, whose head tree still equals the
+   tree that lands. Fact 1 cannot see that; this name can;
 3. the newest completed whole-codebase run on ``main`` (``schedule`` or
    ``workflow_dispatch``, whichever is newer) concluded ``success`` and was
    created at most 48 hours before now. This is the backstop for what a
@@ -53,7 +61,10 @@ shape gives ``true``. Concretely:
   be 1: a re-run is the "cancelled or re-run" case in the plan's review focus, and
   the cost of reading it as unproven is one extra mutation run. A run object that
   lacks one of those fields yields a value ``decide`` rejects; absence is never
-  defaulted into "fine".
+  defaulted into "fine". Likewise the artifact listing is asked for one name
+  and every entry is checked for exactly that name, an ``expired`` that is the
+  boolean ``false``, and no other run's id; a listing of the wrong shape, or a
+  failed request for it, is an error like any other.
 * The nightly's age, and the PR run's, are judged against ``now``, which is
   injectable (``decide``'s ``now=``, the CLI's ``--now``) so tests do not depend
   on the day they run; production never passes it. A ``created_at`` that is
@@ -79,7 +90,9 @@ The shapes this reads were checked against the live API for this repository:
 ``commits/{sha}/pulls`` returns a list whose items carry ``head.sha``;
 ``git/commits/{sha}`` carries ``tree.sha`` (a squash-merged PR's head and merge
 commit report the same one); a ``workflow_runs`` item carries ``id``, ``event``,
-``head_sha``, ``status``, ``conclusion``, ``run_attempt`` and ``created_at``.
+``head_sha``, ``status``, ``conclusion``, ``run_attempt`` and ``created_at``;
+``actions/runs/{id}/artifacts?name=`` returns ``artifacts``, a list whose items
+carry ``name``, ``expired`` and ``workflow_run.id``.
 """
 from __future__ import annotations
 
@@ -121,8 +134,15 @@ MAX_NIGHTLY_AGE = timedelta(hours=48)
 # `coverage-report` artifact 14 days, and on a proven push `coverage-badge`
 # downloads it from the run this script names; a day's margin keeps a run near
 # the edge from expiring between this decision and that download. "More than"
-# again: exactly 13 days still proves.
+# again: exactly 13 days still proves. The `tested-tree-<tree>` artifact is
+# kept at least as long (tests/unit/test_ci_proven_tree.py pins it), so a run
+# young enough to prove never loses the record of what it built first.
 MAX_PR_RUN_AGE = timedelta(days=13)
+
+# The artifact every `pull_request` run of ci.yml uploads, suffixed with the
+# tree of the merge commit it checked out. ci.yml spells the same prefix; the
+# test of that step reads it from here.
+TESTED_TREE_ARTIFACT = "tested-tree-"
 
 # How far ahead of the runner's clock a run's created_at may be before it is
 # treated as corrupt rather than as clock skew.
@@ -133,11 +153,28 @@ MAX_REASONS = 5
 MAX_REASON_CHARS = 500
 
 _COMMIT = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?")      # sha-1 or sha-256
+_OBJECT = _COMMIT       # a tree id has a commit id's shape
 # owner/name, and neither half may be "." or "..": the value is spliced into a
 # URL path, and `../x` would match a bare character class.
 _REPO = re.compile(r"(?!\.{1,2}/)[A-Za-z0-9_.-]+/(?!\.{1,2}$)[A-Za-z0-9_.-]+")
 
 Api = Callable[[str], Any]
+
+
+@dataclass(frozen=True)
+class Artifact:
+    """One entry of a run's artifact listing, as far as the proof reads it.
+
+    ``expired`` is the entry's own flag, or ``None`` when it has none or a
+    non-boolean one -- which ``decide`` does not read as live. ``run_id`` is the
+    run the entry says it belongs to (``workflow_run.id``), or ``None`` when it
+    does not say: the listing is already per run, so absence is tolerated, but
+    a different run is a contradiction ``decide`` refuses.
+    """
+
+    name: str
+    expired: bool | None
+    run_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -154,6 +191,13 @@ class Candidate:
     ``run_created_at`` has no such default, because no query pins it: ``None``
     is "unknown", and ``decide`` never skips on it. ``gather`` fills it from the
     run's own ``created_at`` (``None`` when missing, unparseable or naive).
+
+    ``artifacts`` has none either: it is what the run's artifact listing
+    returned for ``tested-tree-<this commit's tree>`` (see the module
+    docstring, fact 2), and empty -- the default -- is "this run never said it
+    built that tree", which ``decide`` never skips on. ``gather`` lists them
+    for every run it finds; the server's ``name`` filter is not trusted, so
+    every entry is kept for ``decide`` to check.
     """
 
     head_sha: str
@@ -164,6 +208,7 @@ class Candidate:
     run_head_sha: str | None = None     # None: the run is for ``head_sha``
     run_attempt: int = 1
     run_created_at: datetime | None = None
+    artifacts: tuple[Artifact, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -226,6 +271,19 @@ def _judge(merge_tree: str, cand: Candidate, now: datetime) -> tuple[bool, str]:
     if age < -CLOCK_SKEW:
         return False, "%s: created_at is in the future (%sh ahead of this clock)" % (
             where, _hours(age))
+    # The run is green, first-attempt and fresh; did it build THIS tree? Only
+    # its own record says so: the head tree matching is not enough, because
+    # the run may have merged that head into another base (fact 2).
+    want = TESTED_TREE_ARTIFACT + merge_tree
+    named = [a for a in cand.artifacts
+             if a.name == want and a.run_id in (None, cand.run_id)]
+    if not named:
+        return False, ("%s left no %s%s artifact, so nothing says it built this "
+                       "tree (it may have merged the head into another base)"
+                       % (where, TESTED_TREE_ARTIFACT, merge_tree[:12]))
+    if not any(a.expired is False for a in named):
+        return False, "%s: its %s%s artifact has expired" % (
+            where, TESTED_TREE_ARTIFACT, merge_tree[:12])
     return True, "%s succeeded on this exact tree" % where
 
 
@@ -370,11 +428,33 @@ def _text(value: Any) -> str:
     return value if isinstance(value, str) else ""
 
 
-def _candidate(api: Api, head: str) -> Candidate:
+def _artifacts(api: Api, run_id: int, merge_tree: str) -> tuple[Artifact, ...]:
+    """Run ``run_id``'s artifacts named ``tested-tree-<merge_tree>``, unjudged.
+
+    A body of the wrong shape raises, as ``_runs`` does: it must not read as
+    "no artifact", which is a real answer.
+    """
+    listing = api("actions/runs/%d/artifacts?name=%s%s"
+                  % (run_id, TESTED_TREE_ARTIFACT, merge_tree))
+    found = _dig(listing, "artifacts")
+    if not isinstance(found, list) or not all(isinstance(a, dict) for a in found):
+        raise ValueError("response has no artifacts list")
+    out = []
+    for item in found:
+        expired = item.get("expired")
+        owner = _dig(item, "workflow_run", "id")
+        out.append(Artifact(_text(item.get("name")),
+                            expired if isinstance(expired, bool) else None,
+                            owner if _is_int(owner) else None))
+    return tuple(out)
+
+
+def _candidate(api: Api, head: str, merge_tree: str) -> Candidate:
     tree = _tree_sha(api("git/commits/%s" % head), "PR head %s" % head[:12])
     run = _newest(_runs(api("actions/workflows/ci.yml/runs?head_sha=%s&event=pull_request" % head)))
     if run is None:
         return Candidate(head, tree, None, None)
+    run_id = run["id"] if _is_int(run.get("id")) else None
     # `conclusion` is null while a run (or a re-run) is in flight; a status that
     # contradicts a stale conclusion is read as unfinished.
     status = run.get("status")
@@ -383,13 +463,12 @@ def _candidate(api: Api, head: str) -> Candidate:
         conclusion = None
     attempt = run.get("run_attempt")
     return Candidate(
-        head, tree,
-        run["id"] if _is_int(run.get("id")) else None,
-        conclusion,
+        head, tree, run_id, conclusion,
         run_event=_text(run.get("event")),
         run_head_sha=_text(run.get("head_sha")),
         run_attempt=attempt if _is_int(attempt) else 0,
-        run_created_at=_parse_when(run.get("created_at")))
+        run_created_at=_parse_when(run.get("created_at")),
+        artifacts=() if run_id is None else _artifacts(api, run_id, merge_tree))
 
 
 def _last_whole(api: Api) -> Nightly | None:
@@ -438,6 +517,10 @@ def gather(api: Api, sha: str) -> tuple[str, list[Candidate], Nightly | None]:
     caught here.
     """
     merge_tree = _tree_sha(api("git/commits/%s" % sha), "this commit")
+    # It names the artifact asked for, so it goes into a URL: an object id or
+    # nothing, never a string the API happened to return.
+    if not _OBJECT.fullmatch(merge_tree):
+        raise ValueError("this commit's tree.sha is not an object id")
     pulls = api("commits/%s/pulls" % sha)
     if not isinstance(pulls, list):
         raise ValueError("commits/<sha>/pulls did not return a list")
@@ -450,7 +533,7 @@ def gather(api: Api, sha: str) -> tuple[str, list[Candidate], Nightly | None]:
         if (isinstance(head, str) and _COMMIT.fullmatch(head) and head not in heads
                 and _dig(item, "base", "ref") == MAIN):
             heads.append(head)
-    candidates = [_candidate(api, head) for head in heads]
+    candidates = [_candidate(api, head, merge_tree) for head in heads]
     return merge_tree, candidates, _last_whole(api)
 
 

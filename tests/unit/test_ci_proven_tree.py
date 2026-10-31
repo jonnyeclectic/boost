@@ -56,8 +56,10 @@ pt = _load()
 SHA = "a" * 40        # the commit that landed on main
 HEAD = "b" * 40       # a PR head
 HEAD2 = "c" * 40      # another PR head
-TREE = "T" * 40
-OTHER = "O" * 40
+# Object ids, because the merge commit's tree names the artifact gather asks
+# for, and gather refuses to put anything else into a URL.
+TREE = "e" * 40
+OTHER = "f" * 40
 
 # The clock every test pins. A test that leaves `now` to the real clock would
 # pass or fail depending on the day it runs, once a nightly's age matters --
@@ -69,7 +71,14 @@ ARGV = ["--sha", SHA, "--now", NOW_ISO]
 # A PR run an hour old: well inside the 13 days a PR run may prove a tree for.
 FRESH = NOW - timedelta(hours=1)
 
-GOOD = pt.Candidate("h", "T", 7, "success", run_created_at=FRESH)
+
+
+def built(tree="T", *, expired=False, run_id=None):
+    """A run's artifact listing holding its record of having built ``tree``."""
+    return (pt.Artifact(pt.TESTED_TREE_ARTIFACT + tree, expired, run_id),)
+
+
+GOOD = pt.Candidate("h", "T", 7, "success", run_created_at=FRESH, artifacts=built())
 
 
 def hours_before_now(hours):
@@ -90,7 +99,8 @@ def test_skips_when_tree_matches_a_green_pr_and_nightly_is_green():
 
 
 def test_the_skip_reason_names_the_run_and_the_tree():
-    cand = pt.Candidate("h" * 40, "T" * 40, 7, "success", run_created_at=FRESH)
+    cand = pt.Candidate("h" * 40, "T" * 40, 7, "success", run_created_at=FRESH,
+                        artifacts=built("T" * 40))
     decision = pt.decide("T" * 40, [cand], "success", now=NOW)
     assert decision.skip is True
     reason = decision.reason
@@ -174,7 +184,8 @@ def test_a_tree_that_is_only_a_prefix_of_the_merge_tree_is_not_equal():
         assert pt.decide(merge_tree, [cand], "success").skip is False
     # and the identical 40 characters are the one thing that does match
     assert pt.decide(merge_tree, [pt.Candidate("h", merge_tree, 7, "success",
-                                               run_created_at=FRESH)],
+                                               run_created_at=FRESH,
+                                               artifacts=built(merge_tree))],
                      "success", now=NOW).skip is True
 
 
@@ -219,7 +230,8 @@ def test_several_prs_none_matching_is_a_full_run_and_says_why_for_each():
 def test_a_later_pr_may_be_the_proof_and_its_run_is_reported():
     cands = [pt.Candidate("h1", "T", 1, "failure"),     # same tree, red run
              pt.Candidate("h2", "X", 2, "success"),     # green run, other tree
-             pt.Candidate("h3", "T", 3, "success", run_created_at=FRESH)]  # the proof
+             pt.Candidate("h3", "T", 3, "success", run_created_at=FRESH,
+                          artifacts=built())]                     # the proof
     assert pt.decide("T", cands, "success", now=NOW) == pt.Decision(True, ANY, 3)
 
 
@@ -324,11 +336,13 @@ def test_decide_reads_the_real_clock_when_not_given_one():
     real_now = datetime.now(UTC)
     fresh = pt.Nightly("success", real_now - timedelta(hours=1))
     old = pt.Nightly("success", real_now - timedelta(hours=100))
-    cand = pt.Candidate("h", "T", 7, "success", run_created_at=real_now - timedelta(hours=1))
+    cand = pt.Candidate("h", "T", 7, "success", run_created_at=real_now - timedelta(hours=1),
+                        artifacts=built())
     assert pt.decide("T", [cand], fresh).skip is True
     assert pt.decide("T", [cand], old).skip is False
     # ... for the PR run's age as well as the nightly's.
-    stale = pt.Candidate("h", "T", 7, "success", run_created_at=real_now - timedelta(days=14))
+    stale = pt.Candidate("h", "T", 7, "success", run_created_at=real_now - timedelta(days=14),
+                         artifacts=built())
     assert pt.decide("T", [stale], fresh).skip is False
 
 
@@ -341,6 +355,7 @@ def test_decide_reads_the_real_clock_when_not_given_one():
 # exactly 48 hours does for the nightly.
 
 def pr_run_aged(age, **kwargs):
+    kwargs.setdefault("artifacts", built())
     return pt.Candidate("h", "T", 7, "success", run_created_at=NOW - age, **kwargs)
 
 
@@ -445,6 +460,20 @@ def pr_runs_path(head):
     return "actions/workflows/ci.yml/runs?head_sha=%s&event=pull_request" % head
 
 
+def artifacts_path(run_id, tree=TREE):
+    return "actions/runs/%d/artifacts?name=tested-tree-%s" % (run_id, tree)
+
+
+def artifact(tree=TREE, *, run_id=7, expired=False):
+    """One entry of a run's artifact listing, as the API spells it."""
+    return {"id": 900 + run_id, "name": "tested-tree-%s" % tree, "expired": expired,
+            "workflow_run": {"id": run_id, "head_sha": HEAD}}
+
+
+def artifacts(*items):
+    return {"total_count": len(items), "artifacts": list(items)}
+
+
 def whole_path(event):
     return ("actions/workflows/ci.yml/runs?branch=main&status=completed"
             "&event=%s&per_page=1" % event)
@@ -455,7 +484,12 @@ DISPATCH = whole_path("workflow_dispatch")
 
 
 def green_routes(**overrides):
-    """A push that is fully proven: one PR, equal trees, green run, green nightly."""
+    """A push that is fully proven: one PR, equal trees, green run, green nightly.
+
+    Every PR run any listing here returns recorded building this commit's
+    tree -- the artifact listing for it is filled in unless a test routed it
+    itself -- so a test about something else stays about that.
+    """
     routes = {
         "git/commits/%s" % SHA: commit(TREE),
         "commits/%s/pulls" % SHA: [pr(HEAD)],
@@ -465,6 +499,15 @@ def green_routes(**overrides):
         DISPATCH: runs(),
     }
     routes.update(overrides)
+    for path, listing in list(routes.items()):
+        if not path.startswith("actions/workflows/ci.yml/runs?head_sha="):
+            continue
+        found = listing.get("workflow_runs") if isinstance(listing, dict) else None
+        for item in found if isinstance(found, list) else ():
+            ident = item.get("id") if isinstance(item, dict) else None
+            if isinstance(ident, int) and not isinstance(ident, bool):
+                routes.setdefault(artifacts_path(ident),
+                                  artifacts(artifact(run_id=ident)))
     return routes
 
 
@@ -477,7 +520,8 @@ def test_gather_assembles_the_three_facts_decide_needs():
     merge_tree, cands, last = pt.gather(api, SHA)
     assert merge_tree == TREE
     assert cands == [pt.Candidate(HEAD, TREE, 7, "success", "pull_request", HEAD, 1,
-                                  datetime(2026, 10, 30, 10, tzinfo=UTC))]
+                                  datetime(2026, 10, 30, 10, tzinfo=UTC),
+                                  (pt.Artifact("tested-tree-" + TREE, False, 7),))]
     assert last == pt.Nightly("success", datetime(2026, 10, 30, 10, tzinfo=UTC))
     assert pt.decide(merge_tree, cands, last, now=NOW) == pt.Decision(True, ANY, 7)
 
@@ -490,6 +534,7 @@ def test_gather_asks_the_documented_endpoints_and_nothing_else():
         "commits/%s/pulls" % SHA,
         "git/commits/%s" % HEAD,
         pr_runs_path(HEAD),
+        artifacts_path(7),
         SCHEDULE,
         DISPATCH,
     ])
@@ -1011,6 +1056,155 @@ def test_a_bad_command_line_is_a_full_run_not_a_crash(gh_env, argv):
     assert pt.main(argv, api=api, env=gh_env) == 0
     assert _outputs(gh_env) == {"skip": "false", "pr_run_id": ""}
     assert api.calls == []
+
+
+# --- the run must have recorded building THIS tree --------------------------
+#
+# A PR run is found by its head SHA, and a pull_request run builds that head
+# merged into whichever base the PR had when the run started. A PR retargeted
+# to main afterwards (a base change starts no run), or the same head open into
+# a second base, leaves a green run on the head whose head tree equals the
+# tree that landed -- while the run built that head plus another branch. Only
+# the run's own `tested-tree-<tree>` artifact says which tree it built.
+
+def test_decide_does_not_skip_on_a_run_that_never_said_what_it_built():
+    bare = pt.Candidate("h", "T", 7, "success", run_created_at=FRESH)
+    decision = pt.decide("T", [bare], "success", now=NOW)
+    assert decision.skip is False
+    assert "ci run 7 left no tested-tree-T artifact" in decision.reason
+
+
+@pytest.mark.parametrize("record", [
+    built("OTHER"),                                   # it built another tree
+    built("T", expired=True),                         # the record is gone
+    (pt.Artifact("tested-tree-T", None),),            # no `expired` is not live
+    built("T", run_id=8),                             # another run's record
+    (pt.Artifact("tested-tree-Tx", False),),          # not exactly the name
+    (pt.Artifact("TESTED-TREE-T", False),),
+    (pt.Artifact("", False),),
+])
+def test_only_this_runs_live_record_of_this_tree_proves_it(record):
+    cand = pt.Candidate("h", "T", 7, "success", run_created_at=FRESH, artifacts=record)
+    assert pt.decide("T", [cand], "success", now=NOW).skip is False
+
+
+def test_an_expired_record_is_reported_as_expired():
+    cand = pt.Candidate("h", "T", 7, "success", run_created_at=FRESH,
+                        artifacts=built("T", expired=True))
+    assert "tested-tree-T artifact has expired" in pt.decide(
+        "T", [cand], "success", now=NOW).reason
+
+
+def test_one_live_record_among_others_is_enough():
+    record = (*built("OTHER"), *built("T", expired=True), *built("T", run_id=7))
+    cand = pt.Candidate("h", "T", 7, "success", run_created_at=FRESH, artifacts=record)
+    assert pt.decide("T", [cand], "success", now=NOW) == pt.Decision(True, ANY, 7)
+
+
+def test_main_a_run_that_recorded_building_this_tree_proves_it(gh_env):
+    api = FakeApi(green_routes())
+    assert pt.main(ARGV, api=api, env=gh_env) == 0
+    assert _outputs(gh_env) == {"skip": "true", "pr_run_id": "7"}
+    # asked of run 7, for exactly this commit's tree
+    assert artifacts_path(7, TREE) in api.calls
+
+
+def test_main_a_pr_retargeted_to_main_after_its_run_is_a_full_run(gh_env):
+    # Run 7 built HEAD merged into loop/foo, whose commits HEAD lacks: its record
+    # is tested-tree-OTHER. The PR was then retargeted to main (no new run),
+    # and the squash landed HEAD's own tree, TREE, which no run built.
+    for listing in (artifacts(),                        # asked for TREE: none
+                    artifacts(artifact(OTHER))):        # a filter the server ignored
+        api = FakeApi(green_routes(**{artifacts_path(7): listing}))
+        assert pt.main(ARGV, api=api, env=gh_env) == 0
+        assert _outputs(gh_env) == {"skip": "false", "pr_run_id": ""}
+        assert "ci run 7 left no tested-tree-%s artifact" % TREE[:12] in _summary(gh_env)
+        Path(gh_env["GITHUB_OUTPUT"]).unlink()
+
+
+def test_main_a_twin_pr_whose_run_tested_another_tree_is_a_full_run(gh_env):
+    # One head, two PRs: #1 into main and #2 into loop/foo. Run 7 served #1 and
+    # built TREE; run 9 served #2, is newer, and built HEAD + loop/foo. The
+    # newest run on the head is the one judged, and it never built TREE.
+    twin = {"number": 2, "head": {"sha": HEAD}, "base": {"ref": "loop/foo"}}
+    api = FakeApi(green_routes(**{
+        "commits/%s/pulls" % SHA: [pr(HEAD), twin],
+        pr_runs_path(HEAD): runs(run(7, created="2026-10-30T10:00:00Z"),
+                                 run(9, created="2026-10-30T11:00:00Z")),
+        artifacts_path(9): artifacts(),
+    }))
+    assert pt.main(ARGV, api=api, env=gh_env) == 0
+    assert _outputs(gh_env) == {"skip": "false", "pr_run_id": ""}
+    assert "ci run 9 left no tested-tree-" in _summary(gh_env)
+
+
+def test_main_a_run_with_no_tested_tree_artifact_is_a_full_run(gh_env):
+    # A run from before ci.yml uploaded the record, or a lint job that died
+    # before it: the run never said what it built.
+    api = FakeApi(green_routes(**{artifacts_path(7): artifacts()}))
+    assert pt.main(ARGV, api=api, env=gh_env) == 0
+    assert _outputs(gh_env) == {"skip": "false", "pr_run_id": ""}
+
+
+def test_main_an_expired_tested_tree_artifact_is_a_full_run(gh_env):
+    api = FakeApi(green_routes(**{artifacts_path(7): artifacts(artifact(expired=True))}))
+    assert pt.main(ARGV, api=api, env=gh_env) == 0
+    assert _outputs(gh_env) == {"skip": "false", "pr_run_id": ""}
+    assert "artifact has expired" in _summary(gh_env)
+
+
+@pytest.mark.parametrize("exc", [
+    urllib.error.HTTPError("u", 404, "Not Found", None, None),
+    urllib.error.HTTPError("u", 403, "rate limit exceeded", None, None),
+    urllib.error.HTTPError("u", 500, "Server Error", None, None),
+    urllib.error.URLError("no route to host"),
+    TimeoutError("timed out"),
+])
+def test_main_an_artifact_listing_that_errors_is_a_full_run(gh_env, exc):
+    api = FakeApi(green_routes(**{artifacts_path(7): exc}))
+    assert pt.main(ARGV, api=api, env=gh_env) == 0
+    assert _outputs(gh_env) == {"skip": "false", "pr_run_id": ""}
+    assert "error: %s" % type(exc).__name__ in _summary(gh_env)
+
+
+@pytest.mark.parametrize("answer", [
+    {"message": "Not Found"},            # an error body that arrived as a 200
+    None,
+    "nope",
+    [],
+    {},
+    {"artifacts": None},
+    {"artifacts": "x"},
+    {"artifacts": [1, 2]},
+])
+def test_a_malformed_artifact_listing_is_an_error_not_no_artifact(gh_env, answer):
+    api = FakeApi(green_routes(**{artifacts_path(7): answer}))
+    with pytest.raises(ValueError, match="artifacts"):
+        pt.gather(api, SHA)
+    assert pt.main(ARGV, api=api, env=gh_env) == 0
+    assert _outputs(gh_env) == {"skip": "false", "pr_run_id": ""}
+    assert "error: ValueError" in _summary(gh_env)
+
+
+@pytest.mark.parametrize("entry", [
+    {"name": 7, "expired": False},
+    {"name": "tested-tree-" + TREE, "expired": "false"},
+    {"name": "tested-tree-" + TREE},
+    {"name": "tested-tree-" + TREE, "expired": False, "workflow_run": {"id": 8}},
+])
+def test_an_odd_artifact_entry_is_kept_and_refused_by_decide(entry):
+    api = FakeApi(green_routes(**{artifacts_path(7): artifacts(entry)}))
+    merge_tree, cands, last = pt.gather(api, SHA)
+    assert len(cands[0].artifacts) == 1
+    assert pt.decide(merge_tree, cands, last, now=NOW).skip is False
+
+
+@pytest.mark.parametrize("tree", ["T" * 40, TREE.upper(), TREE[:39], "../x", TREE + "\n"])
+def test_a_merge_tree_that_is_not_an_object_id_is_an_error(tree):
+    api = FakeApi(green_routes(**{"git/commits/%s" % SHA: commit(tree)}))
+    with pytest.raises(ValueError, match="object id"):
+        pt.gather(api, SHA)
+    assert not any("artifacts" in c for c in api.calls)
 
 
 # --- the nightly's age, end to end -----------------------------------------
@@ -2049,6 +2243,123 @@ def test_the_badge_publish_step_pushes_the_same_badge_as_before(jobs, tmp_path):
     assert "git init -q -b badges" in log
     assert "git commit -qm coverage 94%" in log
     assert log[-1] == "git push -qf https://x-access-token:tok@github.com/o/r badges:badges"
+
+
+# --------------------------------------------------------------------------
+# the record each pull_request run leaves of the tree it built
+# --------------------------------------------------------------------------
+# `proven` only skips on a PR run that carries `tested-tree-<pushed tree>`, so
+# the upload is half of the proof: pinned here, and its bash run for real.
+
+UPLOAD_ARTIFACT_V7_0_2 = ("actions/upload-artifact@"
+                          "cf430e030ddbb5b0abf93d22962f4752f3646cd9")
+
+
+def _tested_tree_upload(jobs):
+    """``(job name, its steps, the upload step, the step that names the tree)``."""
+    found = [(name, job["steps"], step) for name, job in jobs.items()
+             for step in job.get("steps", [])
+             if step.get("uses", "").startswith("actions/upload-artifact")
+             and str((step.get("with") or {}).get("name", "")).startswith(
+                 pt.TESTED_TREE_ARTIFACT)]
+    assert len(found) == 1, [f[0] for f in found]
+    name, steps, upload = found[0]
+    m = re.fullmatch(r"%s\$\{\{ steps\.([A-Za-z0-9_-]+)\.outputs\.tree \}\}"
+                     % re.escape(pt.TESTED_TREE_ARTIFACT), upload["with"]["name"])
+    assert m, upload["with"]["name"]
+    (tree_step,) = [s for s in steps if s.get("id") == m.group(1)]
+    return name, steps, upload, tree_step
+
+
+def _event_lookup(event):
+    def lookup(ident):
+        if ident == "github.event_name":
+            return event
+        raise KeyError(ident)
+    return lookup
+
+
+def test_every_pull_request_run_uploads_the_tree_it_built(jobs):
+    name, steps, upload, tree_step = _tested_tree_upload(jobs)
+    job = jobs[name]
+    # A job that runs on every pull request and counts toward the run's verdict.
+    assert simulate(jobs, SCENARIOS["pull_request"])[name] == "success"
+    assert not job.get("continue-on-error")
+    assert "strategy" not in job, "an artifact name is unique per run: no matrix"
+    # The record, and the step that computes it, on a pull_request run only.
+    for step in (tree_step, upload):
+        assert not step.get("continue-on-error")
+        for event in ("pull_request", "push", "merge_group", "schedule",
+                      "workflow_dispatch"):
+            assert _truthy(evaluate(step["if"], _event_lookup(event))) is (
+                event == "pull_request"), (step.get("name"), event)
+    # Pinned to the commit every other upload in ci.yml uses.
+    assert upload["uses"] == UPLOAD_ARTIFACT_V7_0_2
+    others = {s["uses"] for j in jobs.values() for s in j.get("steps", [])
+              if s.get("uses", "").startswith("actions/upload-artifact")}
+    assert others == {UPLOAD_ARTIFACT_V7_0_2}
+    spec = upload["with"]
+    assert spec["if-no-files-found"] == "error"
+    # Kept at least as long as a PR run may prove a tree for, plus the day of
+    # margin the coverage-report already has, so it never expires first.
+    assert int(spec["retention-days"]) >= pt.MAX_PR_RUN_AGE.days + 1
+    # The name comes through a step output; nothing is expanded inside `run:`.
+    assert "${{" not in tree_step["run"]
+    assert steps.index(tree_step) < steps.index(upload)
+    # ... computed after the job's one checkout, of github.sha: no `ref:` and
+    # no `repository:`, so HEAD is the merge commit the whole run builds.
+    checkouts = [s for s in steps if s.get("uses", "").startswith("actions/checkout")]
+    assert len(checkouts) == 1
+    assert steps.index(checkouts[0]) < steps.index(tree_step)
+    assert not {"ref", "repository"} & set(checkouts[0].get("with") or {})
+
+
+@needs_bash
+def test_the_recorded_tree_is_the_checked_out_merge_commits_tree(jobs, tmp_path):
+    _, _, upload, tree_step = _tested_tree_upload(jobs)
+    repo = tmp_path / "repo"
+    git = ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t",
+           "-c", "commit.gpgsign=false"]
+    env = dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
+
+    def sh(*args):
+        return subprocess.run([*git, *args], check=True, capture_output=True,
+                              text=True, env=env).stdout.strip()
+
+    # refs/pull/N/merge: the PR head merged into its base, a tree neither has.
+    subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True, env=env)
+    (repo / "a").write_text("1\n", encoding="utf-8")
+    sh("add", "-A")
+    sh("commit", "-qm", "base")
+    sh("checkout", "-qb", "pr")
+    (repo / "b").write_text("2\n", encoding="utf-8")
+    sh("add", "-A")
+    sh("commit", "-qm", "head")
+    head_tree = sh("rev-parse", "HEAD^{tree}")
+    sh("checkout", "-q", "main")
+    (repo / "c").write_text("3\n", encoding="utf-8")
+    sh("add", "-A")
+    sh("commit", "-qm", "base moved")
+    sh("merge", "-q", "--no-ff", "-m", "merge", "pr")
+    merge_tree = sh("rev-parse", "HEAD^{tree}")
+    assert merge_tree != head_tree
+
+    temp = tmp_path / "runner-temp"
+    temp.mkdir()
+    out = tmp_path / "github-output"
+    out.write_text("", encoding="utf-8")
+    proc = _run_step(tree_step, repo, {"RUNNER_TEMP": str(temp),
+                                       "GITHUB_OUTPUT": str(out)})
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert out.read_text(encoding="utf-8") == "tree=%s\n" % merge_tree
+    # ... and the file the upload sends holds the same tree.
+    path = interpolate(upload["with"]["path"],
+                       lambda ident: str(temp) if ident == "runner.temp" else None)
+    assert Path(path).read_text(encoding="utf-8") == merge_tree + "\n"
+    # The name is exactly the one ci_proven_tree.py asks for.
+    name = interpolate(upload["with"]["name"],
+                       lambda ident: merge_tree if ident.endswith(".outputs.tree") else None)
+    assert name == pt.TESTED_TREE_ARTIFACT + merge_tree
 
 
 # --------------------------------------------------------------------------

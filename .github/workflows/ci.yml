@@ -105,6 +105,37 @@ jobs:
         with:
           fetch-depth: 0    # tags for setuptools-scm version resolution
           persist-credentials: false
+      # What this pull_request run builds, in a name the push can ask for.
+      # The checkout above has no `ref:`, so HEAD is github.sha: the merge of
+      # the PR head into the base the PR had when this run started -- which
+      # every job here checks out too. `proven` (scripts/ci_proven_tree.py)
+      # skips a push's suite and shards only when the PR run it names carries
+      # `tested-tree-<the pushed commit's tree>`. A head SHA alone does not
+      # say which base a run merged it into: a PR retargeted to main after
+      # its run (a base change starts no new run), or one head open into two
+      # bases, leaves a green run that built head + another branch.
+      #
+      # Here, in `lint`, because lint runs on every pull_request, once per
+      # run (no matrix: an artifact name is unique per run), and its result
+      # is part of the run's conclusion. Kept 14 days, at least as long as a
+      # PR run may prove a tree for (MAX_PR_RUN_AGE, 13 days), so the record
+      # cannot expire first. The tree reaches the name through a step output,
+      # never through `${{ }}` inside `run:`.
+      - name: record the tree this pull_request run builds
+        id: tested
+        if: github.event_name == 'pull_request'
+        run: |
+          tree="$(git rev-parse --verify 'HEAD^{tree}')"
+          printf '%s\n' "$tree" > "$RUNNER_TEMP/tested-tree"
+          echo "tree=$tree" >> "$GITHUB_OUTPUT"
+      - name: publish the tree this run builds (proves a push of it)
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tested-tree-${{ steps.tested.outputs.tree }}
+          path: ${{ runner.temp }}/tested-tree
+          if-no-files-found: error
+          retention-days: 14
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
@@ -376,8 +407,12 @@ jobs:
   # run was green, and main ran the whole suite and every shard again before
   # publish.yml could release. scripts/ci_proven_tree.py answers yes only when
   # that tree equality holds, the PR head's own first-attempt pull_request run
-  # succeeded, and the newest nightly on main is green and under 48 h old; any
-  # missing fact, API error or rate limit is `skip=false`. It always exits 0,
+  # succeeded and carries a live `tested-tree-<this commit's tree>` artifact
+  # (uploaded by `lint`: the run built exactly this tree, not the head merged
+  # into some other base), and the newest nightly on main is green and under
+  # 48 h old; any missing fact, API error or rate limit is `skip=false`. The
+  # artifact listing needs `actions: read`, which the job already holds for
+  # the runs. It always exits 0,
   # so its outputs are the verdict -- and if the job fails anyway they are
   # empty, which every consumer below reads as "run everything".
   #
