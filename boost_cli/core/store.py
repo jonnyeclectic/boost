@@ -93,6 +93,10 @@ class InstallResult:
     # (:func:`skipped_agents`). No row is recorded for them, so this is the
     # install report's only way to say so.
     skipped_agents: list[tuple[str, str]] = field(default_factory=list)
+    # ``agent: how to run it`` for a workflow written somewhere ``/<name>``
+    # does not reach (:func:`workflows.invocation_hint`) -- a Claude Code
+    # subagent. Worded by core, printed by the install report.
+    invocation: list[str] = field(default_factory=list)
     score: int = 0
     upgraded: bool = False
     kind: str = "skill"
@@ -5811,6 +5815,7 @@ def _install_workflow(entry: dict, force: bool = False,
     foreign_record: list[dict] = []
     declined: list[tuple[str, str]] = []
     render_notes: list[str] = []
+    invocation: list[str] = []
     # From ``materializations`` only: a ``foreign`` row names the user's file.
     owned = {m.get("path") for m in (existing or {}).get("materializations")
              or () if not lockfile.is_skill_copy(m)}
@@ -5875,6 +5880,9 @@ def _install_workflow(entry: dict, force: bool = False,
             linked.append(agent)
             render_notes += ["%s: %s" % (agent, note) for note in
                              workflows.render_notes(agent, slot, raw)]
+            hint = workflows.invocation_hint(agent, slot, name, raw)
+            if hint is not None:
+                invocation.append("%s: %s" % (agent, hint))
 
         # A path this run no longer writes for an agent it did write (the source
         # moved from commands/ to agents/): the old file is a live slash command
@@ -5970,6 +5978,7 @@ def _install_workflow(entry: dict, force: bool = False,
     res.foreign = foreign
     res.declined = declined
     res.render_notes = render_notes
+    res.invocation = invocation
     res.skipped_agents = skipped_agents("workflow", record)
     res.upgraded = existing is not None
     res.scope = scope

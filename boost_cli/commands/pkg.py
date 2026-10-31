@@ -285,6 +285,10 @@ def _report_result(res: store.InstallResult, no_mcp: bool = False) -> None:
         # report would ever name it (`store.skipped_agents`).
         for agent, why in getattr(res, "skipped_agents", None) or ():
             out.dim("  %s" % agents.skip_line(agent, why), wrap=True)
+        # A subagent is not `/<name>`, and the install line alone reads as
+        # though it were (`workflows.invocation_hint`).
+        for line in getattr(res, "invocation", None) or ():
+            out.dim("  %s" % line, wrap=True)
         _report_skill_copy(res)
         _warn_unwritable(res)
         out.ok("lock updated (.skill-lock.json)")
