@@ -6464,22 +6464,32 @@ def _skill_copy(name: str, slot: str, raw: str, existing: dict | None,
 # Copy links: the copy reaches the linking agents with no file of their own
 # --------------------------------------------------------------------------
 # Derived, never recorded. The targets are the enabled linking agents less
-# every agent the workflow's lock row already decided -- a file written (or
-# refused), the user's own file at the path (``foreign``), a file that agent
-# would reject (``declined``) -- and less those due a file the next `boost
-# sync` writes. So a config change that moves an agent into the workflow set
-# takes its link back at the reinstall or sync that writes its file. No row
-# per link: :func:`lockfile.is_skill_copy` matches the slot alone, and a
-# ``skill`` row naming an agent would be misread wherever rows are walked.
+# every agent the workflow set writes (:func:`agents.workflow_agents`) and
+# every agent the lock row names -- a file written (or refused), the user's
+# own file at the path (``foreign``). An agent the set writes with no row yet
+# is due its file from the next `boost sync`; in an entry from before
+# ``only_agents`` was recorded it is one an `--agent` narrowing left out,
+# since those rows are the narrowing's only record. Neither is linked. So a
+# config change that moves an agent into the workflow set takes its link back
+# at the reinstall or sync that writes its file. No row per link:
+# :func:`lockfile.is_skill_copy` matches the slot alone, and a ``skill`` row
+# naming an agent would be misread wherever rows are walked.
+#
+# A ``declined`` agent (one that would reject the file) is of the workflow set
+# too, so it gets no link either. Only Gemini declines today
+# (:func:`workflows.render_problem`), and Gemini is no linking agent; should a
+# linking agent ever decline, it would get the procedure in no form, and
+# linking it here is the fix.
 #
 # Removing them is the other way round: a sweep that asks no config at all,
 # over every dir boost may have linked into, taking only boost's link to this
 # copy's own store dir (:func:`unlink_skill_copy`). A link derived from config
 # would be stranded by the next config change.
 #
-# A declared ``--agent`` narrowing links nowhere: `--agent` names only agents
-# that take the workflow's file, so no narrowing can name a copy-link agent,
-# and ``link_agents`` reads an empty ``only`` as every agent.
+# A declared ``--agent`` narrowing links nowhere, and sweeps any link an
+# earlier, wider install made: `--agent` names only agents that take the
+# workflow's file, so no narrowing can name a copy-link agent, and
+# ``link_agents`` reads an empty ``only`` as every agent.
 
 
 def _holds_its_own(entry: dict) -> set:
@@ -6517,8 +6527,8 @@ def copy_link_targets(name: str, entry: dict | None) -> dict[str, Path]:
     entry = entry or {}
     if not _owns_copy(name, entry) or not wants_skill_copy(None, entry):
         return {}
-    due = unmaterialized_agents("workflow", entry)
-    return copy_link_agents(_holds_its_own(entry) | set(due),
+    writes = agents.workflow_agents(entry.get("base"))
+    return copy_link_agents(_holds_its_own(entry) | set(writes),
                             narrowed=bool(entry.get("only_agents")))
 
 

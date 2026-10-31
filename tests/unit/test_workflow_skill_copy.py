@@ -595,10 +595,16 @@ class TestCopyLinkTargets:
         assert _linked(_workflow_entry("claude-code")) == [
             "windsurf", "antigravity"]
         # An entry from before `only_agents` was recorded replays its rows,
-        # so cursor is not due anything and gets the link.
+        # so cursor is not due a file -- and its rows are the only record of
+        # an `--agent` narrowing, so an agent the workflow set writes with
+        # no row was left out, not left pending: no link either.
         legacy = _workflow_entry("claude-code")
         legacy.pop("only_agents")
-        assert _linked(legacy) == ["windsurf", "cursor", "antigravity"]
+        assert _linked(legacy) == ["windsurf", "antigravity"]
+        cfg = config.load()
+        cfg["agents"]["windsurf"]["workflows"] = True
+        config.save(cfg)
+        assert _linked(legacy) == ["antigravity"]
 
     def test_follows_the_agent_table(self, sandbox):
         cfg = config.load()
@@ -943,6 +949,20 @@ class TestCopyLinksThroughSync:
         assert lockfile.get_skill("reviewer") is None
         plan = store.sync_plan()
         assert plan["missing_copy_links"] == plan["stale_copy_links"] == []
+
+    def test_a_legacy_narrowed_entry_never_links_cursor(self, tap):
+        """A row from before `only_agents` was recorded: sync links the
+        agents that take no workflow file, and never one that does."""
+        store.install(_wf(tap), only_agents=["claude-code"])
+        entry = lockfile.get_workflow("reviewer")
+        entry.pop("only_agents")
+        lockfile.set_workflow("reviewer", entry)
+        plan = store.sync_plan()
+        assert plan["missing_copy_links"] == [("reviewer", "windsurf"),
+                                              ("reviewer", "antigravity")]
+        store.sync_apply(plan)
+        assert not os.path.lexists(_agent_dir("cursor") / "reviewer")
+        assert os.path.islink(_agent_dir("windsurf") / "reviewer")
 
     def test_apply_rechecks_the_lock(self, tap):
         """A plan from before a narrowing links nothing it now excludes."""
