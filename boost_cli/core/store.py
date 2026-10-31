@@ -6526,7 +6526,9 @@ def copy_link_agents(have: Collection[str],
 
 
 def copy_link_targets(name: str, entry: dict | None) -> dict[str, Path]:
-    """The agents workflow ``name``'s skill copy is linked into, from its row.
+    """The agents workflow ``name``'s skill copy is linked into, from its row:
+    the linking agents the workflow set does not write and the row does not
+    name (see "Copy links" above).
 
     None for an entry with no copy, a quarantined one, one whose store dir a
     skill took, or one that asks for no copy (a copy kept only because it was
