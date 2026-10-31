@@ -10,8 +10,10 @@ tested: a squash-merge of an up-to-date PR produces a new commit SHA over the
 *same tree*, and the check below is exactly that equality. Skipping is allowed
 only when all three facts hold:
 
-1. an associated PR has a head commit whose tree is byte-identical to this
-   commit's tree (so the code on ``main`` is the code that PR's CI ran);
+1. an associated PR *into main* has a head commit whose tree is byte-identical
+   to this commit's tree (so the code on ``main`` is the code that PR's CI ran).
+   A PR aimed at another branch is not counted: its ``pull_request`` run built
+   the PR merged into *that* base, a different tree from the one that landed;
 2. that head's newest ``ci`` run, on the ``pull_request`` event, is a
    first-attempt run that concluded ``success``;
 3. the newest completed whole-codebase run on ``main`` (``schedule`` or
@@ -40,7 +42,10 @@ shape gives ``true``. Concretely:
 * ``gather`` does not trust the server's filters. The run it keeps for a head is
   the newest by parsed ``created_at`` (ties broken by run id), never the first in
   the list, and the run's own ``event``, ``head_sha`` and ``run_attempt`` are
-  recorded on the ``Candidate`` for ``decide`` to check. ``run_attempt`` has to
+  recorded on the ``Candidate`` for ``decide`` to check. A whole-codebase run must
+  itself say ``head_branch == "main"`` (a ``workflow_dispatch`` on a feature
+  branch is routine, and its result says nothing about ``main``); a run on another
+  branch, or with no branch at all, is unknown, not skipped over. ``run_attempt`` has to
   be 1: a re-run is the "cancelled or re-run" case in the plan's review focus, and
   the cost of reading it as unproven is one extra mutation run. A run object that
   lacks one of those fields yields a value ``decide`` rejects; absence is never
@@ -99,6 +104,10 @@ TIMEOUT = 15
 # The nightly and the manual dispatch are the two events that run the whole
 # codebase; whichever finished last is the current state of "everything".
 WHOLE_CODEBASE_EVENTS = ("schedule", "workflow_dispatch")
+
+# The branch a push is being decided for. Used for the whole-codebase query and
+# to check the answer to it, and for the base of an associated PR.
+MAIN = "main"
 
 # A nightly older than this does not count as "recent". 48 h = one missed night
 # tolerated, two not; "more than" means exactly 48 h is still fresh.
@@ -226,7 +235,8 @@ def decide(merge_tree: str, candidates: list[Candidate],
     if not isinstance(merge_tree, str) or not merge_tree:
         reasons.append("this commit's tree is unknown")
     elif not candidates:
-        reasons.append("no pull request is associated with this commit (a direct push)")
+        reasons.append("no pull request into main is associated with this commit "
+                       "(a direct push, or a PR aimed at another branch)")
     else:
         for cand in candidates:
             ok, why = _judge(merge_tree, cand)
@@ -357,8 +367,8 @@ def _last_whole(api: Api) -> Nightly | None:
     newest: dict[str, Any] | None = None
     for event in WHOLE_CODEBASE_EVENTS:
         found = _newest(_runs(api(
-            "actions/workflows/ci.yml/runs?branch=main&status=completed"
-            "&event=%s&per_page=1" % event)))
+            "actions/workflows/ci.yml/runs?branch=%s&status=completed"
+            "&event=%s&per_page=1" % (MAIN, event))))
         if found is None:
             continue
         # The filter is asked for, and checked: a run of another event is not a
@@ -366,6 +376,11 @@ def _last_whole(api: Api) -> Nightly | None:
         # redundant with the query -- but a contradiction is not.)
         if found.get("event") not in (None, event):
             raise ValueError("a %r query returned a %r run" % (event, found.get("event")))
+        # Unlike the two checks above, a run that does not NAME its branch is not
+        # accepted: which branch a result is about is the whole question.
+        if found.get("head_branch") != MAIN:
+            raise ValueError("a branch=%s query returned a run on branch %r"
+                             % (MAIN, found.get("head_branch")))
         newest = found if newest is None else max((newest, found), key=_run_key)
     if newest is None:
         return None
@@ -395,8 +410,10 @@ def gather(api: Api, sha: str) -> tuple[str, list[Candidate], Nightly | None]:
     for item in pulls:
         head = _dig(item, "head", "sha")
         # A head that is not a plain commit id is not interpolated into a URL,
-        # and could not be proof anyway: it is dropped.
-        if isinstance(head, str) and _COMMIT.fullmatch(head) and head not in heads:
+        # and could not be proof anyway: it is dropped. So is a PR whose base is
+        # not main (or names no base): see the module docstring.
+        if (isinstance(head, str) and _COMMIT.fullmatch(head) and head not in heads
+                and _dig(item, "base", "ref") == MAIN):
             heads.append(head)
     candidates = [_candidate(api, head) for head in heads]
     return merge_tree, candidates, _last_whole(api)
