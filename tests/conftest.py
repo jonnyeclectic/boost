@@ -487,6 +487,36 @@ def _isolate_home() -> Path:
     return home
 
 
+def _disable_git_auto_maintenance(environ=os.environ) -> None:
+    """Run every child ``git`` with ``maintenance.auto=false``.
+
+    ``git commit``/``fetch``/``merge``/``rebase`` otherwise leave a DETACHED
+    ``git maintenance run --auto`` behind, which creates and deletes
+    ``.git/objects/maintenance.lock`` after the command returned; a test that
+    then ``copytree``s the repo lists the lock, finds it gone, and raises
+    ``shutil.Error``. Measured under ``pytest -n auto`` (git 2.56): two tests
+    errored in three runs, and passed serially. ``maintenance.auto`` stops the
+    process from starting at all, so ``gc.auto=0`` would add nothing — the
+    detached run takes the lock before it checks any task's condition.
+
+    Environment rather than a ``~/.gitconfig``: it survives the ``sandbox``
+    fixture's per-test HOME and tests that set ``GIT_CONFIG_GLOBAL=/dev/null``,
+    and reaches boost's own git calls. Appends to any ``GIT_CONFIG_COUNT``
+    entries already present, and is idempotent, because an xdist worker
+    inherits the controller's environment and then configures again.
+    """
+    try:
+        count = int(environ.get("GIT_CONFIG_COUNT", "0"))
+    except ValueError:
+        count = 0
+    if any(environ.get("GIT_CONFIG_KEY_%d" % i) == "maintenance.auto"
+           for i in range(count)):
+        return
+    environ["GIT_CONFIG_KEY_%d" % count] = "maintenance.auto"
+    environ["GIT_CONFIG_VALUE_%d" % count] = "false"
+    environ["GIT_CONFIG_COUNT"] = str(count + 1)
+
+
 def pytest_unconfigure(config):
     """Remove the session home `_isolate_home` made, if it made one."""
     del config
@@ -530,6 +560,7 @@ def pytest_configure(config):
     """
     del config
     _isolate_home()
+    _disable_git_auto_maintenance()
     _cap_mutant_memory()
     if not os.environ.get("MUTANT_UNDER_TEST"):
         return          # not a mutmut run — nothing to normalize

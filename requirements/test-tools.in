@@ -12,6 +12,10 @@
 # made and reviewed.
 pytest
 pytest-cov
+# Runs the suite across a runner's cores. CI passes `-n auto` on the `tests`
+# command line only — never in pyproject's addopts, because mutmut drives the
+# same pytest and must keep running it in one process.
+pytest-xdist
 coverage
 hypothesis
 # tests/unit/test_sdist_contents.py runs setuptools' own MANIFEST.in matcher

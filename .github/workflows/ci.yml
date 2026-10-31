@@ -433,7 +433,7 @@ jobs:
           # unlocked and best-effort: it is an optional runtime extra, not part
           # of the toolchain, and some matrix legs have no wheel for it.
           "$VENV_BIN/pip" -q install sqlite-vec || true
-      - name: unit + functional (90% coverage gate)
+      - name: unit + functional (90% coverage gate, ubuntu-3.12 only)
         # Every failing test is re-emitted as a `::error::` workflow command so
         # it lands as a check-run annotation. The step conclusion already says
         # WHICH STEP broke; the annotation is what says WHICH TEST. Without it
@@ -447,14 +447,46 @@ jobs:
         # keeps -e from killing the step before the annotations are emitted.
         # set -o pipefail is restated anyway so this does not silently become a
         # green step if the job's shell: is ever changed.
+        #
+        # `-n auto` (pytest-xdist) in every cell, and coverage in ONE cell.
+        # Every cell used to trace the whole suite, and then patch-coverage ran
+        # it a thirteenth time only to write the coverage.xml the ubuntu-3.12
+        # cell had just discarded. Tracing is what Windows paid for most, and
+        # Windows was the critical path (the 80 min cap above). So
+        # ubuntu-3.12 alone measures — and alone enforces `fail_under`, which
+        # pytest-cov applies only under `--cov` — and publishes the report as
+        # the `coverage-report` artifact patch-coverage downloads. The cell is
+        # chosen in `env:` rather than by a matrix expression in the script, so
+        # the upload step's `if:` below can say the same thing the same way.
+        # `-n` lives here and never in pyproject's addopts: mutmut drives the
+        # same pytest and must keep one process
+        # (tests/unit/test_ci_coverage_single_cell.py pins both).
+        env:
+          MEASURE_COVERAGE: ${{ matrix.os == 'ubuntu-latest' && matrix.python == '3.12' }}
         run: |
           set -o pipefail
           rc=0
-          "$VENV_BIN/pytest" tests/unit tests/functional \
-            --cov=boost_cli --cov-report=term-missing --cov-report=json -q \
+          cov=()
+          if [ "$MEASURE_COVERAGE" = true ]; then
+            cov=(--cov=boost_cli --cov-report=term-missing --cov-report=json --cov-report=xml)
+          fi
+          "$VENV_BIN/pytest" tests/unit tests/functional -n auto "${cov[@]}" -q \
             | tee /tmp/pytest.out || rc=$?
           grep -E '^(FAILED|ERROR) ' /tmp/pytest.out | sed 's/^/::error::/' || true
           exit "$rc"
+      - name: publish coverage report (for patch-coverage)
+        # Default `success()` on purpose, never `always()`: a red suite must
+        # leave NO artifact, so patch-coverage fails on the missing download
+        # instead of gating a diff against a half-run suite's report.
+        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.12'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: coverage-report
+          path: |
+            coverage.xml
+            coverage.json
+          if-no-files-found: error
+          retention-days: 14
       - name: shell smoke suite (sandboxed)
         run: bash tests/smoke.sh | tee /tmp/smoke.out
       - name: job summary (coverage + counts)
@@ -1174,14 +1206,26 @@ jobs:
   patch-coverage:
     # Coverage on the CHANGED lines of a PR: the 93%+ project number can hide a
     # PR that adds wholly-untested code, so gate the diff itself. Self-hosted —
-    # diff-cover reads a Cobertura coverage.xml the suite emits, no external
-    # service. PR-only: there's nothing to diff a push to main against.
-    if: github.event_name == 'pull_request'
+    # diff-cover reads a Cobertura coverage.xml, no external service. PR-only:
+    # there's nothing to diff a push to main against.
+    #
+    # It runs no tests. The coverage.xml is the one `tests (ubuntu-latest,
+    # 3.12)` measured, downloaded as the `coverage-report` artifact; this job
+    # used to run the whole suite a second time under coverage (~20 min) to
+    # produce the same file. Hence `needs: tests`, and hence `always()`: this
+    # is a required check, and a plain `needs` would SKIP it when a tests cell
+    # fails — and a skipped required check reads as passing. Under `always()`
+    # the verdict comes from the download instead: that cell uploads only on
+    # a green suite, so a failed or cancelled ubuntu-3.12 cell leaves no
+    # artifact and the download step fails this job — the second line of
+    # defence behind the first step, which fails on any `tests` result other
+    # than success.
+    needs: tests
+    if: always() && github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    # The same suite as the Linux `tests` cells, under coverage, so the same
-    # cap: at 15 the 2026-10-22 train was killed three attempts running at
-    # 93% of a suite that was still progressing, not wedged.
-    timeout-minutes: 30
+    # A download and a diff: well under 3 min. The cap exists only for a
+    # wedged step, so it no longer needs the suite's 30.
+    timeout-minutes: 10
     permissions:
       contents: read
     # JOB-level, not step-level: a secret cannot be referenced directly in an
@@ -1197,6 +1241,21 @@ jobs:
           # catches a compromised action exfiltrating a token, paired with
           # zizmor's static analysis. Flip to block + an allowlist to enforce.
           egress-policy: audit
+      - name: tests must be conclusive
+        # The artifact proves only that the measuring STEP passed: a red smoke
+        # step in that same cell, or any red Windows/macOS cell, still leaves
+        # `coverage-report` behind. So the matrix's result is read here, as a
+        # step that always runs — a job-level `if:` on it would SKIP this
+        # required check, and a skipped required check reads as passing.
+        # TO CONFIRM on the first PR run: that a red 3.15 cell (job-level
+        # continue-on-error) still reports needs.tests.result == 'success'.
+        env:
+          TESTS: ${{ needs.tests.result }}
+        run: |
+          if [ "$TESTS" != "success" ]; then
+            echo "::error::tests concluded '$TESTS' — patch coverage cannot be trusted"
+            exit 1
+          fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0    # full history so origin/main is a real diff base
@@ -1204,23 +1263,19 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
-      - name: git identity (fixture repos)
-        run: |
-          git config --global user.email ci@boost.test
-          git config --global user.name "Boost CI"
-      - name: install test deps
+      - name: install diff-cover
         run: |
           python -m venv .venv
           # Hash-pinned; test-tools.txt plus diff-cover.
           .venv/bin/pip -q install -r requirements/coverage-tools.txt
-          # [rag] extra so dense.py counts the same lines the matrix does
-          .venv/bin/pip -q install sqlite-vec || true
-      - name: suite -> Cobertura coverage.xml
-        # --cov-fail-under=0: the project coverage gate (`fail_under` in
-        # pyproject.toml) is the matrix job's to own; this comment names no
-        # percentage so it cannot drift away from it.
-        # This job gates ONLY the patch. Same suite the matrix runs.
-        run: .venv/bin/pytest tests/unit tests/functional --cov=boost_cli --cov-report=xml --cov-fail-under=0 -q
+      - name: coverage.xml from tests (ubuntu-latest, 3.12)
+        # Fails the job when the artifact is absent — which is exactly the
+        # case of a red or cancelled measuring cell (see the job comment).
+        # The project gate (`fail_under` in pyproject.toml) was enforced in
+        # that cell; this job gates ONLY the patch.
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: coverage-report
       - name: diff-cover (changed-line coverage vs main)
         # 80% of each PR's changed, coverable lines must be tested — pairs with
         # the project gate so new code can't ride in untested. Tune --fail-under

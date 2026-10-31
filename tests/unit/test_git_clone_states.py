@@ -24,7 +24,14 @@ from boost_cli.core import compact as compactplan
 from boost_cli.core import gitutil, paths, registry, util
 from boost_cli.errors import BoostError
 
-_ID = ["-c", "user.email=t@t", "-c", "user.name=t"]
+#: `maintenance.auto=false` because `git commit` otherwise spawns a DETACHED
+#: `git maintenance run --auto`, which creates and deletes
+#: `.git/objects/maintenance.lock` after commit has returned. A `copytree` of
+#: the fresh repo then lists that lock and finds it gone by the time it copies
+#: it — `shutil.Error: ... maintenance.lock: No such file or directory`.
+#: Measured under `pytest -n auto` (git 2.56): TestCommandsNameTheLock errored
+#: twice in one run and passed serially, where the race is narrower.
+_ID = ["-c", "user.email=t@t", "-c", "user.name=t", "-c", "maintenance.auto=false"]
 #: The upstream's `.gitignore`: tracked, unmodified and outside the cone.
 _IGNORE = b"*.log\n"
 
