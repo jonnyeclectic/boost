@@ -88,6 +88,11 @@ class InstallResult:
     # What a written workflow file could not carry over for one agent
     # (:func:`workflows.render_notes`), worded by core, printed by the command.
     render_notes: list[str] = field(default_factory=list)
+    # ``(agent, reason)`` for a rule or workflow: the agents a skill would
+    # reach that this kind's write set leaves out by their own config
+    # (:func:`skipped_agents`). No row is recorded for them, so this is the
+    # install report's only way to say so.
+    skipped_agents: list[tuple[str, str]] = field(default_factory=list)
     score: int = 0
     upgraded: bool = False
     kind: str = "skill"
@@ -1817,6 +1822,67 @@ def unmaterialized_agents(kind: str, entry: dict) -> list[str]:
         r["agent"] for r in (*foreign_rows(entry), *declined_rows(entry))}
     return [a for a in writes
             if a not in have and (not declared or a in declared)]
+
+
+def skipped_agents(kind: str, entry: dict) -> list[tuple[str, str]]:
+    """``(agent, reason)`` for every agent ``entry``'s scope reaches with a
+    skill that ``kind``'s write set leaves out by the agent's own config.
+
+    The sibling of :func:`unmaterialized_agents`, for the agents that one
+    cannot see: it asks which agents boost *writes* and has no row for, and
+    an agent :func:`agents.materializing_agents` or
+    :func:`agents.workflow_agents` excludes (``skills_only``, ``workflows:
+    false``) is not one of them. It never gets a row either, so every
+    reporter that walks the rows missed it: install listed only the agents it
+    wrote, and doctor called the item fully materialized while a Claude Code
+    profile added as ``skills_only`` got no subagent and no rule at all.
+
+    The agents asked are the ones a skill reaches -- :func:`agents.
+    linking_agents` at user scope, :func:`agents.project_agents` in a repo --
+    so an agent that reads the store natively (Codex, which reaches a
+    workflow through its skill copy) is not reported as missing it. Within a
+    declared ``--agent`` narrowing only, so this never widens one. An agent
+    any row already names is left to that row: a materialization row the
+    agent stopped taking is :func:`unwritten_materializations`'s, and a
+    ``foreign`` or ``declined`` row has its own wording. Empty for a skill,
+    and for a quarantined or stranded entry, whose artifacts are absent on
+    purpose. Unlike :func:`unmaterialized_agents` an entry with no rows is
+    still judged: an item every agent skips is exactly one with none.
+    """
+    if (kind not in ("rule", "workflow") or entry.get("quarantined")
+            or scopes.stranded(entry)):
+        return []
+    base = entry.get("base")
+    reach = agents.linking_agents() if base is None else agents.project_agents()
+    declared = entry.get("only_agents")
+    have = {m.get("agent") for m in entry.get("materializations") or ()} | {
+        r["agent"] for r in (*foreign_rows(entry), *declined_rows(entry))}
+    skipped = []
+    for agent in reach:
+        if agent in have or (declared and agent not in declared):
+            continue
+        why = agents.materialization_skip_reason(kind, base, agent)
+        if why is not None:
+            skipped.append((agent, why))
+    return skipped
+
+
+def skipped_agent_items() -> list[tuple[str, str, list[str]]]:
+    """``(agent, reason, ["rule x", "workflow y", …])`` over every installed
+    rule and workflow: :func:`skipped_agents`, grouped by agent for `boost
+    doctor`, which names each agent once rather than once per item.
+
+    In the order first met -- rules before workflows, each section by name --
+    so two runs print the same line.
+    """
+    found: dict[tuple[str, str], list[str]] = {}
+    for kind, section in (("rule", lockfile.installed_rules()),
+                          ("workflow", lockfile.installed_workflows())):
+        for name, entry in sorted(section.items()):
+            for agent, why in skipped_agents(kind, entry):
+                found.setdefault((agent, why), []).append(
+                    "%s %s" % (kind, name))
+    return [(agent, why, items) for (agent, why), items in found.items()]
 
 
 def unwritten_materializations() -> list[tuple[str, str, str, str]]:
@@ -4931,6 +4997,7 @@ def _install_rule(entry: dict, force: bool = False,
     res.conflicts = conflicts
     res.upgraded = existing is not None
     res.scope = scope
+    res.skipped_agents = skipped_agents("rule", record)
     return res
 
 
@@ -5903,6 +5970,7 @@ def _install_workflow(entry: dict, force: bool = False,
     res.foreign = foreign
     res.declined = declined
     res.render_notes = render_notes
+    res.skipped_agents = skipped_agents("workflow", record)
     res.upgraded = existing is not None
     res.scope = scope
     res.skill_copy = Path(copy_row["path"]).parent if copy_row else None

@@ -281,6 +281,10 @@ def _report_result(res: store.InstallResult, no_mcp: bool = False) -> None:
         where = " (this repo)" if res.scope == "project" else ""
         out.ok("materialized%s → %s"
                % (where, " · ".join(res.linked) or "(no enabled agents)"))
+        # An agent the config keeps out gets no row, so nothing after this
+        # report would ever name it (`store.skipped_agents`).
+        for agent, why in getattr(res, "skipped_agents", None) or ():
+            out.dim("  %s" % agents.skip_line(agent, why), wrap=True)
         _report_skill_copy(res)
         _warn_unwritable(res)
         out.ok("lock updated (.skill-lock.json)")

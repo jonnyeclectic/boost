@@ -709,6 +709,48 @@ WITHDRAWN_REASONS = (REASON_SKILLS_ONLY, REASON_NO_COMMAND_FORMAT)
 #: ladder and to none of these would be classified by silence.
 UNREMEDIED_REASONS = (REASON_UNCONFIGURED, REASON_UNKNOWN)
 
+#: The agent-row key behind each reason one flag of the row decides, so a
+#: report can say where the decision lives. The other two have no key: an
+#: agent missing from the config, and the ladder's fallback.
+REASON_FLAGS = {REASON_SKILLS_ONLY: "skills_only",
+                REASON_NO_COMMAND_FORMAT: "workflows",
+                REASON_DISABLED: "enabled",
+                REASON_NO_PROJECT_SCOPE: "project_scope"}
+
+
+def skip_line(agent: str, reason: str) -> str:
+    """One agent an item was not written into, and why, for a report.
+
+    ``claude-personal: takes skills only (agents.claude-personal.skills_only)
+    — not written``. The key is named because the skip is the config's
+    decision, and the row is where to read it -- not because flipping it is
+    always right: for a format boost withdrew (:data:`WITHDRAWN_REASONS`) it
+    is not, and :data:`config.DEFAULTS` says why at the key itself.
+    """
+    key = REASON_FLAGS.get(reason)
+    where = " (agents.%s.%s)" % (agent, key) if key else ""
+    return "%s: %s%s — not written" % (agent, reason, where)
+
+
+def claude_profile_rows() -> list[str]:
+    """Config-added agents that look like a Claude Code profile and take
+    skills only -- the rows ``boost doctor`` offers ``skills_only false`` to.
+
+    The marker is ``.claude.json`` in the row's dotdir: Claude Code keeps it
+    at ``$CLAUDE_CONFIG_DIR/.claude.json`` for a relocated profile (and at
+    ``~/.claude.json`` otherwise, which is why ``claude-code``'s own
+    ``~/.claude`` does not hold one). A profile is Claude Code, so it reads
+    ``agents/``, ``commands/`` and ``rules/`` like ``~/.claude`` does; a row
+    copied from the ``antigravity`` template carries that agent's
+    ``skills_only`` and gets none of them. A built-in row is never asked: its
+    flags are boost's own, and :data:`config.DEFAULTS` says why at each.
+    """
+    defaults: dict = config.DEFAULTS["agents"]  # type: ignore[assignment]
+    return [name for name, spec in known_agents().items()
+            if name not in defaults and spec["enabled"]
+            and spec["skills_only"]
+            and (spec["dir"].parent / ".claude.json").is_file()]
+
 
 def materialization_skip_reason(kind: str, base, agent) -> str | None:
     """Why :func:`materialization_is_written` refuses, or ``None`` if it does
