@@ -23,6 +23,7 @@ import io
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -604,7 +605,9 @@ def test_diff_plan_refuses_an_unreadable_blob(tmp_path, git_repo):
     # read as "file deleted" -> empty scope -> pass (review M-3).
     head = git_repo.head({"boost_cli/core/n.py": "def z(y):\n    return y == 13579\n"})
     blob = _git(git_repo.root, "rev-parse", head + ":boost_cli/core/n.py")
-    (git_repo.root / ".git" / "objects" / blob[:2] / blob[2:]).unlink()
+    loose = git_repo.root / ".git" / "objects" / blob[:2] / blob[2:]
+    loose.chmod(loose.stat().st_mode | stat.S_IWRITE)  # git writes it 0444; Windows will not unlink that
+    loose.unlink()
     with pytest.raises(subprocess.CalledProcessError):
         mp.diff_plan(git_repo.root, git_repo.base, head, git_repo.stats)
 
