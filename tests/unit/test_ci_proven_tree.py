@@ -26,6 +26,7 @@ import subprocess
 import sys
 import urllib.error
 import urllib.request
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import ANY
 
@@ -56,6 +57,21 @@ TREE = "T" * 40
 OTHER = "O" * 40
 
 GOOD = pt.Candidate("h", "T", 7, "success")
+
+# The clock every test pins. A test that leaves `now` to the real clock would
+# pass or fail depending on the day it runs, once a nightly's age matters.
+NOW = datetime(2026, 10, 31, 9, 0, tzinfo=UTC)
+NOW_ISO = "2026-10-31T09:00:00+00:00"
+ARGV = ["--sha", SHA, "--now", NOW_ISO]
+
+
+def hours_before_now(hours):
+    """A GitHub-style timestamp `hours` before the pinned clock."""
+    return (NOW - timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def nightly(hours, conclusion="success"):
+    return pt.Nightly(conclusion, NOW - timedelta(hours=hours))
 
 
 # --------------------------------------------------------------------------
@@ -197,6 +213,82 @@ def test_a_long_candidate_list_gives_a_bounded_reason():
 
 
 # --------------------------------------------------------------------------
+# decide: the nightly has to be recent, not just green
+# --------------------------------------------------------------------------
+# The age limit is 48 hours: one missed night is tolerated, two are not. Without
+# a bound, a nightly that quietly stopped running (a disabled workflow, dropped
+# schedules) would keep a months-old green result authorising skips forever.
+
+def test_a_nightly_47_hours_old_still_allows_the_skip():
+    assert pt.decide("T", [GOOD], nightly(47), now=NOW) == pt.Decision(True, ANY, 7)
+
+
+def test_a_nightly_exactly_48_hours_old_is_still_fresh():
+    # "More than 48 hours" is the rule, so the boundary itself is on the safe-to-skip side.
+    assert pt.decide("T", [GOOD], nightly(48), now=NOW).skip is True
+
+
+def test_a_nightly_one_second_past_48_hours_is_stale():
+    just_over = pt.Nightly("success", NOW - timedelta(hours=48, seconds=1))
+    decision = pt.decide("T", [GOOD], just_over, now=NOW)
+    assert decision.skip is False
+    assert "nightly stale" in decision.reason
+
+
+def test_a_nightly_49_hours_old_is_stale_and_says_so():
+    decision = pt.decide("T", [GOOD], nightly(49), now=NOW)
+    assert decision.skip is False
+    assert decision.pr_run_id is None
+    assert "nightly stale (49h)" in decision.reason
+
+
+def test_the_age_in_the_reason_never_rounds_down_to_a_fresh_looking_number():
+    # 48h and 1s must not be reported as "48h", which reads as not stale.
+    just_over = pt.Nightly("success", NOW - timedelta(hours=48, seconds=1))
+    assert "nightly stale (48.1h)" in pt.decide("T", [GOOD], just_over, now=NOW).reason
+    half = pt.Nightly("success", NOW - timedelta(hours=60, minutes=30))
+    assert "nightly stale (60.5h)" in pt.decide("T", [GOOD], half, now=NOW).reason
+
+
+def test_a_nightly_with_no_creation_time_is_never_fresh():
+    decision = pt.decide("T", [GOOD], pt.Nightly("success", None), now=NOW)
+    assert decision.skip is False
+    assert "nightly age unknown" in decision.reason
+
+
+def test_a_nightly_dated_in_the_future_is_not_trusted():
+    # A few seconds of skew between GitHub's clock and the runner's is normal;
+    # a nightly from tomorrow is a corrupt fact, and an unknown one means a full run.
+    decision = pt.decide("T", [GOOD], nightly(-24), now=NOW)
+    assert decision.skip is False
+    assert "future" in decision.reason
+
+
+def test_a_nightly_a_minute_ahead_of_the_runner_clock_is_just_skew():
+    assert pt.decide("T", [GOOD], nightly(-1 / 60), now=NOW).skip is True
+
+
+def test_a_red_nightly_is_reported_red_and_a_stale_one_stale_and_both_when_both():
+    red = pt.decide("T", [GOOD], nightly(1, "failure"), now=NOW)
+    assert "failure" in red.reason and "stale" not in red.reason
+    both = pt.decide("T", [GOOD], nightly(100, "failure"), now=NOW)
+    assert "failure" in both.reason and "nightly stale (100h)" in both.reason
+
+
+def test_a_stale_nightly_does_not_hide_a_tree_mismatch():
+    decision = pt.decide("T", [pt.Candidate("h", "X", 7, "success")], nightly(100), now=NOW)
+    assert "differs" in decision.reason and "nightly stale" in decision.reason
+
+
+def test_decide_reads_the_real_clock_when_not_given_one():
+    real_now = datetime.now(UTC)
+    fresh = pt.Nightly("success", real_now - timedelta(hours=1))
+    old = pt.Nightly("success", real_now - timedelta(hours=100))
+    assert pt.decide("T", [GOOD], fresh).skip is True
+    assert pt.decide("T", [GOOD], old).skip is False
+
+
+# --------------------------------------------------------------------------
 # a fake GitHub for gather() and main()
 # --------------------------------------------------------------------------
 
@@ -276,8 +368,8 @@ def test_gather_assembles_the_three_facts_decide_needs():
     merge_tree, cands, last = pt.gather(api, SHA)
     assert merge_tree == TREE
     assert cands == [pt.Candidate(HEAD, TREE, 7, "success", "pull_request", HEAD, 1)]
-    assert last == "success"
-    assert pt.decide(merge_tree, cands, last) == pt.Decision(True, ANY, 7)
+    assert last == pt.Nightly("success", datetime(2026, 10, 30, 10, tzinfo=UTC))
+    assert pt.decide(merge_tree, cands, last, now=NOW) == pt.Decision(True, ANY, 7)
 
 
 def test_gather_asks_the_documented_endpoints_and_nothing_else():
@@ -301,7 +393,7 @@ def test_gather_picks_the_newest_whole_codebase_run():
         DISPATCH: runs(run(1, event="workflow_dispatch", conclusion="success",
                            created="2026-10-30T15:00:00Z")),
     }))
-    assert pt.gather(api, SHA)[2] == "failure"
+    assert pt.gather(api, SHA)[2].conclusion == "failure"
 
 
 def test_gather_picks_the_newest_whole_codebase_run_whichever_query_it_came_from():
@@ -311,7 +403,7 @@ def test_gather_picks_the_newest_whole_codebase_run_whichever_query_it_came_from
         DISPATCH: runs(run(2, event="workflow_dispatch", conclusion="success",
                            created="2026-10-31T11:00:00Z")),
     }))
-    assert pt.gather(api, SHA)[2] == "success"
+    assert pt.gather(api, SHA)[2].conclusion == "success"
 
 
 def test_gather_compares_instants_not_strings():
@@ -322,7 +414,7 @@ def test_gather_compares_instants_not_strings():
         DISPATCH: runs(run(2, event="workflow_dispatch", conclusion="failure",
                            created="2026-10-30T23:00:00-05:00")),
     }))
-    assert pt.gather(api, SHA)[2] == "failure"
+    assert pt.gather(api, SHA)[2].conclusion == "failure"
 
 
 def test_gather_uses_the_one_whole_codebase_query_that_has_a_run():
@@ -330,7 +422,7 @@ def test_gather_uses_the_one_whole_codebase_query_that_has_a_run():
         SCHEDULE: runs(),
         DISPATCH: runs(run(1, event="workflow_dispatch", conclusion="success")),
     }))
-    assert pt.gather(only_dispatch, SHA)[2] == "success"
+    assert pt.gather(only_dispatch, SHA)[2].conclusion == "success"
 
 
 def test_gather_reports_no_nightly_when_both_queries_are_empty():
@@ -385,11 +477,20 @@ def test_unorderable_whole_codebase_runs_are_an_error_not_a_guess():
             pt.gather(api, SHA)
 
 
-def test_a_lone_whole_codebase_run_needs_no_timestamp():
-    lone = run(1, event="schedule", conclusion="success")
-    del lone["created_at"]
-    api = FakeApi(green_routes(**{SCHEDULE: runs(lone)}))
-    assert pt.gather(api, SHA)[2] == "success"
+def test_a_lone_whole_codebase_run_is_gathered_without_a_usable_timestamp():
+    # Gathering records what it found; deciding is what refuses an undated run.
+    for created in (None, "", "not a date", "2026-10-31T09:30:00", 12345):
+        lone = run(1, event="schedule", conclusion="success", created=created)
+        if created is None:
+            del lone["created_at"]
+        api = FakeApi(green_routes(**{SCHEDULE: runs(lone)}))
+        assert pt.gather(api, SHA)[2] == pt.Nightly("success", None)
+
+
+def test_the_nightly_keeps_its_creation_time_as_an_instant():
+    api = FakeApi(green_routes(**{SCHEDULE: runs(run(
+        1, event="schedule", created="2026-10-30T23:00:00-05:00"))}))
+    assert pt.gather(api, SHA)[2].created_at == datetime(2026, 10, 31, 4, tzinfo=UTC)
 
 
 def test_the_newest_pr_run_wins_by_timestamp_not_by_list_position():
@@ -432,7 +533,7 @@ def test_a_run_the_query_should_not_have_returned_is_rejected_by_decide(wrong):
     # The query filters by head_sha and event; the answer is checked anyway.
     api = FakeApi(green_routes(**{pr_runs_path(HEAD): runs(run(**wrong))}))
     merge_tree, cands, last = pt.gather(api, SHA)
-    assert pt.decide(merge_tree, cands, last).skip is False
+    assert pt.decide(merge_tree, cands, last, now=NOW).skip is False
 
 
 @pytest.mark.parametrize("missing", ["event", "head_sha", "run_attempt"])
@@ -442,7 +543,7 @@ def test_a_run_missing_a_fact_decide_checks_is_not_proof(missing):
     del bare[missing]
     api = FakeApi(green_routes(**{pr_runs_path(HEAD): runs(bare)}))
     merge_tree, cands, last = pt.gather(api, SHA)
-    assert pt.decide(merge_tree, cands, last).skip is False
+    assert pt.decide(merge_tree, cands, last, now=NOW).skip is False
 
 
 def test_a_pr_run_that_is_not_completed_has_no_conclusion():
@@ -571,7 +672,7 @@ def _summary(env):
 
 
 def test_main_writes_skip_true_and_the_run_id_for_a_proven_tree(gh_env):
-    rc = pt.main(["--sha", SHA], api=FakeApi(green_routes()), env=gh_env)
+    rc = pt.main(ARGV, api=FakeApi(green_routes()), env=gh_env)
     assert rc == 0
     assert _outputs(gh_env) == {"skip": "true", "pr_run_id": "7"}
     assert "7" in _summary(gh_env)
@@ -593,7 +694,7 @@ def test_main_writes_skip_true_and_the_run_id_for_a_proven_tree(gh_env):
 ])
 def test_api_errors_mean_a_full_run(gh_env, exc):
     api = FakeApi(green_routes(**{"git/commits/%s" % SHA: exc}))
-    assert pt.main(["--sha", SHA], api=api, env=gh_env) == 0
+    assert pt.main(ARGV, api=api, env=gh_env) == 0
     assert _outputs(gh_env) == {"skip": "false", "pr_run_id": ""}
     assert "error: %s" % type(exc).__name__ in _summary(gh_env)
 
@@ -601,27 +702,27 @@ def test_api_errors_mean_a_full_run(gh_env, exc):
 def test_an_error_late_in_gathering_still_means_a_full_run(gh_env):
     # The PR was proven; the nightly lookup then fails. Nothing partial counts.
     api = FakeApi(green_routes(**{DISPATCH: urllib.error.URLError("boom")}))
-    assert pt.main(["--sha", SHA], api=api, env=gh_env) == 0
+    assert pt.main(ARGV, api=api, env=gh_env) == 0
     assert _outputs(gh_env)["skip"] == "false"
 
 
 def test_the_error_reason_is_exactly_error_and_the_type(gh_env):
     api = FakeApi(green_routes(**{"git/commits/%s" % SHA:
                                   urllib.error.HTTPError("u", 403, "x", None, None)}))
-    pt.main(["--sha", SHA], api=api, env=gh_env)
+    pt.main(ARGV, api=api, env=gh_env)
     assert "reason: error: HTTPError\n" in _summary(gh_env)
 
 
 def test_an_unproven_push_writes_skip_false_with_its_reason(gh_env):
     api = FakeApi(green_routes(**{"commits/%s/pulls" % SHA: []}))
-    assert pt.main(["--sha", SHA], api=api, env=gh_env) == 0
+    assert pt.main(ARGV, api=api, env=gh_env) == 0
     assert _outputs(gh_env) == {"skip": "false", "pr_run_id": ""}
     assert "no pull request" in _summary(gh_env)
 
 
 def test_main_appends_to_the_output_file_instead_of_replacing_it(gh_env):
     Path(gh_env["GITHUB_OUTPUT"]).write_text("earlier=step\n", encoding="utf-8")
-    pt.main(["--sha", SHA], api=FakeApi(green_routes()), env=gh_env)
+    pt.main(ARGV, api=FakeApi(green_routes()), env=gh_env)
     text = Path(gh_env["GITHUB_OUTPUT"]).read_text(encoding="utf-8")
     assert text.startswith("earlier=step\n")
     assert text.endswith("skip=true\npr_run_id=7\n")
@@ -632,7 +733,7 @@ def test_api_sourced_text_cannot_add_lines_to_the_outputs_the_log_or_the_summary
     hostile = "failure\nskip=true\n::error::injected\n## pwned\r\n more"
     api = FakeApi(green_routes(**{SCHEDULE: runs(run(1, event="schedule",
                                                      conclusion=hostile))}))
-    assert pt.main(["--sha", SHA], api=api, env=gh_env) == 0
+    assert pt.main(ARGV, api=api, env=gh_env) == 0
     assert _outputs(gh_env) == {"skip": "false", "pr_run_id": ""}
     summary = _summary(gh_env)
     assert "injected" in summary                       # the facts are kept ...
@@ -658,14 +759,14 @@ def test_oneline_bounds_the_length():
 
 def test_without_github_output_the_outputs_go_to_stdout(capsys):
     env: dict[str, str] = {}
-    assert pt.main(["--sha", SHA], api=FakeApi(green_routes()), env=env) == 0
+    assert pt.main(ARGV, api=FakeApi(green_routes()), env=env) == 0
     lines = capsys.readouterr().out.splitlines()
     assert "skip=true" in lines and "pr_run_id=7" in lines
 
 
 def test_an_unwritable_output_path_still_exits_zero(tmp_path, capsys):
     env = {"GITHUB_OUTPUT": str(tmp_path), "GITHUB_STEP_SUMMARY": str(tmp_path)}  # dirs
-    assert pt.main(["--sha", SHA], api=FakeApi(green_routes()), env=env) == 0
+    assert pt.main(ARGV, api=FakeApi(green_routes()), env=env) == 0
     assert "GITHUB_OUTPUT" in capsys.readouterr().err
 
 
@@ -682,6 +783,100 @@ def test_an_unwritable_output_path_still_exits_zero(tmp_path, capsys):
 def test_a_bad_command_line_is_a_full_run_not_a_crash(gh_env, argv):
     api = FakeApi({})   # any request at all would raise Unrouted
     assert pt.main(argv, api=api, env=gh_env) == 0
+    assert _outputs(gh_env) == {"skip": "false", "pr_run_id": ""}
+    assert api.calls == []
+
+
+# --- the nightly's age, end to end -----------------------------------------
+
+def _routes_with_nightly(created, **extra):
+    return green_routes(**{SCHEDULE: runs(run(100, event="schedule", head_sha=SHA,
+                                              created=created)), **extra})
+
+
+@pytest.mark.parametrize("hours,skip", [(1, "true"), (47, "true"), (48, "true"),
+                                        (49, "false"), (500, "false")])
+def test_main_skips_only_while_the_nightly_is_recent(gh_env, hours, skip):
+    api = FakeApi(_routes_with_nightly(hours_before_now(hours)))
+    assert pt.main(ARGV, api=api, env=gh_env) == 0
+    assert _outputs(gh_env)["skip"] == skip
+    if skip == "false":
+        assert "nightly stale (%dh)" % hours in _summary(gh_env)
+
+
+def test_main_a_nightly_without_created_at_is_a_full_run(gh_env):
+    lone = run(100, event="schedule", head_sha=SHA)
+    del lone["created_at"]
+    api = FakeApi(green_routes(**{SCHEDULE: runs(lone)}))
+    assert pt.main(ARGV, api=api, env=gh_env) == 0
+    assert _outputs(gh_env) == {"skip": "false", "pr_run_id": ""}
+    assert "nightly age unknown" in _summary(gh_env)
+
+
+@pytest.mark.parametrize("created", ["", "garbage", "yesterday", "2026-13-45T99:99:99Z",
+                                     "2026-10-30T10:00:00", 1761818400, None])
+def test_main_a_malformed_created_at_is_a_full_run(gh_env, created):
+    lone = run(100, event="schedule", head_sha=SHA)
+    lone["created_at"] = created
+    api = FakeApi(green_routes(**{SCHEDULE: runs(lone)}))
+    assert pt.main(ARGV, api=api, env=gh_env) == 0
+    assert _outputs(gh_env) == {"skip": "false", "pr_run_id": ""}
+    assert "age unknown" in _summary(gh_env)
+
+
+def test_main_two_nightlies_one_undated_cannot_be_ordered_so_it_is_a_full_run(gh_env):
+    undated = run(100, event="schedule", head_sha=SHA, created="garbage")
+    api = FakeApi(green_routes(**{
+        SCHEDULE: runs(undated),
+        DISPATCH: runs(run(101, event="workflow_dispatch", created=hours_before_now(1)))}))
+    assert pt.main(ARGV, api=api, env=gh_env) == 0
+    assert _outputs(gh_env)["skip"] == "false"
+    assert "error: ValueError" in _summary(gh_env)
+
+
+def test_main_ages_the_newer_of_the_two_whole_codebase_runs(gh_env):
+    fresh_dispatch = FakeApi(green_routes(**{
+        SCHEDULE: runs(run(100, event="schedule", created=hours_before_now(60))),
+        DISPATCH: runs(run(101, event="workflow_dispatch", created=hours_before_now(5)))}))
+    assert pt.main(ARGV, api=fresh_dispatch, env=gh_env) == 0
+    assert _outputs(gh_env)["skip"] == "true"
+
+
+def test_main_two_old_whole_codebase_runs_are_as_stale_as_the_newer_one(tmp_path):
+    env = {"GITHUB_OUTPUT": str(tmp_path / "o"), "GITHUB_STEP_SUMMARY": str(tmp_path / "s")}
+    api = FakeApi(green_routes(**{
+        SCHEDULE: runs(run(100, event="schedule", created=hours_before_now(60))),
+        DISPATCH: runs(run(101, event="workflow_dispatch", created=hours_before_now(70)))}))
+    assert pt.main(ARGV, api=api, env=env) == 0
+    assert _outputs(env)["skip"] == "false"
+    assert "nightly stale (60h)" in _summary(env)
+
+
+def test_the_clock_defaults_to_the_real_one_on_the_command_line(tmp_path):
+    real_now = datetime.now(UTC)
+
+    def verdict(hours_old, name):
+        env = {"GITHUB_OUTPUT": str(tmp_path / name)}     # one file per call: it appends
+        created = (real_now - timedelta(hours=hours_old)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        assert pt.main(["--sha", SHA], api=FakeApi(_routes_with_nightly(created)), env=env) == 0
+        return _outputs(env)["skip"]
+
+    assert verdict(2, "fresh") == "true"
+    assert verdict(72, "old") == "false"
+
+
+@pytest.mark.parametrize("now", ["2026-10-31T09:00:00Z", "2026-10-31T09:00:00+00:00",
+                                 "2026-10-31T04:00:00-05:00"])
+def test_now_accepts_any_zoned_iso_timestamp(gh_env, now):
+    api = FakeApi(_routes_with_nightly(hours_before_now(47)))
+    assert pt.main(["--sha", SHA, "--now", now], api=api, env=gh_env) == 0
+    assert _outputs(gh_env)["skip"] == "true"
+
+
+@pytest.mark.parametrize("now", ["", "soon", "2026-10-31T09:00:00", "2026-10-31", "1761900000"])
+def test_a_now_that_is_unparseable_or_has_no_zone_is_a_full_run(gh_env, now):
+    api = FakeApi({})   # nothing may be requested on a usage error
+    assert pt.main(["--sha", SHA, "--now", now], api=api, env=gh_env) == 0
     assert _outputs(gh_env) == {"skip": "false", "pr_run_id": ""}
     assert api.calls == []
 
@@ -713,7 +908,7 @@ def no_network(monkeypatch):
 def test_missing_or_malformed_credentials_mean_a_full_run_before_any_request(
         gh_env, no_network, env_extra, named):
     env = {**gh_env, **env_extra}
-    assert pt.main(["--sha", SHA], env=env) == 0
+    assert pt.main(ARGV, env=env) == 0
     assert _outputs(env) == {"skip": "false", "pr_run_id": ""}
     assert named in _summary(env)
 
@@ -732,7 +927,7 @@ def test_the_environment_wires_repo_and_token_into_the_requests(gh_env, monkeypa
 
     monkeypatch.setattr(pt, "_default_opener", lambda: opener_for(table))
     env = {**gh_env, "GITHUB_TOKEN": "s3cret", "GITHUB_REPOSITORY": "o/r"}
-    assert pt.main(["--sha", SHA], env=env) == 0
+    assert pt.main(ARGV, env=env) == 0
     assert _outputs(env) == {"skip": "true", "pr_run_id": "7"}
     assert seen and all(url.startswith("https://api.github.com/repos/o/r/")
                         for url, _, _ in seen)
@@ -748,7 +943,7 @@ def test_the_token_never_reaches_the_log_or_the_summary(gh_env, capsys, monkeypa
 
     monkeypatch.setattr(pt, "_default_opener", lambda: Opener())
     env = {**gh_env, "GITHUB_TOKEN": "s3cret-token", "GITHUB_REPOSITORY": "o/r"}
-    pt.main(["--sha", SHA], env=env)
+    pt.main(ARGV, env=env)
     captured = capsys.readouterr()
     assert "s3cret-token" not in captured.out + captured.err + _summary(env)
     assert "URLError" in captured.err      # the detail is still logged, scrubbed
