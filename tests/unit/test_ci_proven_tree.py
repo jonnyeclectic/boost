@@ -2221,8 +2221,9 @@ def test_an_expired_artifact_is_not_a_measurement(pick_run):
 @pytest.mark.parametrize("event", ["pull_request", "merge_group"])
 def test_the_manual_path_never_takes_a_pull_requests_weights(pick_run, event):
     # `--branch main` matches a fork PR raised from a branch called main, and a
-    # PR's shadow run uploads weights of a tree that is not main's. The same
-    # three events the workflow_run guard accepts, and no others.
+    # PR run that a full-run trigger made plan full uploads weights of a tree
+    # that is not main's. The same three events the workflow_run guard
+    # accepts, and no others.
     listed = [{"databaseId": 40, "event": event}, {"databaseId": 13, "event": "schedule"}]
     run_id, calls, _ = pick_run(listed, {40: _artifacts(False), 13: _artifacts(False)})
     assert run_id == "13"

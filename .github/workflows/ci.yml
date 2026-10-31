@@ -10,7 +10,7 @@ on:
   # never triggers the release workflow — publish still fires only on the real
   # push to main. Enabling the queue itself is a repo Setting (see CONTRIBUTING).
   merge_group:
-  # The whole-codebase mutation run. A pull request's gate is moving to the
+  # The whole-codebase mutation run. A pull request's gate has moved to the
   # functions it changed, and a push to main whose tree a green PR run already
   # tested skips the suite and the shards (`proven` below), so this is where
   # the whole of boost_cli/core is still scored against 80%: the mutation jobs
@@ -704,28 +704,33 @@ jobs:
   #                    — provably not) If so, collect mutmut's test-to-function
   #                    stats ONCE and write the plan the shards run from
   #                    (scripts/mutation_plan.py).
-  #   mutation-shard   twenty-four parallel slices of the mutant set. A file heavier
-  #                    than an even share is split per top-level function
-  #                    (mutant names are addressable that way), so store.py —
-  #                    18% of all mutants — is no longer a floor of its own.
+  #   mutation-shard   parallel slices of the plan's mutant set: twenty-four in
+  #                    full mode, at most sixteen of the diff set in diff mode.
+  #                    In the full pack a file heavier than an even share is
+  #                    split per top-level function (mutant names are
+  #                    addressable that way), so store.py — 18% of all
+  #                    mutants — is no longer a floor of its own.
   #                    Each shard writes results for every file it touched;
   #                    the merge unions them and fails closed on any mutant
   #                    left unrun, so a partition gap reddens the gate rather
   #                    than quietly shrinking the denominator.
-  #   mutation         THE REQUIRED CHECK: merges the slices and applies the gate.
+  #   mutation         THE REQUIRED CHECK: applies the gate the plan names. Full
+  #                    mode merges the 24 slices and scores every mutant
+  #                    against 80% (mutation_gate.py); diff mode scores the
+  #                    diff set's slices (mutation_diff.py gate).
   #
-  # Shadow mode: on a pull request or merge-queue entry the plan also carries a
-  # diff set (the changed functions and their direct callers), sharded in the
-  # same matrix. The full run still decides `mutation`; the diff set's verdict
-  # and per-mutant results are compared against it in an advisory step, until
-  # enough runs agree for the diff gate to bind.
-  #
-  # By event: a push to main that `proven` vouches for plans `none` with the
-  # reason "proven by PR run <id>" and collects no stats, so no shard starts
-  # and `mutation` reports the planner's reason; any other push plans full. A
-  # nightly or a dispatch plans full, always: with pushes able to skip, that
-  # run is where the whole codebase is held to 80%, and with an unproven push
-  # it is the only full run whose `mutation-weights` the refresh workflow takes.
+  # By event: on a pull request or merge-queue entry the plan is `diff` -- the
+  # functions the branch changed and their direct callers -- or `full` when a
+  # full-run trigger fires (a mutation script, these jobs, mutmut or pytest
+  # configuration, a conftest, ...) or there is no diff base; the gate the
+  # plan names decides `mutation`. A push to main that `proven` vouches for
+  # plans `none` with the reason "proven by PR run <id>" and collects no
+  # stats, so no shard starts and `mutation` reports the planner's reason;
+  # any other push plans full. A nightly or a dispatch plans full, always:
+  # with pull requests gated on their diff and pushes able to skip, that run
+  # is where the whole codebase is held to 80%, and with an unproven push it
+  # is the only full run whose `mutation-weights` the refresh workflow takes.
+  # On any event, a change that cannot move the score plans `none`.
   #
   # `mutation` is the context named in .github/required-checks.txt, so it must run
   # and report on every pull request. Neither path-filtering it nor letting
@@ -881,15 +886,14 @@ jobs:
         run: .venv/bin/python -m pytest -q tests/unit/test_mutation_diff.py tests/unit/test_mutation_plan.py
       # A pull request or merge-queue entry plans the diff set -- the
       # functions the branch changed plus their direct callers, see
-      # scripts/mutation_diff.py -- and `mutation` binds on the diff gate.
-      # The nightly full run holds the whole codebase to 80%. The diff gate
-      # earned that by running in shadow beside the full run on the same
-      # commit, compared per mutant, to a bar of zero killed/survived
-      # disagreements over five release trains. Anything else (a push to
-      # main, the nightly, a dispatch) plans full. A full-run trigger in the
-      # diff (a mutation script, this job, setup.cfg [mutmut], ...) makes
-      # `diff` return the full plan -- including on the PR that edits these
-      # lines.
+      # scripts/mutation_diff.py -- and `mutation` binds on the diff gate;
+      # the nightly full run holds the whole codebase to 80%. The bar for
+      # binding was the shadow comparison: zero killed/survived
+      # disagreements over five release trains, required before this change
+      # merged. Anything else (a push to main, the nightly, a dispatch)
+      # plans full. A full-run trigger in the diff (a mutation script, this
+      # job, mutmut or pytest configuration, a conftest, ...) makes `diff`
+      # return the full plan -- including on the PR that edits these lines.
       - name: write the plan
         id: plan
         env:
@@ -1463,7 +1467,7 @@ jobs:
             echo "- **Mutants:** $mutants"
             echo "- **Shards:** $shards"
             if [ "$GATE_SET" = diff ] && [ "$shards" = 0 ]; then
-              echo "- **Mutation:** no core function changed that has mutants to run, so the diff gate has nothing to score and passes"
+              echo "- **Mutation:** no core function changed that has mutants to run, so the diff gate has nothing to score"
             fi
             echo
           } >> "$GITHUB_STEP_SUMMARY"
