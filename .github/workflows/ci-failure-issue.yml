@@ -138,7 +138,25 @@ jobs:
             // conclusion of `ci` silently skips the release for that commit.
             // Saying so here is the difference between "CI is red" and "and
             // nothing was published" — the second needs a rerun, not a fix.
-            const noRelease = run.name === 'ci'
+            //
+            // Unless the run was not a push. `ci` on a schedule or by hand is
+            // the whole-codebase mutation run, which publish.yml never releases
+            // from, so "rerun it to publish" would send the reader to rerun a
+            // run that cannot publish. What it does block is the proven-tree
+            // skip: until the newest whole-codebase run on main is green, every
+            // push runs the full gate.
+            const wholeCodebase = {
+              schedule: 'the nightly whole-codebase mutation run (`schedule`)',
+              workflow_dispatch: 'the whole-codebase mutation run, started by ' +
+                'hand (`workflow_dispatch`)',
+            };
+            const which = run.name === 'ci' ? wholeCodebase[run.event] : undefined;
+            const noRelease = which
+              ? `\n\nThis was ${which}. **No release was involved** — ` +
+                '`publish.yml` releases only from a `push` run. While the ' +
+                'newest whole-codebase run on main is not green, every push ' +
+                'to main runs the full gate instead of skipping as proven.'
+              : run.name === 'ci'
               ? '\n\n**No release was cut for this commit** — `publish.yml` ' +
                 'ships only on a `success` conclusion. Once this is green ' +
                 'again, rerun the failed jobs on that run to publish it.'
