@@ -398,6 +398,78 @@ def test_diff_plan_records_per_function_counts(tmp_path, git_repo):
     assert all(n > 0 for n in diff["counts"].values())
 
 
+def _shard_results(tmp_path: Path, spec: dict, survivor: str | None = None) -> Path:
+    """What the diff shards would upload for ``spec``: one ``m.py.meta`` per
+    shard at the artifact's root (the upload root is ``mutants/boost_cli/core``),
+    holding every in-scope mutant killed -- bar ``survivor`` -- and ``None``
+    for the file's out-of-scope functions, as a real shard writes them."""
+    source = tmp_path / "shard-results" / "diff"
+    for index, shard in enumerate(spec["shards"]):
+        codes: dict = {"boost_cli.core.m.x_c__mutmut_1": None,
+                       "boost_cli.core.m.xǁKǁm__mutmut_1": None}
+        for pat in shard:
+            q = pat[: -len("__mutmut_*")]
+            codes.update({"%s__mutmut_%d" % (q, n): 1
+                          for n in range(1, spec["counts"][q] + 1)})
+        if survivor in codes:
+            codes[survivor] = 0
+        meta = source / ("mutation-diff-shard-%d" % index) / "m.py.meta"
+        meta.parent.mkdir(parents=True)
+        meta.write_text(json.dumps({"exit_code_by_key": codes}), encoding="utf-8")
+    return source
+
+
+@pytest.mark.usefixtures("needs_mutmut")
+@pytest.mark.parametrize("survivor, rc, verdict", [
+    (None, 0, "PASS"),
+    # Under ten mutants in scope, so one survivor fails it.
+    ("boost_cli.core.m.x_a__mutmut_1", 1, "FAIL"),
+])
+def test_the_gate_scores_what_the_planner_actually_writes(
+        tmp_path, git_repo, monkeypatch, capsys, survivor, rc, verdict):
+    # The gate's own tests write plans by hand. This one feeds it the plan
+    # `diff` really writes, so a field the planner stops writing -- or starts
+    # writing in a shape the gate refuses -- fails here and not on a PR
+    # (Task 6 review N-3).
+    md = mp._load_diff()
+    head = git_repo.head({"boost_cli/core/m.py": _M_BASE.replace("+ 1", "+ 2")})
+    plan = plan_diff(tmp_path, git_repo, head)
+    spec, problems = md.validate_plan(plan)
+    assert problems == []
+    assert spec is not None and spec["mutants"] < 10
+    source = _shard_results(tmp_path, spec, survivor)
+    summary = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    assert md.main(["gate", "--plan", str(tmp_path / "plan.json"),
+                    "--source", str(source), "--prefix", "mutation-diff-shard-",
+                    "--root", str(git_repo.root)]) == rc
+    out = capsys.readouterr().out
+    assert "mutation diff gate: %s" % verdict in out
+    assert "%d/%d killed" % (spec["mutants"] - bool(survivor), spec["mutants"]) in out
+    assert "### Mutation (diff scope): %s" % verdict in summary.read_text(encoding="utf-8")
+    warnings = [line for line in out.splitlines() if line.startswith("::warning")]
+    if survivor:
+        # At `def a` in the head checkout: the line a reviewer acts on.
+        assert warnings == ["::warning file=boost_cli/core/m.py,line=1::"
+                            "boost_cli.core.m.x_a: 1 mutants not killed: "
+                            "%s (survived)" % survivor]
+    else:
+        assert warnings == []
+
+
+@pytest.mark.usefixtures("needs_mutmut")
+def test_the_gate_passes_the_planners_empty_scope_with_no_artifacts(
+        tmp_path, git_repo, capsys):
+    md = mp._load_diff()
+    head = git_repo.head({"tests/unit/test_m.py": "def test(): pass\n"})
+    plan = plan_diff(tmp_path, git_repo, head)
+    assert md.validate_plan(plan) == (plan["sets"]["diff"], [])
+    assert md.main(["gate", "--plan", str(tmp_path / "plan.json"),
+                    "--source", str(tmp_path / "absent"), "--prefix",
+                    "mutation-diff-shard-", "--root", str(git_repo.root)]) == 0
+    assert "mutation diff gate: PASS" in capsys.readouterr().out
+
+
 def test_diff_plan_refuses_an_unreadable_blob(tmp_path, git_repo):
     # A path that is in the tree but whose blob git cannot produce (a partial
     # clone whose lazy fetch failed; here, a deleted loose object) must not
