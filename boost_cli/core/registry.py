@@ -556,15 +556,20 @@ def _own_clone_of(clone: Path, taps: list[Tap]) -> Tap | None:
     return next((t for t in taps if _shared(clone, [t.path])), None)
 
 
-def _leftover_of(clone: Path, taps: list[Tap]) -> Tap | None:
-    """The configured tap whose name ``clone``'s dir name spells in another case.
+def _leftover_of(clone: Path, url: str, taps: list[Tap]) -> Tap | None:
+    """The configured tap ``clone`` is a leftover of: its dir in another case.
 
     The case-sensitive half of :func:`_is_listed`: on ext4 `repos/o__r` beside
     a configured `O/R` is not that tap's clone, and `boost tap <its url>`
-    answers "already tapped" and changes nothing.
+    answers "already tapped" and changes nothing. Matched on the dir name
+    (:attr:`Tap.safe_name`), not on a name rebuilt from it — `__` maps back
+    to `/` for `o__r` and not for a tap called `my__tap` — and only when the
+    clone's origin ``url`` is that tap's source or unknown: a clone of another
+    repository is not restored by `boost update`, so it keeps its own hint.
     """
-    key = name_key(clone.name.replace("__", "/"))
-    return next((t for t in taps if name_key(t.name) == key), None)
+    key = name_key(clone.name)
+    return next((t for t in taps if name_key(t.safe_name) == key
+                 and (not url or same_source(t.url, url))), None)
 
 
 def readd_hint(clone: Path, url: str) -> str:
@@ -572,11 +577,12 @@ def readd_hint(clone: Path, url: str) -> str:
 
     :func:`retap_hint` with the clone's dir name mapped back to a tap name, so
     a clone with no origin still gets an honest sentence rather than a
-    command that fails. A clone that is, or is spelled like, a configured
-    tap's gets `boost update` for that tap instead: re-tapping it is a no-op.
+    command that fails. A clone that is a configured tap's, or a leftover of
+    one (:func:`_leftover_of`: its dir in another case, from that tap's
+    source), gets `boost update` for that tap instead: re-tapping is a no-op.
     """
     taps = list_taps()
-    tap = _own_clone_of(clone, taps) or _leftover_of(clone, taps)
+    tap = _own_clone_of(clone, taps) or _leftover_of(clone, url, taps)
     if tap is not None:
         return "`boost update %s`" % util.shell_arg(tap.name)
     return _retap(clone, url)
@@ -600,7 +606,7 @@ def unlisted_clone_line(clone: Path, url: str) -> str:
         return ("%s is tap %s's own clone under another name, so boost "
                 "already reads it — leave it in place"
                 % (paths.tilde(clone), own.name))
-    left = _leftover_of(clone, taps)
+    left = _leftover_of(clone, url, taps)
     if left is not None:
         return ("%s is a leftover of tap %s, whose clone is %s, so boost reads "
                 "nothing from it — run `boost update %s`, then delete the "
