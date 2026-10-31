@@ -1456,10 +1456,15 @@ def test_the_summary_step_reads_the_plan_through_env(jobs):
     assert step["env"] == {"GATE_SET": "${{ needs.mutation-plan.outputs.gate_set }}",
                            "MATRIX": "${{ needs.mutation-plan.outputs.matrix }}",
                            "REASON": "${{ needs.mutation-plan.outputs.reason }}"}
-    # Before either gate, so a red gate still leaves the plan in the summary.
-    steps = jobs["mutation"]["steps"]
-    assert steps.index(step) < steps.index(_step(jobs["mutation"], runs="mutation_diff.py gate"))
-    assert steps.index(step) < steps.index(_step(jobs["mutation"], runs="mutation_shards.py merge"))
+    # Before the completeness check and either gate, so a missing shard or a
+    # red gate still leaves the plan in the summary; after the plan arrives.
+    job = jobs["mutation"]
+    steps = job["steps"]
+    at = steps.index(step)
+    assert steps.index(_downloads(job)["mutation-plan"]) < at
+    for later in (_step(job, name=COMPLETE), _step(job, runs="mutation_diff.py gate"),
+                  _step(job, runs="mutation_shards.py merge")):
+        assert at < steps.index(later), later.get("name")
 
 
 @needs_bash
