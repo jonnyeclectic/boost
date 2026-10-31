@@ -5,11 +5,12 @@
 Two things this repo cannot derive and therefore has to assert.
 
 **The count.** ``mutation_shards.SHARDS`` is Python's copy of a number also
-spelled in the ``mutation-shard`` matrix, in the ``plan --shards`` the shard
-step runs, in the ``merge --shards`` the gate runs, and in
-``mutation-weights-refresh.yml``. They are not one value with four readers:
-a matrix cannot call Python, and ``merge`` reconstructs the same pack from
-scratch to know which shard owned which file.
+spelled in ``mutation_plan.FULL_SHARDS``, in the ``full --shards`` the
+``mutation-plan`` job runs (the shard matrix is built from its output), in
+the ``merge --shards`` the gate runs, and in ``mutation-weights-refresh.yml``.
+They are not one value with four readers: a workflow cannot call Python, and
+``merge`` reconstructs the same pack from scratch to know which shard owned
+which file.
 
 Disagreement is *loud*, and that is still worth a test. ``cmd_merge`` fails
 closed — it collects the shards whose ``.meta`` it cannot find and returns 1
@@ -48,6 +49,12 @@ ms = importlib.util.module_from_spec(_spec)
 assert _spec.loader is not None
 _spec.loader.exec_module(ms)
 
+_plan_spec = importlib.util.spec_from_file_location(
+    "mutation_plan_count", ROOT / "scripts" / "mutation_plan.py")
+mp = importlib.util.module_from_spec(_plan_spec)
+assert _plan_spec.loader is not None
+_plan_spec.loader.exec_module(mp)
+
 
 def _tree_is_mutated(root: Path = ROOT) -> bool:
     """True when this suite is running inside mutmut's rewritten copy.
@@ -78,33 +85,13 @@ def _ci() -> str:
     return CI.read_text(encoding="utf-8")
 
 
-def _matrix_indices() -> list[int]:
-    """The `index:` list under the mutation-shard matrix.
-
-    Regex, not a YAML loader, and the honest reason is that the repo's test
-    tier is stdlib-only — there is no YAML dependency to import here. So this
-    only understands the flow-sequence form the file actually uses
-    (``index: [0, 1, ...]``); a block sequence, or a list split over lines,
-    is equally valid YAML and would make this *fail*, not silently pass. That
-    is the acceptable direction for a mis-parse, and the assertion below says
-    which form it wants, so the failure explains itself.
-    """
-    body = _ci()
-    start = body.index("  mutation-shard:")
-    end = body.index("\n  mutation:", start)
-    m = re.search(r"^\s+index:\s*\[([^\]]+)\]", body[start:end], re.M)
-    assert m, ("no inline `index: [...]` matrix under mutation-shard — if it "
-               "was reformatted as a block sequence, teach this helper that "
-               "form rather than deleting the check")
-    return [int(x) for x in m.group(1).split(",")]
-
-
-def test_the_matrix_is_exactly_the_shard_count_zero_indexed():
-    # Not just the length. `plan --index` validates `0 <= index < shards` and
-    # exits non-zero outside it, so a matrix of [1..8] would fail one job and
-    # never run shard 0's units at all -- and the merge would see shard 0's
-    # artifact missing, which `mutmut` counts as unrun rather than as absent.
-    assert _matrix_indices() == list(range(ms.SHARDS))
+def test_the_planner_plans_the_shard_count():
+    # The matrix is no longer spelled in ci.yml: `mutation-plan` writes it
+    # from `mutation_plan.py full --shards N`, one entry per packed bin, so
+    # its width is FULL_SHARDS by construction. What is left to pin is that
+    # the planner's number is this one -- the flag itself is pinned against
+    # SHARDS just below, with every other `--shards` in the workflows.
+    assert mp.FULL_SHARDS == ms.SHARDS
 
 
 @pytest.mark.parametrize("path", [CI, REFRESH], ids=lambda p: p.name)
@@ -115,15 +102,6 @@ def test_every_shards_flag_in_the_workflows_matches(path):
     assert set(found) == {ms.SHARDS}, (
         "%s spells --shards %s against SHARDS=%d"
         % (path.name, sorted(set(found)), ms.SHARDS))
-
-
-def test_the_step_name_counts_the_same_shards():
-    # Cosmetic only, and pinned anyway: "shard 3 of 6" over an eight-way
-    # matrix is the kind of thing that is read as evidence later, which is how
-    # the stale "planned 24.1 min per shard" comment above `timeout-minutes`
-    # survived the move to millisecond weights.
-    assert "of %d" % ms.SHARDS in _ci(), \
-        "the `mutate shard ... of N` step name disagrees with SHARDS"
 
 
 def timeout_minutes() -> int:

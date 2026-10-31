@@ -116,14 +116,12 @@ Usage
   mutation_shards.py merge --shards N --into mutants results/*  # rebuild results
   mutation_shards.py weights --source mutants    # refresh the balance hints
   mutation_shards.py drift --candidate new.json # is a refresh worth a PR?
-  mutation_shards.py cache-key                   # hash half of a shard's actions/cache key
 """
 from __future__ import annotations
 
 import argparse
 import ast
 import contextlib
-import hashlib
 import json
 import math
 import sys
@@ -1029,9 +1027,18 @@ def cmd_plan(args: argparse.Namespace) -> int:
     if not 0 <= args.index < args.shards:
         raise SystemExit("mutation_shards plan: --index %d out of range for %d shards"
                          % (args.index, args.shards))
-    patterns = [pattern_for(root, u) for u in bins[args.index]]
-    print(" ".join(p for p in patterns if p))
+    print(" ".join(patterns_for_bin(root, bins[args.index])))
     return 0
+
+
+def patterns_for_bin(root: Path, units: list[Unit]) -> list[str]:
+    """One packed bin's mutmut patterns, with ``__init__.py``'s ``None`` dropped.
+
+    The single spelling of "what does this shard run", shared by ``plan
+    --index`` and ``mutation_plan.py full`` so the two cannot drift apart --
+    ``merge --shards N`` re-derives the same pack and trusts that they agree.
+    """
+    return [p for p in (pattern_for(root, u) for u in units) if p]
 
 
 def shard_meta(parent: Path, prefix: str, shard: int, name: str):
@@ -1184,11 +1191,17 @@ RELEVANT_PREFIXES = (
     "boost_cli/",
     "tests/",
     "requirements/mutation-tools.txt",
-    "scripts/mutation_gate.py",
-    "scripts/mutation_shards.py",
     ".github/workflows/ci.yml",
 )
 RELEVANT_EXACT = ("setup.cfg", "pyproject.toml")
+
+#: Every gate script, by shape rather than by name, so the next one
+#: (`mutation_plan.py` was the third) is covered the day it lands. Only
+#: `.py`: `scripts/mutation_weights.json` sits under the same prefix and is a
+#: packing hint, never a correctness input -- a refresh moves which shard runs
+#: a mutant, not whether it is killed, so it must not buy a 24-shard run.
+GATE_SCRIPT_PREFIX = "scripts/mutation_"
+GATE_SCRIPT_SUFFIX = ".py"
 
 
 def is_relevant(changed: list[str]) -> bool:
@@ -1200,6 +1213,8 @@ def is_relevant(changed: list[str]) -> bool:
         if name in RELEVANT_EXACT:
             return True
         if name.endswith("conftest.py"):
+            return True
+        if name.startswith(GATE_SCRIPT_PREFIX) and name.endswith(GATE_SCRIPT_SUFFIX):
             return True
         for prefix in RELEVANT_PREFIXES:
             if name.startswith(prefix):
@@ -1228,76 +1243,6 @@ def cmd_scope(args: argparse.Namespace) -> int:
         print("true")
         return 0
     print("true" if is_relevant(changed) else "false")
-    return 0
-
-
-# --------------------------------------------------------------------------
-# cache key: reuse a shard's mutants/ results across pushes of the same PR
-# --------------------------------------------------------------------------
-
-# Same list as RELEVANT_PREFIXES, minus boost_cli/ itself. mutmut already
-# reuses a source file's own results by content hash (per the module
-# docstring's "Balance without a chicken-and-egg" -- mutmut's per-source
-# hashing, not re-verified locally against the 3.7.0 pin here), so keying the
-# actions/cache entry on boost_cli/ too would just repeat that reuse one
-# level up, at the cost of evicting every mutant in the cache -- not just the
-# ones in the file that changed -- on every core edit, which is most pushes.
-# What mutmut does NOT re-derive on its own is which tests ran, which
-# mutmut/pytest built the recorded exit codes, and the gate's own scripts;
-# any of those changing must miss the cache and pay the full run, exactly as
-# `is_relevant` already says for the scope job.
-CACHE_KEY_PREFIXES = tuple(p for p in RELEVANT_PREFIXES if p != "boost_cli/")
-CACHE_KEY_EXACT = RELEVANT_EXACT
-
-
-def cache_key_paths(root: Path) -> list[Path]:
-    """Every file whose content can change a shard's cache key.
-
-    Mirrors ``is_relevant``'s own file list, minus ``boost_cli/`` (see
-    ``CACHE_KEY_PREFIXES``). A named file or directory that does not exist is
-    skipped rather than raising, so a fixture repo that only sets up part of
-    the tree still produces a stable key.
-    """
-    found: set[Path] = set()
-    for name in CACHE_KEY_EXACT:
-        path = root / name
-        if path.is_file():
-            found.add(path)
-    for prefix in CACHE_KEY_PREFIXES:
-        base = root / prefix
-        if base.is_dir():
-            found.update(f for f in base.rglob("*") if f.is_file())
-        elif base.is_file():
-            found.add(base)
-    return sorted(found)
-
-
-def cache_key_hash(root: Path) -> str:
-    """A deterministic digest of every file ``cache_key_paths`` names.
-
-    Hashes content, not mtime or git status: a checkout's timestamps are not
-    reproducible across machines, but bytes are. Each file's path is folded
-    in alongside its content (relative to `root`, POSIX-normalized) so a
-    rename or an added/removed file changes the digest even when every
-    remaining file's bytes are untouched.
-    """
-    digest = hashlib.sha256()
-    for path in cache_key_paths(root):
-        digest.update(path.relative_to(root).as_posix().encode("utf-8"))
-        digest.update(b"\0")
-        digest.update(path.read_bytes())
-        digest.update(b"\0")
-    return digest.hexdigest()
-
-
-def cmd_cache_key(args: argparse.Namespace) -> int:
-    """Print the hash half of a mutation shard's ``actions/cache`` key.
-
-    The workflow builds the full key itself (shard index + Python version +
-    this hash) -- this script has no reason to know either of the first two,
-    and folding them in here would just make the CI YAML a pass-through.
-    """
-    print(cache_key_hash(Path(args.root)))
     return 0
 
 
@@ -1706,9 +1651,6 @@ def main() -> int:
     d.add_argument("--github-output",
                    help="append `moved=` and `makespan=` to this file ($GITHUB_OUTPUT)")
     d.set_defaults(func=cmd_drift)
-
-    k = sub.add_parser("cache-key", help="hash half of a shard's actions/cache key")
-    k.set_defaults(func=cmd_cache_key)
 
     args = ap.parse_args()
     return args.func(args)
