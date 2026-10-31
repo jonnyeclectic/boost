@@ -10,6 +10,7 @@ it, and doctor says when the row looks like a Claude Code profile.
 """
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 
@@ -113,3 +114,56 @@ def test_the_named_remedy_writes_the_profile(duo):
     out = _flat(duo("doctor").out)
     assert "claude-personal: takes skills only" not in out
     assert "looks like a Claude Code profile" not in out
+
+
+@pytest.fixture()
+def shared_profile(duo):
+    """The ``claude-personal`` row, with its skills dir a symlink to
+    claude-code's -- one way to share skills between Claude Code profiles."""
+    home = paths.home()
+    (home / ".claude" / "skills").mkdir(parents=True, exist_ok=True)
+    (home / ".claude-personal").mkdir(parents=True, exist_ok=True)
+    (home / ".claude-personal" / "skills").symlink_to(
+        os.path.join("..", ".claude", "skills"))
+    return duo
+
+
+def test_a_profile_sharing_claude_codes_skills_dir_converges(shared_profile):
+    """The profile's dir IS claude-code's, where the subagent's own file is,
+    so the copy is not linked for it -- once, by name or by path.
+
+    Decided by agent name, install linked the copy for claude-personal --
+    into ~/.claude/skills -- then unlinked it as claude-code's in the same
+    run; doctor said the link was missing, and every sync linked and
+    unlinked it again without ever going green.
+    """
+    duo = shared_profile
+    link = paths.home() / ".claude" / "skills" / WORKFLOW
+    # The dry run and the run name the same agents.
+    dry = _flat(duo("install", WORKFLOW, "--dry-run").out)
+    assert "linked → windsurf · antigravity" in dry
+    assert "claude-personal" not in dry.split("linked →", 1)[1].split("✓")[0]
+    out = _flat(duo("install", WORKFLOW).out)
+    assert "linked → windsurf · antigravity ✓" in out
+    assert "unlinked" not in out
+    assert ("claude-personal: takes skills only "
+            "(agents.claude-personal.skills_only) — not written") in out
+    assert not os.path.lexists(link)
+    for _ in range(2):
+        r = duo("doctor")
+        assert r.rc == 0
+        assert "not linked" not in r.out
+        assert "issue" not in _flat(r.out).split("● ")[-1]
+        sync = duo("sync")
+        assert WORKFLOW not in sync.out, sync.out
+        assert not os.path.lexists(link)
+    # A link the old install left behind is the sweep's, named once, as
+    # claude-code's -- the agent with the file -- not twice for one path.
+    link.symlink_to(paths.home() / ".agents" / "skills" / WORKFLOW)
+    flat = _flat(duo("doctor", expect=None).out)
+    assert flat.count("skill copy is linked for") == 1, flat
+    assert ("skill copy is linked for claude-code, which has the workflow's "
+            "own file") in flat
+    duo("sync")
+    assert not os.path.lexists(link)
+    assert duo("doctor").rc == 0

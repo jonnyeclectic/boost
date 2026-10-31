@@ -6498,6 +6498,16 @@ def _skill_copy(name: str, slot: str, raw: str, existing: dict | None,
 # earlier, wider install made: `--agent` names only agents that take the
 # workflow's file, so no narrowing can name a copy-link agent, and
 # ``link_agents`` reads an empty ``only`` as every agent.
+#
+# "Beside a file of the workflow's own" is decided by the physical skills dir
+# (:func:`agents.dir_identity`), never by agent name alone. A Claude Code
+# profile whose ``~/.claude-personal/skills`` is a symlink to
+# ``~/.claude/skills`` is a second name for claude-code's dir: a copy link made
+# for the profile lands beside claude-code's own file. Decided by name, the
+# targets linked it there and the stale sweep, seeing claude-code's path,
+# removed it in the same run -- every sync linked and unlinked again, and
+# doctor never went green. So such an agent is no target, and a link there is
+# stale.
 
 
 def _holds_its_own(entry: dict) -> set:
@@ -6516,13 +6526,26 @@ def _owns_copy(name: str, entry: dict) -> bool:
             and lockfile.get_skill(name) is None)
 
 
+def _holder_dirs(have: Collection[str]) -> set[object]:
+    """The physical skills dirs (:func:`agents.dir_identity`) of ``have``,
+    the agents with a file of the workflow's own."""
+    known = agents.known_agents()
+    return {agents.dir_identity(known[a]["dir"]) for a in have if a in known}
+
+
 def copy_link_agents(have: Collection[str],
                      narrowed: bool = False) -> dict[str, Path]:
     """The linking agents a workflow's copy goes to: all but ``have``, the
-    agents with a file of the workflow's own. None when ``narrowed``."""
+    agents with a file of the workflow's own, and any whose skills dir is
+    physically one of theirs. None when ``narrowed``.
+
+    The dry run (`boost install -n`) and the real one both come here, so they
+    name the same agents."""
     if narrowed:
         return {}
-    return {a: d for a, d in agents.linking_agents().items() if a not in have}
+    shared = _holder_dirs(have)
+    return {a: d for a, d in agents.linking_agents().items()
+            if a not in have and agents.dir_identity(d) not in shared}
 
 
 def copy_link_targets(name: str, entry: dict | None) -> dict[str, Path]:
@@ -6569,24 +6592,48 @@ def missing_copy_links(name: str, entry: dict) -> list[str]:
 def stale_copy_links(name: str, entry: dict) -> list[str]:
     """The linking agents holding boost's link to ``name``'s copy where it
     does not belong, which `boost sync` removes: beside a file of the
-    workflow's own (the procedure twice), and anywhere under a declared
-    ``--agent`` narrowing, which links nowhere -- so a link a wider install
-    made does not outlive it. A disabled agent keeps its link, as it keeps a
-    skill's. :func:`stale_copy_reason` says which, per agent."""
+    workflow's own (the procedure twice) -- in that agent's skills dir, or in
+    one that is physically the same dir under another agent's name -- and
+    anywhere under a declared ``--agent`` narrowing, which links nowhere -- so
+    a link a wider install made does not outlive it. A disabled agent keeps
+    its link, as it keeps a skill's. :func:`stale_copy_reason` says which, per
+    agent.
+
+    One physical link is named once, by the agent with the file of its own
+    where there is one, so doctor's lines and the dry run's match what the
+    sweep removes."""
     if not _owns_copy(name, entry):
         return []
     own = _holds_its_own(entry)
+    shared = _holder_dirs(own)
     narrowed = bool(entry.get("only_agents"))
-    return [a for a, adir in agents.linking_agents().items()
-            if (narrowed or a in own) and is_boost_link(adir / name)
+    hits = [(a, agents.dir_identity(adir))
+            for a, adir in agents.linking_agents().items()
+            if (narrowed or a in own or agents.dir_identity(adir) in shared)
+            and is_boost_link(adir / name)
             and links_to_store_dir(adir / name, name)]
+    speaker: dict[object, str] = {}
+    for a, key in sorted(hits, key=lambda hit: hit[0] not in own):
+        speaker.setdefault(key, a)
+    return [a for a, key in hits if speaker[key] == a]
 
 
 def stale_copy_reason(entry: dict, agent: str) -> str:
     """Why :func:`stale_copy_links` names ``agent``, as the clause doctor,
     sync and the MCP doctor all end their line with."""
-    if agent in _holds_its_own(entry):
+    own = _holds_its_own(entry)
+    if agent in own:
         return "which has the workflow's own file"
+    adir = agents.linking_agents().get(agent)
+    if adir is not None:
+        key = agents.dir_identity(adir)
+        known = agents.known_agents()
+        # `own` holds the copy row's agent too, which is None
+        holder = next((a for a in sorted(a for a in own if a in known)
+                       if agents.dir_identity(known[a]["dir"]) == key), None)
+        if holder is not None:
+            return ("whose skills dir is %s's, which has the workflow's own "
+                    "file" % holder)
     return "which the workflow's --agent scope leaves out"
 
 
