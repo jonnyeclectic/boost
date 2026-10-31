@@ -1308,6 +1308,7 @@ def test_run_as_a_script_with_no_credentials_exits_zero_with_skip_false(tmp_path
 WORKFLOWS = ROOT / ".github" / "workflows"
 CI_YML = WORKFLOWS / "ci.yml"
 REFRESH_YML = WORKFLOWS / "mutation-weights-refresh.yml"
+PUBLISH_YML = WORKFLOWS / "publish.yml"
 
 
 @pytest.fixture(scope="module")
@@ -1353,6 +1354,27 @@ def _as_number(value) -> float:
         return float(text)
     except ValueError:
         return math.nan
+
+
+def _render(value) -> str:
+    """A value as GitHub prints it into a string."""
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value)
+
+
+def _format(template, *args) -> str:
+    # GitHub's format(): `{N}` is the Nth argument, `{{` and `}}` are literal
+    # braces. A placeholder past the last argument is an error there too.
+    def sub(m):
+        if m.group(0) in ("{{", "}}"):
+            return m.group(0)[0]
+        return _render(args[int(m.group(1))])
+    return re.sub(r"\{\{|\}\}|\{(\d+)\}", sub, _render(template))
 
 
 def _equal(a, b) -> bool:
@@ -1460,6 +1482,8 @@ class _Expression:
             self._expect(")")
             if text in _STATUS_FUNCTIONS and not args:
                 return self.status[text]
+            if text == "format" and args:
+                return _format(*args)
             raise ValueError("this interpreter does not implement %s()" % text)
         if text in ("true", "false"):
             return text == "true"
@@ -1475,14 +1499,7 @@ def evaluate(text: str, lookup, status: dict | None = None):
 def interpolate(text: str, lookup) -> str:
     """A string with `${{ }}` holes, as GitHub renders it."""
     def render(m):
-        value = evaluate(m.group(1), lookup)
-        if value is None:
-            return ""
-        if isinstance(value, bool):
-            return "true" if value else "false"
-        if isinstance(value, float) and value.is_integer():
-            return str(int(value))
-        return str(value)
+        return _render(evaluate(m.group(1), lookup))
     return re.sub(r"\$\{\{(.*?)\}\}", render, text)
 
 
@@ -1768,6 +1785,21 @@ def test_the_interpreter_applies_the_implicit_success_to_grandparents():
 def test_the_interpreter_follows_githubs_rules(text, expected):
     status = {"always": True, "cancelled": False}
     assert evaluate(text, lambda name: pytest.fail(name), status) == expected
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("format('a-{0}-{1}', 'x', 7)", "a-x-7"),
+    ("format('{{{0}}}', 'x')", "{x}"),          # doubled braces are literal
+    ("format('{0}{0}', null)", ""),             # null renders empty
+    ("format('{0}', true)", "true"),
+])
+def test_the_interpreter_formats_as_github_does(text, expected):
+    assert evaluate(text, lambda name: pytest.fail(name), {}) == expected
+
+
+def test_a_format_placeholder_without_an_argument_is_an_error():
+    with pytest.raises(IndexError):
+        evaluate("format('{1}', 'only-one')", lambda name: pytest.fail(name), {})
 
 
 @pytest.mark.parametrize("text", ["contains(github.ref, 'main')", "github.ref == ",
@@ -2226,3 +2258,91 @@ def test_the_download_waits_for_a_run_id_and_its_absence_is_reported():
     report = next(s for s in _refresh_steps() if s.get("name") == "no measurement to apply")
     # `skipped` is not `success`, so a dispatch that found no run still says so.
     assert report["if"] == "steps.fetch.outcome != 'success'"
+
+
+# --------------------------------------------------------------------------
+# publish.yml: only a push run may queue for the release
+# --------------------------------------------------------------------------
+#
+# publish.yml fires on EVERY completed `ci` on main, and that now includes the
+# nightly and every dispatch. Each such run joins the workflow's concurrency
+# group before its guard skips it, and GitHub keeps one running and one pending
+# run per group: a third arrival cancels the pending one. With a constant
+# `release` group, a nightly completing while merge B's release waited behind
+# merge A's cancelled B's release, and B shipped with the next merge. So only
+# the runs that can release -- a push run, or the manual release button --
+# share `release`; every other run gets a group of its own.
+
+RELEASE_GROUP = ("${{ (github.event_name == 'workflow_dispatch' "
+                 "|| github.event.workflow_run.event == 'push') "
+                 "&& 'release' || format('release-ignored-{0}', github.run_id) }}")
+
+
+@pytest.fixture(scope="module")
+def publish():
+    yaml = pytest.importorskip("yaml")
+    if not PUBLISH_YML.exists():
+        pytest.skip(".github/workflows not reachable (e.g. mutation sandbox)")
+    return yaml.safe_load(PUBLISH_YML.read_text(encoding="utf-8"))
+
+
+def _publish_lookup(name="workflow_run", *, event="push", run_id="9001",
+                    conclusion="success", repo="o/boost"):
+    run = {"event": event, "conclusion": conclusion,
+           "head_repository.full_name": repo}
+
+    def lookup(ident):
+        if ident == "github.event_name":
+            return name
+        if ident == "github.run_id":
+            return run_id
+        if ident == "github.repository":
+            return "o/boost"
+        prefix = "github.event.workflow_run."
+        if ident.startswith(prefix):
+            # A dispatch of publish.yml itself carries no workflow_run payload.
+            return run.get(ident[len(prefix):]) if name == "workflow_run" else None
+        raise KeyError(ident)
+    return lookup
+
+
+def test_the_release_group_is_one_pinned_expression(publish):
+    # `cancel-in-progress: false` is unchanged and still means what it did for
+    # a push run: same group name, so a release is never cancelled mid-upload
+    # and push runs still serialise against each other and the manual button.
+    assert publish["concurrency"] == {"group": RELEASE_GROUP, "cancel-in-progress": False}
+
+
+@pytest.mark.parametrize("name, event, group", [
+    ("workflow_run", "push", "release"),
+    ("workflow_dispatch", None, "release"),            # the manual release button
+    ("workflow_run", "schedule", "release-ignored-9001"),
+    ("workflow_run", "workflow_dispatch", "release-ignored-9001"),
+    ("workflow_run", "pull_request", "release-ignored-9001"),  # fork PR from `main`
+])
+def test_only_a_run_that_can_release_queues_for_the_release(publish, name, event, group):
+    lookup = _publish_lookup(name, event=event)
+    assert evaluate(publish["concurrency"]["group"], lookup) == group
+
+
+@pytest.mark.parametrize("event", ["schedule", "workflow_dispatch", "pull_request"])
+def test_two_ignored_runs_never_share_a_group(publish, event):
+    expr = publish["concurrency"]["group"]
+    first = evaluate(expr, _publish_lookup(event=event, run_id="1"))
+    second = evaluate(expr, _publish_lookup(event=event, run_id="2"))
+    assert first != second
+    assert "release" not in (first, second)
+
+
+@pytest.mark.parametrize("name", ["workflow_run", "workflow_dispatch"])
+@pytest.mark.parametrize("event", ["push", "schedule", "workflow_dispatch", "pull_request"])
+@pytest.mark.parametrize("conclusion", ["success", "failure"])
+@pytest.mark.parametrize("repo", ["o/boost", "fork/boost"])
+def test_every_run_the_guard_lets_release_is_in_the_release_group(
+        publish, name, event, conclusion, repo):
+    # The group and the guard must agree: a run in its own group could release
+    # concurrently with another and race it for the next version and tag.
+    lookup = _publish_lookup(name, event=event, conclusion=conclusion, repo=repo)
+    guard = publish["jobs"]["guard"]["if"]
+    if _truthy(evaluate(guard, lookup, {"success": True})):
+        assert evaluate(publish["concurrency"]["group"], lookup) == "release"
