@@ -69,6 +69,14 @@ def test_only_the_ubuntu_312_cell_measures_coverage():
     # badge, xml for diff-cover and Codecov.
     for flag in ("--cov=boost_cli", "--cov-report=json", "--cov-report=xml"):
         assert flag in run
+    # ...and only inside the branch the env picks: hoisting `cov=(...)` out of
+    # the `if` would measure (and gate) every cell while the env still read
+    # as one, and the pytest line itself must carry no `--cov` of its own.
+    guard = 'if [ "$MEASURE_COVERAGE" = true ]; then'
+    assert guard in run
+    branch = run.split(guard, 1)[1].split("\nfi", 1)[0]
+    assert "cov=(--cov=boost_cli" in branch
+    assert "--cov" not in run.replace(branch, "")
 
 
 def test_the_cell_publishes_its_report_only_when_the_suite_passed():
@@ -94,6 +102,34 @@ def test_patch_coverage_reuses_the_cells_report():
     assert dl and dl[0]["with"]["name"] == "coverage-report"
     # A missing artifact must fail the job, never be tolerated past.
     assert not dl[0].get("continue-on-error")
+
+
+def test_patch_coverage_fails_unless_every_tests_cell_succeeded():
+    """The artifact proves only the measuring STEP passed, not the matrix.
+
+    A red smoke step in the ubuntu-3.12 cell, or any red Windows cell, still
+    leaves `coverage-report` behind, so the download alone would go green.
+    The job is `always()`, so the check must be a step: a job-level `if:` on
+    the result would SKIP a required check, which reads as passing.
+    """
+    steps = jobs()["patch-coverage"]["steps"]
+    download = next(i for i, s in enumerate(steps)
+                    if "download-artifact" in s.get("uses", ""))
+    for i, step in enumerate(steps):
+        env = step.get("env") or {}
+        var = next((k for k, v in env.items()
+                    if "needs.tests.result" in str(v)), None)
+        if var is None:
+            continue
+        assert i < download, "inspect the result before trusting the artifact"
+        run = step["run"]
+        assert '"$%s" != "success"' % var in run
+        after = run.split('"$%s" != "success"' % var, 1)[1]
+        assert "exit 1" in after.split("fi", 1)[0]
+        assert "if" not in step, "the conclusive check must never be skipped"
+        assert not step.get("continue-on-error")
+        return
+    pytest.fail("no step in `patch-coverage` inspects needs.tests.result")
 
 
 def test_pytest_addopts_never_parallelise():

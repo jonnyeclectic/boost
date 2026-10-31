@@ -1217,8 +1217,9 @@ jobs:
     # fails — and a skipped required check reads as passing. Under `always()`
     # the verdict comes from the download instead: that cell uploads only on
     # a green suite, so a failed or cancelled ubuntu-3.12 cell leaves no
-    # artifact and the download step fails this job. Every other cell's
-    # failure is already red in its own required `tests (...)` check.
+    # artifact and the download step fails this job — the second line of
+    # defence behind the first step, which fails on any `tests` result other
+    # than success.
     needs: tests
     if: always() && github.event_name == 'pull_request'
     runs-on: ubuntu-latest
@@ -1240,6 +1241,21 @@ jobs:
           # catches a compromised action exfiltrating a token, paired with
           # zizmor's static analysis. Flip to block + an allowlist to enforce.
           egress-policy: audit
+      - name: tests must be conclusive
+        # The artifact proves only that the measuring STEP passed: a red smoke
+        # step in that same cell, or any red Windows/macOS cell, still leaves
+        # `coverage-report` behind. So the matrix's result is read here, as a
+        # step that always runs — a job-level `if:` on it would SKIP this
+        # required check, and a skipped required check reads as passing.
+        # TO CONFIRM on the first PR run: that a red 3.15 cell (job-level
+        # continue-on-error) still reports needs.tests.result == 'success'.
+        env:
+          TESTS: ${{ needs.tests.result }}
+        run: |
+          if [ "$TESTS" != "success" ]; then
+            echo "::error::tests concluded '$TESTS' — patch coverage cannot be trusted"
+            exit 1
+          fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0    # full history so origin/main is a real diff base
