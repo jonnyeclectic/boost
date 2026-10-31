@@ -722,12 +722,15 @@ def sandbox(tmp_path, monkeypatch):
 def _sandbox_home(tmp_path, monkeypatch):
     """Everything `sandbox` does, for a caller that holds its own MonkeyPatch.
 
-    A function rather than the fixture body so `tapped_template` -- session
-    scoped, and therefore unable to request the function-scoped `sandbox` --
-    builds its HOME under exactly the environment a test runs in. A second,
-    hand-kept list of the variables to set and unset would be the thing that
-    drifts: a template tapped under a looser environment than the tests would
-    hand every one of them a HOME no test-time `boost tap` could produce.
+    A function rather than the fixture body so `sandbox_env_delta` can run it
+    and record exactly what it changes. `tapped_template` builds its HOME in a
+    child process from a hand-kept second copy of that list
+    (`_tapped_support.SANDBOX_ENV` / `SANDBOX_UNSET`), and that copy is the
+    thing that would drift: a template tapped under a looser environment than
+    the tests would hand every one of them a HOME no test-time `boost tap`
+    could produce. So `test_tapped_template.py`'s
+    `test_the_child_environment_is_what_the_sandbox_gives_a_test` compares the
+    copy with `sandbox_env_delta`, the ground truth taken from this function.
     """
     home = tmp_path / "home"
     home.mkdir()
