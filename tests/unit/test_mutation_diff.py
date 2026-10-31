@@ -409,15 +409,23 @@ def _write_plan(tmp_path, plan):
 
 
 def _diff_plan(tmp_path, shards, mutants, functions=None, counts=None):
-    """A diff plan; `mutants` is required so every test states what it planned."""
+    """A diff plan; `mutants` is required so every test states what it planned.
+
+    `counts` is required in a plan, as the planner always writes it. With one
+    function (or none) it can only be `{f: mutants}` (or `{}`), so it is
+    derived; with several, the test must say how they split.
+    """
     flat = [p[: -len("__mutmut_*")] for s in shards for p in s]
+    if counts is None:
+        if len(flat) > 1:
+            raise ValueError("several functions: pass counts= explicitly")
+        counts = dict.fromkeys(flat, mutants)
     spec = {
         "shards": shards,
         "mutants": mutants,
         "functions": functions if functions is not None else flat,
+        "counts": counts,
     }
-    if counts is not None:
-        spec["counts"] = counts
     return _write_plan(
         tmp_path, {"gate_set": "diff", "reasons": ["test"], "sets": {"diff": spec}}
     )
@@ -481,7 +489,8 @@ def test_gate_reads_only_in_scope_keys(tmp_path, head_tree, monkeypatch):
 def test_gate_fails_and_annotates_a_survivor(tmp_path, head_tree, monkeypatch, capsys):
     summary = tmp_path / "summary.md"
     monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
-    plan = _diff_plan(tmp_path, [[md.pattern(_A)], [md.pattern(_K)]], 3)
+    plan = _diff_plan(tmp_path, [[md.pattern(_A)], [md.pattern(_K)]], 3,
+                      counts={_A: 1, _K: 2})
     _meta(tmp_path / "src", "mutation-diff-shard-", 0,
           {f"{_A}__mutmut_1": 1, f"{_K}__mutmut_1": None})
     _meta(tmp_path / "src", "mutation-diff-shard-", 1,
@@ -507,7 +516,8 @@ def test_gate_no_annotations_keeps_the_verdict_and_summary(
     # code and summary are the data the shadow report compares.
     summary = tmp_path / "summary.md"
     monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
-    plan = _diff_plan(tmp_path, [[md.pattern(_A)], [md.pattern(_K)]], 3)
+    plan = _diff_plan(tmp_path, [[md.pattern(_A)], [md.pattern(_K)]], 3,
+                      counts={_A: 1, _K: 2})
     _meta(tmp_path / "src", "mutation-diff-shard-", 0,
           {f"{_A}__mutmut_1": 1, f"{_K}__mutmut_1": None})
     _meta(tmp_path / "src", "mutation-diff-shard-", 1,
@@ -536,10 +546,12 @@ def test_gate_annotation_lists_at_most_three(tmp_path, head_tree, monkeypatch, c
 
 
 @pytest.mark.usefixtures("needs_mutmut")
-def test_gate_missing_shard_is_not_a_pass(tmp_path, head_tree):
-    plan = _diff_plan(tmp_path, [[md.pattern(_A)], [md.pattern(_K)]], 1)
+def test_gate_missing_shard_is_not_a_pass(tmp_path, head_tree, capsys):
+    plan = _diff_plan(tmp_path, [[md.pattern(_A)], [md.pattern(_K)]], 2,
+                      counts={_A: 1, _K: 1})
     _meta(tmp_path / "src", "mutation-diff-shard-", 0, {f"{_A}__mutmut_1": 1})
     assert _gate(tmp_path, plan, head_tree) == 2
+    assert "shard 1: no artifact at" in capsys.readouterr().out
 
 
 @pytest.mark.usefixtures("needs_mutmut")
@@ -551,12 +563,14 @@ def test_gate_unrun_in_scope_key_is_exit_2(tmp_path, head_tree):
 
 
 @pytest.mark.usefixtures("needs_mutmut")
-def test_gate_function_with_no_keys_is_exit_2(tmp_path, head_tree):
+def test_gate_function_with_no_keys_is_exit_2(tmp_path, head_tree, capsys):
     # The planner counted mutants for it; a shard that produced none ran
     # something else, and scoring the rest would pass on a subset.
-    plan = _diff_plan(tmp_path, [[md.pattern(_A), md.pattern(_K)]], 1)
+    plan = _diff_plan(tmp_path, [[md.pattern(_A), md.pattern(_K)]], 2,
+                      counts={_A: 1, _K: 1})
     _meta(tmp_path / "src", "mutation-diff-shard-", 0, {f"{_A}__mutmut_1": 1})
     assert _gate(tmp_path, plan, head_tree) == 2
+    assert f"no mutants of {_K} (planned, never run)" in capsys.readouterr().out
 
 
 @pytest.mark.usefixtures("needs_mutmut")
@@ -702,6 +716,11 @@ _PA = "boost_cli.core.m.x_a__mutmut_*"
         ({"shards": [], "mutants": 0, "functions": [None]}, None, "functions"),
         ({"shards": [], "mutants": 0, "functions": "x"}, None, "functions"),
         ([], None, "sets.diff"),
+        # `counts` is required: the planner always writes it, and without it
+        # one function's shortfall can hide behind another's surplus.
+        ({"shards": [[_PA]], "mutants": 1, "functions": [_A]},
+         {f"{_A}__mutmut_1": 1}, "counts"),
+        ({"shards": [], "mutants": 0, "functions": []}, None, "counts"),
     ],
 )
 def test_gate_refuses_a_malformed_diff_set(tmp_path, head_tree, capsys, spec, meta, complaint):

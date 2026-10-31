@@ -465,8 +465,10 @@ def validate_plan(plan: Any) -> tuple[dict[str, Any] | None, list[str]]:
     * `mutants` is an int >= 0, and is 0 exactly when there are no shards, so
       a `0` can't make the shortfall check vacuous;
     * `functions` is a list of strings;
-    * `counts`, when present (the planner always writes it), maps exactly the
-      shards' functions to positive ints that sum to `mutants`.
+    * `counts` maps exactly the shards' functions to positive ints that sum
+      to `mutants`. Required, because the planner always writes it, and
+      without it a total alone would let one function's shortfall hide
+      behind another's surplus.
     """
     if not isinstance(plan, dict):
         return None, ["the plan is not a JSON object"]
@@ -505,7 +507,9 @@ def validate_plan(plan: Any) -> tuple[dict[str, Any] | None, list[str]]:
     if not isinstance(functions, list) or not all(isinstance(f, str) for f in functions):
         problems.append(f"`functions` is {functions!r}, not a list of strings")
 
-    if "counts" in spec:
+    if "counts" not in spec:
+        problems.append("`counts` is missing (the planner always writes it)")
+    else:
         counts = spec["counts"]
         if not isinstance(counts, dict) or not all(
             isinstance(k, str) and _count(v) and v > 0 for k, v in counts.items()
@@ -535,7 +539,7 @@ def collect_diff(
     """
     codes: dict[str, int | None] = {}
     problems: list[str] = []
-    per_function = spec.get("counts") or {}
+    per_function = spec["counts"]
     for index, shard in enumerate(spec["shards"]):
         if not (source / f"{prefix}{index}").is_dir():
             problems.append(f"shard {index}: no artifact at {source}/{prefix}{index}")
@@ -552,7 +556,7 @@ def collect_diff(
             }
             if not mine:
                 problems.append(f"shard {index}: no mutants of {q} (planned, never run)")
-            elif q in per_function and len(mine) < per_function[q]:
+            elif len(mine) < per_function[q]:
                 # Exact per function: a total alone hides one function's
                 # shortfall behind another's surplus.
                 problems.append(
