@@ -59,8 +59,9 @@ def test_install_names_the_profile_it_left_out(duo):
     out = _flat(duo("install", WORKFLOW).out)
     assert ("claude-personal: takes skills only "
             "(agents.claude-personal.skills_only) — not written") in out
-    assert ("windsurf: has no slash-command format "
-            "(agents.windsurf.workflows) — not written") in out
+    # windsurf's `workflows: false` is boost's own: named, its key not offered
+    assert "windsurf: has no slash-command format — not written" in out
+    assert "agents.windsurf.workflows" not in out
     assert not (paths.home() / ".claude-personal" / "agents").exists()
 
 

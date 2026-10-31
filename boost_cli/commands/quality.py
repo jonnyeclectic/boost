@@ -709,10 +709,8 @@ def cmd_doctor(argv):
         # antigravity row loses every subagent, command and rule with no
         # line anywhere saying so (`store.skipped_agents`).
         for aname in agents.claude_profile_rows():
-            rep.note("agent-config", "agents.%s looks like a Claude Code "
-                     "profile — `boost config set agents.%s.skills_only "
-                     "false` then `boost sync` gives it agents/, commands/ "
-                     "and rules/" % (aname, aname), wrap=True)
+            rep.note("agent-config", agents.claude_profile_note(aname),
+                     wrap=True)
     for aname, err in agent_errs:
         key = "agents.%s.dir" % aname
         bad("agent-config", "%s: %s — %s, or set a path with `boost config set "
