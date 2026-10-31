@@ -21,7 +21,10 @@ from __future__ import annotations
 import importlib.util
 import io
 import json
+import math
 import os
+import re
+import shutil
 import subprocess
 import sys
 import urllib.error
@@ -1189,3 +1192,780 @@ def test_run_as_a_script_with_no_credentials_exits_zero_with_skip_false(tmp_path
         env=env, capture_output=True, text=True, timeout=60, check=False)
     assert proc.returncode == 0, proc.stderr
     assert out.read_text(encoding="utf-8") == "skip=false\npr_run_id=\n"
+
+
+# ==========================================================================
+# ci.yml wiring: which job runs on which event
+# ==========================================================================
+#
+# The script above only decides. What its `skip=true` may switch off is
+# ci.yml's business, and the failure worth pinning there is a quiet one: a job
+# that is SKIPPED reports as passing, so a required check that a skipped
+# `proven` drags down with it (every pull request, where `proven` never runs)
+# would turn green without testing anything. GitHub evaluates a job-level
+# `if:` with no status function as `success() && <if>`, and that `success()`
+# looks at every ANCESTOR, not only the jobs named in `needs`
+# (actions/runner#491) -- so the grandchild of a skipped job is skipped too.
+#
+# Grepping conditions cannot see that, so these tests evaluate them: a small
+# interpreter for the subset of GitHub's expression language the job
+# conditions use, and a walk of the job graph that applies the implicit
+# `success()` rule. It refuses anything it does not understand -- an unknown
+# function, an unknown context name, a `needs.X` the job does not declare --
+# so a new construct fails here rather than being approximated.
+
+WORKFLOWS = ROOT / ".github" / "workflows"
+CI_YML = WORKFLOWS / "ci.yml"
+REFRESH_YML = WORKFLOWS / "mutation-weights-refresh.yml"
+
+
+@pytest.fixture(scope="module")
+def ci():
+    # Not a module-level importorskip: the CLI tests above need no PyYAML, and
+    # mutmut's sandbox carries no .github directory.
+    yaml = pytest.importorskip("yaml")
+    if not CI_YML.exists():
+        pytest.skip(".github/workflows not reachable (e.g. mutation sandbox)")
+    return yaml.safe_load(CI_YML.read_text(encoding="utf-8"))
+
+
+@pytest.fixture(scope="module")
+def jobs(ci):
+    return ci["jobs"]
+
+
+_EXPR_TOKEN = re.compile(r"""\s*(?:
+      (?P<op>&&|\|\||==|!=|!|\(|\)|,)
+    | '(?P<str>(?:[^']|'')*)'
+    | (?P<num>\d+(?:\.\d+)?)
+    | (?P<name>[A-Za-z_][A-Za-z0-9_.*-]*)
+    )""", re.X)
+
+_STATUS_FUNCTIONS = ("always", "cancelled", "success", "failure")
+_STATUS_CALL = re.compile(r"\b(%s)\s*\(" % "|".join(_STATUS_FUNCTIONS))
+
+
+def _truthy(value) -> bool:
+    # GitHub's falsy set is false, 0, -0, '' and null -- exactly Python's.
+    return bool(value)
+
+
+def _as_number(value) -> float:
+    if value is None:
+        return 0.0
+    if isinstance(value, bool | int | float):
+        return float(value)
+    text = value.strip()
+    if not text:
+        return 0.0
+    try:
+        return float(text)
+    except ValueError:
+        return math.nan
+
+
+def _equal(a, b) -> bool:
+    # Strings compare case-insensitively; mixed types are coerced to numbers
+    # (so null == '' is true, as it is on GitHub).
+    if isinstance(a, str) and isinstance(b, str):
+        return a.casefold() == b.casefold()
+    if type(a) is type(b):
+        return a == b
+    return _as_number(a) == _as_number(b)
+
+
+class _Expression:
+    """One expression, evaluated against a lookup and the status functions."""
+
+    def __init__(self, text: str, lookup, status: dict):
+        body = text.strip()
+        if body.startswith("${{") and body.endswith("}}"):
+            body = body[3:-2]
+        self.tokens = []
+        pos = 0
+        while body[pos:].strip():
+            m = _EXPR_TOKEN.match(body, pos)
+            if not m or m.end() == pos:
+                raise SyntaxError("cannot read %r at %d" % (body, pos))
+            kind = m.lastgroup
+            self.tokens.append((kind, m.group(kind)))
+            pos = m.end()
+        self.i = 0
+        self.lookup = lookup
+        self.status = status
+
+    def value(self):
+        out = self._or()
+        if self.i != len(self.tokens):
+            raise SyntaxError("trailing tokens: %r" % (self.tokens[self.i:],))
+        return out
+
+    def _peek(self):
+        if self.i < len(self.tokens) and self.tokens[self.i][0] == "op":
+            return self.tokens[self.i][1]
+        return None
+
+    def _take(self):
+        tok = self.tokens[self.i]
+        self.i += 1
+        return tok
+
+    def _expect(self, op):
+        if self._peek() != op:
+            raise SyntaxError("expected %r at token %d" % (op, self.i))
+        self.i += 1
+
+    # Precedence, loosest first: ||, &&, == / !=, !, primary.
+    def _or(self):
+        left = self._and()
+        while self._peek() == "||":
+            self.i += 1
+            right = self._and()
+            left = left if _truthy(left) else right
+        return left
+
+    def _and(self):
+        left = self._compare()
+        while self._peek() == "&&":
+            self.i += 1
+            right = self._compare()
+            left = right if _truthy(left) else left
+        return left
+
+    def _compare(self):
+        left = self._unary()
+        if self._peek() in ("==", "!="):
+            op = self._take()[1]
+            same = _equal(left, self._unary())
+            return same if op == "==" else not same
+        return left
+
+    def _unary(self):
+        if self._peek() == "!":
+            self.i += 1
+            return not _truthy(self._unary())
+        return self._primary()
+
+    def _primary(self):
+        kind, text = self._take()
+        if kind == "op" and text == "(":
+            inner = self._or()
+            self._expect(")")
+            return inner
+        if kind == "str":
+            return text.replace("''", "'")
+        if kind == "num":
+            return float(text)
+        if kind != "name":
+            raise SyntaxError("unexpected %r" % text)
+        if self._peek() == "(":
+            self.i += 1
+            args = []
+            if self._peek() != ")":
+                args.append(self._or())
+                while self._peek() == ",":
+                    self.i += 1
+                    args.append(self._or())
+            self._expect(")")
+            if text in _STATUS_FUNCTIONS and not args:
+                return self.status[text]
+            raise ValueError("this interpreter does not implement %s()" % text)
+        if text in ("true", "false"):
+            return text == "true"
+        if text == "null":
+            return None
+        return self.lookup(text)
+
+
+def evaluate(text: str, lookup, status: dict | None = None):
+    return _Expression(text, lookup, status or {}).value()
+
+
+def interpolate(text: str, lookup) -> str:
+    """A string with `${{ }}` holes, as GitHub renders it."""
+    def render(m):
+        value = evaluate(m.group(1), lookup)
+        if value is None:
+            return ""
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        if isinstance(value, float) and value.is_integer():
+            return str(int(value))
+        return str(value)
+    return re.sub(r"\$\{\{(.*?)\}\}", render, text)
+
+
+def _needs(job: dict) -> list[str]:
+    needs = job.get("needs") or []
+    return [needs] if isinstance(needs, str) else list(needs)
+
+
+def _ancestors(jobs: dict, name: str) -> set[str]:
+    seen: set[str] = set()
+    todo = list(_needs(jobs[name]))
+    while todo:
+        dep = todo.pop()
+        if dep not in seen:
+            seen.add(dep)
+            todo.extend(_needs(jobs[dep]))
+    return seen
+
+
+def _topological(jobs: dict) -> list[str]:
+    order: list[str] = []
+    while len(order) < len(jobs):
+        ready = [n for n in jobs if n not in order
+                 and all(d in order for d in _needs(jobs[n]))]
+        assert ready, "the job graph has a cycle or an unknown need"
+        order.extend(sorted(ready))
+    return order
+
+
+#: The seven situations the plan cares about, in the column order of the
+#: table below. `proven` is (result, skip output, pr_run_id output) for the
+#: pushes; on every other event the job's own `if:` decides it never runs.
+SCENARIOS = {
+    "pull_request": {"event": "pull_request", "ref": "refs/pull/7/merge"},
+    "merge_group": {"event": "merge_group",
+                    "ref": "refs/heads/gh-readonly-queue/main/pr-7-abc"},
+    "push, proven skip=true": {"event": "push", "ref": "refs/heads/main",
+                               "proven": ("success", "true", "41")},
+    "push, proven skip=false": {"event": "push", "ref": "refs/heads/main",
+                                "proven": ("success", "false", "")},
+    "push, proven job failed": {"event": "push", "ref": "refs/heads/main",
+                                "proven": ("failure", "", "")},
+    "schedule": {"event": "schedule", "ref": "refs/heads/main"},
+    "workflow_dispatch": {"event": "workflow_dispatch", "ref": "refs/heads/main"},
+}
+
+#: What each job's outputs are when it runs. The planner's matrix is a model
+#: of its `write the plan` step -- empty exactly when `proven` said skip -- and
+#: that step's bash is run against the same inputs in test_mutation_plan.py.
+ONE_SHARD = '[{"set":"full","index":0}]'
+
+
+def _outcome(name: str, scenario: dict) -> tuple[str, dict]:
+    if name == "proven":
+        result, skip, run_id = scenario["proven"]
+        if result != "success":
+            return result, {}       # a failed job's outputs are empty
+        return result, {"skip": skip, "pr_run_id": run_id}
+    if name == "mutation-plan":
+        proven = scenario.get("proven", ("", "", ""))
+        matrix = "[]" if proven[1] == "true" else ONE_SHARD
+        return "success", {"matrix": matrix, "gate_set": "" if matrix == "[]" else "full",
+                           "shadow": "false"}
+    return "success", {}
+
+
+def job_runs(jobs: dict, name: str, results: dict, outputs: dict,
+             scenario: dict) -> bool:
+    """Does GitHub start this job, given what its ancestors did?"""
+    job = jobs[name]
+    direct = _needs(job)
+
+    def lookup(ident: str):
+        if ident == "github.event_name":
+            return scenario["event"]
+        if ident == "github.ref":
+            return scenario["ref"]
+        parts = ident.split(".")
+        if parts[0] == "needs":
+            assert len(parts) >= 3 and parts[1] in direct, (
+                "%s reads %s but does not `needs:` %s" % (name, ident, parts[1]))
+            if parts[2:] == ["result"]:
+                return results[parts[1]]
+            if parts[2] == "outputs" and len(parts) == 4:
+                return outputs[parts[1]].get(parts[3], "")
+        raise KeyError("%s: no context value %r in this model" % (name, ident))
+
+    upstream = [results[a] for a in _ancestors(jobs, name)]
+    status = {"always": True, "cancelled": False,
+              "success": all(r == "success" for r in upstream),
+              "failure": any(r == "failure" for r in upstream)}
+    cond = job.get("if")
+    if cond is None:
+        return status["success"]
+    text = cond if isinstance(cond, str) else str(cond).lower()
+    value = _truthy(evaluate(text, lookup, status))
+    if _STATUS_CALL.search(text):
+        return value
+    return status["success"] and value
+
+
+def simulate(jobs: dict, scenario: dict) -> dict[str, str]:
+    """``{job: result}`` for one event, walking the graph in order."""
+    results: dict[str, str] = {}
+    outputs: dict[str, dict] = {}
+    for name in _topological(jobs):
+        if job_runs(jobs, name, results, outputs, scenario):
+            results[name], outputs[name] = _outcome(name, scenario)
+        else:
+            results[name], outputs[name] = "skipped", {}
+    return results
+
+
+#: Who runs where. One row per ci.yml job, one column per SCENARIOS entry.
+#: A new job fails test_every_job_has_a_row until someone decides its row.
+R, S = "runs", "skipped"
+EXPECTED = {
+    #                  PR  queue  skip=T  skip=F  failed  sched  dispatch
+    "proven":         (S,  S,     R,      R,      R,      S,     S),
+    "lint":           (R,  R,     R,      R,      R,      S,     S),
+    "evals":          (R,  R,     R,      R,      R,      S,     S),
+    "tests":          (R,  R,     S,      R,      R,      S,     S),
+    "coverage-badge": (S,  S,     R,      R,      R,      S,     S),
+    "mutation-plan":  (R,  R,     R,      R,      R,      R,     R),
+    "mutation-shard": (R,  R,     S,      R,      R,      R,     R),
+    "mutation":       (R,  R,     R,      R,      R,      R,     R),
+    "install-smoke":  (R,  R,     R,      R,      R,      S,     S),
+    "patch-coverage": (R,  S,     S,      S,      S,      S,     S),
+    "canary":         (R,  S,     S,      S,      S,      S,     S),
+    "bdd":            (R,  R,     R,      R,      R,      S,     S),
+    "onnx-inference": (R,  R,     R,      R,      R,      S,     S),
+}
+
+#: The only jobs a nightly or a dispatch may start: the whole-codebase run.
+WHOLE_CODEBASE_JOBS = {"mutation-plan", "mutation-shard", "mutation"}
+
+
+def run_table(jobs: dict) -> dict[str, tuple[str, ...]]:
+    """The simulated EXPECTED: ``{job: (runs|skipped per scenario)}``."""
+    sims = [simulate(jobs, sc) for sc in SCENARIOS.values()]
+    return {name: tuple(R if sim[name] != "skipped" else S for sim in sims)
+            for name in jobs}
+
+
+def render_table(jobs: dict) -> str:
+    """The table as Markdown -- what the task report carries, never hand-typed."""
+    head = "| job | " + " | ".join(SCENARIOS) + " |"
+    rule = "|---" * (len(SCENARIOS) + 1) + "|"
+    rows = ["| `%s` | %s |" % (name, " | ".join(cells))
+            for name, cells in run_table(jobs).items()]
+    return "\n".join([head, rule, *rows])
+
+
+def test_every_job_has_a_row(jobs):
+    assert set(jobs) == set(EXPECTED)
+
+
+def test_each_job_runs_exactly_where_the_table_says(jobs):
+    table = run_table(jobs)
+    wrong = {name: (table[name], EXPECTED[name]) for name in jobs
+             if table[name] != EXPECTED[name]}
+    assert not wrong, "\n" + "\n".join(
+        "%s: simulated %s, expected %s" % (n, got, want)
+        for n, (got, want) in wrong.items())
+
+
+def test_the_table_renders_every_scenario(jobs):
+    text = render_table(jobs)
+    for column in SCENARIOS:
+        assert column in text
+    assert text.count("\n") == len(jobs) + 1
+
+
+@pytest.mark.parametrize("event", ["schedule", "workflow_dispatch"])
+def test_a_whole_codebase_run_starts_only_the_mutation_jobs(jobs, event):
+    ran = {n for n, r in simulate(jobs, SCENARIOS[event]).items() if r != "skipped"}
+    assert ran == WHOLE_CODEBASE_JOBS, sorted(ran ^ WHOLE_CODEBASE_JOBS)
+
+
+def test_a_proven_push_still_runs_every_non_test_check(jobs):
+    # The spec keeps lint (with zizmor), the eval harness, install-smoke, bdd
+    # and onnx-inference on a proven push; only the suite, the shards and the
+    # coverage collection are what the PR run already did.
+    sim = simulate(jobs, SCENARIOS["push, proven skip=true"])
+    skipped = {n for n, r in sim.items() if r == "skipped"}
+    assert skipped == {"tests", "mutation-shard", "patch-coverage", "canary"}
+
+
+def test_every_job_downstream_of_proven_names_a_status_function(jobs):
+    # The implicit `success()` reaches every ancestor, so a job anywhere below
+    # `proven` without one is skipped on every pull request.
+    below = [n for n in jobs if "proven" in _ancestors(jobs, n)]
+    assert {"tests", "mutation-plan", "mutation-shard", "coverage-badge"} <= set(below)
+    for name in below:
+        cond = str(jobs[name].get("if", ""))
+        assert _STATUS_CALL.search(cond), (
+            "%s is downstream of `proven`, which is skipped on every pull "
+            "request; with no status function in its `if:` it is skipped too" % name)
+
+
+def test_a_job_that_needs_proven_is_not_cancelled_rather_than_succeeded(jobs):
+    # `!cancelled()`: it runs when `proven` was skipped (PRs), when it failed
+    # (empty output, so a full run), and never after a cancel.
+    for name, job in jobs.items():
+        if "proven" not in _needs(job):
+            continue
+        cond = job["if"]
+        if name == "coverage-badge":
+            assert cond.startswith("${{ always() && "), cond
+            continue
+        assert cond.startswith("${{ !cancelled()"), (name, cond)
+        assert cond.endswith("}}"), (name, cond)
+
+
+TESTS_IF = ("${{ !cancelled() && github.event_name != 'schedule'"
+            " && github.event_name != 'workflow_dispatch'"
+            " && needs.proven.outputs.skip != 'true' }}")
+
+
+def test_the_suite_is_skipped_only_on_an_explicit_true(jobs):
+    assert jobs["tests"]["if"] == TESTS_IF
+    assert _needs(jobs["tests"]) == ["proven"]
+
+
+@pytest.mark.parametrize("event, skip, proven_result, runs", [
+    ("pull_request", "", "skipped", True),       # proven never ran: test
+    ("merge_group", "", "skipped", True),
+    ("push", "true", "success", False),          # the one way to skip
+    ("push", "false", "success", True),
+    ("push", "", "failure", True),               # proven failed: empty output, test
+    ("push", "TRUE", "success", False),          # GitHub's == folds case
+    ("push", "yes", "success", True),            # only `true` skips
+    ("schedule", "", "skipped", False),
+    ("workflow_dispatch", "", "skipped", False),
+])
+def test_the_suite_condition_case_by_case(jobs, event, skip, proven_result, runs):
+    scenario = {"event": event, "ref": "refs/heads/main"}
+    got = job_runs(jobs, "tests", {"proven": proven_result},
+                   {"proven": {"skip": skip}}, scenario)
+    assert got is runs
+
+
+def test_the_shards_check_the_planner_result_now_that_they_say_not_cancelled(jobs):
+    # `!cancelled()` drops the implicit success(), so the planner's own result
+    # has to be stated -- else a failed planner's empty matrix would start a
+    # shard from `fromJSON('')`.
+    shard = jobs["mutation-shard"]
+    assert shard["if"] == ("${{ !cancelled() && needs.mutation-plan.result == 'success'"
+                           " && needs.mutation-plan.outputs.matrix != '[]' }}")
+    for plan_result, matrix, runs in [("success", ONE_SHARD, True),
+                                      ("success", "[]", False),
+                                      ("failure", "", False),
+                                      ("cancelled", "", False)]:
+        got = job_runs(jobs, "mutation-shard", {"mutation-plan": plan_result,
+                                                "proven": "skipped"},
+                       {"mutation-plan": {"matrix": matrix}},
+                       SCENARIOS["pull_request"])
+        assert got is runs, (plan_result, matrix)
+
+
+def test_the_interpreter_applies_the_implicit_success_to_grandparents():
+    # Pins the rule the whole section rests on: a job whose `if:` has no
+    # status function is skipped when ANY ancestor was skipped, even though
+    # its direct need succeeded. Without it, the simulation would wave
+    # through the regression it exists to catch.
+    graph = {"a": {"if": "github.event_name == 'push'"},
+             "b": {"needs": "a", "if": "${{ !cancelled() }}"},
+             "c": {"needs": "b", "if": "github.event_name == 'pull_request'"},
+             "d": {"needs": "b", "if": "${{ !cancelled() && github.event_name == 'pull_request' }}"}}
+    sim = simulate(graph, {"event": "pull_request", "ref": "refs/pull/1/merge"})
+    assert sim == {"a": "skipped", "b": "success", "c": "skipped", "d": "success"}
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("'a' == 'A'", True),
+    ("null == ''", True),
+    ("!('x' != 'x')", True),
+    ("'' || 'fallback'", "fallback"),
+    ("'x' && ''", ""),
+    ("!cancelled() && always()", True),
+    ("'it''s' == 'IT''S'", True),
+])
+def test_the_interpreter_follows_githubs_rules(text, expected):
+    status = {"always": True, "cancelled": False}
+    assert evaluate(text, lambda name: pytest.fail(name), status) == expected
+
+
+@pytest.mark.parametrize("text", ["contains(github.ref, 'main')", "github.ref == ",
+                                  "fromJSON('[]')"])
+def test_the_interpreter_refuses_what_it_does_not_implement(text):
+    with pytest.raises((SyntaxError, ValueError, IndexError)):
+        evaluate(text, lambda name: "refs/heads/main", {})
+
+
+# --------------------------------------------------------------------------
+# triggers and concurrency
+# --------------------------------------------------------------------------
+
+def _on(ci) -> dict:
+    # PyYAML reads the bare key `on` as the boolean True (YAML 1.1).
+    return ci.get("on", ci.get(True))
+
+
+def test_ci_runs_nightly_and_on_dispatch(ci):
+    on = _on(ci)
+    assert on["schedule"] == [{"cron": "30 9 * * *"}]
+    assert "workflow_dispatch" in on
+    # The triggers that already existed are unchanged.
+    assert on["push"] == {"branches": ["main"]}
+    assert "pull_request" in on and "merge_group" in on
+
+
+def _group_for(ci, event, sha, pr=None):
+    block = ci["concurrency"]
+    ctx = {"github.event_name": event, "github.sha": sha,
+           "github.event.pull_request.number": pr}
+    return (interpolate(block["group"], ctx.__getitem__),
+            _truthy(evaluate(block["cancel-in-progress"], ctx.__getitem__)))
+
+
+def test_a_nightly_never_shares_a_group_with_the_push_of_the_same_commit(ci):
+    # Same group + cancel-in-progress: false means the later run WAITS, and a
+    # third arrival cancels the pending one: a release run stuck behind a
+    # two-hour nightly, or cancelled by a dispatch.
+    groups = {event: _group_for(ci, event, SHA)[0]
+              for event in ("push", "schedule", "workflow_dispatch", "merge_group")}
+    assert len(set(groups.values())) == len(groups), groups
+
+
+def test_two_main_commits_never_share_a_group(ci):
+    assert _group_for(ci, "push", SHA)[0] != _group_for(ci, "push", HEAD)[0]
+    assert _group_for(ci, "schedule", SHA)[0] != _group_for(ci, "schedule", HEAD)[0]
+
+
+def test_a_pull_requests_runs_still_share_one_group_and_cancel(ci):
+    first = _group_for(ci, "pull_request", SHA, pr=7)
+    second = _group_for(ci, "pull_request", HEAD, pr=7)
+    assert first == second and first[1] is True
+    assert _group_for(ci, "pull_request", SHA, pr=8)[0] != first[0]
+
+
+@pytest.mark.parametrize("event", ["push", "schedule", "workflow_dispatch", "merge_group"])
+def test_nothing_but_a_pull_request_is_cancelled(ci, event):
+    assert _group_for(ci, event, SHA)[1] is False
+
+
+# --------------------------------------------------------------------------
+# the `proven` job
+# --------------------------------------------------------------------------
+
+def _all_run_text(job: dict) -> str:
+    return "\n".join(s.get("run", "") for s in job.get("steps", []))
+
+
+def test_proven_runs_only_on_push_with_read_only_scopes(jobs):
+    job = jobs["proven"]
+    assert job["if"] == "github.event_name == 'push'"
+    assert job["permissions"] == {"contents": "read", "actions": "read",
+                                  "pull-requests": "read"}
+    assert set(job["outputs"]) == {"skip", "pr_run_id"}
+    assert "timeout-minutes" in job
+
+
+def test_proven_runs_the_script_with_the_token_through_env(jobs):
+    job = jobs["proven"]
+    step = next(s for s in job["steps"] if "ci_proven_tree.py" in s.get("run", ""))
+    assert 'scripts/ci_proven_tree.py --sha "$GITHUB_SHA"' in step["run"]
+    # --now is for tests; the workflow is judged against the real clock.
+    assert "--now" not in step["run"]
+    assert step["env"]["GITHUB_TOKEN"] == "${{ github.token }}"  # noqa: S105  (an expression, not a secret)
+    outputs = job["outputs"]
+    assert outputs["skip"] == "${{ steps.%s.outputs.skip }}" % step["id"]
+    assert outputs["pr_run_id"] == "${{ steps.%s.outputs.pr_run_id }}" % step["id"]
+    # The script always exits 0; a step-level escape hatch would hide a crash.
+    assert "continue-on-error" not in step
+
+
+def test_no_new_job_expands_an_expression_inside_run(jobs):
+    for name in ("proven", "coverage-badge", "tests"):
+        for step in jobs[name]["steps"]:
+            run = step.get("run", "")
+            if name == "tests" and step.get("name", "").startswith("job summary"):
+                continue   # predates this change; matrix values only
+            assert "${{" not in run, (name, step.get("name"))
+
+
+# --------------------------------------------------------------------------
+# coverage-badge
+# --------------------------------------------------------------------------
+
+def test_the_badge_left_the_test_matrix(jobs):
+    tests = jobs["tests"]
+    assert tests["permissions"] == {"contents": "read"}
+    assert "badges" not in _all_run_text(tests)
+
+
+def test_only_the_badge_job_may_write_contents(jobs):
+    writers = sorted(n for n, j in jobs.items()
+                     if (j.get("permissions") or {}).get("contents") == "write")
+    assert writers == ["coverage-badge"]
+    assert jobs["coverage-badge"]["permissions"] == {"contents": "write",
+                                                     "actions": "read"}
+
+
+def test_the_badge_runs_on_main_pushes_whatever_upstream_did(jobs):
+    job = jobs["coverage-badge"]
+    assert set(_needs(job)) == {"proven", "tests"}
+    assert job["if"] == ("${{ always() && github.event_name == 'push'"
+                         " && github.ref == 'refs/heads/main' }}")
+    assert "timeout-minutes" in job
+
+
+def _badge_step(jobs, needle):
+    found = [s for s in jobs["coverage-badge"]["steps"] if needle in s.get("run", "")]
+    assert len(found) == 1, needle
+    return found[0]
+
+
+def _badge_downloads(jobs):
+    return [s for s in jobs["coverage-badge"]["steps"]
+            if s.get("uses", "").startswith("actions/download-artifact")]
+
+
+def test_the_badge_judges_its_source_before_downloading(jobs):
+    steps = jobs["coverage-badge"]["steps"]
+    check = _badge_step(jobs, "$TESTS")
+    assert check["env"]["TESTS"] == "${{ needs.tests.result }}"
+    assert check["env"]["SKIP"] == "${{ needs.proven.outputs.skip }}"
+    assert check["env"]["PR_RUN_ID"] == "${{ needs.proven.outputs.pr_run_id }}"
+    # Always runs, never tolerated: it is what keeps an always() job honest.
+    assert "if" not in check and not check.get("continue-on-error")
+    first_download = min(steps.index(s) for s in _badge_downloads(jobs))
+    assert steps.index(check) < first_download
+
+
+DOWNLOAD_ARTIFACT_V8_0_2 = ("actions/download-artifact@"
+                            "9000827ccba6bdab643e8b6fd33ac0654aef8333")
+
+
+def test_the_badge_downloads_from_this_run_or_the_proving_one(jobs):
+    downloads = {s["if"]: s for s in _badge_downloads(jobs)}
+    check_id = _badge_step(jobs, "$TESTS")["id"]
+    this = downloads["steps.%s.outputs.from == 'this'" % check_id]
+    pr = downloads["steps.%s.outputs.from == 'pr'" % check_id]
+    assert this["with"] == {"name": "coverage-report"}
+    assert pr["with"] == {"name": "coverage-report",
+                          "run-id": "${{ needs.proven.outputs.pr_run_id }}",
+                          "github-token": "${{ github.token }}"}
+    for step in (this, pr):
+        assert not step.get("continue-on-error"), "a missing artifact must fail the job"
+        # The pin mutation-weights-refresh.yml already drives with run-id and
+        # github-token (v8.0.2), so the cross-run inputs are known to exist.
+        assert step["uses"] == DOWNLOAD_ARTIFACT_V8_0_2
+
+
+needs_bash = pytest.mark.skipif(
+    sys.platform == "win32" or not shutil.which("bash"),
+    reason="runs a workflow step's bash")
+
+
+def _run_step(step: dict, cwd: Path, env: dict) -> subprocess.CompletedProcess:
+    # `bash -e {0}`: what an ubuntu runner runs a `run:` with when the job
+    # sets no `shell:`.
+    script = cwd / "step.sh"
+    script.write_text(step["run"], encoding="utf-8")
+    full = {"PATH": os.environ["PATH"], "HOME": str(cwd)}
+    full.update(env)
+    return subprocess.run(["bash", "-e", str(script)], cwd=cwd, env=full,
+                          capture_output=True, text=True, check=False)
+
+
+@needs_bash
+@pytest.mark.parametrize("tests, skip, run_id, source", [
+    ("success", "false", "", "this"),        # the suite ran here and passed
+    ("success", "", "", "this"),             # proven failed, so the suite ran
+    ("skipped", "true", "41", "pr"),         # proven: the PR run measured it
+    ("failure", "false", "", None),          # red suite: no badge, red job
+    ("cancelled", "false", "", None),
+    ("skipped", "", "", None),               # neither ran: nothing to publish
+    ("skipped", "false", "", None),
+    ("skipped", "true", "", None),           # skip without a run to read from
+    ("success", "true", "41", None),         # contradiction: refuse, do not guess
+])
+def test_the_badge_source_check_case_by_case(jobs, tmp_path, tests, skip, run_id, source):
+    step = _badge_step(jobs, "$TESTS")
+    out = tmp_path / "out"
+    out.write_text("", encoding="utf-8")
+    proc = _run_step(step, tmp_path, {"TESTS": tests, "SKIP": skip,
+                                      "PR_RUN_ID": run_id, "GITHUB_OUTPUT": str(out)})
+    if source is None:
+        assert proc.returncode != 0, proc.stdout
+        assert "::error::" in proc.stdout
+        assert "from=" not in out.read_text(encoding="utf-8")
+    else:
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert out.read_text(encoding="utf-8") == "from=%s\n" % source
+
+
+@needs_bash
+def test_the_badge_publish_step_pushes_the_same_badge_as_before(jobs, tmp_path):
+    step = _badge_step(jobs, "badges:badges")
+    assert step["env"] == {"GH_TOKEN": "${{ github.token }}",
+                           "REPO": "${{ github.repository }}"}
+    (tmp_path / "coverage.json").write_text(
+        json.dumps({"totals": {"percent_covered": 93.62}}), encoding="utf-8")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    calls = tmp_path / "git.log"
+    git = bin_dir / "git"
+    git.write_text('#!/bin/bash\necho "git $*" >> "%s"\n' % calls, encoding="utf-8")
+    git.chmod(0o755)
+    runner_temp = tmp_path / "rt"
+    runner_temp.mkdir()
+    proc = _run_step(step, tmp_path, {
+        "PATH": "%s%s%s" % (bin_dir, os.pathsep, os.environ["PATH"]),
+        "GH_TOKEN": "tok", "REPO": "o/r", "RUNNER_TEMP": str(runner_temp)})
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    badge = json.loads((runner_temp / "badges" / "coverage.json").read_text(encoding="utf-8"))
+    assert badge == {"schemaVersion": 1, "label": "coverage", "message": "94%",
+                     "color": "brightgreen"}
+    log = calls.read_text(encoding="utf-8").splitlines()
+    assert "git init -q -b badges" in log
+    assert "git commit -qm coverage 94%" in log
+    assert log[-1] == "git push -qf https://x-access-token:tok@github.com/o/r badges:badges"
+
+
+# --------------------------------------------------------------------------
+# mutation-weights-refresh.yml: weights come only from full whole-codebase runs
+# --------------------------------------------------------------------------
+
+def _refresh_if():
+    yaml = pytest.importorskip("yaml")
+    if not REFRESH_YML.exists():
+        pytest.skip(".github/workflows not reachable (e.g. mutation sandbox)")
+    wf = yaml.safe_load(REFRESH_YML.read_text(encoding="utf-8"))
+    return wf["jobs"]["rebalance"]["if"]
+
+
+def _refresh_accepts(name="workflow_run", *, event="push", conclusion="success",
+                     branch="main", repo="o/boost"):
+    run = {"conclusion": conclusion, "event": event, "head_branch": branch,
+           "head_repository.full_name": repo}
+
+    def lookup(ident):
+        if ident == "github.event_name":
+            return name
+        if ident == "github.repository":
+            return "o/boost"
+        prefix = "github.event.workflow_run."
+        if ident.startswith(prefix):
+            return run.get(ident[len(prefix):]) if name == "workflow_run" else None
+        raise KeyError(ident)
+    return _truthy(evaluate(_refresh_if(), lookup, {"success": True}))
+
+
+@pytest.mark.parametrize("event", ["push", "schedule", "workflow_dispatch"])
+def test_the_refresh_follows_every_full_run_on_main(event):
+    # A proven push uploads no weights (its plan is `none`), so without the
+    # nightly and the dispatch the refresh would never see a measurement.
+    assert _refresh_accepts(event=event)
+
+
+@pytest.mark.parametrize("kwargs", [
+    {"event": "pull_request"},             # a fork PR from a branch named main
+    {"event": "merge_group"},
+    {"repo": "fork/boost"},
+    {"conclusion": "failure"},
+    {"conclusion": "cancelled"},
+    {"event": "workflow_dispatch", "branch": "feature"},  # dispatched elsewhere
+    {"event": "schedule", "branch": "release"},
+])
+def test_the_refresh_refuses_anything_else(kwargs):
+    assert not _refresh_accepts(**kwargs)
+
+
+def test_the_refresh_can_still_be_run_by_hand():
+    assert _refresh_accepts("workflow_dispatch")
