@@ -312,8 +312,15 @@ class TestNotAnUnrecordedSkill:
         assert not (paths.home() / ".claude" / "skills" / "reviewer").exists()
         assert lockfile.get_skill("reviewer") is None
         r = boost("doctor", expect=None)
-        assert "reviewer" not in _flat(r.out)
         assert "not reachable as skill" not in _flat(r.out)
+        # Nothing calls the copy a skill to adopt or link. The one check that
+        # does name the workflow is the note saying which agents its own
+        # config leaves it out of (windsurf, antigravity) -- about the
+        # workflow, not the copy.
+        r = boost("doctor", "--json", expect=None)
+        checks = [c for c in json.loads(r.out)["checks"]
+                  if c["name"] != "skipped-agents"]
+        assert "reviewer" not in json.dumps(checks)
 
     def test_sync_rewrites_a_deleted_copy(self, boost, wf_tap):
         boost("install", "reviewer")
