@@ -631,7 +631,7 @@ def _canary_targets(run: str) -> list[Path]:
 
 
 #: Every job that assembles its own venv and runs the suite in it, as
-#: ``workflow:job``. Pinned so a sixth is a decision: a new one that this
+#: ``workflow:job``. Pinned so a seventh is a decision: a new one that this
 #: file has never seen is exactly the shape both regressions took.
 #: ``ci.yml:patch-coverage`` left this set when it stopped running the suite:
 #: it downloads ``tests (ubuntu-latest, 3.12)``'s coverage.xml and runs only
@@ -642,6 +642,9 @@ HARNESS_JOBS = {
     "ci.yml:onnx-inference",   # one file out of tests/unit, own venv, .[rag]
     "floors.yml:lowest",       # uv lowest-direct, explicit pip line
     "sonarcloud.yml:sonar-analyze",
+    # Runs only the two mutation-tool test files, the ones whose mutmut-backed
+    # tests skip everywhere else; -r mutation-tools.txt, test-tools + mutmut.
+    "ci.yml:mutation-plan",
 }
 
 
@@ -673,6 +676,13 @@ def _conditional_install_jobs() -> list[str]:
     ``- if: runner.os == 'Linux'`` over a ``pip install setuptools`` is
     credited on every leg of a matrix, including the legs where the step is
     skipped entirely.
+
+    One shape is not guilty: an install whose step ``if:`` is, verbatim, the
+    ``if:`` of every step in the job that runs the suite (``ci.yml:
+    mutation-plan`` builds its venv and runs its tests only for a mutation-
+    relevant change). The suite then cannot run without the install, so
+    nothing is credited that the run might lack. A shell ``if``/``case`` is
+    never excused: its condition is invisible from the step.
     """
     guilty = []
     for wf in _workflow_files():
@@ -680,11 +690,16 @@ def _conditional_install_jobs() -> list[str]:
         for job_id, job in (doc.get("jobs") or {}).items():
             if "%s:%s" % (wf.name, job_id) not in HARNESS_JOBS:
                 continue
-            for step in job.get("steps") or []:
+            steps = job.get("steps") or []
+            suite_gates = {step.get("if") for step in steps
+                           if _pytest_runs(step.get("run") or "")}
+            for step in steps:
                 body = step.get("run") or ""
                 if not any(_pip_install(c) for _a, c in _stream(body)):
                     continue
-                if step.get("if") or re.search(r"(?m)^\s*(if|case)\s", body):
+                shell_gated = re.search(r"(?m)^\s*(if|case)\s", body)
+                step_gated = step.get("if") and suite_gates != {step.get("if")}
+                if shell_gated or step_gated:
                     guilty.append("%s:%s" % (wf.name, job_id))
     return sorted(set(guilty))
 
@@ -1289,6 +1304,49 @@ jobs:
 
         assert _conditional_install_jobs() == []
 
+    def test_an_install_gated_exactly_like_every_suite_step_is_not_flagged(
+            self, tmp_path, monkeypatch):
+        # `ci.yml:mutation-plan`'s shape: the venv is only built when the
+        # change is mutation-relevant, and the suite only runs then too. The
+        # suite cannot run without the install, so nothing is credited that
+        # the run might lack.
+        _plant(tmp_path, "probe.yml", """
+on: push
+jobs:
+  both:
+    steps:
+      - if: steps.scope.outputs.relevant == 'true'
+        run: |
+          python -m venv .venv
+          .venv/bin/pip -q install pytest setuptools
+      - if: steps.scope.outputs.relevant == 'true'
+        run: .venv/bin/python -m pytest -q tests/unit/test_a.py
+""", monkeypatch)
+        monkeypatch.setattr("test_canary_deps.HARNESS_JOBS", {"probe.yml:both"})
+
+        assert _conditional_install_jobs() == []
+
+    @pytest.mark.parametrize("suite_if", [
+        None,                                        # the suite always runs
+        "steps.scope.outputs.relevant != 'false'",  # a different condition
+    ])
+    def test_a_suite_step_not_gated_like_the_install_is_flagged(
+            self, tmp_path, monkeypatch, suite_if):
+        gate = ("      - if: %s\n        run: " % suite_if) if suite_if else "      - run: "
+        _plant(tmp_path, "probe.yml", """
+on: push
+jobs:
+  split:
+    steps:
+      - if: steps.scope.outputs.relevant == 'true'
+        run: |
+          python -m venv .venv
+          .venv/bin/pip -q install pytest setuptools
+""" + gate + ".venv/bin/python -m pytest -q tests/unit/test_a.py\n", monkeypatch)
+        monkeypatch.setattr("test_canary_deps.HARNESS_JOBS", {"probe.yml:split"})
+
+        assert _conditional_install_jobs() == ["probe.yml:split"]
+
     def test_no_venv_job_runs_the_suite_in_a_way_this_file_cannot_read(self):
         """The blind spot that would make a job vacuously compliant.
 
@@ -1371,7 +1429,7 @@ jobs:
                             generated.add(f"{wf}:{job}")
         assert committed == {
             "ci.yml:tests", "ci.yml:onnx-inference",
-            "sonarcloud.yml:sonar-analyze",
+            "sonarcloud.yml:sonar-analyze", "ci.yml:mutation-plan",
         }
         assert generated == {"floors.yml:lowest"}
         # `ci.yml:canary` is in neither: it names every distribution on the
