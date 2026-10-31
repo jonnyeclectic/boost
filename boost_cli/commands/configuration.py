@@ -1995,9 +1995,12 @@ def _install_lines(res: store.InstallResult, entry: dict) -> list[str]:
     # A workflow's copy in the skill store is how a skills-only agent reaches
     # it; an agent told nothing concludes the same as above.
     if res.skill_copy is not None:
-        lines.append("as a skill: %s" % res.skill_copy)
+        lines.append("as a skill: %s%s" % (
+            res.skill_copy, " (linked for %s)" % ", ".join(res.copy_linked)
+            if res.copy_linked else ""))
     if res.skill_note:
         lines.append(res.skill_note)
+    lines += ["skill copy not linked: %s" % why for why in res.copy_blocked]
     # Skill-only, as `boost install` prints it: a rule or workflow has no
     # score, and "quality score: 0/100" told the agent a valid one scored zero.
     if res.kind == "skill":
@@ -2112,6 +2115,13 @@ def _tool_doctor(args: dict):
         "out_of_scope_links": lambda rows: [
             "%s is linked for %s, outside its declared scope — `boost sync "
             "--prune` removes the link" % (n, a) for n, a in rows],
+        "missing_copy_links": lambda rows: [
+            "workflow %s's skill copy is not linked for %s — `boost sync` "
+            "links it" % (n, a) for n, a in rows],
+        "stale_copy_links": lambda rows: [
+            "workflow %s's skill copy is linked for %s, beside the "
+            "workflow's own file there — `boost sync` removes the link"
+            % (n, a) for n, a in rows],
         "unrecorded_store": unrecorded,
     }
     for key, vals in plan.items():

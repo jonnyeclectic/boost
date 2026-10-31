@@ -1676,7 +1676,8 @@ class TestSyncPlan:
              "unreadable_store": [], "misnamed_store": [], "workflow_copies": [],
              "rule_blocks": [],
              "plugin_duplicates": [], "unrecorded_store": [],
-             "missing_materializations": [], "out_of_scope_links": []}
+             "missing_materializations": [], "out_of_scope_links": [],
+             "missing_copy_links": [], "stale_copy_links": []}
 
     def test_clean_state_empty_plan(self, brainstorming):
         assert store.sync_plan() == self.EMPTY

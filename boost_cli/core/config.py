@@ -128,10 +128,13 @@ DEFAULTS = {
     "policy_enforce": True,
     # A workflow (a subagent, or a slash command with a description) also gets
     # a copy in the canonical store, ``~/.agents/skills/<name>/SKILL.md``, so
-    # agents that read skills and no workflow format — Codex — can reach it.
-    # `boost install --as-skill/--no-as-skill` overrides it per install, and
-    # that choice sticks; with neither flag an install follows this. See
-    # store._skill_copy.
+    # agents that read skills and no workflow format can reach it: Codex reads
+    # the store directly, and the copy is linked into each linking agent that
+    # got no workflow file of its own (windsurf, antigravity, a `skills_only`
+    # profile) -- never into one that holds the workflow's file, which would
+    # show it the procedure twice. `boost install --as-skill/--no-as-skill`
+    # overrides it per install, and that choice sticks; with neither flag an
+    # install follows this. See store._skill_copy and store.copy_link_targets.
     "workflows_as_skills": True,
     # No `telemetry` key: it sat here for releases with no reader, so `config
     # set telemetry true` reported success for a feature that does not

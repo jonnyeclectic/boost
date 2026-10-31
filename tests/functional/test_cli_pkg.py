@@ -3132,6 +3132,7 @@ class TestSyncJson:
                         "unreadable_store": [], "misnamed_store": [], "workflow_copies": [], "rule_blocks": [],
                         "plugin_duplicates": [], "unrecorded_store": [],
                         "missing_materializations": [], "out_of_scope_links": [],
+                        "missing_copy_links": [], "stale_copy_links": [],
                         "project": {"missing": [], "orphaned": []}, "lock": None}
         data = json.loads(boost("sync", "--json").out)
         assert data == {"actions": [], "pruned": [], "kept": [],
