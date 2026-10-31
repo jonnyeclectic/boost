@@ -276,6 +276,50 @@ def test_merge_fails_closed_on_unrun_mutants(tmp_path, capsys):
     assert "INCOMPLETE" in out and "unrun" in out
 
 
+def _two_shard_metas(tmp_path, hashes_by_shard):
+    """One file owned by both shards (a lone file split per function)."""
+    repo = _repo(tmp_path, {"a.py": 40})
+    parent = tmp_path / "shard-results"
+    for i, h in enumerate(hashes_by_shard):
+        d = parent / ("mutation-shard-%d" % i) / "boost_cli" / "core"
+        d.mkdir(parents=True)
+        (d / "a.py.meta").write_text(json.dumps({
+            "exit_code_by_key": {"m.x_a__mutmut_1": 0 if i == 0 else None,
+                                 "m.x_b__mutmut_1": 0 if i == 1 else None},
+            "hash_by_function_name": h,
+            "type_check_error_by_key": {},
+            "durations_by_key": {},
+            "estimated_durations_by_key": {},
+        }), encoding="utf-8")
+    return repo, parent
+
+
+def _merge_two(tmp_path, monkeypatch, hashes_by_shard):
+    repo, parent = _two_shard_metas(tmp_path, hashes_by_shard)
+    # Force both shards to own the file, as a per-function split does.
+    monkeypatch.setattr(
+        ms, "pack", lambda root, n: [[repo / "boost_cli" / "core" / "a.py"]] * 2)
+    return ms.cmd_merge(_ns(root=str(repo), shards=2, into=str(tmp_path / "m"),
+                            source=str(parent), prefix="mutation-shard-"))
+
+
+def test_merge_round_trips_every_meta_field(tmp_path, monkeypatch):
+    h = {"x_a": "h1", "x_b": "h2"}
+    assert _merge_two(tmp_path, monkeypatch, [h, dict(h)]) == 0
+    got = json.loads((tmp_path / "m" / "boost_cli" / "core"
+                      / "a.py.meta").read_text(encoding="utf-8"))
+    assert got["hash_by_function_name"] == h
+    assert set(got) == {"exit_code_by_key", "hash_by_function_name",
+                        "type_check_error_by_key", "durations_by_key",
+                        "estimated_durations_by_key"}
+
+
+def test_merge_fails_when_shards_disagree_on_a_hash(tmp_path, monkeypatch, capsys):
+    rc = _merge_two(tmp_path, monkeypatch, [{"x_a": "h1"}, {"x_a": "other"}])
+    assert rc == 1
+    assert "shards disagree on function hashes" in capsys.readouterr().out
+
+
 class _ns:
     """Tiny argparse.Namespace stand-in with the defaults the commands expect."""
 
