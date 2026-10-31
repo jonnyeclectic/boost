@@ -11,6 +11,8 @@ antigravity row) got no subagent and no rule, and nothing said so.
 """
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from boost_cli.commands import pkg
@@ -192,25 +194,58 @@ class TestSkippedAgentItems:
 
 
 class TestSkipLine:
-    def test_it_names_the_reason_and_the_key_that_decides_it(self):
+    def test_it_names_the_reason_and_the_key_that_decides_it(self, sandbox):
+        _add_agent("claude-personal", skills_only=True)
         assert agents.skip_line("claude-personal",
                                 agents.REASON_SKILLS_ONLY) == (
             "claude-personal: takes skills only "
             "(agents.claude-personal.skills_only) — not written")
+        _add_agent("my-tool", workflows=False)
+        assert agents.skip_line("my-tool",
+                                agents.REASON_NO_COMMAND_FORMAT) == (
+            "my-tool: has no slash-command format "
+            "(agents.my-tool.workflows) — not written")
+
+    def test_a_format_boost_withdrew_names_no_key(self, sandbox):
+        """antigravity's ``skills_only`` and windsurf's ``workflows: false``
+        are boost's own (``config.DEFAULTS`` says why at each), and flipping
+        either writes a file the agent never loads: the key is not offered."""
+        assert agents.skip_line("antigravity", agents.REASON_SKILLS_ONLY) == (
+            "antigravity: takes skills only — not written")
         assert agents.skip_line("windsurf",
                                 agents.REASON_NO_COMMAND_FORMAT) == (
-            "windsurf: has no slash-command format "
-            "(agents.windsurf.workflows) — not written")
+            "windsurf: has no slash-command format — not written")
 
-    def test_every_config_reason_names_its_key(self):
+    def test_a_built_in_row_the_user_withdrew_keeps_its_key(self, sandbox):
+        """The setting is the user's when it is not the row's default."""
+        _set("claude-code", skills_only=True)
+        _set("cursor", workflows=False)
+        assert agents.skip_line("claude-code", agents.REASON_SKILLS_ONLY) == (
+            "claude-code: takes skills only (agents.claude-code.skills_only) "
+            "— not written")
+        assert agents.skip_line("cursor",
+                                agents.REASON_NO_COMMAND_FORMAT) == (
+            "cursor: has no slash-command format (agents.cursor.workflows) "
+            "— not written")
+
+    def test_an_unconfigured_agent_keeps_its_key(self, sandbox):
+        assert agents.skip_line("ghost", agents.REASON_SKILLS_ONLY) == (
+            "ghost: takes skills only (agents.ghost.skills_only) — not written")
+
+    def test_every_config_reason_names_its_key(self, sandbox):
         assert agents.skip_line("cursor", agents.REASON_DISABLED) == (
             "cursor: is disabled (agents.cursor.enabled) — not written")
         assert agents.skip_line("cursor",
                                 agents.REASON_NO_PROJECT_SCOPE) == (
             "cursor: has no project scope (agents.cursor.project_scope) "
             "— not written")
+        # at its built-in value, but a reason the user may reverse
+        assert agents.skip_line("antigravity",
+                                agents.REASON_NO_PROJECT_SCOPE) == (
+            "antigravity: has no project scope "
+            "(agents.antigravity.project_scope) — not written")
 
-    def test_a_reason_no_flag_decides_names_no_key(self):
+    def test_a_reason_no_flag_decides_names_no_key(self, sandbox):
         assert agents.skip_line("x", agents.REASON_UNKNOWN) == (
             "x: is not written — not written")
 
@@ -221,8 +256,7 @@ class TestSkipLine:
         flat = " ".join(capsys.readouterr().out.split())
         assert ("claude-personal: takes skills only "
                 "(agents.claude-personal.skills_only) — not written") in flat
-        assert ("antigravity: takes skills only "
-                "(agents.antigravity.skills_only) — not written") in flat
+        assert "antigravity: takes skills only — not written" in flat
 
 
 def _profile(name="claude-personal", marker=True, **flags):
@@ -231,6 +265,18 @@ def _profile(name="claude-personal", marker=True, **flags):
         (paths.home() / (".%s" % name)).mkdir(parents=True, exist_ok=True)
         (paths.home() / (".%s" % name) / ".claude.json").write_text(
             "{}\n", encoding="utf-8")
+
+
+def _unstattable_marker(monkeypatch):
+    """``os.stat`` of any ``.claude.json`` fails as it does under a dir the
+    user cannot search."""
+    real = os.stat
+
+    def stat(path, *args, **kwargs):
+        if os.fspath(path).endswith(".claude.json"):
+            raise PermissionError(13, "Permission denied", os.fspath(path))
+        return real(path, *args, **kwargs)
+    monkeypatch.setattr(os, "stat", stat)
 
 
 class TestClaudeProfileRows:
@@ -255,6 +301,50 @@ class TestClaudeProfileRows:
     def test_a_disabled_row_is_not(self, sandbox):
         _profile(enabled=False)
         assert agents.claude_profile_rows() == []
+
+    def test_the_note_offers_the_flag_and_sync(self, sandbox):
+        _profile(project_scope=False)
+        assert agents.claude_profile_note("claude-personal") == (
+            "agents.claude-personal looks like a Claude Code profile — "
+            "`boost config set agents.claude-personal.skills_only false` "
+            "then `boost sync` gives it agents/, commands/ and rules/")
+
+    def test_a_profile_with_project_scope_is_told_to_drop_it(self, sandbox):
+        """A config-added row takes project scope unless it says otherwise,
+        and in a repo Claude Code reads `.claude/` under any profile: a
+        project install into `<repo>/.claude-personal/` is never loaded."""
+        _profile()
+        assert agents.claude_profile_note("claude-personal") == (
+            "agents.claude-personal looks like a Claude Code profile — "
+            "`boost config set agents.claude-personal.skills_only false` "
+            "then `boost sync` gives it agents/, commands/ and rules/; run "
+            "`boost config set agents.claude-personal.project_scope false` "
+            "first — in a repo Claude Code reads `.claude/` under any "
+            "profile, never `.claude-personal/`")
+
+    def test_a_marker_it_cannot_stat_is_not_a_profile(self, sandbox,
+                                                      monkeypatch):
+        """Under a dir that is not searchable, ``Path.is_file`` raises
+        PermissionError on Python 3.12 and 3.13 rather than answering False.
+        Faked at ``os.stat`` -- a mode-000 dir stops nothing for root, which
+        is who the mutation runner is -- with the marker really there, so
+        only the swallowed error can make the answer empty."""
+        _profile()
+        _unstattable_marker(monkeypatch)
+        assert agents.claude_profile_rows() == []
+
+    def test_doctor_finishes_its_report_over_it(self, sandbox, monkeypatch,
+                                                capsys):
+        """Doctor asks this on every run: a raise there was exit 70 and a
+        crash report in place of the verdict."""
+        from boost_cli.commands import quality
+        _profile()
+        _unstattable_marker(monkeypatch)
+        assert quality.cmd_doctor([]) in (0, 1)
+        out = capsys.readouterr().out
+        assert "looks like a Claude Code profile" not in out
+        assert ("● healthy" in out or "attention — see the suggestions "
+                "above" in out or "ready to set up" in out), out
 
     def test_a_built_in_row_is_never_called_a_profile(self, sandbox):
         """antigravity is skills_only by design; a `.claude.json` beside it

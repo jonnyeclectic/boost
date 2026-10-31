@@ -718,17 +718,32 @@ REASON_FLAGS = {REASON_SKILLS_ONLY: "skills_only",
                 REASON_NO_PROJECT_SCOPE: "project_scope"}
 
 
+def _withdrawn_by_boost(agent: str, reason: str, key: str) -> bool:
+    """Whether ``agent`` skips for a :data:`WITHDRAWN_REASONS` reason only
+    because its built-in row says so: ``key`` holds :func:`flag_default`'s
+    value. A row the config added cannot -- its default is
+    :data:`FLAG_DEFAULTS`', which takes rules and workflows -- and neither
+    can a built-in row the user set the other way."""
+    if reason not in WITHDRAWN_REASONS:
+        return False
+    spec = known_agents().get(agent)
+    return spec is not None and spec[key] == flag_default(agent, key)
+
+
 def skip_line(agent: str, reason: str) -> str:
     """One agent an item was not written into, and why, for a report.
 
     ``claude-personal: takes skills only (agents.claude-personal.skills_only)
     — not written``. The key is named because the skip is the config's
-    decision, and the row is where to read it -- not because flipping it is
-    always right: for a format boost withdrew (:data:`WITHDRAWN_REASONS`) it
-    is not, and :data:`config.DEFAULTS` says why at the key itself.
+    decision, and the row is where to read it. Not for a format boost
+    withdrew and the row still has as boost set it -- ``antigravity``'s
+    ``skills_only``, ``windsurf``'s ``workflows: false``: flipping that writes
+    a file the agent never loads, :data:`config.DEFAULTS` says why at the key
+    itself, and a line printed on every install would read as an invitation.
     """
     key = REASON_FLAGS.get(reason)
-    where = " (agents.%s.%s)" % (agent, key) if key else ""
+    where = (" (agents.%s.%s)" % (agent, key)
+             if key and not _withdrawn_by_boost(agent, reason, key) else "")
     return "%s: %s%s — not written" % (agent, reason, where)
 
 
@@ -744,12 +759,39 @@ def claude_profile_rows() -> list[str]:
     copied from the ``antigravity`` template carries that agent's
     ``skills_only`` and gets none of them. A built-in row is never asked: its
     flags are boost's own, and :data:`config.DEFAULTS` says why at each.
+
+    The probe is :func:`os.path.isfile`, which answers False on any
+    ``OSError``. ``Path.is_file`` raises PermissionError on Python 3.12 and
+    3.13 for a path under a dir the user cannot search, and doctor asks this
+    on every run -- so a row pointing there ended the report in a crash, when
+    doctor's own agent-dir check names exactly that problem.
     """
     defaults: dict = config.DEFAULTS["agents"]  # type: ignore[assignment]
     return [name for name, spec in known_agents().items()
             if name not in defaults and spec["enabled"]
             and spec["skills_only"]
-            and (spec["dir"].parent / ".claude.json").is_file()]
+            and os.path.isfile(spec["dir"].parent / ".claude.json")]
+
+
+def claude_profile_note(name: str) -> str:
+    """`boost doctor`'s line for one of :func:`claude_profile_rows`.
+
+    It names ``skills_only false`` and ``boost sync``, and -- when the row
+    takes project scope, which a config-added row does unless it says
+    otherwise -- ``project_scope false`` first: in a repo Claude Code reads
+    ``<repo>/.claude/`` whatever profile it runs under, so a project install
+    for the row lands in ``<repo>/.claude-personal/``, which nothing loads.
+    Named, never set: the row is the user's (no config is rewritten).
+    """
+    spec = known_agents()[name]
+    note = ("agents.%s looks like a Claude Code profile — `boost config set "
+            "agents.%s.skills_only false` then `boost sync` gives it agents/, "
+            "commands/ and rules/" % (name, name))
+    if spec["project_scope"]:
+        note += ("; run `boost config set agents.%s.project_scope false` "
+                 "first — in a repo Claude Code reads `.claude/` under any "
+                 "profile, never `%s/`" % (name, spec["dir"].parent.name))
+    return note
 
 
 def materialization_skip_reason(kind: str, base, agent) -> str | None:
