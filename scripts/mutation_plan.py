@@ -39,6 +39,8 @@ Usage
 -----
   mutation_plan.py full --shards 24 --out PLAN      # every mutant, committed pack
   mutation_plan.py none --reason TEXT --out PLAN    # nothing to run, and why
+  mutation_plan.py base --event E --sha SHA --base-sha B --head-sha H
+                                                    # the diff base, on stdout
   mutation_plan.py diff --base SHA --head SHA --stats mutants/mutmut-stats.json \
                         [--shadow] --out PLAN       # the PR's functions, or full
   mutation_plan.py matrix --plan PLAN               # [{"set":..,"index":..}, ...]
@@ -164,6 +166,37 @@ def changed_paths(root: Path, base: str, head: str) -> list[str]:
     """
     out = _git(root, "diff", "--name-only", "--no-renames", "-z", base, head)
     return [p for p in out.decode("utf-8").split("\0") if p]
+
+
+def diff_base(root: Path, event: str, sha: str, *, base_sha: str,
+              head_sha: str) -> tuple[str, str]:
+    """The commit to diff ``sha`` against, and a line saying how it was chosen.
+
+    ``sha`` is the commit the shards check out. On a pull request that is
+    GitHub's merge commit (``refs/pull/N/merge``), whose first parent is the
+    base it was merged onto: diffing against it is the PR's change exactly as
+    applied to the tree the shards test. When ``sha`` is not a two-parent
+    merge, the merge base of the event's base and head stands in. It is wider
+    whenever main has moved since the branch point (main's interim changes
+    join the scope), which is the safe direction. A merge-queue entry is
+    built on ``base_sha``, so that is its base.
+
+    Every git failure propagates (``check=True``): an unknown or empty SHA
+    must stop the diff plan, and ci.yml then plans the full run instead.
+    """
+    if event == "pull_request":
+        line = _git(root, "rev-list", "--parents", "-n1", sha + "^{commit}")
+        parents = line.decode("utf-8").split()[1:]
+        if len(parents) == 2:
+            return parents[0], "first parent of %s (the PR as merged)" % sha
+        base = _git(root, "merge-base", base_sha, head_sha).decode("utf-8").strip()
+        return base, ("merge base of %s and %s (%s has %d parents, not 2; "
+                      "wider than the PR alone)"
+                      % (base_sha, head_sha, sha, len(parents)))
+    if event == "merge_group":
+        base = _git(root, "rev-parse", "--verify", base_sha + "^{commit}")
+        return base.decode("utf-8").strip(), "merge_group base_sha %s" % base_sha
+    raise ValueError("no diff base for event %r" % event)
 
 
 def diff_plan(root: Path, base: str, head: str, stats: Path, *,
@@ -300,6 +333,13 @@ def main(argv: list[str]) -> int:
     d.add_argument("--root", default=str(ROOT), help="repo root (default: this checkout)")
     d.add_argument("--out", required=True)
 
+    b = sub.add_parser("base", help="print the commit the diff plan diffs against")
+    b.add_argument("--event", required=True, help="github.event_name")
+    b.add_argument("--sha", required=True, help="the commit the shards check out")
+    b.add_argument("--base-sha", required=True, help="the event's base SHA")
+    b.add_argument("--head-sha", required=True, help="the event's head SHA")
+    b.add_argument("--root", default=str(ROOT), help="repo root (default: this checkout)")
+
     m = sub.add_parser("matrix", help="print the shard matrix as compact JSON")
     m.add_argument("--plan", required=True)
 
@@ -325,6 +365,20 @@ def main(argv: list[str]) -> int:
         _write(args.out, diff_plan(Path(args.root), args.base, args.head,
                                    Path(args.stats), shadow=args.shadow,
                                    shards=args.shards))
+        return 0
+    if args.cmd == "base":
+        # The SHA alone on stdout, because ci.yml captures it with $(...); the
+        # reason on stderr, so the log says which base the plan used.
+        try:
+            base, why = diff_base(Path(args.root), args.event, args.sha,
+                                  base_sha=args.base_sha, head_sha=args.head_sha)
+        except (subprocess.CalledProcessError, ValueError) as exc:
+            detail = getattr(exc, "stderr", None) or b""
+            print("mutation_plan base: %s %s" % (exc, detail.decode("utf-8", "replace").strip()),
+                  file=sys.stderr)
+            return 1
+        print("mutation_plan base: %s -- %s" % (base, why), file=sys.stderr)
+        print(base)
         return 0
     if args.cmd == "matrix":
         # One line, no spaces: it is written to $GITHUB_OUTPUT as `matrix=...`

@@ -714,21 +714,24 @@ jobs:
           else
             case "$EVENT" in
               pull_request|merge_group)
-                # The branch point, from the event's own base and head. The
-                # far end is $GITHUB_SHA, not the PR head: it is the commit
+                # The far end is $GITHUB_SHA, not the PR head: it is the commit
                 # the stats were just taken at and every shard checks out (a
                 # PR's merge commit), so the planner counts mutants of the tree
                 # the shards mutate. Counting the PR head's instead would make
                 # the gate refuse a shortfall whenever main had changed a
-                # scoped function since the branch point.
-                # No merge base (unfetched, or an empty SHA) widens to full.
-                if MERGE_BASE="$(git merge-base "$BASE_SHA" "$HEAD_SHA")"; then
+                # scoped function since the branch point. The near end is the
+                # merge commit's first parent -- the PR exactly as applied --
+                # else the merge base of the event's base and head (wider);
+                # the queue's is its base_sha. `base` logs which it chose.
+                # No base (unfetched, or an empty SHA) widens to full.
+                if DIFF_BASE="$(python3 scripts/mutation_plan.py base --event "$EVENT" \
+                    --sha "$GITHUB_SHA" --base-sha "$BASE_SHA" --head-sha "$HEAD_SHA")"; then
                   # .venv: the diff planner imports mutmut, libcst and PyYAML.
                   .venv/bin/python scripts/mutation_plan.py diff --shadow --shards 24 \
-                    --base "$MERGE_BASE" --head "$GITHUB_SHA" \
+                    --base "$DIFF_BASE" --head "$GITHUB_SHA" \
                     --stats mutants/mutmut-stats.json --out mutation-plan.json
                 else
-                  plan_full "no merge base for '$BASE_SHA'..'$HEAD_SHA', so no diff scope"
+                  plan_full "no diff base for $EVENT at $GITHUB_SHA, so no diff scope"
                 fi
                 ;;
               *)

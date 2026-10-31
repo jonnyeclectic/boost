@@ -425,6 +425,100 @@ def test_diff_plan_refuses_stats_without_dependencies(tmp_path, git_repo):
 
 
 # --------------------------------------------------------------------------
+# base: what the diff planner diffs against
+# --------------------------------------------------------------------------
+
+class MergedRepo:
+    """``c0`` on main; ``feature`` adds ``c1``; main moves on to ``c2``; then
+    ``merge`` is c1 merged into c2, the shape of a PR's ``refs/pull/N/merge``."""
+
+    def __init__(self, root: Path):
+        root.mkdir()
+        self.root = root
+        _git(root, "init", "-q", "-b", "main")
+        self.c0 = self._commit("a.txt", "0")
+        _git(root, "checkout", "-q", "-b", "feature")
+        self.c1 = self._commit("b.txt", "1")
+        _git(root, "checkout", "-q", "main")
+        self.c2 = self._commit("c.txt", "2")
+        _git(root, "merge", "-q", "--no-ff", "-m", "merge", "feature")
+        self.merge = _git(root, "rev-parse", "HEAD")
+
+    def _commit(self, name: str, text: str) -> str:
+        (self.root / name).write_text(text, encoding="utf-8")
+        _git(self.root, "add", name)
+        _git(self.root, "commit", "-q", "-m", name)
+        return _git(self.root, "rev-parse", "HEAD")
+
+
+@pytest.fixture
+def merged(tmp_path):
+    return MergedRepo(tmp_path / "merged")
+
+
+def test_a_pr_merge_commit_diffs_against_its_first_parent(merged):
+    # The PR's own change, exactly as applied to the commit the shards test.
+    # base.sha is deliberately stale (c0): the merge commit's parent wins.
+    base, why = mp.diff_base(merged.root, "pull_request", merged.merge,
+                             base_sha=merged.c0, head_sha=merged.c1)
+    assert base == merged.c2
+    assert "first parent" in why
+
+
+def test_a_pr_sha_that_is_no_merge_falls_back_to_the_merge_base(merged):
+    # Not two parents (a checkout of the head itself, say): the wider merge
+    # base of the event's base and head, and the reason says so.
+    base, why = mp.diff_base(merged.root, "pull_request", merged.c1,
+                             base_sha=merged.c2, head_sha=merged.c1)
+    assert base == merged.c0
+    assert "merge base" in why
+
+
+def test_the_merge_queue_diffs_against_its_base_sha(merged):
+    base, why = mp.diff_base(merged.root, "merge_group", merged.merge,
+                             base_sha=merged.c2, head_sha=merged.merge)
+    assert base == merged.c2
+    assert "base_sha" in why
+
+
+@pytest.mark.parametrize("event", ["push", "schedule", ""])
+def test_no_other_event_has_a_diff_base(merged, event):
+    with pytest.raises(ValueError):
+        mp.diff_base(merged.root, event, merged.merge, base_sha=merged.c2,
+                     head_sha=merged.c1)
+
+
+@pytest.mark.parametrize("event, sha, base_sha", [
+    ("pull_request", "0" * 40, "c2"),        # the commit under test is unknown
+    ("pull_request", "c1", ""),              # no merge commit, and no base to widen to
+    ("merge_group", "merge", ""),            # the queue sent no base
+    ("merge_group", "merge", "0" * 40),      # or one this clone lacks
+])
+def test_an_unusable_sha_is_an_error_never_a_guess(merged, event, sha, base_sha):
+    sha = getattr(merged, sha, sha)
+    base_sha = getattr(merged, base_sha, base_sha)
+    with pytest.raises(subprocess.CalledProcessError):
+        mp.diff_base(merged.root, event, sha, base_sha=base_sha, head_sha=merged.c1)
+
+
+def test_base_prints_the_sha_alone_and_logs_why(merged, capsys):
+    assert mp.main(["base", "--root", str(merged.root), "--event", "pull_request",
+                    "--sha", merged.merge, "--base-sha", merged.c0,
+                    "--head-sha", merged.c1]) == 0
+    out, err = capsys.readouterr()
+    assert out == merged.c2 + "\n"        # captured by $(...) in ci.yml
+    assert "first parent" in err
+
+
+def test_base_failure_prints_nothing_on_stdout(merged, capsys):
+    assert mp.main(["base", "--root", str(merged.root), "--event", "push",
+                    "--sha", merged.merge, "--base-sha", "", "--head-sha", ""]) == 1
+    out, err = capsys.readouterr()
+    assert out == ""
+    assert "no diff base" in err
+
+
+# --------------------------------------------------------------------------
 # ci.yml wiring
 # --------------------------------------------------------------------------
 
@@ -638,7 +732,10 @@ def test_the_planner_checkout_has_every_object(jobs):
     assert "filter" not in checkout["with"]
 
 
-def test_the_planner_takes_the_merge_base_from_the_events_own_shas(jobs):
+def test_the_planner_asks_mutation_plan_base_for_the_diff_base(jobs):
+    # The choice (merge commit's first parent, else the merge base; the
+    # queue's base_sha) lives in `mutation_plan.py base`, unit-tested above;
+    # the step only hands it the event's facts.
     step = _step(jobs["mutation-plan"], step_id="plan")
     env = step["env"]
     assert env["EVENT"] == "${{ github.event_name }}"
@@ -646,7 +743,10 @@ def test_the_planner_takes_the_merge_base_from_the_events_own_shas(jobs):
                                " || github.event.merge_group.base_sha }}")
     assert env["HEAD_SHA"] == ("${{ github.event.pull_request.head.sha"
                                " || github.event.merge_group.head_sha }}")
-    assert 'git merge-base "$BASE_SHA" "$HEAD_SHA"' in step["run"]
+    assert ('python3 scripts/mutation_plan.py base --event "$EVENT" --sha "$GITHUB_SHA"'
+            ' --base-sha "$BASE_SHA" --head-sha "$HEAD_SHA"') in " ".join(
+        w for w in step["run"].split() if w != "\\")   # line continuations
+    assert "git merge-base" not in step["run"]
 
 
 def test_the_planner_exports_whether_the_plan_is_shadow(jobs):
@@ -670,6 +770,7 @@ out=""; prev=""
 for a in "$@"; do [ "$prev" = "--out" ] && out="$a"; prev="$a"; done
 case " $* " in
   *" matrix "*) echo '[{"set":"full","index":0}]'; exit 0 ;;
+  *"mutation_plan.py base "*) [ -n "$BASE_FAIL" ] && exit 1; echo forkpoint0; exit 0 ;;
   *" --shadow "*) plan='{"gate_set":"full","reasons":[],"sets":{"diff":{"shards":[]},"full":{"shards":[["a"]]}}}' ;;
   *" none "*) plan='{"gate_set":null,"reasons":["n"],"sets":{}}' ;;
   *) plan='{"gate_set":"full","reasons":[],"sets":{"full":{"shards":[["a"]]}}}' ;;
@@ -703,6 +804,8 @@ exit 0
             calls.unlink()
             plans = [line for line in log if "--out mutation-plan.json" in line]
             assert len(plans) == 1, log
+            # The helper owns every git question; the step asks none itself.
+            assert not any(line.startswith("git ") for line in log), log
             return plans[0], log, _outputs(out)
         return run
 
@@ -712,8 +815,9 @@ exit 0
         assert plan.startswith(".venv/bin/python scripts/mutation_plan.py diff "), plan
         assert " --shadow " in plan + " "
         assert " --shards 24 " in plan
-        # The branch point comes from the event's own base and head ...
-        assert "git merge-base basetip0 prhead0" in log
+        # The base comes from `mutation_plan.py base`, given the event's facts ...
+        assert any("mutation_plan.py base --event %s --sha mergecommit0 --base-sha basetip0 "
+                   "--head-sha prhead0" % event in line for line in log), log
         assert " --base forkpoint0 " in plan
         # ... but the far end is the commit every shard checks out and the
         # stats were taken at. The PR head would count mutants of a tree no
@@ -727,13 +831,13 @@ exit 0
     def test_everything_else_plans_full(self, planner, event):
         plan, log, outputs = planner(event)
         assert "python3 scripts/mutation_plan.py full --shards 24 " in plan
-        assert not any("merge-base" in line for line in log)
+        assert not any("mutation_plan.py base " in line for line in log)
         assert outputs["shadow"] == "false"
         assert outputs["gate_set"] == "full"
 
-    def test_no_merge_base_falls_back_to_full(self, planner):
+    def test_no_diff_base_falls_back_to_full(self, planner):
         # A missing or unfetched base must widen the gate, never empty it.
-        plan, _, outputs = planner("pull_request", MB_FAIL="1")
+        plan, _, outputs = planner("pull_request", BASE_FAIL="1")
         assert "scripts/mutation_plan.py full --shards 24 " in plan
         assert outputs["shadow"] == "false"
 
@@ -741,7 +845,7 @@ exit 0
     def test_an_irrelevant_change_plans_nothing(self, planner, event):
         plan, log, outputs = planner(event, relevant="false")
         assert "scripts/mutation_plan.py none " in plan
-        assert not any("merge-base" in line for line in log)
+        assert not any("mutation_plan.py base " in line for line in log)
         assert outputs["gate_set"] == ""
         assert outputs["shadow"] == "false"
 
