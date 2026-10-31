@@ -138,6 +138,36 @@ def test_two_absent_trees_never_match(merge_tree, head_tree):
     assert decision.skip is False
 
 
+@pytest.mark.parametrize("position", [0, 11, 12, 20, 38, 39])
+def test_trees_that_differ_in_a_single_character_anywhere_are_not_equal(position):
+    # Positions 0-11 are what a reason line shows; 12-39 are what an abbreviated
+    # comparison (the easy regression: `tree[:12]`) would never look at.
+    merge_tree = "0123456789abcdef0123456789abcdef01234567"
+    other = merge_tree[:position] + ("f" if merge_tree[position] != "f" else "e") \
+        + merge_tree[position + 1:]
+    assert len(other) == len(merge_tree) and other != merge_tree
+    decision = pt.decide(merge_tree, [pt.Candidate("h", other, 7, "success")], "success")
+    assert decision.skip is False
+    assert decision.pr_run_id is None
+
+
+def test_trees_that_differ_only_in_letter_case_are_not_equal():
+    # "Identical" means byte-identical: the comparison is not normalised.
+    merge_tree = "0123456789abcdef0123456789abcdef01234567"
+    cand = pt.Candidate("h", merge_tree.upper(), 7, "success")
+    assert pt.decide(merge_tree, [cand], "success").skip is False
+
+
+def test_a_tree_that_is_only_a_prefix_of_the_merge_tree_is_not_equal():
+    merge_tree = "0123456789abcdef0123456789abcdef01234567"
+    for prefix in (merge_tree[:12], merge_tree[:39]):
+        cand = pt.Candidate("h", prefix, 7, "success")
+        assert pt.decide(merge_tree, [cand], "success").skip is False
+    # and the identical 40 characters are the one thing that does match
+    assert pt.decide(merge_tree, [pt.Candidate("h", merge_tree, 7, "success")],
+                     "success").skip is True
+
+
 @pytest.mark.parametrize("bad", [
     {"run_event": "push"},
     {"run_event": "workflow_dispatch"},
@@ -318,14 +348,20 @@ def commit(tree):
     return {"tree": {"sha": tree}}
 
 
-def pr(head):
-    return {"number": 1, "head": {"sha": head}}
+def pr(head, base="main"):
+    return {"number": 1, "head": {"sha": head}, "base": {"ref": base}}
 
 
 def run(run_id=7, *, conclusion="success", event="pull_request", head_sha=HEAD,
-        attempt=1, created="2026-10-30T10:00:00Z", status="completed"):
+        attempt=1, created="2026-10-30T10:00:00Z", status="completed",
+        head_branch=None):
+    # A schedule or dispatch run of `ci` belongs to main; a pull_request run's
+    # head_branch is the PR's own branch.
+    if head_branch is None:
+        head_branch = "feature/x" if event == "pull_request" else "main"
     return {"id": run_id, "event": event, "head_sha": head_sha, "status": status,
-            "conclusion": conclusion, "run_attempt": attempt, "created_at": created}
+            "conclusion": conclusion, "run_attempt": attempt, "created_at": created,
+            "head_branch": head_branch}
 
 
 def runs(*items):
@@ -458,6 +494,44 @@ def test_a_nightly_run_that_is_not_completed_has_no_conclusion():
     assert pt.gather(api, SHA)[2] is None
 
 
+@pytest.mark.parametrize("path", [SCHEDULE, DISPATCH])
+@pytest.mark.parametrize("branch", ["feature/x", "main-old", "refs/heads/main", "Main",
+                                    "master", "", None, 7, "missing"])
+def test_a_whole_codebase_run_not_on_main_is_unknown_not_a_nightly(path, branch):
+    # A workflow_dispatch on a feature branch is a normal thing to do, and its
+    # result says nothing about main. The query asks for branch=main; the answer
+    # is checked too, and a run with no branch at all is not vouched for either.
+    event = "schedule" if path == SCHEDULE else "workflow_dispatch"
+    off_main = run(100, event=event)
+    if branch == "missing":
+        del off_main["head_branch"]
+    else:
+        off_main["head_branch"] = branch
+    api = FakeApi(green_routes(**{path: runs(off_main)}))
+    with pytest.raises(ValueError, match="main"):
+        pt.gather(api, SHA)
+
+
+def test_main_a_nightly_from_another_branch_is_a_full_run(gh_env):
+    off_main = run(100, event="schedule", head_branch="feature/x",
+                   created=hours_before_now(1))
+    api = FakeApi(green_routes(**{SCHEDULE: runs(off_main)}))
+    assert pt.main(ARGV, api=api, env=gh_env) == 0
+    assert _outputs(gh_env) == {"skip": "false", "pr_run_id": ""}
+    assert "error: ValueError" in _summary(gh_env)
+
+
+def test_a_green_dispatch_on_a_feature_branch_does_not_rescue_a_red_nightly(gh_env):
+    # The off-main run is newer and green; it must not be read as "the latest".
+    api = FakeApi(green_routes(**{
+        SCHEDULE: runs(run(100, event="schedule", conclusion="failure",
+                           created=hours_before_now(30))),
+        DISPATCH: runs(run(101, event="workflow_dispatch", head_branch="feature/x",
+                           created=hours_before_now(1)))}))
+    assert pt.main(ARGV, api=api, env=gh_env) == 0
+    assert _outputs(gh_env)["skip"] == "false"
+
+
 def test_a_nightly_run_of_the_wrong_event_is_not_trusted():
     api = FakeApi(green_routes(**{SCHEDULE: runs(run(1, event="push"))}))
     with pytest.raises(ValueError):
@@ -546,6 +620,43 @@ def test_a_run_missing_a_fact_decide_checks_is_not_proof(missing):
     assert pt.decide(merge_tree, cands, last, now=NOW).skip is False
 
 
+# GitHub's run `status` values besides "completed". A stale `conclusion` riding on
+# any of them (a re-run resets the status first) must not be read as a result.
+NOT_COMPLETED = ["queued", "waiting", "requested", "pending", "in_progress",
+                 "", "banana", "COMPLETED"]
+
+
+@pytest.mark.parametrize("status", NOT_COMPLETED)
+def test_a_pr_run_in_any_status_but_completed_is_unfinished(status):
+    api = FakeApi(green_routes(**{pr_runs_path(HEAD): runs(
+        run(conclusion="success", status=status))}))
+    merge_tree, cands, last = pt.gather(api, SHA)
+    assert cands[0].conclusion is None
+    decision = pt.decide(merge_tree, cands, last, now=NOW)
+    assert decision.skip is False
+    assert "still running" in decision.reason
+
+
+@pytest.mark.parametrize("status", NOT_COMPLETED)
+def test_a_nightly_in_any_status_but_completed_is_not_a_result(status):
+    api = FakeApi(green_routes(**{SCHEDULE: runs(
+        run(100, event="schedule", conclusion="success", status=status))}))
+    merge_tree, cands, last = pt.gather(api, SHA)
+    assert last is None
+    assert pt.decide(merge_tree, cands, last, now=NOW).skip is False
+
+
+@pytest.mark.parametrize("status", NOT_COMPLETED)
+def test_main_a_run_in_any_status_but_completed_is_a_full_run(tmp_path, status):
+    for name, routes in (
+            ("pr", green_routes(**{pr_runs_path(HEAD): runs(run(status=status))})),
+            ("nightly", green_routes(**{SCHEDULE: runs(
+                run(100, event="schedule", status=status))}))):
+        env = {"GITHUB_OUTPUT": str(tmp_path / name)}
+        assert pt.main(ARGV, api=FakeApi(routes), env=env) == 0
+        assert _outputs(env) == {"skip": "false", "pr_run_id": ""}
+
+
 def test_a_pr_run_that_is_not_completed_has_no_conclusion():
     api = FakeApi(green_routes(**{pr_runs_path(HEAD): runs(
         run(conclusion="success", status="in_progress"))}))
@@ -587,6 +698,47 @@ def test_no_associated_pr_is_a_direct_push():
     _, cands, _ = pt.gather(api, SHA)
     assert cands == []
     assert not any(c.startswith("git/commits/%s" % HEAD) for c in api.calls)
+
+
+@pytest.mark.parametrize("base", [
+    {"ref": "release/1.x"}, {"ref": "master"}, {"ref": "Main"}, {"ref": "main-old"},
+    {"ref": "refs/heads/main"}, {"ref": ""}, {"ref": None}, {"ref": 7}, {},
+    None, "main",
+])
+def test_a_pr_into_another_branch_is_not_a_candidate(base):
+    # A pull_request run builds the PR merged into ITS base, so a PR aimed at
+    # another branch tested a different tree and proves nothing about main's.
+    aimed_elsewhere = {"number": 1, "head": {"sha": HEAD}, "base": base}
+    api = FakeApi(green_routes(**{"commits/%s/pulls" % SHA: [aimed_elsewhere]}))
+    _, cands, _ = pt.gather(api, SHA)
+    assert cands == []
+    assert not any("git/commits/%s" % HEAD in c or HEAD in c for c in api.calls)
+
+
+def test_a_pr_with_no_base_at_all_is_not_a_candidate():
+    api = FakeApi(green_routes(**{
+        "commits/%s/pulls" % SHA: [{"number": 1, "head": {"sha": HEAD}}]}))
+    assert pt.gather(api, SHA)[1] == []
+
+
+def test_only_the_prs_into_main_are_asked_about():
+    api = FakeApi(green_routes(**{
+        "commits/%s/pulls" % SHA: [pr(HEAD, base="release/1.x"), pr(HEAD2)],
+        "git/commits/%s" % HEAD2: commit(TREE),
+        pr_runs_path(HEAD2): runs(run(8, head_sha=HEAD2)),
+    }))
+    _, cands, _ = pt.gather(api, SHA)
+    assert [c.head_sha for c in cands] == [HEAD2]
+    assert "git/commits/%s" % HEAD not in api.calls
+    assert pr_runs_path(HEAD) not in api.calls
+
+
+def test_main_a_green_pr_into_another_branch_does_not_prove_a_push_to_main(gh_env):
+    api = FakeApi(green_routes(**{
+        "commits/%s/pulls" % SHA: [pr(HEAD, base="release/1.x")]}))
+    assert pt.main(ARGV, api=api, env=gh_env) == 0
+    assert _outputs(gh_env) == {"skip": "false", "pr_run_id": ""}
+    assert "no pull request into main" in _summary(gh_env)
 
 
 def test_a_pr_entry_with_no_usable_head_is_dropped_not_queried():
