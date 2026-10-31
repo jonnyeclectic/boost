@@ -140,6 +140,13 @@ def main() -> int:
     run("git", "init", "-q")
     run("git", "config", "user.email", "fixture@boost.test")
     run("git", "config", "user.name", "Boost Fixture")
+    # Otherwise `git commit` leaves a DETACHED `git maintenance run --auto`
+    # behind, which creates and deletes `.git/objects/maintenance.lock` after
+    # this script has exited. The suite `copytree`s this repo straight away,
+    # lists the lock, finds it gone, and raises `shutil.Error` — measured under
+    # `pytest -n auto` with git 2.56 (test_drift_hint, one run in three).
+    # Repo-local, so every copy and clone-source of the fixture inherits it.
+    run("git", "config", "maintenance.auto", "false")
     run("git", "add", "-A")
     run("git", "commit", "-qm", "fixture skills")
     print(dest)
