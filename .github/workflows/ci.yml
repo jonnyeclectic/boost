@@ -656,7 +656,9 @@ jobs:
         # so mutmut's clean run falls back to the WHOLE unit suite: 27.4 min
         # for that run, against 15.1 for the exact name -- 14.5 of it the
         # stats pass itself, 4 s after it, because the clean run is that
-        # function's three tests. Only the stats file leaves this job.
+        # function's three tests. The diff shards name their mutants exactly
+        # for the same reason (mutation_diff.mutant_names). Only the stats
+        # file leaves this job.
         # A shard that restores it goes straight to `Listing all tests`
         # (collect_or_load_stats re-collects only for ids the file lacks):
         # 39 s from start to `Running mutation testing` locally, stats in
@@ -1093,22 +1095,28 @@ jobs:
           # would quietly re-collect and this shard would just be slow again.
           mkdir -p mutants
           cp "$RUNNER_TEMP/mutation-stats/mutmut-stats.json" mutants/mutmut-stats.json
-          # `patterns` exits 1 with nothing on stdout for an empty or unknown
+          # `patterns` exits 1, writing nothing, for an empty or unknown
           # shard: `mutmut run` with no arguments runs EVERY mutant, so an
           # empty answer must stop here, not become a full 26-minute run in
-          # every shard at once.
-          PATTERNS="$(python3 scripts/mutation_plan.py patterns --plan "$RUNNER_TEMP/mutation-plan/mutation-plan.json" --set "$SET" --index "$SHARD")"
-          echo "$SET shard $SHARD patterns: $PATTERNS"
+          # every shard at once. It writes one NUL-terminated entry per
+          # argument -- a diff shard's are exact mutant names, up to 1500,
+          # whose module part a PR's file name chose -- and they reach mutmut
+          # as a quoted array: never word-split, never globbed against the
+          # tree. `--` keeps an entry from ever being read as an option.
+          ARGS_FILE="$RUNNER_TEMP/mutmut-args"
+          python3 scripts/mutation_plan.py patterns --plan "$RUNNER_TEMP/mutation-plan/mutation-plan.json" --set "$SET" --index "$SHARD" --out "$ARGS_FILE"
+          MUTMUT_ARGS=()
+          while IFS= read -r -d '' arg; do
+            MUTMUT_ARGS+=("$arg")
+          done < "$ARGS_FILE"
+          if [ "${#MUTMUT_ARGS[@]}" -eq 0 ]; then
+            echo "::error::$SET shard $SHARD has nothing to run"
+            exit 1
+          fi
           set +e
-          set -f
-          # The word split is deliberate: each pattern must reach mutmut as its
-          # own argument. Globbing is off (set -f) so the shell cannot expand
-          # them against the working tree first.
-          # shellcheck disable=SC2086
-          .venv/bin/mutmut run $PATTERNS
+          .venv/bin/mutmut run -- "${MUTMUT_ARGS[@]}"
           rc=$?
           set -e
-          set +f
           # mutmut reports surviving mutants with a non-zero status. Survivors
           # are the gate's business, not a shard's — only a genuine failure to
           # run should fail this job. (Matches scripts/mutation_gate.py.)
