@@ -286,9 +286,10 @@ def _report_result(res: store.InstallResult, no_mcp: bool = False) -> None:
         for agent, why in getattr(res, "skipped_agents", None) or ():
             out.dim("  %s" % agents.skip_line(agent, why), wrap=True)
         # A subagent is not `/<name>`, and the install line alone reads as
-        # though it were (`workflows.invocation_hint`).
+        # though it were (`workflows.invocation_hint`). It quotes the
+        # frontmatter `name`, a tap's text, so it is printed plain.
         for line in getattr(res, "invocation", None) or ():
-            out.dim("  %s" % line, wrap=True)
+            out.dim("  %s" % out.plain(line), wrap=True)
         _report_skill_copy(res)
         _warn_unwritable(res)
         out.ok("lock updated (.skill-lock.json)")
@@ -372,8 +373,11 @@ def _warn_unwritable(res, stream=None) -> None:
         out.warn("%s: skill copy not linked: %s" % (res.name, line),
                  stream=stream, wrap=True)
     # Written, but not everything in the source survived the conversion.
+    # Plain: a note may quote the file it is about (a subagent's `tools`
+    # entries), and that file is a tap's.
     for line in getattr(res, "render_notes", None) or ():
-        out.warn("%s: %s" % (res.name, line), stream=stream, wrap=True)
+        out.warn("%s: %s" % (res.name, out.plain(line)), stream=stream,
+                 wrap=True)
     # A link in the skill the copy left out: the rest installed, and this
     # names the file the skill may still expect.
     for line in getattr(res, "skipped_links", None) or ():

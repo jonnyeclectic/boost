@@ -161,6 +161,34 @@ class TestInstalledText:
         assert "upgraded fields v9.9[8m-hidden → v9.10[8m-hidden" in flat
 
 
+@pytest.fixture
+def agent_tap(boost, tmp_path):
+    """A subagent whose frontmatter ``name`` and ``tools`` both carry
+    escapes: the two fields Claude Code's install lines echo."""
+    tap = tmp_path / "atap"
+    (tap / "agents").mkdir(parents=True)
+    (tap / "agents" / "esc-agent.md").write_bytes(
+        b"---\nname: \"nm\x1b]0;PWNED\x07x\"\ndescription: d\n"
+        b"tools: codebase\x1b[2J\x1b]0;PWNED\x07, githubRepo\n---\n\nBody.\n")
+    _git(tap, "init", "-q")
+    _commit(tap, "v1")
+    boost("tap", tap)
+    return tap
+
+
+class TestSubagentText:
+    """A Claude Code subagent's install lines quote its frontmatter: the
+    ``tools`` entries in the warning, the ``name`` in the @-mention hint."""
+
+    def test_the_tools_warning_and_the_mention_hint(self, boost, agent_tap):
+        # the catalog name is the frontmatter `name`, slugged
+        flat = _clean(boost("install", "nm-0-pwned-x"))
+        assert ("nm-0-pwned-x: claude-code: `tools` grants `codebase[2J]0;PWNED`, "
+                "`githubRepo`, none of which is a Claude Code tool") in flat
+        assert ("claude-code: a subagent, not a slash command — @-mention it "
+                "as `@agent-nm]0;PWNEDx`, or ask Claude to use it") in flat
+
+
 @pytest.mark.skipif(sys.platform == "win32",
                     reason="symlinks need a privilege, and Windows refuses "
                            "control characters in file names")

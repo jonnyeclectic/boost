@@ -83,6 +83,12 @@ class TestClaudeAgentNotes:
         _agent(None),                                  # inherits every tool
         _agent(""),                                    # empty
         _agent("~"),
+        # YAML's null in any case; `null` is the one spelling that tells a
+        # case-folded comparison from an upper-cased one (`NULL` and `Null`
+        # would also pass as Claude-shaped names)
+        _agent("null"),
+        _agent("NULL"),
+        _agent("Null"),
         _agent("[]"),
         _agent(">\n  codebase"),                       # block scalar
         _agent("\n  a: codebase"),                     # nested mapping
@@ -120,6 +126,9 @@ class TestClaudeToolSplit:
          ["Agent(worker, researcher)", "Read"]),
         ("Bash(git add *, git commit *)", ["Bash(git add *, git commit *)"]),
         ("Bash(echo (a, b)), Read", ["Bash(echo (a, b))", "Read"]),
+        # the comma sits at depth 1 after a nested group has closed: a depth
+        # that reset to 1 on every `(` instead of counting would end at 0 there
+        ("Bash(x (y), z), Read", ["Bash(x (y), z)", "Read"]),
         # a stray `)` never drives the depth negative and swallows the rest
         ("a), b, c", ["a)", "b", "c"]),
         (" , Read,, ", ["Read"]),
