@@ -454,6 +454,26 @@ def _cap_mutant_memory() -> None:
 _RELOCATING_ENV = ("BOOST_HOME", "BOOST_AGENTS_STORE", "CODEX_HOME",
                    "CLAUDE_CONFIG_DIR", "CLAUDE_CODE_PLUGIN_CACHE_DIR")
 
+# Terminal geometry a test never chose. pytest imports `readline` before any
+# conftest loads (`_pytest.capture._readline_workaround`), and GNU readline,
+# which is what Linux builds link, `setenv`s LINES and COLUMNS as it starts --
+# 80x24 when there is no terminal at all. The controller's `os.environ` was
+# copied at interpreter start and never sees that, so a serial run is clean;
+# every pytest-xdist worker it spawns inherits the C environment and starts
+# with COLUMNS=80. `out.pane_width` honours an exported COLUMNS by design, so
+# each worker fitted every table to 80 columns: `list` clipped a `project:`
+# path to "project:/tmp/pytest-of…", `drift` dropped NAME, and five
+# functional tests failed on ubuntu only (macOS links libedit, which leaves
+# the environment alone). A test that wants a width sets one.
+_GEOMETRY_ENV = ("COLUMNS", "LINES")
+
+
+def _drop_inherited_geometry() -> None:
+    """Remove the :data:`_GEOMETRY_ENV` variables this process inherited."""
+    for name in _GEOMETRY_ENV:
+        os.environ.pop(name, None)
+
+
 _SESSION_HOME: list[Path] = []
 
 
@@ -560,6 +580,7 @@ def pytest_configure(config):
     """
     del config
     _isolate_home()
+    _drop_inherited_geometry()
     _disable_git_auto_maintenance()
     _cap_mutant_memory()
     if not os.environ.get("MUTANT_UNDER_TEST"):
