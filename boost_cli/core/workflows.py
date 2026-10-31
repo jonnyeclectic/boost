@@ -1283,7 +1283,7 @@ def claude_tool_resolves(entry: str) -> bool:
     (:data:`_CLAUDE_TOOL_SHAPE`) -- which covers every built-in, the ``Task``
     alias and the ``Name(spec)`` form. Generous on purpose: this decides
     whether to *warn*, and a false warning on a working subagent is worse
-    than a quiet one on a misspelled ``Raed``.
+    than a quiet one on a made-up ``ReadFile``.
     """
     return (entry == "*" or entry.startswith(CLAUDE_MCP_PREFIX)
             or _CLAUDE_TOOL_SHAPE.match(entry) is not None)
