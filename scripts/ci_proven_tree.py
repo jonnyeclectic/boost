@@ -15,9 +15,13 @@ only when all three facts hold:
 2. that head's newest ``ci`` run, on the ``pull_request`` event, is a
    first-attempt run that concluded ``success``;
 3. the newest completed whole-codebase run on ``main`` (``schedule`` or
-   ``workflow_dispatch``, whichever is newer) concluded ``success``. This is the
-   backstop for what a diff-scoped PR gate cannot see: a red nightly turns every
-   push back into a full run until it is green again.
+   ``workflow_dispatch``, whichever is newer) concluded ``success`` and was
+   created at most 48 hours before now. This is the backstop for what a
+   diff-scoped PR gate cannot see: a red nightly turns every push back into a
+   full run until it is green again, and so does a *missing* one. The age bound
+   is what makes "green" mean "recently": without it, a nightly that quietly
+   stopped (workflow disabled, schedules dropped) would keep authorising skips on
+   a months-old result. 48 hours tolerates one missed night and not two.
 
 THE DIRECTION IS THE WHOLE POINT. A wrong "skip" ships code no mutation run has
 seen; a wrong "run" costs one mutation run. So every fact that is unknown,
@@ -41,6 +45,13 @@ shape gives ``true``. Concretely:
   the cost of reading it as unproven is one extra mutation run. A run object that
   lacks one of those fields yields a value ``decide`` rejects; absence is never
   defaulted into "fine".
+* The nightly's age is judged against ``now``, which is injectable (``decide``'s
+  ``now=``, the CLI's ``--now``) so tests do not depend on the day they run;
+  production never passes it. A ``created_at`` that is missing, unparseable or
+  without a timezone makes the age unknown, and unknown means a full run. A
+  ``created_at`` more than a few minutes in the *future* is also refused: skew
+  between GitHub's clock and the runner's is seconds, and anything larger is a
+  corrupt fact rather than a fresh run.
 * Redirects are refused. ``urllib`` re-sends the ``Authorization`` header to a
   redirect target, and nothing here should ever be sent anywhere but
   ``api.github.com``.
@@ -65,6 +76,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import sys
@@ -72,7 +84,7 @@ import urllib.error
 import urllib.request
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, NoReturn
 
 # A literal https prefix: the URL is never built from a scheme or host that
@@ -87,6 +99,14 @@ TIMEOUT = 15
 # The nightly and the manual dispatch are the two events that run the whole
 # codebase; whichever finished last is the current state of "everything".
 WHOLE_CODEBASE_EVENTS = ("schedule", "workflow_dispatch")
+
+# A nightly older than this does not count as "recent". 48 h = one missed night
+# tolerated, two not; "more than" means exactly 48 h is still fresh.
+MAX_NIGHTLY_AGE = timedelta(hours=48)
+
+# How far ahead of the runner's clock a run's created_at may be before it is
+# treated as corrupt rather than as clock skew.
+CLOCK_SKEW = timedelta(minutes=5)
 
 # How many per-candidate reasons / characters one reason line may carry.
 MAX_REASONS = 5
@@ -119,6 +139,18 @@ class Candidate:
     run_event: str = "pull_request"
     run_head_sha: str | None = None     # None: the run is for ``head_sha``
     run_attempt: int = 1
+
+
+@dataclass(frozen=True)
+class Nightly:
+    """The newest completed whole-codebase run: how it ended, and when it began.
+
+    ``created_at`` is an aware datetime, or ``None`` when the run's own value was
+    missing, unparseable or had no timezone. ``decide`` never skips on ``None``.
+    """
+
+    conclusion: str | None
+    created_at: datetime | None
 
 
 @dataclass(frozen=True)
@@ -161,9 +193,34 @@ def _judge(merge_tree: str, cand: Candidate) -> tuple[bool, str]:
     return True, "%s succeeded on this exact tree" % where
 
 
+def _hours(delta: timedelta) -> str:
+    """Hours, rounded UP to a tenth: 48 h and 1 s reads 48.1, never a fresh-looking 48."""
+    tenths = math.ceil(abs(delta.total_seconds()) / 360)
+    return ("%.1f" % (tenths / 10)).removesuffix(".0")
+
+
+def _age_problem(created_at: datetime | None, now: datetime) -> str | None:
+    """Why a nightly created at ``created_at`` is not recent enough, or None."""
+    if created_at is None:
+        return "nightly age unknown (created_at missing or unparseable)"
+    age = now - created_at
+    if age > MAX_NIGHTLY_AGE:
+        return "nightly stale (%sh)" % _hours(age)
+    if age < -CLOCK_SKEW:
+        return "nightly created_at is in the future (%sh ahead of this clock)" % _hours(age)
+    return None
+
+
 def decide(merge_tree: str, candidates: list[Candidate],
-           last_whole: str | None) -> Decision:
-    """The pure decision: skip only when every fact is known and green."""
+           last_whole: str | Nightly | None, now: datetime | None = None) -> Decision:
+    """The pure decision: skip only when every fact is known and green.
+
+    ``last_whole`` is what ``gather`` returns, a ``Nightly``, whose age is judged
+    against ``now`` (the real clock when omitted). A bare conclusion string is
+    also accepted -- the brief's original form -- and is judged on the
+    conclusion alone: the caller then owns the freshness of what it passes.
+    ``main`` always goes through ``gather``.
+    """
     reasons: list[str] = []
     winner: Candidate | None = None
     if not isinstance(merge_tree, str) or not merge_tree:
@@ -177,22 +234,29 @@ def decide(merge_tree: str, candidates: list[Candidate],
                 winner = cand
                 break
             reasons.append(why)
+    if len(reasons) > MAX_REASONS:      # the nightly's reasons below are never cut
+        reasons = [*reasons[:MAX_REASONS], "and %d more" % (len(reasons) - MAX_REASONS)]
 
-    if last_whole is None:
+    if isinstance(last_whole, Nightly):
+        conclusion = last_whole.conclusion
+        age_problem = _age_problem(
+            last_whole.created_at, datetime.now(UTC) if now is None else now)
+    else:
+        conclusion, age_problem = last_whole, None
+    if conclusion is None:
         reasons.append("no completed nightly or dispatch whole-codebase run on main yet")
-    elif last_whole != "success":
-        reasons.append("the latest whole-codebase run on main concluded %s" % last_whole)
+    elif conclusion != "success":
+        reasons.append("the latest whole-codebase run on main concluded %s" % conclusion)
+    if age_problem is not None:
+        reasons.append(age_problem)
 
-    if winner is not None and last_whole == "success":
+    if winner is not None and conclusion == "success" and age_problem is None:
         return Decision(
             True,
             "tree %s is PR head %s's tree: ci run %s succeeded on it, and the "
             "latest whole-codebase run on main succeeded" % (
                 merge_tree[:12], winner.head_sha[:12], winner.run_id),
             winner.run_id)
-
-    if len(reasons) > MAX_REASONS:
-        reasons = [*reasons[:MAX_REASONS], "and %d more" % (len(reasons) - MAX_REASONS)]
     return Decision(False, "; ".join(reasons), None)
 
 
@@ -227,13 +291,24 @@ def _runs(listing: Any) -> list[dict[str, Any]]:
     return found
 
 
+def _parse_when(value: Any) -> datetime | None:
+    """An aware datetime from an ISO-8601 string, or None for anything else.
+
+    A timestamp without a timezone is refused rather than assumed to be UTC.
+    """
+    if not isinstance(value, str):
+        return None
+    try:
+        when = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return when if when.tzinfo is not None else None
+
+
 def _run_key(run: dict[str, Any]) -> tuple[datetime, int]:
-    created = run.get("created_at")
-    if not isinstance(created, str):
-        raise ValueError("a run has no created_at, so runs cannot be ordered")
-    when = datetime.fromisoformat(created)          # ValueError if unparseable
-    if when.tzinfo is None:
-        raise ValueError("created_at %r has no timezone" % created)
+    when = _parse_when(run.get("created_at"))
+    if when is None:
+        raise ValueError("a run has no usable created_at, so runs cannot be ordered")
     ident = run.get("id")
     return when, ident if _is_int(ident) else 0
 
@@ -272,8 +347,8 @@ def _candidate(api: Api, head: str) -> Candidate:
         run_attempt=attempt if _is_int(attempt) else 0)
 
 
-def _last_whole(api: Api) -> str | None:
-    """Conclusion of the newest completed ``schedule``/``workflow_dispatch`` run.
+def _last_whole(api: Api) -> Nightly | None:
+    """The newest completed ``schedule``/``workflow_dispatch`` run, or None.
 
     Two queries, ``per_page=1`` each, because GitHub's ``event`` filter takes one
     value. An exception from either propagates (see the module docstring); an
@@ -298,11 +373,15 @@ def _last_whole(api: Api) -> str | None:
     conclusion = newest.get("conclusion")
     if (status is not None and status != "completed") or not isinstance(conclusion, str) or not conclusion:
         return None
-    return conclusion
+    return Nightly(conclusion, _parse_when(newest.get("created_at")))
 
 
-def gather(api: Api, sha: str) -> tuple[str, list[Candidate], str | None]:
+def gather(api: Api, sha: str) -> tuple[str, list[Candidate], Nightly | None]:
     """Collect (merge commit tree, one Candidate per associated PR head, nightly).
+
+    The nightly is a ``Nightly`` (conclusion plus creation time), or None when no
+    whole-codebase run has completed. Age is not judged here: ``decide`` does it,
+    against an injectable clock.
 
     ``api(path)`` returns parsed JSON for ``repos/<repo>/<path>``. Raises on any
     transport or shape problem; see the module docstring for why nothing is
@@ -372,6 +451,13 @@ class _Parser(argparse.ArgumentParser):
         raise UsageError(message)
 
 
+def _instant(text: str) -> datetime:
+    when = _parse_when(text)
+    if when is None:
+        raise argparse.ArgumentTypeError("needs an ISO-8601 timestamp with a timezone")
+    return when
+
+
 def _oneline(text: str) -> str:
     """One bounded line: no newline of any kind, no control character."""
     flat = " ".join("".join(c if c.isprintable() else " " for c in text).split())
@@ -384,6 +470,9 @@ def _decide_for(argv: list[str] | None, api: Api | None, env: Mapping[str, str])
         parser = _Parser(prog="ci_proven_tree.py", description="Decide whether a push to "
                          "main may skip the full mutation run.")
         parser.add_argument("--sha", required=True, help="the commit that landed on main")
+        parser.add_argument("--now", type=_instant, default=None,
+                            help="ISO-8601 instant to age the nightly against "
+                                 "(tests only; default: the real clock)")
         args = parser.parse_args(argv)
         if not _COMMIT.fullmatch(args.sha):
             return Decision(False, "--sha is not a full lower-case commit id")
@@ -394,7 +483,7 @@ def _decide_for(argv: list[str] | None, api: Api | None, env: Mapping[str, str])
             if not _REPO.fullmatch(repo):
                 return Decision(False, "GITHUB_REPOSITORY is unset or malformed")
             api = make_api(repo, token)
-        return decide(*gather(api, args.sha))
+        return decide(*gather(api, args.sha), now=args.now)
     except Exception as exc:
         detail = _oneline(str(exc))
         print("ci_proven_tree: %s: %s" % (type(exc).__name__,
