@@ -217,12 +217,13 @@ def _is_core_module(p: str) -> bool:
     )
 
 
-def diff_scope(
-    changed_paths: list[str],
-    read: Callable[[str, str], str | None],
-    deps: dict[str, list[str]],
-) -> list[str]:
-    """Sorted qualified changed functions plus their direct callers."""
+def changed_scope(
+    changed_paths: list[str], read: Callable[[str, str], str | None]
+) -> set[str]:
+    """Qualified functions of boost_cli/core/*.py new or changed at head.
+
+    The half of the scope that needs no stats; deleted ones are excluded.
+    """
     funcs: set[str] = set()
     for p in changed_paths:
         if _is_core_module(p):
@@ -230,6 +231,16 @@ def diff_scope(
                 qualify(p, k)
                 for k in changed_functions(read("base", p), read("head", p))
             }
+    return funcs
+
+
+def diff_scope(
+    changed_paths: list[str],
+    read: Callable[[str, str], str | None],
+    deps: dict[str, list[str]],
+) -> list[str]:
+    """Sorted qualified changed functions plus their direct callers."""
+    funcs = changed_scope(changed_paths, read)
     return sorted(funcs | direct_callers(deps, funcs))
 
 

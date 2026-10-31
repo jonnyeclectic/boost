@@ -31,7 +31,8 @@ mutants of the functions a PR changed plus their direct callers, see
 ``mutation_diff.py``). ``gate_set`` names the set the required ``mutation``
 check scores. Two plans mean "nothing to score": ``null`` (``none``: nothing
 mutable changed) and ``"diff"`` with ``sets.diff.shards == []`` (core changed,
-but no function body did, or the ones that did have no mutants left).
+but no function body did). A changed function with no mutants plans ``full``:
+mutmut records no callers for it, so the diff scope cannot be known.
 ``matrix`` and ``patterns`` are generic over set names on purpose, so a new set
 needs a planner change and nothing else.
 
@@ -214,10 +215,12 @@ def diff_plan(root: Path, base: str, head: str, stats: Path, *,
     """The diff-scoped plan for ``base..head``, or the full one when forced.
 
     A full-run trigger (``mutation_diff.full_run_reasons``) returns exactly
-    the ``full`` plan with those reasons. Otherwise every mutant of every
-    in-scope function is counted with mutmut's own generator at ``head`` and
-    packed by measured time; ``--shadow`` also carries the full set and gates
-    on it, so the two can be compared on one SHA before the diff gate binds.
+    the ``full`` plan with those reasons, and so does a changed function that
+    has no mutants (its callers cannot be known, see below). Otherwise every
+    mutant of every in-scope function is counted with mutmut's own generator
+    at ``head`` and packed by measured time; ``--shadow`` also carries the
+    full set and gates on it, so the two can be compared on one SHA before
+    the diff gate binds.
     """
     md = _load_diff()
     read = git_reader(root, base, head)
@@ -230,6 +233,7 @@ def diff_plan(root: Path, base: str, head: str, stats: Path, *,
     # rather than under-scope (a KeyError fails the planner, so `mutation`).
     deps = json.loads(Path(stats).read_text(encoding="utf-8"))["function_dependencies"]
     scope = md.diff_scope(changed, read, deps)
+    edited = md.changed_scope(changed, read)
 
     by_file: dict[str, list[tuple[str, str]]] = {}
     for q in scope:
@@ -248,6 +252,21 @@ def diff_plan(root: Path, base: str, head: str, stats: Path, *,
                 if per_function.get(mangled):
                     counts[q] = per_function[mangled]
 
+    # Callers come only from mutmut's `function_dependencies`, and mutmut adds
+    # an edge only when a trampolined function is called -- and trampolines
+    # only a function that has mutants. A changed function with none (any
+    # decorator but a lone @staticmethod/@classmethod, e.g. @property or
+    # @contextmanager, or a body with nothing to mutate) is therefore never a
+    # key there: its direct callers would silently drop out of the scope, and
+    # a plan of "none with mutants" would pass. Its callers are unknown, so
+    # the whole run is the scope. (`changed_functions` already leaves out a
+    # function deleted at head; a caller with no mutants needs nothing.)
+    blind = sorted(q for q in edited if q not in counts)
+    if blind:
+        return full_plan(root, shards, [
+            "changed function has no mutants, so its callers are unknown: %s" % q
+            for q in blind])
+
     bins = md.pack_functions(counts, md.ms_per_mutant(root, list(counts)),
                              per_shard=per_shard or md.PER_SHARD)
     # `matrix` keeps an empty shard on purpose (it would be a slice of the full
@@ -257,11 +276,11 @@ def diff_plan(root: Path, base: str, head: str, stats: Path, *,
     # from failing that shard.
     shard_patterns_ = [[md.pattern(q) for q in b] for b in bins if b]
     total = sum(counts.values())
+    # Every changed function has mutants by now (see `blind`), so a scope
+    # with none is one where no function changed.
     if total:
         why = ("diff scope: %d mutants in %d functions (changed + direct callers), "
                "%d shards" % (total, len(counts), len(shard_patterns_)))
-    elif scope:
-        why = "diff scope: %d functions in scope, none with mutants" % len(scope)
     else:
         why = "diff scope: no boost_cli/core function changed"
     plan: dict[str, Any] = {

@@ -339,16 +339,80 @@ def test_diff_plan_method_names_survive_into_patterns(tmp_path, git_repo):
 @pytest.mark.usefixtures("needs_mutmut")
 def test_diff_plan_new_file_and_deleted_function(tmp_path, git_repo):
     head = git_repo.head({
-        "boost_cli/core/m.py": _M_BASE.replace(
-            "def c(x):\n    return x - 1\n", "def c(x):\n    pass\n"),
+        "boost_cli/core/m.py": _M_BASE.replace("def c(x):\n    return x - 1\n", ""),
         "boost_cli/core/n.py": "def z(y):\n    return y == 1\n",
     })
     plan = plan_diff(tmp_path, git_repo, head)
     patterns = [p for shard in plan["sets"]["diff"]["shards"] for p in shard]
-    # c changed but has no mutants left: listed in scope, never a pattern
-    # (a pattern matching nothing makes mutmut assert and the shard die).
-    assert "boost_cli.core.m.x_c" in plan["sets"]["diff"]["functions"]
+    # c is gone at head: nothing of it to mutate and no caller to find, so it
+    # is out of scope, and not a reason to run everything either.
+    assert plan["gate_set"] == "diff"
+    assert plan["sets"]["diff"]["functions"] == ["boost_cli.core.n.x_z"]
     assert patterns == ["boost_cli.core.n.x_z__mutmut_*"]
+
+
+# A function mutmut makes no mutants of is never trampolined, so the stats'
+# `function_dependencies` never names it: its callers are invisible, and a
+# scope of "the changed function, none with mutants" planned 0 shards and
+# passed. Each shape below exists in boost_cli/core today.
+_UNTRAMPOLINED = (
+    "import contextlib\n\n\n"
+    "class Tap:\n    @property\n    def path(self):\n        return 'a'\n\n\n"
+    "@contextlib.contextmanager\ndef lock():\n    yield\n\n\n"
+    "def bare():\n    pass\n\n\n"
+    "def install(t):\n    with lock():\n        bare()\n        return t.path + 'x'\n"
+)
+
+
+@pytest.mark.usefixtures("needs_mutmut")
+@pytest.mark.parametrize("edit, qualified", [
+    (("return 'a'", "return 'b'"), "boost_cli.core.n.xǁTapǁpath"),
+    (("    yield\n", "    yield None\n"), "boost_cli.core.n.x_lock"),
+    (("    pass\n", "    return None\n"), "boost_cli.core.n.x_bare"),
+])
+def test_a_changed_function_with_no_mutants_plans_the_full_run(
+        tmp_path, git_repo, edit, qualified):
+    md = mp._load_diff()
+    base = git_repo.head({"boost_cli/core/n.py": _UNTRAMPOLINED})
+    head = git_repo.head({"boost_cli/core/n.py": _UNTRAMPOLINED.replace(*edit)})
+    with md.mutmut_config(git_repo.root):
+        counts = md.mutant_counts("boost_cli/core/n.py", _UNTRAMPOLINED.replace(*edit))
+    # The caller has mutants; the changed function has none, and the stats
+    # (as a real run writes them) have no key for it.
+    assert counts.get("x_install", 0) > 0
+    assert qualified.rpartition(".")[2] not in counts
+    out = tmp_path / "plan.json"
+    assert mp.main(["diff", "--base", base, "--head", head,
+                    "--stats", str(git_repo.stats), "--root", str(git_repo.root),
+                    "--shards", "2", "--out", str(out)]) == 0
+    plan = json.loads(out.read_text(encoding="utf-8"))
+    assert plan["gate_set"] == "full"
+    assert plan["reasons"] == [
+        "changed function has no mutants, so its callers are unknown: %s" % qualified]
+    assert list(plan["sets"]) == ["full"]
+
+
+@pytest.mark.usefixtures("needs_mutmut")
+def test_a_deleted_function_and_a_caller_with_no_mutants_need_nothing(
+        tmp_path, git_repo):
+    # `bare` deleted at head is no reason; nor is a caller of a changed
+    # function that has no mutants of its own (`idle`, unchanged).
+    idle = "def idle():\n    pass\n\n\n"
+    base = git_repo.head({"boost_cli/core/n.py": "def bare():\n    pass\n\n\n"
+                          + idle + "def wrap(x):\n    return x\n"})
+    head = git_repo.head({"boost_cli/core/n.py": idle
+                          + "def wrap(x):\n    return x + 1\n"})
+    git_repo.stats.write_text(json.dumps({"function_dependencies": {
+        "boost_cli.core.n.x_wrap": ["boost_cli.core.n.x_idle"]}}), encoding="utf-8")
+    out = tmp_path / "plan.json"
+    assert mp.main(["diff", "--base", base, "--head", head,
+                    "--stats", str(git_repo.stats), "--root", str(git_repo.root),
+                    "--out", str(out)]) == 0
+    plan = json.loads(out.read_text(encoding="utf-8"))
+    assert plan["gate_set"] == "diff"
+    assert plan["sets"]["diff"]["functions"] == ["boost_cli.core.n.x_idle",
+                                                 "boost_cli.core.n.x_wrap"]
+    assert list(plan["sets"]["diff"]["counts"]) == ["boost_cli.core.n.x_wrap"]
 
 
 @pytest.mark.usefixtures("needs_mutmut")
