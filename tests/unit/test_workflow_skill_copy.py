@@ -1053,6 +1053,26 @@ class TestCopyLinksThroughSync:
         plan = store.sync_plan()
         assert plan["missing_copy_links"] == plan["stale_copy_links"] == []
 
+    def test_plan_rows_follow_the_workflow_names(self, tap):
+        store.install(_wf(tap, rel="agents/zeta.md", name="zeta"))
+        store.install(_wf(tap))
+        for name in ("zeta", "reviewer"):
+            (_agent_dir("windsurf") / name).unlink()
+            (_agent_dir("claude-code") / name).symlink_to(
+                paths.store_dir() / name)
+        plan = store.sync_plan()
+        assert plan["missing_copy_links"] == [("reviewer", "windsurf"),
+                                              ("zeta", "windsurf")]
+        assert plan["stale_copy_links"] == [("reviewer", "claude-code"),
+                                            ("zeta", "claude-code")]
+        assert store.sync_preview(plan)[-4:] == [
+            "would link workflow reviewer's skill copy → windsurf",
+            "would link workflow zeta's skill copy → windsurf",
+            "would unlink workflow reviewer's skill copy from claude-code, "
+            "which has the workflow's own file",
+            "would unlink workflow zeta's skill copy from claude-code, "
+            "which has the workflow's own file"]
+
     def test_apply_links_only_what_the_plan_named(self, tap, tmp_path):
         """The user's own link at windsurf is not a fault doctor counts, so
         repairing antigravity must not report it -- or exit 1 over it."""
