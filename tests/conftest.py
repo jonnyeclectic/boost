@@ -16,6 +16,7 @@ import sys
 import tempfile
 from pathlib import Path
 
+import _tapped_support
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -427,21 +428,6 @@ def mutant_address_cap(mutant: str | None, mapped: int | None,
     return mapped + headroom
 
 
-def _under_mutmut() -> bool:
-    """Whether mutmut is driving this run -- any non-empty ``MUTANT_UNDER_TEST``.
-
-    mutmut 3.8.0 sets the variable around every pass that runs tests: ``stats``
-    while it records which test reaches which function, ``fail`` for its
-    forced-failure check, and the mutant's own name (``<module>.<name>__mutmut_N``)
-    in each mutant's worker; it sets ``""`` for the clean pass that runs no
-    mutant, and that pass has nothing to attribute, so it counts as an ordinary
-    run (``mutmut/__main__.py``, ``mutmut/workers/isolation.py``). Read from
-    ``os.environ`` rather than through mutmut's accessor: the suite must not
-    import mutmut, which is not in the ordinary test requirements.
-    """
-    return bool(os.environ.get("MUTANT_UNDER_TEST"))
-
-
 def _mapped_bytes() -> int | None:
     """This process's virtual size from ``/proc/self/statm``, or ``None``."""
     try:
@@ -470,6 +456,11 @@ _RELOCATING_ENV = ("BOOST_HOME", "BOOST_AGENTS_STORE", "CODEX_HOME",
                    "CLAUDE_CONFIG_DIR", "CLAUDE_CODE_PLUGIN_CACHE_DIR")
 
 _SESSION_HOME: list[Path] = []
+
+#: ``os.environ`` as ``pytest_configure`` leaves it -- the session HOME in, the
+#: git auto-maintenance setting in, no test run yet. Filled there, once per
+#: process (an xdist worker configures for itself).
+_SESSION_ENV: dict[str, str] = {}
 
 
 def _isolate_home() -> Path:
@@ -576,6 +567,9 @@ def pytest_configure(config):
     del config
     _isolate_home()
     _disable_git_auto_maintenance()
+    # What a test starts from, before any test has patched anything: the child
+    # that builds the tapped-HOME template is given this, not the live environ.
+    _SESSION_ENV.update(os.environ)
     _cap_mutant_memory()
     if not os.environ.get("MUTANT_UNDER_TEST"):
         return          # not a mutmut run — nothing to normalize
@@ -1063,7 +1057,27 @@ def signer():
 
 
 @pytest.fixture(scope="session")
-def tapped_template(tmp_path_factory, fixture_tap_src):
+def pristine_env():
+    """A copy of the environment the session started from (see ``_SESSION_ENV``)."""
+    return dict(_SESSION_ENV)
+
+
+@pytest.fixture()
+def sandbox_env_delta(tmp_path, monkeypatch):
+    """What `_sandbox_home` changes in ``os.environ``: ``{name: new value or None}``.
+
+    The template's build environment (:data:`_tapped_support.SANDBOX_ENV`) is a
+    second copy of what `sandbox` sets; this is the ground truth it is compared
+    with, taken by running `_sandbox_home` itself.
+    """
+    before = dict(os.environ)
+    _sandbox_home(tmp_path, monkeypatch)
+    return {k: os.environ.get(k) for k in {*before, *os.environ}
+            if before.get(k) != os.environ.get(k)}
+
+
+@pytest.fixture(scope="session")
+def tapped_template(tmp_path_factory, fixture_tap_src, pristine_env):
     """A HOME as ``boost tap fixture_tap_src`` leaves it, built once per worker.
 
     ``tapped`` ran that command for every test that asked: a ``git clone``, a
@@ -1076,23 +1090,23 @@ def tapped_template(tmp_path_factory, fixture_tap_src):
     (:func:`restore_tapped_home`). ``installed`` still runs its ``install`` per
     test: that is a write the test may then change, not a shared starting point.
 
-    The HOME is made by the real command, in-process, under the environment
-    ``sandbox`` gives a test (:func:`_sandbox_home`). In-process, not a
-    subprocess, because mutmut's stats run records trampoline hits in one set
-    and hands the whole set to whichever test's teardown comes next
-    (``mutmut.runners.harness.run_stats``): a subprocess would hide
-    ``registry.add``, ``catalog.rebuild_tap`` and ``gitutil.clone_shallow``
-    from every test, leaving their mutants "not checked by any test".
+    The HOME is made by the real command in a **child process** with an
+    environment spelled out in :mod:`_tapped_support` (the sandbox's variables
+    over the session's starting environment), not in this process. This fixture
+    is first requested from inside whichever test reaches ``tapped`` first
+    (``tapped`` asks for it lazily, so mutmut never builds one), and it is then
+    cached for the worker: built in-process it saw that test's live patches --
+    a fixture stubbing ``catalog.scan_dir`` ahead of ``tapped`` cached an empty
+    catalog, and an unrelated later test failed ``0 > 0`` depending on which
+    test the scheduler dealt a worker first. A child process cannot see them.
+    There is no mutmut reason left for building in-process: mutmut never uses
+    this fixture (``tapped`` taps per test while it drives), and the clean pass
+    that does records nothing.
 
-    What in-process does *not* keep is the old reach: those functions used to
-    be credited to every test using ``tapped``, and would now be credited to the
-    one test that happened to build the template plus the tests that call them
-    directly, so a mutant there that only a downstream reader of the tapped
-    state (search, list, info) caught would no longer be run against that
-    reader. So when mutmut is driving (:func:`_under_mutmut`) ``tapped`` does
-    not use this fixture at all and taps per test, as it did before -- the
-    speed-up is for the ``tests`` job, and the mutation job keeps the
-    attribution its gate was calibrated on.
+    The result is checked before it is returned -- the tap row in
+    ``config.json``, a non-empty catalog cache, a clone whose HEAD is the commit
+    the cache describes -- and a fixture that raises is not cached as a value, so
+    a bad template fails loudly everywhere it is asked for.
 
     Nothing in the HOME names its own location. Checked against a real tap:
     ``config.json`` and the catalog cache carry the *source* repo's path (this
@@ -1105,61 +1119,20 @@ def tapped_template(tmp_path_factory, fixture_tap_src):
     ``tmp_path_factory`` is per xdist worker (``.../popen-gwN``), so workers
     never share or race on a template; each builds its own on first use.
     """
-    import io
-    from contextlib import redirect_stderr, redirect_stdout
-
-    from boost_cli.cli import main
-    from boost_cli.core import logs
-
-    root = tmp_path_factory.mktemp("tapped-template")
-    out, err = io.StringIO(), io.StringIO()
-    with pytest.MonkeyPatch.context() as mp:
-        home = _sandbox_home(root, mp)
-        # `logs.configure` is once-per-process and binds its file handler to
-        # the HOME that is current then. Reset on the way in, so the tap logs
-        # to the template rather than to wherever a previous test left the
-        # handler; and on the way out, because a handler left bound would
-        # append every later command to the *template's* boost.log -- the one
-        # file no test may write. `_reset_logging` does the same at the start
-        # of each test, but that runs after this session fixture and is an
-        # ordering this should not depend on.
-        logs.reset()
-        try:
-            with redirect_stdout(out), redirect_stderr(err):
-                try:
-                    rc = main(["tap", str(fixture_tap_src)])
-                except SystemExit as e:
-                    rc = e.code if isinstance(e.code, int) else 1
-        finally:
-            logs.reset()
-    assert not rc, ("boost tap %s -> rc=%r\n--- stdout ---\n%s--- stderr ---\n%s"
-                    % (fixture_tap_src, rc, out.getvalue(), err.getvalue()))
-    return home
+    return _tapped_support.build_tapped_home(
+        tmp_path_factory.mktemp("tapped-template"), fixture_tap_src,
+        pristine_env, ROOT)
 
 
 @pytest.fixture()
 def restore_tapped_home(tapped_template):
     """A function copying the tapped template into a directory; returns it.
 
-    ``copytree`` with ``symlinks=True`` and the default ``copy2``: a link stays
-    a link rather than becoming a file, and file times survive -- the refresh
-    marker and the catalog cache are read by mtime
-    (``registry.refresh_age_days``, ``catalog._ENTRY_CACHE``'s stamp), so a
-    copy stamped "now" would make a fresh template look newer than the clone
-    it describes. Bytes, not hard links: a local ``git clone`` hard-links its
-    objects, and a link shared with the template would let one test's ``untap``
-    delete the next test's clone.
-
-    What a copy cannot keep is git's index stat data (inode and ctime): plumbing
-    such as ``git diff-files`` calls the copied tree modified until something
-    refreshes the index. Porcelain re-reads the content and finds it clean, and
-    nothing in ``boost_cli`` calls the plumbing (``gitutil.narrow`` runs
-    ``update-index --refresh`` itself for this reason).
+    See :func:`_tapped_support.copy_template` for what the copy keeps (links,
+    file times) and what it cannot (git's index stat data).
     """
     def restore(dest):
-        dest = Path(dest)
-        shutil.copytree(tapped_template, dest, symlinks=True, dirs_exist_ok=True)
-        return dest
+        return _tapped_support.copy_template(tapped_template, dest)
     return restore
 
 
@@ -1171,10 +1144,10 @@ def tapped(request, boost, sandbox, fixture_tap_src):
     in two cases that run the real command, as this fixture did before the
     template existed:
 
-    * **mutmut is driving the run** (:func:`_under_mutmut`). mutmut maps a
-      mutant to the tests that reached its function in the stats pass, and
-      hands a pass's hits to the one test whose teardown comes next. A copy
-      reaches none of ``registry.add``, ``catalog.rebuild_tap`` or
+    * **mutmut is driving the run** (:func:`_tapped_support.under_mutmut`).
+      mutmut maps a mutant to the tests that reached its function in the stats
+      pass, and hands a pass's hits to the one test whose teardown comes next.
+      A copy reaches none of ``registry.add``, ``catalog.rebuild_tap`` or
       ``gitutil.clone_shallow``, so behind the template those mutants would
       keep one ``tapped`` test instead of ~117 unit ones, and any a downstream
       reader (search, list, info) alone caught could survive. The mutation gate
@@ -1189,14 +1162,16 @@ def tapped(request, boost, sandbox, fixture_tap_src):
     reaches for it, and under mutmut that would tap a template nothing reads,
     in a run where the tap is the code under mutation.
     """
+    if _tapped_support.under_mutmut() or any(sandbox.iterdir()):
+        boost("tap", fixture_tap_src)
+        return fixture_tap_src
     from boost_cli.core import paths
+    # Only the copy lands files at a place it chose, so only it can miss: the
+    # real tap goes wherever boost resolves, as it always did.
     assert paths.boost_home() == sandbox / ".boost", (
         "a copied tap lands under the sandbox HOME, but boost state resolves"
         " to %s -- BOOST_HOME was set before `tapped` ran" % paths.boost_home())
-    if _under_mutmut() or any(sandbox.iterdir()):
-        boost("tap", fixture_tap_src)
-    else:
-        request.getfixturevalue("restore_tapped_home")(sandbox)
+    request.getfixturevalue("restore_tapped_home")(sandbox)
     return fixture_tap_src
 
 

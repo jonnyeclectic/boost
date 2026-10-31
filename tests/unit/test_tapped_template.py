@@ -17,17 +17,21 @@ as it did before the template existed -- and that is pinned here too.
 """
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
-import conftest
+import _tapped_support
 import pytest
 
 from boost_cli.core import catalog, logs, registry
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 # These pin conftest plumbing, which mutmut never mutates, but each one taps (or
 # builds the template), so under mutmut they would join the test set of every
@@ -35,7 +39,7 @@ from boost_cli.core import catalog, logs, registry
 # mutmut turns off, so in its stats run they would fail and abort the run. The
 # clean-test pass sets the variable to "" and does run them.
 pytestmark = pytest.mark.skipif(
-    conftest._under_mutmut(),
+    _tapped_support.under_mutmut(),
     reason="mutmut run: `tapped` taps per test, so the template is not in play")
 
 
@@ -151,8 +155,12 @@ class TestTheTemplateDoesNotNameItself:
         # the template, and the tap would half-work -- listed from the copy,
         # read from the original. Both spellings, because macOS resolves a
         # tmp dir under /var to /private/var.
-        needles = {str(tapped_template).encode(),
-                   str(tapped_template.resolve()).encode()}
+        # ...and as JSON writes it: on Windows `C:\\Users\\x` is stored with its
+        # backslashes doubled, which the plain spelling never matches, so the
+        # test would pass there without looking at anything.
+        paths = {str(tapped_template), str(tapped_template.resolve())}
+        needles = {p.encode() for p in paths} | {
+            json.dumps(p)[1:-1].encode() for p in paths}
         hits = [p.relative_to(tapped_template).as_posix()
                 for p in tapped_template.rglob("*")
                 if p.is_file() and not p.is_symlink()
@@ -205,6 +213,24 @@ class TestNothingReachesTheTemplate:
                 p = Path(top) / name
                 if p.is_symlink():
                     assert not p.resolve().is_relative_to(root), p
+
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="creating a symlink needs a privilege there")
+    def test_the_copy_keeps_a_link_a_link(self, tmp_path):
+        # The real template holds no symlink today (`.agents/skills` is empty),
+        # so the test above walks nothing and `symlinks=True` is pinned by no
+        # one. Plant the shapes a template could grow: a relative link, and a
+        # dangling one -- which `symlinks=False` turns into a copy error.
+        template = tmp_path / "template"
+        (template / "d").mkdir(parents=True)
+        (template / "d" / "file").write_text("x", encoding="utf-8")
+        (template / "rel").symlink_to("d/file")
+        (template / "dangling").symlink_to("nowhere")
+        copy = _tapped_support.copy_template(template, tmp_path / "copy")
+        assert (copy / "rel").is_symlink()
+        assert os.readlink(copy / "rel") == "d/file"
+        assert (copy / "dangling").is_symlink()
+        assert not (copy / "d" / "file").samefile(template / "d" / "file")
 
     def test_editing_the_copy_leaves_the_template_alone(
             self, tapped, sandbox, boost, tapped_template, restore_tapped_home,
@@ -314,7 +340,7 @@ class TestMutmutTapsForRealAndEverythingElseCopies:
         "boost_cli.core.registry.x_add__mutmut_3"])
     def test_every_value_mutmut_drives_with_counts(self, monkeypatch, value):
         monkeypatch.setenv("MUTANT_UNDER_TEST", value)
-        assert conftest._under_mutmut() is True
+        assert _tapped_support.under_mutmut() is True
 
     @pytest.mark.parametrize("value", [None, ""])
     def test_unset_and_the_clean_pass_do_not(self, monkeypatch, value):
@@ -322,7 +348,7 @@ class TestMutmutTapsForRealAndEverythingElseCopies:
             monkeypatch.delenv("MUTANT_UNDER_TEST", raising=False)
         else:
             monkeypatch.setenv("MUTANT_UNDER_TEST", value)
-        assert conftest._under_mutmut() is False
+        assert _tapped_support.under_mutmut() is False
 
     def test_under_mutmut_the_tap_is_real_and_the_template_untouched(
             self, mutmut_stats, copies_into, tapped, sandbox, request):
@@ -349,3 +375,182 @@ class TestMutmutTapsForRealAndEverythingElseCopies:
         # "" means mutmut is running the suite with no mutant active, so there
         # is no attribution to protect -- the same as an ordinary pytest run.
         assert copies_into == [sandbox]
+
+
+class TestTheBuildCannotSeeTheRequestingTest:
+    """The template is cached for the worker; a test's patches last one test.
+
+    ``tapped`` asks for the template from inside the first test that reaches
+    it, so what that test (or a fixture listed before ``tapped``) has patched is
+    live when it is built. Built in-process, a fixture stubbing
+    ``catalog.scan_dir`` cached an empty catalog and a later, unrelated test
+    failed ``0 > 0``. The build is a child process with a built environment.
+    """
+
+    @pytest.fixture()
+    def patched(self, monkeypatch, tmp_path):
+        """Everything of this process's a build could pick up, patched."""
+        monkeypatch.setattr(catalog, "scan_dir", lambda *a, **k: [])
+        monkeypatch.setenv("BOOST_HOME", str(tmp_path / "decoy-boost-home"))
+        monkeypatch.setenv("PATH", str(tmp_path / "no-such-bin"))
+        monkeypatch.setenv("BOOST_LIVE_PATCH", "1")
+        return tmp_path / "decoy-boost-home"
+
+    def test_a_build_under_patches_equals_the_template(
+            self, patched, tmp_path, pristine_env, fixture_tap_src, request):
+        # The builder itself, called while the patches are live, so this does
+        # not depend on whether another test already built the template.
+        home = _tapped_support.build_tapped_home(
+            tmp_path / "built-under-patches", fixture_tap_src, pristine_env,
+            REPO_ROOT)
+        template = request.getfixturevalue("tapped_template")
+        cache = json.loads((home / ".boost/cache/fixture-tap.json").read_text(
+            encoding="utf-8"))
+        assert cache["skills"], "the stubbed scanner reached the child"
+        assert not patched.exists(), "BOOST_HOME reached the child"
+        assert cache["skills"] == json.loads(
+            (template / ".boost/cache/fixture-tap.json").read_text(
+                encoding="utf-8"))["skills"]
+        assert set(_fingerprint(home)) == set(_fingerprint(template))
+
+    def test_a_test_that_stubs_the_scanner_before_tapped_cannot_poison_it(
+            self, patched, fixture_tap_src, pristine_env, request):
+        # The reviewer's reproduction, through the fixtures. Whether this test
+        # is the one that builds the template depends on which test the worker
+        # ran first, so it can only fail when it is -- the test above is the
+        # one that does not depend on order.
+        #
+        # `fixture_tap_src` and `pristine_env` are named here although the body
+        # never uses them: the body asks for `tapped` dynamically, and a
+        # session fixture first requested from there is built under `patched`
+        # -- `fixture_tap_src` runs `make_fixture.py` with the live environment,
+        # so with PATH stubbed it failed, and the failure was cached for every
+        # later test on the worker. Named in the signature, pytest builds them
+        # before any function-scoped patch (a real `tapped` user gets that
+        # through `tapped`'s own signature).
+        request.getfixturevalue("tapped")
+        template = request.getfixturevalue("tapped_template")
+        sandbox = request.getfixturevalue("sandbox")
+        for home in (template, sandbox):
+            cache = json.loads((home / ".boost/cache/fixture-tap.json").read_text(
+                encoding="utf-8"))
+            assert cache["skills"], home
+
+    def test_the_child_environment_is_not_the_live_one(
+            self, patched, pristine_env, tmp_path):
+        env = _tapped_support.child_env(
+            pristine_env, tmp_path / "home", "file:///no-manifest", REPO_ROOT)
+        assert "BOOST_LIVE_PATCH" not in env
+        assert "BOOST_HOME" not in env
+        assert env["PATH"] == pristine_env["PATH"] != os.environ["PATH"]
+        assert env["HOME"] == str(tmp_path / "home")
+
+    def test_the_child_environment_is_what_the_sandbox_gives_a_test(
+            self, sandbox_env_delta, pristine_env, tmp_path):
+        # SANDBOX_ENV / SANDBOX_UNSET are a second copy of what `sandbox`
+        # sets. Compared against what `sandbox` really changed, so a variable
+        # added to one and not the other fails here and not as a template that
+        # differs from every test's HOME.
+        env = _tapped_support.child_env(
+            pristine_env, tmp_path / "home", "file:///no-manifest", REPO_ROOT)
+        per_test = {"HOME", "USERPROFILE", "BOOST_SHARD_MANIFEST"}  # tmp paths
+        differs = {k: (v, env.get(k)) for k, v in sandbox_env_delta.items()
+                   if k not in per_test and env.get(k) != v}
+        assert differs == {}
+        for name in _tapped_support.SANDBOX_UNSET:
+            assert name not in env
+        assert {k: env[k] for k in _tapped_support.SANDBOX_ENV} == \
+            _tapped_support.SANDBOX_ENV
+
+    def test_the_child_runs_git_with_auto_maintenance_off(self, pristine_env):
+        env = _tapped_support.child_env(
+            pristine_env, Path("h"), "file:///no-manifest", REPO_ROOT)
+        count = int(env["GIT_CONFIG_COUNT"])
+        pairs = {env["GIT_CONFIG_KEY_%d" % i]: env["GIT_CONFIG_VALUE_%d" % i]
+                 for i in range(count)}
+        assert pairs["maintenance.auto"] == "false"
+
+
+class TestABadTemplateFailsLoudly:
+    @pytest.fixture()
+    def home(self, restore_tapped_home, tmp_path):
+        return restore_tapped_home(tmp_path / "doctored-home")
+
+    @pytest.fixture()
+    def problems(self, home, fixture_tap_src, pristine_env, tmp_path):
+        env = _tapped_support.child_env(
+            pristine_env, home, "file:///no-manifest", REPO_ROOT)
+        return lambda: _tapped_support.check_tapped_home(
+            home, fixture_tap_src, env)
+
+    def test_a_good_template_has_no_problems(self, problems):
+        assert problems() == []
+
+    def test_a_missing_tap_row(self, home, problems):
+        (home / ".boost/config.json").write_text('{"taps": []}', encoding="utf-8")
+        assert any("no tap row" in p for p in problems())
+
+    def test_a_row_for_some_other_source(self, home, problems):
+        cfg = home / ".boost/config.json"
+        blob = json.loads(cfg.read_text(encoding="utf-8"))
+        blob["taps"][0]["url"] = "/somewhere/else"
+        cfg.write_text(json.dumps(blob), encoding="utf-8")
+        assert any("points at" in p for p in problems())
+
+    def test_a_catalog_with_nothing_in_it(self, home, problems):
+        # `boost tap` exiting 0 having catalogued nothing -- the failure that
+        # would otherwise show as dozens of tests finding no skills.
+        cache = home / ".boost/cache/fixture-tap.json"
+        blob = json.loads(cache.read_text(encoding="utf-8"))
+        blob["skills"] = []
+        cache.write_text(json.dumps(blob), encoding="utf-8")
+        assert any("lists no skills" in p for p in problems())
+
+    def test_a_missing_catalog(self, home, problems):
+        (home / ".boost/cache/fixture-tap.json").unlink()
+        assert any("unreadable" in p for p in problems())
+
+    def test_a_clone_without_a_head(self, home, problems):
+        (home / ".boost/repos/fixture-tap/.git/HEAD").unlink()
+        assert any("no HEAD" in p for p in problems())
+
+    def test_a_catalog_that_describes_another_commit(self, home, problems):
+        cache = home / ".boost/cache/fixture-tap.json"
+        blob = json.loads(cache.read_text(encoding="utf-8"))
+        blob["commit"] = "0" * 40
+        cache.write_text(json.dumps(blob), encoding="utf-8")
+        assert any("describes commit" in p for p in problems())
+
+    def test_a_failed_tap_raises_instead_of_returning_a_home(
+            self, tmp_path, pristine_env):
+        with pytest.raises(AssertionError, match="template is bad") as err:
+            _tapped_support.build_tapped_home(
+                tmp_path / "root", tmp_path / "not-a-repo", pristine_env,
+                REPO_ROOT)
+        assert "boost tap exited" in str(err.value)
+
+
+class TestTheSupportModuleIsSafeToImport:
+    def test_it_runs_nothing_at_import(self):
+        # A test module imports it at collection time, so a statement that
+        # does work -- or can raise -- would abort the run before one test.
+        tree = ast.parse(Path(_tapped_support.__file__).read_text(
+            encoding="utf-8"))
+        for node in tree.body:
+            if isinstance(node, ast.Expr):
+                assert isinstance(node.value, ast.Constant), "only a docstring"
+            elif isinstance(node, ast.Assign):
+                ast.literal_eval(node.value)    # constants only
+            else:
+                assert isinstance(node, (ast.Import, ast.ImportFrom,
+                                         ast.FunctionDef, ast.ClassDef)), node
+
+    def test_no_test_here_reaches_for_conftest_by_name(self):
+        # `import conftest` is whichever conftest.py was imported last; under
+        # a bare `pytest` that is tests/langchain's, not tests/'s.
+        tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
+        imported = {a.name for n in ast.walk(tree) if isinstance(n, ast.Import)
+                    for a in n.names}
+        imported |= {n.module for n in ast.walk(tree)
+                     if isinstance(n, ast.ImportFrom)}
+        assert "conftest" not in imported
