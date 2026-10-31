@@ -153,6 +153,7 @@ def test_full_run_triggers(path, base, head, expect):
 
 _PROJECT = "[project]\nname = 'boost'\nversion = '%s'\n"
 _MUTMUT_TOML = "[tool.mutmut]\ndo_not_mutate = [%s]\n"
+_PYTEST_TOML = "[tool.pytest]\naddopts = [%s]\n"
 
 
 @pytest.mark.parametrize(
@@ -176,6 +177,24 @@ _MUTMUT_TOML = "[tool.mutmut]\ndo_not_mutate = [%s]\n"
          + _MUTMUT_TOML % "'a'",
          ["pyproject.toml [tool.pytest.ini_options] changed",
           "pyproject.toml [tool.mutmut] changed"]),
+        # pytest 9's native [tool.pytest] table configures every test run too:
+        # added, changed, removed...
+        (_PROJECT % "1", _PROJECT % "1" + _PYTEST_TOML % "'-x'",
+         ["pyproject.toml [tool.pytest] changed"]),
+        (_PROJECT % "1" + _PYTEST_TOML % "'-q'", _PROJECT % "1" + _PYTEST_TOML % "'-x'",
+         ["pyproject.toml [tool.pytest] changed"]),
+        (_PROJECT % "1" + _PYTEST_TOML % "'-q'", _PROJECT % "1",
+         ["pyproject.toml [tool.pytest] changed"]),
+        # ...but not by an unrelated edit, and an ini_options edit is reported
+        # once, under its own name
+        (_PROJECT % "1" + _PYTEST_TOML % "'-q'", _PROJECT % "2" + _PYTEST_TOML % "'-q'", []),
+        (_PROJECT % "1" + "[tool.pytest.ini_options]\naddopts = '-q'\n",
+         _PROJECT % "1" + "[tool.pytest.ini_options]\naddopts = '-x'\n",
+         ["pyproject.toml [tool.pytest.ini_options] changed"]),
+        # a `tool` or `tool.pytest` that is no table is an unparsable config,
+        # not an AttributeError out of the planner
+        (_PROJECT % "1", "tool = 3\n" + _PROJECT % "1", ["pyproject.toml unparsable"]),
+        (_PROJECT % "1", "[tool]\npytest = 'x'\n", ["pyproject.toml unparsable"]),
     ],
 )
 def test_pyproject_mutmut_table_is_a_trigger(base, head, want):
@@ -205,6 +224,20 @@ def test_pyproject_mutmut_table_is_a_trigger(base, head, want):
         ("tests/unit/pytest.ini", ["tests/unit/pytest.ini changed"]),
         ("tests/unit/test_conftest.py", []),
         ("tests/unit/pytest.ini.bak", []),
+        # pytest's other config files, wherever they sit
+        (".pytest.ini", [".pytest.ini changed"]),
+        ("pytest.toml", ["pytest.toml changed"]),
+        (".pytest.toml", [".pytest.toml changed"]),
+        ("tests/unit/pytest.toml", ["tests/unit/pytest.toml changed"]),
+        ("tests/unit/pytest.toml.bak", []),
+        # the test tree's shared support reaches every test, as conftest does
+        ("tests/_tapped_support.py", ["test support changed: tests/_tapped_support.py"]),
+        ("tests/make_fixture.py", ["test support changed: tests/make_fixture.py"]),
+        # ...but only at the top of tests/, and only Python
+        ("tests/unit/_helpers.py", []),
+        ("tests/unit/make_fixture.py", []),
+        ("tests/_notes.md", []),
+        ("tests/test_make_fixture.py", []),
     ],
 )
 def test_subpackages_conftests_and_pytest_ini_are_triggers(path, want):
