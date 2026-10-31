@@ -169,8 +169,12 @@ def check_tapped_home(home: Path, source: Path, env: Mapping[str, str]
         problems.append("the catalog cache %s.json is unreadable: %s" % (name, e))
 
     git_dir = boost_home / "repos" / name / ".git"
+    # Found on the child's PATH, not this process's: Windows resolves a bare
+    # "git" against the parent's PATH whatever ``env`` says, and a test may
+    # have patched that PATH away (``TestTheBuildCannotSeeTheRequestingTest``).
+    git = shutil.which("git", path=env.get("PATH")) or "git"
     head = subprocess.run(
-        ["git", "--git-dir", str(git_dir), "rev-parse", "--verify", "-q", "HEAD"],
+        [git, "--git-dir", str(git_dir), "rev-parse", "--verify", "-q", "HEAD"],
         env=dict(env), stdin=subprocess.DEVNULL, capture_output=True, text=True,
         encoding="utf-8", errors="replace", check=False)
     if head.returncode:
