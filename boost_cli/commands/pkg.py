@@ -282,9 +282,13 @@ def _report_result(res: store.InstallResult, no_mcp: bool = False) -> None:
         out.ok("materialized%s → %s"
                % (where, " · ".join(res.linked) or "(no enabled agents)"))
         # An agent the config keeps out gets no row, so nothing after this
-        # report would ever name it (`store.skipped_agents`).
+        # report would ever name it (`store.skipped_agents`) -- unless a
+        # workflow's skill copy was linked into it, which the line says.
+        copied = set(getattr(res, "copy_linked", None) or ())
         for agent, why in getattr(res, "skipped_agents", None) or ():
-            out.dim("  %s" % agents.skip_line(agent, why), wrap=True)
+            out.dim("  %s" % agents.skip_line(agent, why,
+                                              via_copy=agent in copied),
+                    wrap=True)
         # A subagent is not `/<name>`, and the install line alone reads as
         # though it were (`workflows.invocation_hint`). It quotes the
         # frontmatter `name`, a tap's text, so it is printed plain.

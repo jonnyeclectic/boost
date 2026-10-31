@@ -1879,22 +1879,29 @@ def skipped_agents(kind: str, entry: dict) -> list[tuple[str, str]]:
     return skipped
 
 
-def skipped_agent_items() -> list[tuple[str, str, list[str]]]:
-    """``(agent, reason, ["rule x", "workflow y", …])`` over every installed
-    rule and workflow: :func:`skipped_agents`, grouped by agent for `boost
-    doctor`, which names each agent once rather than once per item.
+def skipped_agent_items() -> list[tuple[str, str, bool, list[str]]]:
+    """``(agent, reason, via_copy, ["rule x", "workflow y", …])`` over every
+    installed rule and workflow: :func:`skipped_agents`, grouped by agent for
+    `boost doctor`, which names each agent once rather than once per item.
+
+    ``via_copy`` splits an agent's items in two: a workflow whose skill copy
+    is linked into the agent (:func:`copy_link_targets`) reaches it after
+    all, as a skill, and a rule -- or a workflow with no copy -- does not.
 
     In the order first met -- rules before workflows, each section by name --
     so two runs print the same line.
     """
-    found: dict[tuple[str, str], list[str]] = {}
+    found: dict[tuple[str, str, bool], list[str]] = {}
     for kind, section in (("rule", lockfile.installed_rules()),
                           ("workflow", lockfile.installed_workflows())):
         for name, entry in sorted(section.items()):
+            copied = (copy_link_targets(name, entry) if kind == "workflow"
+                      else {})
             for agent, why in skipped_agents(kind, entry):
-                found.setdefault((agent, why), []).append(
+                found.setdefault((agent, why, agent in copied), []).append(
                     "%s %s" % (kind, name))
-    return [(agent, why, items) for (agent, why), items in found.items()]
+    return [(agent, why, copied, items)
+            for (agent, why, copied), items in found.items()]
 
 
 def unwritten_materializations() -> list[tuple[str, str, str, str]]:

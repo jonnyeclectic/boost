@@ -1402,13 +1402,13 @@ def cmd_doctor(argv):
     left_out = store.skipped_agent_items() if agents_ok else []
     if left_out:
         rep.note("skipped-agents", "; ".join(
-            "%s for %s" % (agents.skip_line(agent, why),
+            "%s for %s" % (agents.skip_line(agent, why, via_copy=copied),
                            ", ".join(items[:_MAT_NOTE_SHOWN]
                                      + (["and %d more"
                                          % (len(items) - _MAT_NOTE_SHOWN)]
                                         if len(items) > _MAT_NOTE_SHOWN
                                         else [])))
-            for agent, why, items in left_out), wrap=True)
+            for agent, why, copied, items in left_out), wrap=True)
     # The per-row note above answers "which row, which agent, why". This
     # answers a different question the surfaces had nowhere to put: skip every
     # row an item has and the item reached no agent at all. `rep.note`, not

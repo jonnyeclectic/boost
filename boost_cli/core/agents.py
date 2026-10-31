@@ -730,7 +730,7 @@ def _withdrawn_by_boost(agent: str, reason: str, key: str) -> bool:
     return spec is not None and spec[key] == flag_default(agent, key)
 
 
-def skip_line(agent: str, reason: str) -> str:
+def skip_line(agent: str, reason: str, via_copy: bool = False) -> str:
     """One agent an item was not written into, and why, for a report.
 
     ``claude-personal: takes skills only (agents.claude-personal.skills_only)
@@ -740,11 +740,17 @@ def skip_line(agent: str, reason: str) -> str:
     ``skills_only``, ``windsurf``'s ``workflows: false``: flipping that writes
     a file the agent never loads, :data:`config.DEFAULTS` says why at the key
     itself, and a line printed on every install would read as an invitation.
+
+    ``via_copy``: the agent does reach the item, through the link to a
+    workflow's skill copy (``store.copy_link_targets``) -- so it ends "skill
+    copy only" rather than "not written", which beside the install's
+    "linked → windsurf" line read as a contradiction.
     """
     key = REASON_FLAGS.get(reason)
     where = (" (agents.%s.%s)" % (agent, key)
              if key and not _withdrawn_by_boost(agent, reason, key) else "")
-    return "%s: %s%s — not written" % (agent, reason, where)
+    return "%s: %s%s — %s" % (agent, reason, where,
+                              "skill copy only" if via_copy else "not written")
 
 
 def claude_profile_rows() -> list[str]:
