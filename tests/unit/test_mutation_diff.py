@@ -152,3 +152,60 @@ def test_diff_scope_adds_callers_and_sorts():
 def test_diff_scope_deleted_file_is_empty():
     read = lambda rev, p: "def a(): pass\n" if rev == "base" else None
     assert md.diff_scope(["boost_cli/core/store.py"], read, {}) == []
+
+
+def _core(base, head):
+    return md.full_run_reasons(["boost_cli/core/x.py"], _reader(base, head))
+
+
+def test_unparsable_head_is_a_full_run_reason():
+    assert _core("def a(): pass\n", "def a(:\n") == [
+        "unparsable source: boost_cli/core/x.py (head)"
+    ]
+
+
+def test_unparsable_base_is_a_full_run_reason():
+    assert _core("def a(:\n", "def a(): pass\n") == [
+        "unparsable source: boost_cli/core/x.py (base)"
+    ]
+
+
+def test_parsable_core_source_and_init_have_no_reason():
+    assert _core("def a(): pass\n", "def a(): return 1\n") == []
+    assert (
+        md.full_run_reasons(["boost_cli/core/__init__.py"], _reader("ok", "def a(:\n"))
+        == []
+    )
+
+
+@pytest.mark.parametrize(
+    "path,good,bad",
+    [
+        ("setup.cfg", "[mutmut]\na=1\n", "no section header\n"),
+        ("pyproject.toml", "[project]\na=1\n", "a = = 1\n"),
+        (".github/workflows/ci.yml", "jobs: {}\n", "jobs: [unclosed\n"),
+        (".github/workflows/ci.yml", "jobs: {}\n", "jobs: [a, b]\n"),
+        (".github/workflows/ci.yml", "jobs: {}\n", "jobs: 3\n"),
+    ],
+)
+def test_unparsable_config_is_a_reason_not_a_crash(path, good, bad):
+    want = [f"{path} unparsable"]
+    assert md.full_run_reasons([path], _reader(good, bad)) == want
+    assert md.full_run_reasons([path], _reader(bad, good)) == want
+
+
+def test_nested_class_method_uses_mutmuts_dotted_class_key():
+    src = "class A:\n    class B:\n        def m(self):\n            return 1\n"
+    assert md.changed_functions(src, src.replace("1", "2")) == {"xǁA.Bǁm"}
+
+
+def test_rename_as_delete_plus_add_scopes_only_the_new_file():
+    src = "def a():\n    return 1\n"
+
+    def read(rev, p):
+        if rev == "base":
+            return src if p.endswith("old.py") else None
+        return src if p.endswith("new.py") else None
+
+    paths = ["boost_cli/core/old.py", "boost_cli/core/new.py"]
+    assert md.diff_scope(paths, read, {}) == ["boost_cli.core.new.x_a"]

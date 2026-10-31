@@ -8,12 +8,17 @@ direct callers. "Touched" is decided with mutmut's own per-function hash
 not a change and a method edit uses the same mangled name (`xǁClassǁmethod`)
 that mutmut keys its mutants by.
 
+Scope covers function bodies only: an edit to module-level code (a constant, an
+import) names no function and so adds nothing; the nightly full run is the
+backstop for those.
+
 Pure functions only: the caller supplies file text through `read(rev, path)`
 and the dependency map from `mutants/mutmut-stats.json`.
 """
 
 from __future__ import annotations
 
+import ast
 import configparser
 import tomllib
 from collections.abc import Callable
@@ -23,6 +28,14 @@ import yaml
 from mutmut.mutation.file_mutation import compute_function_hashes
 
 CORE_DIR = "boost_cli/core"
+# Specific parse failures only; a bare except would hide real bugs. ValueError is
+# the non-mapping `jobs` case raised above.
+_PARSE_ERRORS = (
+    configparser.Error,
+    tomllib.TOMLDecodeError,
+    yaml.YAMLError,
+    ValueError,
+)
 CI_YML = ".github/workflows/ci.yml"
 
 
@@ -70,6 +83,8 @@ def _mutation_jobs(text: str | None):
     if text is None:
         return None
     jobs = (yaml.safe_load(text) or {}).get("jobs") or {}
+    if not isinstance(jobs, dict):
+        raise ValueError("ci.yml `jobs` is not a mapping")
     return {k: v for k, v in jobs.items() if k.startswith("mutation")}
 
 
@@ -80,23 +95,40 @@ def full_run_reasons(
     reasons: list[str] = []
     for p in changed_paths:
         name = PurePosixPath(p)
-        if p == "setup.cfg":
-            hit = _mutmut_section(read("base", p)) != _mutmut_section(read("head", p))
-            why = "setup.cfg [mutmut] changed"
-        elif p == "requirements/mutation-tools.txt" or (
-            name.parent == PurePosixPath("scripts")
-            and name.name.startswith("mutation_")
-            and name.suffix == ".py"
-        ):
-            hit, why = True, f"{p} changed"
-        elif p == CI_YML:
-            hit = _mutation_jobs(read("base", p)) != _mutation_jobs(read("head", p))
-            why = "ci.yml jobs.mutation* changed"
-        elif p == "pyproject.toml":
-            hit = _pytest_table(read("base", p)) != _pytest_table(read("head", p))
-            why = "pyproject.toml [tool.pytest.ini_options] changed"
-        else:
+        if _is_core_module(p):
+            # compute_function_hashes swallows SyntaxError and returns {}, which
+            # would read as "no function changed" and fail open. Say so instead.
+            for rev in ("base", "head"):
+                src = read(rev, p)
+                if src is None:
+                    continue
+                try:
+                    ast.parse(src)
+                except (SyntaxError, ValueError):
+                    reasons.append(f"unparsable source: {p} ({rev})")
             continue
+        try:
+            if p == "setup.cfg":
+                hit = _mutmut_section(read("base", p)) != _mutmut_section(
+                    read("head", p)
+                )
+                why = "setup.cfg [mutmut] changed"
+            elif p == "requirements/mutation-tools.txt" or (
+                name.parent == PurePosixPath("scripts")
+                and name.name.startswith("mutation_")
+                and name.suffix == ".py"
+            ):
+                hit, why = True, f"{p} changed"
+            elif p == CI_YML:
+                hit = _mutation_jobs(read("base", p)) != _mutation_jobs(read("head", p))
+                why = "ci.yml jobs.mutation* changed"
+            elif p == "pyproject.toml":
+                hit = _pytest_table(read("base", p)) != _pytest_table(read("head", p))
+                why = "pyproject.toml [tool.pytest.ini_options] changed"
+            else:
+                continue
+        except _PARSE_ERRORS:
+            hit, why = True, f"{p} unparsable"
         if hit:
             reasons.append(why)
     return reasons
