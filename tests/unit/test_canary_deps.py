@@ -103,8 +103,8 @@ MODULE_TO_DIST = {
 #: Importable from a checkout without being installed: first-party packages and
 #: the ``scripts/`` modules the suite puts on ``sys.path`` to test directly.
 REPO_LOCAL = {
-    "boost_cli", "boost_langchain", "conftest", "evals", "noxfile",
-    "publish_shards", "scripts", "shard_plan", "tests",
+    "_tapped_support", "boost_cli", "boost_langchain", "conftest", "evals",
+    "noxfile", "publish_shards", "scripts", "shard_plan", "tests",
 }
 
 
