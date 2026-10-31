@@ -61,6 +61,24 @@ real_tree_only = pytest.mark.skipif(
     _tree_is_mutated(), reason="tree rewritten by mutmut; packing it is slow")
 
 
+@pytest.fixture
+def needs_mutmut():
+    """Skip a test that reaches mutmut where mutmut is not installed.
+
+    Per test, never per module: the `tests` cells install
+    requirements/test-tools.txt (PyYAML, no mutmut), and the tests that need
+    only the stdlib and PyYAML must keep running there. The mutmut-backed ones
+    run in `mutation-plan`, whose venv is requirements/mutation-tools.txt,
+    under BOOST_REQUIRE_MUTMUT=1: there a missing mutmut is an error, so the
+    one place these tests run cannot quietly skip them all.
+    """
+    if os.environ.get("BOOST_REQUIRE_MUTMUT") == "1":
+        import mutmut
+
+        return mutmut
+    return pytest.importorskip("mutmut")
+
+
 def write_plan(tmp_path: Path, sets: dict, gate_set: str | None = "full") -> str:
     path = tmp_path / "plan.json"
     path.write_text(json.dumps({"gate_set": gate_set, "reasons": ["test"],
@@ -279,6 +297,7 @@ def test_diff_plan_with_a_trigger_is_full(tmp_path, git_repo):
     assert plan["sets"]["full"]["shards"] == [["boost_cli.core.m.*"], []]
 
 
+@pytest.mark.usefixtures("needs_mutmut")
 def test_diff_plan_with_no_core_change_has_zero_shards(tmp_path, git_repo):
     head = git_repo.head({"README.md": "docs\n",
                           "tests/unit/test_m.py": "def test(): pass\n",
@@ -292,6 +311,7 @@ def test_diff_plan_with_no_core_change_has_zero_shards(tmp_path, git_repo):
     assert run_cli("matrix", "--plan", str(tmp_path / "plan.json")) == "[]\n"
 
 
+@pytest.mark.usefixtures("needs_mutmut")
 def test_diff_plan_scopes_changed_functions_and_direct_callers(tmp_path, git_repo):
     head = git_repo.head({"boost_cli/core/m.py": _M_BASE.replace("+ 1", "+ 2")})
     plan = plan_diff(tmp_path, git_repo, head)
@@ -305,6 +325,7 @@ def test_diff_plan_scopes_changed_functions_and_direct_callers(tmp_path, git_rep
     assert all(diff["shards"]), "no empty shard may reach `patterns`"
 
 
+@pytest.mark.usefixtures("needs_mutmut")
 def test_diff_plan_method_names_survive_into_patterns(tmp_path, git_repo):
     head = git_repo.head({"boost_cli/core/m.py": _M_BASE.replace("2 if", "4 if")})
     plan = plan_diff(tmp_path, git_repo, head)
@@ -315,6 +336,7 @@ def test_diff_plan_method_names_survive_into_patterns(tmp_path, git_repo):
                    "--set", "diff", "--index", "0") == "boost_cli.core.m.xǁKǁm__mutmut_*\n"
 
 
+@pytest.mark.usefixtures("needs_mutmut")
 def test_diff_plan_new_file_and_deleted_function(tmp_path, git_repo):
     head = git_repo.head({
         "boost_cli/core/m.py": _M_BASE.replace(
@@ -329,6 +351,7 @@ def test_diff_plan_new_file_and_deleted_function(tmp_path, git_repo):
     assert patterns == ["boost_cli.core.n.x_z__mutmut_*"]
 
 
+@pytest.mark.usefixtures("needs_mutmut")
 def test_diff_plan_never_emits_an_empty_shard(tmp_path, git_repo):
     # One function, so packing at 1 mutant/shard asks for more shards than
     # there are functions; the extra bins must not reach the matrix.
@@ -340,6 +363,7 @@ def test_diff_plan_never_emits_an_empty_shard(tmp_path, git_repo):
     assert plan["sets"]["diff"]["shards"] == [[md.pattern("boost_cli.core.m.x_c")]]
 
 
+@pytest.mark.usefixtures("needs_mutmut")
 def test_shadow_plan_gates_on_full_and_runs_both(tmp_path, git_repo):
     head = git_repo.head({"boost_cli/core/m.py": _M_BASE.replace("+ 1", "+ 2")})
     plan = plan_diff(tmp_path, git_repo, head, "--shadow")
@@ -352,6 +376,7 @@ def test_shadow_plan_gates_on_full_and_runs_both(tmp_path, git_repo):
     assert sets == {"diff", "full"}
 
 
+@pytest.mark.usefixtures("needs_mutmut")
 def test_diff_plan_runs_as_a_script(tmp_path, git_repo):
     # CI runs it as `python scripts/mutation_plan.py diff`, a fresh process
     # where nothing else has imported mutation_diff first.
@@ -364,6 +389,7 @@ def test_diff_plan_runs_as_a_script(tmp_path, git_repo):
     assert json.loads(out.read_text(encoding="utf-8"))["gate_set"] == "diff"
 
 
+@pytest.mark.usefixtures("needs_mutmut")
 def test_diff_plan_records_per_function_counts(tmp_path, git_repo):
     head = git_repo.head({"boost_cli/core/m.py": _M_BASE.replace("+ 1", "+ 2")})
     diff = plan_diff(tmp_path, git_repo, head)["sets"]["diff"]
@@ -923,3 +949,45 @@ def test_a_flat_download_of_several_planned_shards_stays_red(jobs, tmp_path):
     proc = _bash(step, tmp_path, {"MATRIX": SHADOW3})
     assert proc.returncode == 1, proc.stdout + proc.stderr
     assert not (root / "full" / "mutation-full-shard-0").exists()
+
+
+def test_the_planner_runs_the_mutmut_backed_tests(jobs):
+    # They skip in every `tests` cell, which has no mutmut; this is the one
+    # place in CI they run, against the same venv the shards mutate with, and
+    # BOOST_REQUIRE_MUTMUT turns a skip there into a failure.
+    steps = jobs["mutation-plan"]["steps"]
+    step = _step(jobs["mutation-plan"], runs="-m pytest")
+    assert step["run"].strip() == (".venv/bin/python -m pytest -q "
+                                   "tests/unit/test_mutation_diff.py "
+                                   "tests/unit/test_mutation_plan.py")
+    assert step["env"] == {"BOOST_REQUIRE_MUTMUT": "1"}
+    assert step["if"] == "steps.scope.outputs.relevant == 'true'"
+    assert "continue-on-error" not in step
+    stats = steps.index(_step(jobs["mutation-plan"], name="collect mutmut stats once"))
+    plan = steps.index(_step(jobs["mutation-plan"], step_id="plan"))
+    # After the stats run, so nothing it writes can reach mutmut's view of the
+    # checkout; before the planner, which leans on what these tests pin.
+    assert stats < steps.index(step) < plan
+
+
+@needs_bash
+def test_a_required_mutmut_is_an_error_not_a_skip(tmp_path):
+    # The fixture's contract, checked from the outside: with mutmut blocked
+    # and BOOST_REQUIRE_MUTMUT=1, a mutmut-backed test errors instead of
+    # skipping.
+    probe = tmp_path / "sitecustomize.py"
+    probe.write_text("import sys\nsys.modules['mutmut'] = None\n", encoding="utf-8")
+    env = dict(os.environ, PYTHONPATH=str(tmp_path), BOOST_REQUIRE_MUTMUT="1")
+    target = "tests/unit/test_mutation_diff.py::test_body_edit_is_a_change"
+    proc = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:randomly",
+                           "-p", "no:cacheprovider", target],
+                          cwd=ROOT, env=env, capture_output=True, text=True)
+    assert proc.returncode != 0, proc.stdout
+    assert "ERROR " + target in proc.stdout, proc.stdout
+    assert "ModuleNotFoundError" in proc.stdout, proc.stdout
+    env.pop("BOOST_REQUIRE_MUTMUT")
+    proc = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:randomly",
+                           "-p", "no:cacheprovider", "-rs", target],
+                          cwd=ROOT, env=env, capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stdout
+    assert "could not import 'mutmut'" in proc.stdout, proc.stdout

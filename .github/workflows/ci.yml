@@ -675,6 +675,17 @@ jobs:
             exit 1
           fi
           test -s mutants/mutmut-stats.json
+      # The tests of the planner and the diff gate that reach mutmut skip in
+      # every `tests` cell, which installs requirements/test-tools.txt and so
+      # has no mutmut. They run here instead, in the venv the shards mutate
+      # with, where BOOST_REQUIRE_MUTMUT makes a skip an error. After the stats
+      # run, so nothing they write is in the checkout mutmut took stats of;
+      # before the planner, which leans on what they pin.
+      - name: test the planner and the diff gate (needs mutmut)
+        if: steps.scope.outputs.relevant == 'true'
+        env:
+          BOOST_REQUIRE_MUTMUT: "1"
+        run: .venv/bin/python -m pytest -q tests/unit/test_mutation_diff.py tests/unit/test_mutation_plan.py
       # Shadow mode. A pull request or merge-queue entry plans BOTH sets: the
       # full 24-shard run, which still decides `mutation`, and the diff set
       # (the functions the branch changed plus their direct callers, see

@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -15,22 +16,63 @@ sys.modules["mutation_diff"] = md
 _spec.loader.exec_module(md)
 
 
+@pytest.fixture
+def needs_mutmut():
+    """Skip a test that reaches mutmut where mutmut is not installed.
+
+    Per test, never per module: the `tests` cells install
+    requirements/test-tools.txt (PyYAML, no mutmut), and the tests that need
+    only the stdlib and PyYAML must keep running there. The mutmut-backed ones
+    run in `mutation-plan`, whose venv is requirements/mutation-tools.txt,
+    under BOOST_REQUIRE_MUTMUT=1: there a missing mutmut is an error, so the
+    one place these tests run cannot quietly skip them all.
+    """
+    if os.environ.get("BOOST_REQUIRE_MUTMUT") == "1":
+        import mutmut
+
+        return mutmut
+    return pytest.importorskip("mutmut")
+
+
+def test_the_module_loads_without_mutmut():
+    # Pinned where mutmut IS installed too, so the import can't creep back to
+    # module level unnoticed: a `None` in sys.modules makes any `import
+    # mutmut...` raise, exactly as an absent package would.
+    code = (
+        "import sys, importlib.util\n"
+        "sys.modules['mutmut'] = None\n"
+        "spec = importlib.util.spec_from_file_location('mutation_diff', sys.argv[1])\n"
+        "m = importlib.util.module_from_spec(spec)\n"
+        "sys.modules['mutation_diff'] = m\n"
+        "spec.loader.exec_module(m)\n"
+        "assert m.passes(m.Verdict(killed=8, denominator=10))\n"
+        "assert m.changed_functions('def a(): pass\\n', None) == set()\n"
+    )
+    proc = subprocess.run([sys.executable, "-c", code, str(_P)],
+                          capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr
+
+
+@pytest.mark.usefixtures("needs_mutmut")
 def test_body_edit_is_a_change():
     assert md.changed_functions(
         "def a():\n    return 1\n", "def a():\n    return 2\n"
     ) == {"x_a"}
 
 
+@pytest.mark.usefixtures("needs_mutmut")
 def test_new_function_counts_and_deleted_one_does_not():
     assert md.changed_functions(
         "def a(): pass\ndef b(): pass\n", "def a(): pass\ndef c(): pass\n"
     ) == {"x_c"}
 
 
+@pytest.mark.usefixtures("needs_mutmut")
 def test_new_file_everything_is_new():
     assert md.changed_functions(None, "def a(): pass\n") == {"x_a"}
 
 
+@pytest.mark.usefixtures("needs_mutmut")
 def test_method_edit_uses_mutmuts_mangled_name():
     base = "class K:\n    def m(self):\n        return 1\n"
     assert md.changed_functions(base, base.replace("1", "2")) == {"xǁKǁm"}
@@ -40,6 +82,7 @@ def test_deleted_file_has_no_scope():
     assert md.changed_functions("def a(): pass\n", None) == set()
 
 
+@pytest.mark.usefixtures("needs_mutmut")
 def test_unchanged_function_is_not_a_change():
     src = "def a():\n    return 1\n"
     assert md.changed_functions(src, src) == set()
@@ -140,6 +183,7 @@ def test_init_and_non_core_files_never_enter_scope():
     assert md.diff_scope(paths, read, {}) == []
 
 
+@pytest.mark.usefixtures("needs_mutmut")
 def test_diff_scope_adds_callers_and_sorts():
     read = lambda rev, p: (
         "def a():\n    return 1\n" if rev == "base" else "def a():\n    return 2\n"
@@ -196,11 +240,13 @@ def test_unparsable_config_is_a_reason_not_a_crash(path, good, bad):
     assert md.full_run_reasons([path], _reader(bad, good)) == want
 
 
+@pytest.mark.usefixtures("needs_mutmut")
 def test_nested_class_method_uses_mutmuts_dotted_class_key():
     src = "class A:\n    class B:\n        def m(self):\n            return 1\n"
     assert md.changed_functions(src, src.replace("1", "2")) == {"xǁA.Bǁm"}
 
 
+@pytest.mark.usefixtures("needs_mutmut")
 def test_rename_as_delete_plus_add_scopes_only_the_new_file():
     src = "def a():\n    return 1\n"
 
@@ -268,6 +314,7 @@ def test_split_qualified_round_trips(qualified, path, mangled):
     assert md.qualify(path, mangled) == qualified
 
 
+@pytest.mark.usefixtures("needs_mutmut")
 def test_mutant_counts_uses_mutmuts_own_mutants(tmp_path):
     (tmp_path / "setup.cfg").write_text(
         "[mutmut]\nsource_paths = boost_cli/core/\n", encoding="utf-8"
@@ -284,6 +331,7 @@ def test_mutant_counts_uses_mutmuts_own_mutants(tmp_path):
     assert all(n > 0 for n in counts.values())
 
 
+@pytest.mark.usefixtures("needs_mutmut")
 def test_mutmut_config_is_restored(tmp_path):
     from mutmut import configuration
 
@@ -297,11 +345,13 @@ def test_mutmut_config_is_restored(tmp_path):
     assert configuration._config is before
 
 
+@pytest.mark.usefixtures("needs_mutmut")
 def test_score_counts_like_mutation_gate():
     v = md.score({"a": 1, "b": 0, "c": 33, "d": 34, "e": 36})
     assert (v.killed, v.denominator) == (1, 4) and v.survivors == ["b"] and v.timeouts == ["e"]
 
 
+@pytest.mark.usefixtures("needs_mutmut")
 def test_type_check_catch_is_not_a_kill():
     # mutation_gate.py scores mutmut's `killed` count, which never includes
     # `caught by type check` (37): it sits in the denominator unkilled.
@@ -309,6 +359,7 @@ def test_type_check_catch_is_not_a_kill():
     assert (v.killed, v.denominator) == (2, 3)
 
 
+@pytest.mark.usefixtures("needs_mutmut")
 def test_unknown_exit_code_is_unkilled_and_does_not_grow_mutmuts_map():
     from mutmut.stats import status_by_exit_code
 
@@ -318,15 +369,18 @@ def test_unknown_exit_code_is_unkilled_and_does_not_grow_mutmuts_map():
     assert dict(status_by_exit_code) == before
 
 
+@pytest.mark.usefixtures("needs_mutmut")
 def test_small_scope_fails_on_any_survivor():
     assert not md.passes(md.score({"a": 1, "b": 1, "c": 0}))
     assert md.passes(md.score({"a": 1, "b": 1, "c": 1}))
 
 
+@pytest.mark.usefixtures("needs_mutmut")
 def test_unrun_fails_closed():
     assert not md.passes(md.score({"a": 1, "b": None}))
 
 
+@pytest.mark.usefixtures("needs_mutmut")
 def test_eighty_percent_boundary():
     codes = {str(i): (1 if i < 8 else 0) for i in range(10)}
     assert md.passes(md.score(codes))
@@ -335,6 +389,7 @@ def test_eighty_percent_boundary():
     assert not md.passes(md.score(codes))
 
 
+@pytest.mark.usefixtures("needs_mutmut")
 def test_empty_scope_passes():
     assert md.passes(md.score({}))
     assert md.passes(md.score({"a": 34}))
@@ -403,6 +458,7 @@ def _gate(tmp_path, plan, head_tree, *extra):
     )
 
 
+@pytest.mark.usefixtures("needs_mutmut")
 def test_gate_reads_only_in_scope_keys(tmp_path, head_tree, monkeypatch):
     # shard .meta holds None for out-of-scope keys of the same file -> ignored, exit 0
     monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
@@ -421,6 +477,7 @@ def test_gate_reads_only_in_scope_keys(tmp_path, head_tree, monkeypatch):
     assert _gate(tmp_path, plan, head_tree) == 0
 
 
+@pytest.mark.usefixtures("needs_mutmut")
 def test_gate_fails_and_annotates_a_survivor(tmp_path, head_tree, monkeypatch, capsys):
     summary = tmp_path / "summary.md"
     monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
@@ -442,6 +499,7 @@ def test_gate_fails_and_annotates_a_survivor(tmp_path, head_tree, monkeypatch, c
     assert f"{_K}__mutmut_1" in text and f"{_K}__mutmut_2" in text
 
 
+@pytest.mark.usefixtures("needs_mutmut")
 def test_gate_annotation_lists_at_most_three(tmp_path, head_tree, monkeypatch, capsys):
     monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
     plan = _diff_plan(tmp_path, [[md.pattern(_A)]], 5)
@@ -455,12 +513,14 @@ def test_gate_annotation_lists_at_most_three(tmp_path, head_tree, monkeypatch, c
     assert warning.count("__mutmut_") == 3
 
 
+@pytest.mark.usefixtures("needs_mutmut")
 def test_gate_missing_shard_is_not_a_pass(tmp_path, head_tree):
     plan = _diff_plan(tmp_path, [[md.pattern(_A)], [md.pattern(_K)]], 1)
     _meta(tmp_path / "src", "mutation-diff-shard-", 0, {f"{_A}__mutmut_1": 1})
     assert _gate(tmp_path, plan, head_tree) == 2
 
 
+@pytest.mark.usefixtures("needs_mutmut")
 def test_gate_unrun_in_scope_key_is_exit_2(tmp_path, head_tree):
     plan = _diff_plan(tmp_path, [[md.pattern(_A)]], 2)
     _meta(tmp_path / "src", "mutation-diff-shard-", 0,
@@ -468,6 +528,7 @@ def test_gate_unrun_in_scope_key_is_exit_2(tmp_path, head_tree):
     assert _gate(tmp_path, plan, head_tree) == 2
 
 
+@pytest.mark.usefixtures("needs_mutmut")
 def test_gate_function_with_no_keys_is_exit_2(tmp_path, head_tree):
     # The planner counted mutants for it; a shard that produced none ran
     # something else, and scoring the rest would pass on a subset.
@@ -476,6 +537,7 @@ def test_gate_function_with_no_keys_is_exit_2(tmp_path, head_tree):
     assert _gate(tmp_path, plan, head_tree) == 2
 
 
+@pytest.mark.usefixtures("needs_mutmut")
 def test_gate_fewer_mutants_than_planned_is_exit_2(tmp_path, head_tree):
     plan = _diff_plan(tmp_path, [[md.pattern(_A)]], 3)
     _meta(tmp_path / "src", "mutation-diff-shard-", 0,
@@ -495,6 +557,7 @@ def test_gate_empty_scope_passes_with_no_artifacts(tmp_path, head_tree):
     assert _gate(tmp_path, plan, head_tree) == 0
 
 
+@pytest.mark.usefixtures("needs_mutmut")
 def test_gate_honours_min_and_small(tmp_path, head_tree, monkeypatch):
     monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
     plan = _diff_plan(tmp_path, [[md.pattern(_A)]], 3)
@@ -514,6 +577,7 @@ def test_gate_honours_min_and_small(tmp_path, head_tree, monkeypatch):
         (_SRC, "x_gone", None),
     ],
 )
+@pytest.mark.usefixtures("needs_mutmut")
 def test_def_line(src, mangled, line):
     assert md.def_line(src, mangled) == line
 
@@ -521,6 +585,7 @@ def test_def_line(src, mangled, line):
 # -- compare ----------------------------------------------------------------
 
 
+@pytest.mark.usefixtures("needs_mutmut")
 def test_compare_flags_a_flip_and_excludes_timeouts(tmp_path, capsys):
     plan = _diff_plan(tmp_path, [[md.pattern(_A)]], 4)
     _meta(tmp_path / "full", "mutation-full-shard-", 0,
@@ -540,6 +605,7 @@ def test_compare_flags_a_flip_and_excludes_timeouts(tmp_path, capsys):
     assert f"{_A}__mutmut_3" in out  # the excluded timeout is listed too
 
 
+@pytest.mark.usefixtures("needs_mutmut")
 def test_compare_agreement_exits_0(tmp_path, capsys):
     plan = _diff_plan(tmp_path, [[md.pattern(_A)]], 1)
     _meta(tmp_path / "full", "mutation-full-shard-", 0, {f"{_A}__mutmut_1": 1})
@@ -549,6 +615,7 @@ def test_compare_agreement_exits_0(tmp_path, capsys):
     assert "agree 1, disagree 0, excluded-timeouts 0" in capsys.readouterr().out
 
 
+@pytest.mark.usefixtures("needs_mutmut")
 def test_compare_counts_a_key_missing_from_the_full_run_as_disagreement(tmp_path, capsys):
     plan = _diff_plan(tmp_path, [[md.pattern(_A)]], 1)
     _meta(tmp_path / "full", "mutation-full-shard-", 0, {f"{_A}__mutmut_1": None})
@@ -558,6 +625,7 @@ def test_compare_counts_a_key_missing_from_the_full_run_as_disagreement(tmp_path
     assert "full=not checked diff=killed" in capsys.readouterr().out
 
 
+@pytest.mark.usefixtures("needs_mutmut")
 def test_compare_with_no_full_shards_is_exit_2(tmp_path):
     plan = _diff_plan(tmp_path, [[md.pattern(_A)]], 1)
     _meta(tmp_path / "diff", "mutation-diff-shard-", 0, {f"{_A}__mutmut_1": 1})
@@ -636,6 +704,7 @@ def test_compare_refuses_a_malformed_diff_set(tmp_path, capsys):
     assert "malformed plan" in capsys.readouterr().out
 
 
+@pytest.mark.usefixtures("needs_mutmut")
 def test_gate_per_function_counts_catch_an_offsetting_shortfall(tmp_path, head_tree, capsys):
     # The total matches (3 == 3), but `a` lost a mutant and `K.m` gained one:
     # only per-function counts can tell (review M-4).
@@ -666,6 +735,7 @@ def test_gate_refuses_inconsistent_counts(tmp_path, head_tree, capsys, counts):
     assert "malformed plan" in out and "counts" in out
 
 
+@pytest.mark.usefixtures("needs_mutmut")
 def test_gate_with_exact_counts_passes(tmp_path, head_tree):
     plan = _diff_plan(tmp_path, [[_PA]], 2, counts={_A: 2})
     _meta(tmp_path / "src", "mutation-diff-shard-", 0,
@@ -676,6 +746,7 @@ def test_gate_with_exact_counts_passes(tmp_path, head_tree):
 # -- fix round 1: escaping (review M-1) and compare ordering (M-2) ----------
 
 
+@pytest.mark.usefixtures("needs_mutmut")
 def test_gate_escapes_the_annotation_file_property(tmp_path, head_tree, monkeypatch, capsys):
     # A PR-controlled file name must not be able to inject `,line=9` (or a
     # newline) into the workflow command's properties.
@@ -701,6 +772,7 @@ def test_gate_escapes_raw_keys_on_every_output_line(tmp_path, head_tree, monkeyp
     assert "%0A::error::injected" in out
 
 
+@pytest.mark.usefixtures("needs_mutmut")
 def test_compare_escapes_raw_keys(tmp_path, capsys):
     plan = _diff_plan(tmp_path, [[_PA]], 1)
     key = f"{_A}__mutmut_1\n::error::injected"
@@ -712,6 +784,7 @@ def test_compare_escapes_raw_keys(tmp_path, capsys):
     assert not any(line.startswith("::error") for line in out.splitlines()), out
 
 
+@pytest.mark.usefixtures("needs_mutmut")
 def test_compare_counts_a_one_sided_timeout_as_disagreement(tmp_path, capsys):
     # Absent on one side is a missing result, not a timeout to excuse (M-2).
     plan = _diff_plan(tmp_path, [[_PA]], 2)

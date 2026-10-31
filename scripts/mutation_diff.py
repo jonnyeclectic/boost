@@ -47,11 +47,14 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 import yaml
-from mutmut import configuration as mutmut_configuration
-from mutmut.mutation.file_mutation import compute_function_hashes, mutate_file_contents
-from mutmut.mutation.trampoline_templates import mangle_function_name
-from mutmut.stats import status_by_exit_code
-from mutmut.utils.file_utils import change_cwd
+
+# mutmut is imported inside the functions that use it, never here. The unit
+# suite loads this module in every `tests` cell, and those install
+# requirements/test-tools.txt, which has PyYAML but not mutmut: a module-level
+# import made the whole test file a collection error there. Plan validation,
+# packing, scoring arithmetic and the full-run triggers need only the stdlib
+# and PyYAML; the tests that reach mutmut skip without it, and run in
+# `mutation-plan`, whose venv is requirements/mutation-tools.txt.
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -86,6 +89,8 @@ def changed_functions(base_src: str | None, head_src: str | None) -> set[str]:
     """Mangled keys new in head, or whose AST hash differs. Deleted ones are excluded."""
     if head_src is None:
         return set()
+    from mutmut.mutation.file_mutation import compute_function_hashes
+
     head = compute_function_hashes(head_src)
     base = compute_function_hashes(base_src) if base_src is not None else {}
     return {k for k, h in head.items() if base.get(k) != h}
@@ -235,6 +240,9 @@ def mutmut_config(root: Path) -> Iterator[None]:
     previous config is restored because the unit suite also runs *inside*
     mutmut, where that global belongs to the run doing the mutating.
     """
+    from mutmut import configuration as mutmut_configuration
+    from mutmut.utils.file_utils import change_cwd
+
     previous = mutmut_configuration._config
     mutmut_configuration._config = None
     try:
@@ -252,6 +260,8 @@ def mutant_counts(path: str, src: str) -> dict[str, int]:
     for the same source and config (call under `mutmut_config`). A function
     with nothing to mutate (`pass`) is absent, not zero.
     """
+    from mutmut.mutation.file_mutation import mutate_file_contents
+
     out: dict[str, int] = {}
     for name in mutate_file_contents(path, src).mutant_names:
         head, sep, _ = name.rpartition(MUTANT_SEP)
@@ -345,6 +355,8 @@ def status_of(code: int | None) -> str:
     factory instead gives the same answer ("suspicious") and leaves mutmut's
     table as it was.
     """
+    from mutmut.stats import status_by_exit_code
+
     if code in status_by_exit_code:
         return status_by_exit_code[code]
     factory = status_by_exit_code.default_factory
@@ -401,6 +413,7 @@ def def_line(src: str, mangled: str) -> int | None:
         tree = ast.parse(src)
     except (SyntaxError, ValueError):
         return None
+    from mutmut.mutation.trampoline_templates import mangle_function_name
 
     def visit(stmts: list[ast.stmt], class_name: str) -> int | None:
         for node in stmts:
