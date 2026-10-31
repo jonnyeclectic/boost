@@ -775,6 +775,7 @@ case " $* " in
   *" none "*) plan='{"gate_set":null,"reasons":["n"],"sets":{}}' ;;
   *) plan='{"gate_set":"full","reasons":[],"sets":{"full":{"shards":[["a"]]}}}' ;;
 esac
+[ -n "$PLAN_OVERRIDE" ] && plan="$PLAN_OVERRIDE"
 [ -n "$out" ] && echo "$plan" > "$out"
 exit 0
 '''
@@ -875,6 +876,19 @@ exit 0
     def test_the_plan_reason_is_one_line_for_the_gate_summary(self, planner):
         _, _, outputs = planner("push", relevant="false")
         assert outputs["reason"] == "n"
+
+    def test_a_reason_with_a_newline_cannot_start_another_output(self, planner, tmp_path):
+        # A raw newline in `reason=` would end that output and let the rest of
+        # the line set any other one, e.g. gate_set.
+        plan = {"gate_set": None, "sets": {},
+                "reasons": ["a\ngate_set=full", "b\r", "x" * 600]}
+        _, _, outputs = planner("push", relevant="false",
+                                PLAN_OVERRIDE=json.dumps(plan))
+        assert outputs["gate_set"] == ""
+        assert outputs["reason"].startswith("a gate_set=full; b ; xxx")
+        assert len(outputs["reason"]) == 500
+        out = (tmp_path / "github_output").read_text(encoding="utf-8")
+        assert sum(line.startswith("gate_set=") for line in out.splitlines()) == 1
 
 
 class TestScopeByEvent:
