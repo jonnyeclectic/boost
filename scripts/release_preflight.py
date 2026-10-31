@@ -15,6 +15,14 @@ released and exits non-zero unless all of them succeeded::
   python3 scripts/release_preflight.py --repo owner/name --sha "$(git rev-parse HEAD)" \\
       --require pip-audit.yml --require package-metadata.yml
 
+``ci.yml`` is judged by its ``push`` run alone. It also runs on main's tip from
+``schedule`` and ``workflow_dispatch`` -- the whole-codebase mutation run, about
+two hours, on the same commit whenever nothing merged in between -- and the API
+lists runs newest first, so without the filter a nightly that started after the
+push run became the verdict: the release waited on it and failed at the
+deadline. The other gates keep their newest run of any event (see
+``EVENT_FOR``).
+
 Stdlib only, and deliberately fails closed. A workflow that never ran for this
 sha, one still running when the deadline passes, an unreadable API reply, and a
 run that concluded anything other than ``success`` are all failures: a release
@@ -34,6 +42,13 @@ import urllib.request
 API = "https://api.github.com"
 
 PASS, FAIL, PENDING = "pass", "fail", "pending"
+
+# Workflows whose verdict comes from one event's runs only. Just ci: it is the
+# one gate with a long non-push run on main (the whole-codebase mutation run),
+# and publish.yml fires on ci's *push* run. pip-audit's weekly schedule is
+# deliberately absent -- a newer red audit of the same commit against today's
+# advisories is a reason not to ship.
+EVENT_FOR = {"ci.yml": "push"}
 
 
 def api_get(path: str, token: str, attempts: int = 3):
@@ -61,8 +76,12 @@ def api_get(path: str, token: str, attempts: int = 3):
     return None
 
 
-def evaluate(payload):
+def evaluate(payload, event=None):
     """Classify the newest run in an Actions ``/runs`` payload.
+
+    With ``event``, only runs that name that event count -- the API is asked
+    to filter too, and this is the check that does not depend on it. A run
+    that does not say which event fired it is not the one asked for.
 
     Returns ``(PASS|FAIL|PENDING, detail)``. Anything the API did not clearly
     say was a success is PENDING (keep waiting) or FAIL (stop now) — there is
@@ -73,6 +92,10 @@ def evaluate(payload):
     runs = payload.get("workflow_runs")
     if not isinstance(runs, list) or not runs:
         return PENDING, "no run recorded for this commit yet"
+    if event is not None:
+        runs = [r for r in runs if isinstance(r, dict) and r.get("event") == event]
+        if not runs:
+            return PENDING, "no %s run recorded for this commit yet" % event
     run = runs[0]
     if not isinstance(run, dict):
         return PENDING, "malformed run entry"
@@ -108,7 +131,10 @@ def wait_for_gates(repo, sha, workflows, fetch, sleep=time.sleep,
         for name in list(pending):
             path = ("/repos/%s/actions/workflows/%s/runs?head_sha=%s&per_page=20"
                     % (repo, urllib.parse.quote(name), urllib.parse.quote(sha)))
-            verdict, detail = evaluate(fetch(path))
+            event = EVENT_FOR.get(name)
+            if event:
+                path += "&event=" + urllib.parse.quote(event)
+            verdict, detail = evaluate(fetch(path), event=event)
             if verdict is PASS:
                 pending.remove(name)
                 passed[name] = detail
