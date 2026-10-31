@@ -6988,7 +6988,7 @@ def backfill_skill_copies(dry: bool = False) -> list[str]:
         if dry:
             # The run's copy row, as far as the targets read one: by its slot
             # (`lockfile.is_skill_copy`), so the targets are the run's.
-            will = copy_link_targets(name, {**entry, "materializations": [
+            will = copy_link_targets(name, entry | {"materializations": [
                 *(entry.get("materializations") or ()),
                 {"slot": workflows.SLOT_SKILL}]})
             lines.append("would write workflow %s's skill copy to %s%s"
