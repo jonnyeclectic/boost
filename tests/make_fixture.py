@@ -147,7 +147,8 @@ def main() -> int:
     # `pytest -n auto` with git 2.56 (test_drift_hint, one run in three).
     # Repo-local, so every `copytree` of the fixture inherits it; a `git clone`
     # does not (it writes a fresh .git/config), which is why the suite also
-    # sets it process-wide in conftest's `_disable_git_auto_maintenance`.
+    # sets it process-wide (`_tapped_support.disable_git_auto_maintenance`,
+    # called from conftest.py's pytest_configure).
     run("git", "config", "maintenance.auto", "false")
     run("git", "add", "-A")
     run("git", "commit", "-qm", "fixture skills")

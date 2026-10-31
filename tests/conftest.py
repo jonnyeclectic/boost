@@ -16,6 +16,7 @@ import sys
 import tempfile
 from pathlib import Path
 
+import _tapped_support
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -456,6 +457,11 @@ _RELOCATING_ENV = ("BOOST_HOME", "BOOST_AGENTS_STORE", "CODEX_HOME",
 
 _SESSION_HOME: list[Path] = []
 
+#: ``os.environ`` as ``pytest_configure`` leaves it -- the session HOME in, the
+#: git auto-maintenance setting in, no test run yet. Filled there, once per
+#: process (an xdist worker configures for itself).
+_SESSION_ENV: dict[str, str] = {}
+
 
 def _isolate_home() -> Path:
     """Point ``$HOME`` at a throwaway directory for the whole session.
@@ -485,36 +491,6 @@ def _isolate_home() -> Path:
         os.environ.pop(name, None)
     _SESSION_HOME.append(home)
     return home
-
-
-def _disable_git_auto_maintenance(environ=os.environ) -> None:
-    """Run every child ``git`` with ``maintenance.auto=false``.
-
-    ``git commit``/``fetch``/``merge``/``rebase`` otherwise leave a DETACHED
-    ``git maintenance run --auto`` behind, which creates and deletes
-    ``.git/objects/maintenance.lock`` after the command returned; a test that
-    then ``copytree``s the repo lists the lock, finds it gone, and raises
-    ``shutil.Error``. Measured under ``pytest -n auto`` (git 2.56): two tests
-    errored in three runs, and passed serially. ``maintenance.auto`` stops the
-    process from starting at all, so ``gc.auto=0`` would add nothing — the
-    detached run takes the lock before it checks any task's condition.
-
-    Environment rather than a ``~/.gitconfig``: it survives the ``sandbox``
-    fixture's per-test HOME and tests that set ``GIT_CONFIG_GLOBAL=/dev/null``,
-    and reaches boost's own git calls. Appends to any ``GIT_CONFIG_COUNT``
-    entries already present, and is idempotent, because an xdist worker
-    inherits the controller's environment and then configures again.
-    """
-    try:
-        count = int(environ.get("GIT_CONFIG_COUNT", "0"))
-    except ValueError:
-        count = 0
-    if any(environ.get("GIT_CONFIG_KEY_%d" % i) == "maintenance.auto"
-           for i in range(count)):
-        return
-    environ["GIT_CONFIG_KEY_%d" % count] = "maintenance.auto"
-    environ["GIT_CONFIG_VALUE_%d" % count] = "false"
-    environ["GIT_CONFIG_COUNT"] = str(count + 1)
 
 
 def pytest_unconfigure(config):
@@ -560,7 +536,10 @@ def pytest_configure(config):
     """
     del config
     _isolate_home()
-    _disable_git_auto_maintenance()
+    _tapped_support.disable_git_auto_maintenance()
+    # What a test starts from, before any test has patched anything: the child
+    # that builds the tapped-HOME template is given this, not the live environ.
+    _SESSION_ENV.update(os.environ)
     _cap_mutant_memory()
     if not os.environ.get("MUTANT_UNDER_TEST"):
         return          # not a mutmut run — nothing to normalize
@@ -737,6 +716,22 @@ def _no_interpreter_ceiling():
 @pytest.fixture()
 def sandbox(tmp_path, monkeypatch):
     """A fresh fake $HOME; returns its Path."""
+    return _sandbox_home(tmp_path, monkeypatch)
+
+
+def _sandbox_home(tmp_path, monkeypatch):
+    """Everything `sandbox` does, for a caller that holds its own MonkeyPatch.
+
+    A function rather than the fixture body so `sandbox_env_delta` can run it
+    and record exactly what it changes. `tapped_template` builds its HOME in a
+    child process from a hand-kept second copy of that list
+    (`_tapped_support.SANDBOX_ENV` / `SANDBOX_UNSET`), and that copy is the
+    thing that would drift: a template tapped under a looser environment than
+    the tests would hand every one of them a HOME no test-time `boost tap`
+    could produce. So `test_tapped_template.py`'s
+    `test_the_child_environment_is_what_the_sandbox_gives_a_test` compares the
+    copy with `sandbox_env_delta`, the ground truth taken from this function.
+    """
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
@@ -1034,10 +1029,122 @@ def signer():
     return _MinisignSigner()
 
 
+@pytest.fixture(scope="session")
+def pristine_env():
+    """A copy of the environment the session started from (see ``_SESSION_ENV``)."""
+    return dict(_SESSION_ENV)
+
+
 @pytest.fixture()
-def tapped(boost, fixture_tap_src):
-    """Sandbox with the fixture tap added. Returns the tap's source path."""
-    boost("tap", fixture_tap_src)
+def sandbox_env_delta(tmp_path, monkeypatch):
+    """What `_sandbox_home` changes in ``os.environ``: ``{name: new value or None}``.
+
+    The template's build environment (:data:`_tapped_support.SANDBOX_ENV`) is a
+    second copy of what `sandbox` sets; this is the ground truth it is compared
+    with, taken by running `_sandbox_home` itself.
+    """
+    before = dict(os.environ)
+    _sandbox_home(tmp_path, monkeypatch)
+    return {k: os.environ.get(k) for k in {*before, *os.environ}
+            if before.get(k) != os.environ.get(k)}
+
+
+@pytest.fixture(scope="session")
+def tapped_template(tmp_path_factory, fixture_tap_src, pristine_env):
+    """A HOME as ``boost tap fixture_tap_src`` leaves it, built once per worker.
+
+    ``tapped`` ran that command for every test that asked: a ``git clone``, a
+    catalog scan and a config write. Over the 1,474 tests that use it (setup
+    only, serial, two interleaved before/after pairs) the fixture body went
+    from 0.12-0.15 s to 0.032 s, and a test's whole setup, for the 882 that do
+    not also ``install``, from a 0.124 s median (0.161 mean) to 0.035 s (0.05
+    mean). The result is the same every time -- the source is a session-scoped
+    repo no test edits -- so it is built once and each test copies it
+    (:func:`restore_tapped_home`). ``installed`` still runs its ``install`` per
+    test: that is a write the test may then change, not a shared starting point.
+
+    The HOME is made by the real command in a **child process** with an
+    environment spelled out in :mod:`_tapped_support` (the sandbox's variables
+    over the session's starting environment), not in this process. This fixture
+    is first requested from inside whichever test reaches ``tapped`` first
+    (``tapped`` asks for it lazily, so mutmut never builds one), and it is then
+    cached for the worker: built in-process it saw that test's live patches --
+    a fixture stubbing ``catalog.scan_dir`` ahead of ``tapped`` cached an empty
+    catalog, and an unrelated later test failed ``0 > 0`` depending on which
+    test the scheduler dealt a worker first. A child process cannot see them.
+    There is no mutmut reason left for building in-process: mutmut never uses
+    this fixture (``tapped`` taps per test while it drives), and the clean pass
+    that does records nothing.
+
+    The result is checked before it is returned -- the tap row in
+    ``config.json``, a non-empty catalog cache, a clone whose HEAD is the commit
+    the cache describes -- and a fixture that raises is not cached as a value, so
+    a bad template fails loudly everywhere it is asked for.
+
+    Nothing in the HOME names its own location. Checked against a real tap:
+    ``config.json`` and the catalog cache carry the *source* repo's path (this
+    worker's ``fixture_tap_src``, which is why the template must be per worker),
+    and the clone's ``.git/config`` its origin URL -- no alternates, no
+    worktree paths, no symlinks, no reference to the HOME it was cloned into.
+    A change that makes the HOME self-referential fails
+    ``tests/unit/test_tapped_template.py``, not a distant test.
+
+    ``tmp_path_factory`` is per xdist worker (``.../popen-gwN``), so workers
+    never share or race on a template; each builds its own on first use.
+    """
+    return _tapped_support.build_tapped_home(
+        tmp_path_factory.mktemp("tapped-template"), fixture_tap_src,
+        pristine_env, ROOT)
+
+
+@pytest.fixture()
+def restore_tapped_home(tapped_template):
+    """A function copying the tapped template into a directory; returns it.
+
+    See :func:`_tapped_support.copy_template` for what the copy keeps (links,
+    file times) and what it cannot (git's index stat data).
+    """
+    def restore(dest):
+        return _tapped_support.copy_template(tapped_template, dest)
+    return restore
+
+
+@pytest.fixture()
+def tapped(request, boost, sandbox, fixture_tap_src):
+    """Sandbox with the fixture tap added. Returns the tap's source path.
+
+    A copy of ``tapped_template`` rather than a ``boost tap`` per test -- except
+    in two cases that run the real command, as this fixture did before the
+    template existed:
+
+    * **mutmut is driving the run** (:func:`_tapped_support.under_mutmut`).
+      mutmut maps a mutant to the tests that reached its function in the stats
+      pass, and hands a pass's hits to the one test whose teardown comes next.
+      A copy reaches none of ``registry.add``, ``catalog.rebuild_tap`` or
+      ``gitutil.clone_shallow``, so behind the template those mutants would
+      keep one ``tapped`` test instead of ~117 unit ones, and any a downstream
+      reader (search, list, info) alone caught could survive. The mutation gate
+      is a kill-count floor, so the speed-up stays out of its way.
+    * **the HOME already holds something.** ``boost tap`` *adds a row* to
+      whatever ``config.json`` is there, and a copy would overwrite it, so a
+      test that seeds the HOME before asking for ``tapped`` keeps the old
+      behaviour.
+
+    The template is requested from inside the branch that uses it, not named in
+    the signature: a fixture in the signature is built whether or not the body
+    reaches for it, and under mutmut that would tap a template nothing reads,
+    in a run where the tap is the code under mutation.
+    """
+    if _tapped_support.under_mutmut() or any(sandbox.iterdir()):
+        boost("tap", fixture_tap_src)
+        return fixture_tap_src
+    from boost_cli.core import paths
+    # Only the copy lands files at a place it chose, so only it can miss: the
+    # real tap goes wherever boost resolves, as it always did.
+    assert paths.boost_home() == sandbox / ".boost", (
+        "a copied tap lands under the sandbox HOME, but boost state resolves"
+        " to %s -- BOOST_HOME was set before `tapped` ran" % paths.boost_home())
+    request.getfixturevalue("restore_tapped_home")(sandbox)
     return fixture_tap_src
 
 
