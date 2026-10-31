@@ -2132,7 +2132,7 @@ def pick_run(tmp_path):
     fixtures.mkdir()
     calls = tmp_path / "gh.log"
 
-    def run(listed, artifacts, triggering=""):
+    def run(listed, artifacts, triggering="", ok=True):
         (fixtures / "runs.json").write_text(json.dumps(listed), encoding="utf-8")
         for run_id, body in artifacts.items():
             (fixtures / ("artifacts-%d.json" % run_id)).write_text(
@@ -2144,6 +2144,8 @@ def pick_run(tmp_path):
             "PATH": "%s%s%s" % (bin_dir, os.pathsep, os.environ["PATH"]),
             "CALLS": str(calls), "FIXTURES": str(fixtures), "GITHUB_OUTPUT": str(out),
             "GH_TOKEN": "t", "REPO": "o/boost", "TRIGGERING": triggering})
+        if not ok:
+            return proc, out.read_text(encoding="utf-8")
         assert proc.returncode == 0, proc.stdout + proc.stderr
         got = dict(line.split("=", 1) for line in out.read_text(encoding="utf-8").splitlines())
         return got["run-id"], calls.read_text(encoding="utf-8").splitlines(), proc.stdout
@@ -2196,6 +2198,18 @@ def test_no_run_with_weights_is_reported_not_guessed(pick_run):
     run_id, _, stdout = pick_run([{"databaseId": 33, "event": "push"}], {33: _artifacts()})
     assert run_id == ""
     assert "mutation-weights" in stdout
+
+
+@needs_jq
+def test_an_unreadable_artifact_list_fails_the_step_rather_than_skipping_on(pick_run):
+    # A 403/5xx on run 34's artifacts says nothing about whether it holds
+    # weights. Moving on to 14 would apply an older measurement while a newer
+    # one may exist, so the step goes red (an issue, since this workflow is
+    # watched) and names no run.
+    listed = [{"databaseId": 34, "event": "schedule"}, {"databaseId": 14, "event": "schedule"}]
+    proc, output = pick_run(listed, {14: _artifacts(False)}, ok=False)
+    assert proc.returncode != 0
+    assert "run-id=" not in output
 
 
 @needs_jq
