@@ -888,3 +888,38 @@ def test_every_planned_shard_must_have_uploaded(jobs, tmp_path, present, rc):
         (tmp_path / root / rel).mkdir(parents=True)
     proc = _bash(step, tmp_path, {"MATRIX": SHADOW3})
     assert proc.returncode == rc, proc.stdout + proc.stderr
+
+
+@needs_bash
+def test_a_lone_shard_downloaded_flat_is_put_back_under_its_name(jobs, tmp_path):
+    # download-artifact (v8.0.2, src/download-artifact.ts) writes a pattern
+    # download that matches ONE artifact straight into `path:`, with no
+    # <artifact-name>/ level -- `artifacts.length === 1 ? resolvedPath : ...`.
+    # One diff shard is the commonest diff plan, so without this every such
+    # PR would read "no results from diff shard 0" and go red.
+    job = jobs["mutation"]
+    step = _step(job, name="every planned shard uploaded results")
+    root = tmp_path / Path(_downloads(job)["mutation-full-shard-*"]["with"]["path"]).parent
+    for i in range(2):
+        (root / "full" / ("mutation-full-shard-%d" % i)).mkdir(parents=True)
+    (root / "diff").mkdir()
+    (root / "diff" / "m.py.meta").write_text("{}", encoding="utf-8")
+    proc = _bash(step, tmp_path, {"MATRIX": SHADOW3})
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert (root / "diff" / "mutation-diff-shard-0" / "m.py.meta").is_file()
+    assert not (root / "diff" / "m.py.meta").exists()
+
+
+@needs_bash
+def test_a_flat_download_of_several_planned_shards_stays_red(jobs, tmp_path):
+    # Two planned, one arrived (flat, because it was the only match): which
+    # shard it was is unknowable, so nothing is moved and the check fails.
+    job = jobs["mutation"]
+    step = _step(job, name="every planned shard uploaded results")
+    root = tmp_path / Path(_downloads(job)["mutation-full-shard-*"]["with"]["path"]).parent
+    (root / "full").mkdir(parents=True)
+    (root / "full" / "m.py.meta").write_text("{}", encoding="utf-8")
+    (root / "diff" / "mutation-diff-shard-0").mkdir(parents=True)
+    proc = _bash(step, tmp_path, {"MATRIX": SHADOW3})
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert not (root / "full" / "mutation-full-shard-0").exists()
