@@ -326,6 +326,11 @@ def test_parsable_core_source_and_init_have_no_reason():
         (".github/workflows/ci.yml", "jobs: {}\n", "jobs: [unclosed\n"),
         (".github/workflows/ci.yml", "jobs: {}\n", "jobs: [a, b]\n"),
         (".github/workflows/ci.yml", "jobs: {}\n", "jobs: 3\n"),
+        # a top level that is no mapping has no `jobs` to read: an
+        # AttributeError out of the planner before it was a reason
+        (".github/workflows/ci.yml", "jobs: {}\n", "- a\n"),
+        (".github/workflows/ci.yml", "jobs: {}\n", "3\n"),
+        (".github/workflows/ci.yml", "jobs: {}\n", '"text"\n'),
     ],
 )
 def test_unparsable_config_is_a_reason_not_a_crash(path, good, bad):

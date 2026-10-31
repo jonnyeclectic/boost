@@ -765,7 +765,8 @@ jobs:
   # with pull requests gated on their diff and pushes able to skip, that run
   # is where the whole codebase is held to 80%, and with an unproven push it
   # is the only full run whose `mutation-weights` the refresh workflow takes.
-  # On any event, a change that cannot move the score plans `none`.
+  # On a pull request, merge-queue entry or push, a change that cannot move
+  # the score plans `none`.
   #
   # `mutation` is the context named in .github/required-checks.txt, so it must run
   # and report on every pull request. Neither path-filtering it nor letting
