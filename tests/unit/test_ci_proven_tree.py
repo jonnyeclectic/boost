@@ -59,13 +59,17 @@ HEAD2 = "c" * 40      # another PR head
 TREE = "T" * 40
 OTHER = "O" * 40
 
-GOOD = pt.Candidate("h", "T", 7, "success")
-
 # The clock every test pins. A test that leaves `now` to the real clock would
-# pass or fail depending on the day it runs, once a nightly's age matters.
+# pass or fail depending on the day it runs, once a nightly's age matters --
+# and a PR run's age now matters on every candidate that is meant to prove.
 NOW = datetime(2026, 10, 31, 9, 0, tzinfo=UTC)
 NOW_ISO = "2026-10-31T09:00:00+00:00"
 ARGV = ["--sha", SHA, "--now", NOW_ISO]
+
+# A PR run an hour old: well inside the 13 days a PR run may prove a tree for.
+FRESH = NOW - timedelta(hours=1)
+
+GOOD = pt.Candidate("h", "T", 7, "success", run_created_at=FRESH)
 
 
 def hours_before_now(hours):
@@ -82,12 +86,14 @@ def nightly(hours, conclusion="success"):
 # --------------------------------------------------------------------------
 
 def test_skips_when_tree_matches_a_green_pr_and_nightly_is_green():
-    assert pt.decide("T", [GOOD], "success") == pt.Decision(True, ANY, 7)
+    assert pt.decide("T", [GOOD], "success", now=NOW) == pt.Decision(True, ANY, 7)
 
 
 def test_the_skip_reason_names_the_run_and_the_tree():
-    reason = pt.decide("T" * 40, [pt.Candidate("h" * 40, "T" * 40, 7, "success")],
-                       "success").reason
+    cand = pt.Candidate("h" * 40, "T" * 40, 7, "success", run_created_at=FRESH)
+    decision = pt.decide("T" * 40, [cand], "success", now=NOW)
+    assert decision.skip is True
+    reason = decision.reason
     assert "7" in reason
     assert "T" * 12 in reason
 
@@ -167,8 +173,9 @@ def test_a_tree_that_is_only_a_prefix_of_the_merge_tree_is_not_equal():
         cand = pt.Candidate("h", prefix, 7, "success")
         assert pt.decide(merge_tree, [cand], "success").skip is False
     # and the identical 40 characters are the one thing that does match
-    assert pt.decide(merge_tree, [pt.Candidate("h", merge_tree, 7, "success")],
-                     "success").skip is True
+    assert pt.decide(merge_tree, [pt.Candidate("h", merge_tree, 7, "success",
+                                               run_created_at=FRESH)],
+                     "success", now=NOW).skip is True
 
 
 @pytest.mark.parametrize("bad", [
@@ -212,8 +219,8 @@ def test_several_prs_none_matching_is_a_full_run_and_says_why_for_each():
 def test_a_later_pr_may_be_the_proof_and_its_run_is_reported():
     cands = [pt.Candidate("h1", "T", 1, "failure"),     # same tree, red run
              pt.Candidate("h2", "X", 2, "success"),     # green run, other tree
-             pt.Candidate("h3", "T", 3, "success")]     # the proof
-    assert pt.decide("T", cands, "success") == pt.Decision(True, ANY, 3)
+             pt.Candidate("h3", "T", 3, "success", run_created_at=FRESH)]  # the proof
+    assert pt.decide("T", cands, "success", now=NOW) == pt.Decision(True, ANY, 3)
 
 
 def test_a_proven_tree_with_a_red_nightly_still_runs_everything():
@@ -317,8 +324,71 @@ def test_decide_reads_the_real_clock_when_not_given_one():
     real_now = datetime.now(UTC)
     fresh = pt.Nightly("success", real_now - timedelta(hours=1))
     old = pt.Nightly("success", real_now - timedelta(hours=100))
-    assert pt.decide("T", [GOOD], fresh).skip is True
-    assert pt.decide("T", [GOOD], old).skip is False
+    cand = pt.Candidate("h", "T", 7, "success", run_created_at=real_now - timedelta(hours=1))
+    assert pt.decide("T", [cand], fresh).skip is True
+    assert pt.decide("T", [cand], old).skip is False
+    # ... for the PR run's age as well as the nightly's.
+    stale = pt.Candidate("h", "T", 7, "success", run_created_at=real_now - timedelta(days=14))
+    assert pt.decide("T", [stale], fresh).skip is False
+
+
+# --- the PR run's age: the badge reads its coverage-report ------------------
+#
+# On a proven push ci.yml's `coverage-badge` downloads `coverage-report` from
+# the PR run this script names, and that artifact is kept 14 days. A PR run
+# older than 13 days is therefore not proof: the push runs everything, which
+# also gives the badge a report of its own. Exactly 13 days still counts, as
+# exactly 48 hours does for the nightly.
+
+def pr_run_aged(age, **kwargs):
+    return pt.Candidate("h", "T", 7, "success", run_created_at=NOW - age, **kwargs)
+
+
+@pytest.mark.parametrize("age, skip", [
+    (timedelta(0), True),
+    (timedelta(days=12), True),
+    (timedelta(days=13), True),
+    (timedelta(days=13, seconds=1), False),
+    (timedelta(days=14), False),
+    (timedelta(days=90), False),
+])
+def test_a_pr_run_proves_its_tree_for_13_days(age, skip):
+    assert pt.decide("T", [pr_run_aged(age)], "success", now=NOW).skip is skip
+
+
+def test_a_stale_pr_run_says_how_old_it_is_and_why_that_matters():
+    reason = pt.decide("T", [pr_run_aged(timedelta(days=14))], "success", now=NOW).reason
+    assert "ci run 7" in reason
+    assert "14 days old" in reason
+    assert "coverage-report" in reason
+
+
+def test_a_pr_run_just_past_13_days_never_reads_as_13():
+    reason = pt.decide("T", [pr_run_aged(timedelta(days=13, seconds=1))], "success",
+                       now=NOW).reason
+    assert "13.1 days old" in reason
+
+
+def test_a_pr_run_with_no_creation_time_is_not_proof():
+    cand = pt.Candidate("h", "T", 7, "success")     # run_created_at defaults to None
+    decision = pt.decide("T", [cand], "success", now=NOW)
+    assert decision.skip is False
+    assert "created_at unknown" in decision.reason
+
+
+def test_a_pr_run_dated_in_the_future_is_not_trusted():
+    decision = pt.decide("T", [pr_run_aged(-timedelta(hours=2))], "success", now=NOW)
+    assert decision.skip is False
+    assert "in the future" in decision.reason
+    # a minute of skew between GitHub's clock and the runner's is not that
+    assert pt.decide("T", [pr_run_aged(-timedelta(minutes=1))], "success",
+                     now=NOW).skip is True
+
+
+def test_a_stale_pr_run_is_judged_after_everything_cheaper_to_explain():
+    # A red, stale run is reported red: the age is the last thing checked.
+    cand = pt.Candidate("h", "T", 7, "failure", run_created_at=NOW - timedelta(days=30))
+    assert "concluded failure" in pt.decide("T", [cand], "success", now=NOW).reason
 
 
 # --------------------------------------------------------------------------
@@ -406,7 +476,8 @@ def test_gather_assembles_the_three_facts_decide_needs():
     api = FakeApi(green_routes())
     merge_tree, cands, last = pt.gather(api, SHA)
     assert merge_tree == TREE
-    assert cands == [pt.Candidate(HEAD, TREE, 7, "success", "pull_request", HEAD, 1)]
+    assert cands == [pt.Candidate(HEAD, TREE, 7, "success", "pull_request", HEAD, 1,
+                                  datetime(2026, 10, 30, 10, tzinfo=UTC))]
     assert last == pt.Nightly("success", datetime(2026, 10, 30, 10, tzinfo=UTC))
     assert pt.decide(merge_tree, cands, last, now=NOW) == pt.Decision(True, ANY, 7)
 
@@ -957,6 +1028,26 @@ def test_main_skips_only_while_the_nightly_is_recent(gh_env, hours, skip):
     assert _outputs(gh_env)["skip"] == skip
     if skip == "false":
         assert "nightly stale (%dh)" % hours in _summary(gh_env)
+
+
+@pytest.mark.parametrize("days,skip", [(12, "true"), (13, "true"), (14, "false")])
+def test_main_skips_only_while_the_pr_runs_coverage_report_exists(gh_env, days, skip):
+    api = FakeApi(green_routes(**{
+        pr_runs_path(HEAD): runs(run(created=hours_before_now(24 * days)))}))
+    assert pt.main(ARGV, api=api, env=gh_env) == 0
+    assert _outputs(gh_env) == {"skip": skip, "pr_run_id": "7" if skip == "true" else ""}
+    if skip == "false":
+        assert "%d days old" % days in _summary(gh_env)
+
+
+@pytest.mark.parametrize("created", ["garbage", "2026-10-30T10:00:00", None])
+def test_main_a_pr_run_without_a_usable_created_at_is_a_full_run(gh_env, created):
+    lone = run()
+    lone["created_at"] = created
+    api = FakeApi(green_routes(**{pr_runs_path(HEAD): runs(lone)}))
+    assert pt.main(ARGV, api=api, env=gh_env) == 0
+    assert _outputs(gh_env) == {"skip": "false", "pr_run_id": ""}
+    assert "created_at unknown" in _summary(gh_env)
 
 
 def test_main_a_nightly_without_created_at_is_a_full_run(gh_env):
@@ -1804,6 +1895,16 @@ def test_the_badge_runs_on_main_pushes_whatever_upstream_did(jobs):
     assert "timeout-minutes" in job
 
 
+def test_a_failed_badge_is_red_but_never_holds_a_release(jobs):
+    # The badge is cosmetic: a red badge job shows on the run, and the run
+    # (which publish.yml releases on) still concludes on the real gates. Its
+    # own checks are steps with no continue-on-error, so they still fail it.
+    job = jobs["coverage-badge"]
+    assert job["continue-on-error"] is True
+    for step in job["steps"]:
+        assert "continue-on-error" not in step, step.get("name")
+
+
 def _badge_step(jobs, needle):
     found = [s for s in jobs["coverage-badge"]["steps"] if needle in s.get("run", "")]
     assert len(found) == 1, needle
@@ -1969,3 +2070,145 @@ def test_the_refresh_refuses_anything_else(kwargs):
 
 def test_the_refresh_can_still_be_run_by_hand():
     assert _refresh_accepts("workflow_dispatch")
+
+
+# --- the manual path: which run's weights --------------------------------
+#
+# On a dispatch of the refresh itself there is no triggering run, so the step
+# looks one up. "The newest green ci on main" now usually names a proven push,
+# which uploads no weights, so it asks the artifacts API run by run for one
+# that still holds a live `mutation-weights` artifact. The stub `gh` applies
+# the step's own `-q` jq programs to fixture JSON, so the filters are real.
+
+def _refresh_steps():
+    yaml = pytest.importorskip("yaml")
+    if not REFRESH_YML.exists():
+        pytest.skip(".github/workflows not reachable (e.g. mutation sandbox)")
+    wf = yaml.safe_load(REFRESH_YML.read_text(encoding="utf-8"))
+    return wf["jobs"]["rebalance"]["steps"]
+
+
+def _refresh_step(step_id):
+    found = [s for s in _refresh_steps() if s.get("id") == step_id]
+    assert len(found) == 1, step_id
+    return found[0]
+
+
+needs_jq = pytest.mark.skipif(
+    sys.platform == "win32" or not shutil.which("bash") or not shutil.which("jq"),
+    reason="runs a workflow step's bash, which needs bash and jq")
+
+_GH_STUB = r"""#!/bin/bash
+echo "gh $*" >> "$CALLS"
+q=""; prev=""
+for a in "$@"; do [ "$prev" = "-q" ] && q="$a"; prev="$a"; done
+if [ "$1 $2" = "run list" ]; then
+  jq -r "$q" "$FIXTURES/runs.json"; exit $?
+fi
+if [ "$1" = api ]; then
+  id="$(echo "$2" | sed -E 's#.*/runs/([0-9]+)/artifacts.*#\1#')"
+  f="$FIXTURES/artifacts-$id.json"
+  [ -f "$f" ] || { echo "gh: Not Found (HTTP 404)" >&2; exit 1; }
+  jq -r "$q" "$f"; exit $?
+fi
+exit 99
+"""
+
+
+def _artifacts(*expired):
+    return {"total_count": len(expired),
+            "artifacts": [{"name": "mutation-weights", "expired": e} for e in expired]}
+
+
+@pytest.fixture
+def pick_run(tmp_path):
+    step = _refresh_step("source")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    gh = bin_dir / "gh"
+    gh.write_text(_GH_STUB, encoding="utf-8")
+    gh.chmod(0o755)
+    fixtures = tmp_path / "fixtures"
+    fixtures.mkdir()
+    calls = tmp_path / "gh.log"
+
+    def run(listed, artifacts, triggering=""):
+        (fixtures / "runs.json").write_text(json.dumps(listed), encoding="utf-8")
+        for run_id, body in artifacts.items():
+            (fixtures / ("artifacts-%d.json" % run_id)).write_text(
+                json.dumps(body), encoding="utf-8")
+        out = tmp_path / "out"
+        out.write_text("", encoding="utf-8")
+        calls.write_text("", encoding="utf-8")
+        proc = _run_step(step, tmp_path, {
+            "PATH": "%s%s%s" % (bin_dir, os.pathsep, os.environ["PATH"]),
+            "CALLS": str(calls), "FIXTURES": str(fixtures), "GITHUB_OUTPUT": str(out),
+            "GH_TOKEN": "t", "REPO": "o/boost", "TRIGGERING": triggering})
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        got = dict(line.split("=", 1) for line in out.read_text(encoding="utf-8").splitlines())
+        return got["run-id"], calls.read_text(encoding="utf-8").splitlines(), proc.stdout
+    return run
+
+
+@needs_jq
+def test_the_manual_path_skips_runs_that_uploaded_no_weights(pick_run):
+    listed = [{"databaseId": 30, "event": "push"},          # proven: no weights
+              {"databaseId": 20, "event": "push"},          # docs-only: none either
+              {"databaseId": 10, "event": "schedule"}]      # the nightly: weights
+    run_id, calls, _ = pick_run(listed, {30: _artifacts(), 20: _artifacts(),
+                                         10: _artifacts(False)})
+    assert run_id == "10"
+    assert [c for c in calls if c.startswith("gh api ")] == [
+        "gh api repos/o/boost/actions/runs/%d/artifacts?name=mutation-weights -q %s"
+        % (n, "[.artifacts[] | select(.expired | not)] | length") for n in (30, 20, 10)]
+
+
+@needs_jq
+def test_the_manual_path_takes_whichever_event_actually_has_them(pick_run):
+    # No event is assumed to carry weights: an unproven push does too.
+    listed = [{"databaseId": 31, "event": "push"}, {"databaseId": 11, "event": "schedule"}]
+    run_id, _, _ = pick_run(listed, {31: _artifacts(False), 11: _artifacts(False)})
+    assert run_id == "31"
+
+
+@needs_jq
+def test_an_expired_artifact_is_not_a_measurement(pick_run):
+    listed = [{"databaseId": 32, "event": "workflow_dispatch"},
+              {"databaseId": 12, "event": "schedule"}]
+    run_id, _, _ = pick_run(listed, {32: _artifacts(True), 12: _artifacts(True, False)})
+    assert run_id == "12"
+
+
+@needs_jq
+@pytest.mark.parametrize("event", ["pull_request", "merge_group"])
+def test_the_manual_path_never_takes_a_pull_requests_weights(pick_run, event):
+    # `--branch main` matches a fork PR raised from a branch called main, and a
+    # PR's shadow run uploads weights of a tree that is not main's. The same
+    # three events the workflow_run guard accepts, and no others.
+    listed = [{"databaseId": 40, "event": event}, {"databaseId": 13, "event": "schedule"}]
+    run_id, calls, _ = pick_run(listed, {40: _artifacts(False), 13: _artifacts(False)})
+    assert run_id == "13"
+    assert not any("/runs/40/" in c for c in calls)
+
+
+@needs_jq
+def test_no_run_with_weights_is_reported_not_guessed(pick_run):
+    run_id, _, stdout = pick_run([{"databaseId": 33, "event": "push"}], {33: _artifacts()})
+    assert run_id == ""
+    assert "mutation-weights" in stdout
+
+
+@needs_jq
+def test_a_triggering_run_is_taken_as_is(pick_run):
+    run_id, calls, _ = pick_run([], {}, triggering="777")
+    assert run_id == "777"
+    assert calls == []
+
+
+def test_the_download_waits_for_a_run_id_and_its_absence_is_reported():
+    fetch = _refresh_step("fetch")
+    assert fetch["if"] == "steps.source.outputs.run-id != ''"
+    assert fetch["with"]["run-id"] == "${{ steps.source.outputs.run-id }}"
+    report = next(s for s in _refresh_steps() if s.get("name") == "no measurement to apply")
+    # `skipped` is not `success`, so a dispatch that found no run still says so.
+    assert report["if"] == "steps.fetch.outcome != 'success'"

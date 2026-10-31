@@ -121,8 +121,14 @@ jobs:
       - name: which run measured the mutants
         id: source
         # `github.event.workflow_run.id` is empty on a manual dispatch, so that
-        # path asks for the most recent successful `ci` on main instead. Both
-        # end at a run id, which is the only thing the download needs.
+        # path has to find a run. "The newest green `ci` on main" is the wrong
+        # one now: most pushes are proven by their PR run and upload no
+        # weights, so it asks each candidate's artifacts instead of guessing
+        # which event carries them, and takes the newest that holds an
+        # unexpired `mutation-weights`. Only the three events the workflow_run
+        # guard accepts -- `--branch main` also matches a fork PR raised from a
+        # branch called main. Finding none leaves the id empty, and the
+        # download below waits for one.
         env:
           GH_TOKEN: ${{ github.token }}
           TRIGGERING: ${{ github.event.workflow_run.id }}
@@ -131,14 +137,24 @@ jobs:
           set -euo pipefail
           id="$TRIGGERING"
           if [ -z "$id" ]; then
-            id="$(gh run list --repo "$REPO" --workflow ci.yml --branch main \
-                    --status success --limit 1 --json databaseId \
-                    -q '.[0].databaseId')"
+            candidates="$(gh run list --repo "$REPO" --workflow ci.yml --branch main \
+                    --status success --limit 30 --json databaseId,event \
+                    -q '.[] | select(.event == "push" or .event == "schedule" or .event == "workflow_dispatch") | .databaseId')"
+            for candidate in $candidates; do
+              held="$(gh api "repos/$REPO/actions/runs/$candidate/artifacts?name=mutation-weights" \
+                        -q '[.artifacts[] | select(.expired | not)] | length')"
+              if [ "${held:-0}" -gt 0 ]; then id="$candidate"; break; fi
+            done
           fi
           echo "run-id=$id" >> "$GITHUB_OUTPUT"
-          echo "measuring run $id"
+          if [ -n "$id" ]; then
+            echo "measuring run $id"
+          else
+            echo "no green ci run on main holds an unexpired mutation-weights artifact"
+          fi
       - name: download the measured hints
         id: fetch
+        if: steps.source.outputs.run-id != ''
         # `continue-on-error`, because "that run did not reach the mutation
         # gate" is the ordinary case, not a fault: ci.yml skips the whole gate
         # when nothing mutable changed, and runs no shards on a push whose tree
@@ -156,6 +172,14 @@ jobs:
         env:
           RUN_ID: ${{ steps.source.outputs.run-id }}
         run: |
+          if [ -z "$RUN_ID" ]; then
+            {
+              echo "No green \`ci\` run on main among the newest thirty holds an"
+              echo "unexpired \`mutation-weights\` artifact; run the whole-codebase"
+              echo "mutation run (dispatch ci.yml on main) and try again."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           {
             echo "Run \`$RUN_ID\` published no \`mutation-weights\` artifact —"
             echo "it ran no full mutation run (nothing mutable changed, or a"

@@ -15,7 +15,11 @@ only when all three facts hold:
    A PR aimed at another branch is not counted: its ``pull_request`` run built
    the PR merged into *that* base, a different tree from the one that landed;
 2. that head's newest ``ci`` run, on the ``pull_request`` event, is a
-   first-attempt run that concluded ``success``;
+   first-attempt run that concluded ``success`` and was created at most 13 days
+   before now. The age bound is the badge's: on a proven push ci.yml publishes
+   the coverage badge from that run's ``coverage-report`` artifact, which is
+   kept 14 days, so an older run cannot stand in for this push's tests. A full
+   run then measures its own;
 3. the newest completed whole-codebase run on ``main`` (``schedule`` or
    ``workflow_dispatch``, whichever is newer) concluded ``success`` and was
    created at most 48 hours before now. This is the backstop for what a
@@ -50,13 +54,13 @@ shape gives ``true``. Concretely:
   the cost of reading it as unproven is one extra mutation run. A run object that
   lacks one of those fields yields a value ``decide`` rejects; absence is never
   defaulted into "fine".
-* The nightly's age is judged against ``now``, which is injectable (``decide``'s
-  ``now=``, the CLI's ``--now``) so tests do not depend on the day they run;
-  production never passes it. A ``created_at`` that is missing, unparseable or
-  without a timezone makes the age unknown, and unknown means a full run. A
-  ``created_at`` more than a few minutes in the *future* is also refused: skew
-  between GitHub's clock and the runner's is seconds, and anything larger is a
-  corrupt fact rather than a fresh run.
+* The nightly's age, and the PR run's, are judged against ``now``, which is
+  injectable (``decide``'s ``now=``, the CLI's ``--now``) so tests do not depend
+  on the day they run; production never passes it. A ``created_at`` that is
+  missing, unparseable or without a timezone makes the age unknown, and unknown
+  means a full run. A ``created_at`` more than a few minutes in the *future* is
+  also refused: skew between GitHub's clock and the runner's is seconds, and
+  anything larger is a corrupt fact rather than a fresh run.
 * Redirects are refused. ``urllib`` re-sends the ``Authorization`` header to a
   redirect target, and nothing here should ever be sent anywhere but
   ``api.github.com``.
@@ -113,6 +117,13 @@ MAIN = "main"
 # tolerated, two not; "more than" means exactly 48 h is still fresh.
 MAX_NIGHTLY_AGE = timedelta(hours=48)
 
+# A PR run older than this does not prove the tree. ci.yml keeps the
+# `coverage-report` artifact 14 days, and on a proven push `coverage-badge`
+# downloads it from the run this script names; a day's margin keeps a run near
+# the edge from expiring between this decision and that download. "More than"
+# again: exactly 13 days still proves.
+MAX_PR_RUN_AGE = timedelta(days=13)
+
 # How far ahead of the runner's clock a run's created_at may be before it is
 # treated as corrupt rather than as clock skew.
 CLOCK_SKEW = timedelta(minutes=5)
@@ -133,12 +144,16 @@ Api = Callable[[str], Any]
 class Candidate:
     """One PR head, and the newest ``ci`` run found for it.
 
-    The first four fields are the brief's interface. The last three describe the
-    run itself, and their defaults are the values of a run found by exactly the
-    query ``gather`` makes (this head, ``pull_request``, first attempt) so a
+    The first four fields are the brief's interface. The next three describe
+    the run itself, and their defaults are the values of a run found by exactly
+    the query ``gather`` makes (this head, ``pull_request``, first attempt) so a
     hand-built ``Candidate`` stays terse. ``gather`` never relies on them: it
     always fills all three from the API's own run object, and a field the object
     lacks becomes ``""`` / ``0``, which ``decide`` rejects.
+
+    ``run_created_at`` has no such default, because no query pins it: ``None``
+    is "unknown", and ``decide`` never skips on it. ``gather`` fills it from the
+    run's own ``created_at`` (``None`` when missing, unparseable or naive).
     """
 
     head_sha: str
@@ -148,6 +163,7 @@ class Candidate:
     run_event: str = "pull_request"
     run_head_sha: str | None = None     # None: the run is for ``head_sha``
     run_attempt: int = 1
+    run_created_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -174,7 +190,7 @@ def _is_int(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
 
-def _judge(merge_tree: str, cand: Candidate) -> tuple[bool, str]:
+def _judge(merge_tree: str, cand: Candidate, now: datetime) -> tuple[bool, str]:
     """Is this candidate the proof? Returns (yes, why-not-or-why)."""
     head = (cand.head_sha or "?")[:12]
     if not cand.head_sha:
@@ -199,12 +215,29 @@ def _judge(merge_tree: str, cand: Candidate) -> tuple[bool, str]:
     if cand.run_attempt != 1:
         return False, "%s is attempt %s, and only a first attempt counts" % (
             where, cand.run_attempt or "unknown")
+    # Last, so a run that is red or re-run is reported as that, not as old.
+    if cand.run_created_at is None:
+        return False, "%s: created_at unknown, so its age is too" % where
+    age = now - cand.run_created_at
+    if age > MAX_PR_RUN_AGE:
+        return False, ("%s is %s days old; a PR run proves a tree for %d days, "
+                       "while its coverage-report artifact (kept 14) still exists"
+                       % (where, _days(age), MAX_PR_RUN_AGE.days))
+    if age < -CLOCK_SKEW:
+        return False, "%s: created_at is in the future (%sh ahead of this clock)" % (
+            where, _hours(age))
     return True, "%s succeeded on this exact tree" % where
 
 
 def _hours(delta: timedelta) -> str:
     """Hours, rounded UP to a tenth: 48 h and 1 s reads 48.1, never a fresh-looking 48."""
     tenths = math.ceil(abs(delta.total_seconds()) / 360)
+    return ("%.1f" % (tenths / 10)).removesuffix(".0")
+
+
+def _days(delta: timedelta) -> str:
+    """Days, rounded UP to a tenth, like ``_hours``: 13 days and 1 s reads 13.1."""
+    tenths = math.ceil(abs(delta.total_seconds()) / 8640)
     return ("%.1f" % (tenths / 10)).removesuffix(".0")
 
 
@@ -228,8 +261,10 @@ def decide(merge_tree: str, candidates: list[Candidate],
     against ``now`` (the real clock when omitted). A bare conclusion string is
     also accepted -- the brief's original form -- and is judged on the
     conclusion alone: the caller then owns the freshness of what it passes.
-    ``main`` always goes through ``gather``.
+    ``main`` always goes through ``gather``. Each candidate's PR run is aged
+    against the same ``now``.
     """
+    now = datetime.now(UTC) if now is None else now
     reasons: list[str] = []
     winner: Candidate | None = None
     if not isinstance(merge_tree, str) or not merge_tree:
@@ -239,7 +274,7 @@ def decide(merge_tree: str, candidates: list[Candidate],
                        "(a direct push, or a PR aimed at another branch)")
     else:
         for cand in candidates:
-            ok, why = _judge(merge_tree, cand)
+            ok, why = _judge(merge_tree, cand, now)
             if ok:
                 winner = cand
                 break
@@ -249,8 +284,7 @@ def decide(merge_tree: str, candidates: list[Candidate],
 
     if isinstance(last_whole, Nightly):
         conclusion = last_whole.conclusion
-        age_problem = _age_problem(
-            last_whole.created_at, datetime.now(UTC) if now is None else now)
+        age_problem = _age_problem(last_whole.created_at, now)
     else:
         conclusion, age_problem = last_whole, None
     if conclusion is None:
@@ -354,7 +388,8 @@ def _candidate(api: Api, head: str) -> Candidate:
         conclusion,
         run_event=_text(run.get("event")),
         run_head_sha=_text(run.get("head_sha")),
-        run_attempt=attempt if _is_int(attempt) else 0)
+        run_attempt=attempt if _is_int(attempt) else 0,
+        run_created_at=_parse_when(run.get("created_at")))
 
 
 def _last_whole(api: Api) -> Nightly | None:
