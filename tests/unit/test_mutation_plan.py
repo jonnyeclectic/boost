@@ -317,6 +317,8 @@ def test_diff_plan_scopes_changed_functions_and_direct_callers(tmp_path, git_rep
     plan = plan_diff(tmp_path, git_repo, head)
     diff = plan["sets"]["diff"]
     assert plan["gate_set"] == "diff"
+    # The diff set alone: the full run no longer rides along on a PR.
+    assert list(plan["sets"]) == ["diff"]
     assert diff["functions"] == ["boost_cli.core.m.x_a", "boost_cli.core.m.x_b"]
     patterns = sorted(p for shard in diff["shards"] for p in shard)
     assert patterns == ["boost_cli.core.m.x_a__mutmut_*",
@@ -364,19 +366,6 @@ def test_diff_plan_never_emits_an_empty_shard(tmp_path, git_repo):
 
 
 @pytest.mark.usefixtures("needs_mutmut")
-def test_shadow_plan_gates_on_full_and_runs_both(tmp_path, git_repo):
-    head = git_repo.head({"boost_cli/core/m.py": _M_BASE.replace("+ 1", "+ 2")})
-    plan = plan_diff(tmp_path, git_repo, head, "--shadow")
-    assert plan["gate_set"] == "full"
-    assert set(plan["sets"]) == {"diff", "full"}
-    assert plan["sets"]["full"]["shards"] == [["boost_cli.core.m.*"], []]
-    assert plan["sets"]["diff"]["shards"]
-    sets = {e["set"] for e in json.loads(run_cli("matrix", "--plan",
-                                                 str(tmp_path / "plan.json")))}
-    assert sets == {"diff", "full"}
-
-
-@pytest.mark.usefixtures("needs_mutmut")
 def test_diff_plan_runs_as_a_script(tmp_path, git_repo):
     # CI runs it as `python scripts/mutation_plan.py diff`, a fresh process
     # where nothing else has imported mutation_diff first.
@@ -387,6 +376,17 @@ def test_diff_plan_runs_as_a_script(tmp_path, git_repo):
                     "--stats", str(git_repo.stats), "--root", str(git_repo.root),
                     "--out", str(out)], check=True, capture_output=True)
     assert json.loads(out.read_text(encoding="utf-8"))["gate_set"] == "diff"
+
+
+def test_diff_plan_has_no_shadow_mode(tmp_path, git_repo):
+    # It planned the full set beside the diff set and gated on the full one,
+    # so the two could be compared before the diff gate was trusted to bind.
+    # It binds now, and a plan that gates on full would quietly undo that.
+    with pytest.raises(SystemExit):
+        mp.main(["diff", "--shadow", "--base", git_repo.base, "--head", git_repo.base,
+                 "--stats", str(git_repo.stats), "--root", str(git_repo.root),
+                 "--out", str(tmp_path / "plan.json")])
+    assert not (tmp_path / "plan.json").exists()
 
 
 @pytest.mark.usefixtures("needs_mutmut")
@@ -766,7 +766,7 @@ def test_shard_artifacts_are_named_by_set(jobs):
 
 
 # --------------------------------------------------------------------------
-# ci.yml wiring: shadow mode (full binds, diff runs alongside and is compared)
+# ci.yml wiring: the gate the plan names binds (diff on PRs, full elsewhere)
 # --------------------------------------------------------------------------
 #
 # The static checks pin where things are; the bash-driven ones below run the
@@ -810,8 +810,8 @@ def _stub(path: Path, body: str) -> None:
 
 def _bash(step: dict, cwd: Path, env: dict) -> subprocess.CompletedProcess:
     # `bash -e {0}` is what an ubuntu runner runs a `run:` with when the job
-    # sets no `shell:` -- note: no pipefail, which is why the shadow step must
-    # capture exit codes itself rather than pipe through tee.
+    # sets no `shell:` -- note: no pipefail, which is why a step must capture
+    # an exit code itself rather than read it through a pipe.
     script = cwd / "step.sh"
     script.write_text(step["run"], encoding="utf-8")
     full = {"PATH": os.environ["PATH"], "HOME": str(cwd)}
@@ -859,8 +859,17 @@ def test_the_planner_asks_mutation_plan_base_for_the_diff_base(jobs):
     assert "git merge-base" not in step["run"]
 
 
-def test_the_planner_exports_whether_the_plan_is_shadow(jobs):
-    assert jobs["mutation-plan"]["outputs"]["shadow"] == "${{ steps.plan.outputs.shadow }}"
+def test_the_shadow_run_is_gone(jobs):
+    # The diff gate binds on PRs now; the full run that ran beside it, the
+    # per-mutant comparison and its report were the evidence for that switch
+    # and are not run any more. Nothing may keep planning or reading them.
+    assert "shadow" not in jobs["mutation-plan"]["outputs"]
+    assert "--shadow" not in _run_text(jobs["mutation-plan"])
+    text = CI.read_text(encoding="utf-8")
+    assert "mutation_diff.py compare" not in text
+    assert "mutation-shadow-report" not in text
+    assert "outputs.shadow" not in text
+    assert "--no-annotations" not in text
 
 
 class TestPlannerByEvent:
@@ -881,7 +890,7 @@ for a in "$@"; do [ "$prev" = "--out" ] && out="$a"; prev="$a"; done
 case " $* " in
   *" matrix "*) echo '[{"set":"full","index":0}]'; exit 0 ;;
   *"mutation_plan.py base "*) [ -n "$BASE_FAIL" ] && exit 1; echo forkpoint0; exit 0 ;;
-  *" --shadow "*) plan='{"gate_set":"full","reasons":[],"sets":{"diff":{"shards":[]},"full":{"shards":[["a"]]}}}' ;;
+  *"mutation_plan.py diff "*) plan='{"gate_set":"diff","reasons":["d"],"sets":{"diff":{"shards":[["a"]],"mutants":3}}}' ;;
   *" none "*) plan='{"gate_set":null,"reasons":["n"],"sets":{}}' ;;
   *) plan='{"gate_set":"full","reasons":[],"sets":{"full":{"shards":[["a"]]}}}' ;;
 esac
@@ -921,10 +930,12 @@ exit 0
         return run
 
     @pytest.mark.parametrize("event", ["pull_request", "merge_group"])
-    def test_prs_and_the_queue_plan_diff_in_shadow(self, planner, event):
+    def test_prs_and_the_queue_plan_diff_and_bind_on_it(self, planner, event):
         plan, log, outputs = planner(event)
         assert plan.startswith(".venv/bin/python scripts/mutation_plan.py diff "), plan
-        assert " --shadow " in plan + " "
+        # No shadow: the diff set alone, and the gate binds on it.
+        assert "--shadow" not in plan
+        # The full set's width when a trigger in the diff forces the full run.
         assert " --shards 24 " in plan
         # The base comes from `mutation_plan.py base`, given the event's facts ...
         assert any("mutation_plan.py base --event %s --sha mergecommit0 --base-sha basetip0 "
@@ -935,22 +946,21 @@ exit 0
         # shard mutates, and the gate refuses a shortfall as INCOMPLETE.
         assert " --head mergecommit0 " in plan
         assert " --stats mutants/mutmut-stats.json " in plan
-        assert outputs["shadow"] == "true"
-        assert outputs["gate_set"] == "full"
+        assert outputs["gate_set"] == "diff"
+        assert "shadow" not in outputs
 
     @pytest.mark.parametrize("event", ["push", "schedule", "workflow_dispatch"])
     def test_everything_else_plans_full(self, planner, event):
         plan, log, outputs = planner(event)
         assert "python3 scripts/mutation_plan.py full --shards 24 " in plan
         assert not any("mutation_plan.py base " in line for line in log)
-        assert outputs["shadow"] == "false"
         assert outputs["gate_set"] == "full"
 
     def test_no_diff_base_falls_back_to_full(self, planner):
         # A missing or unfetched base must widen the gate, never empty it.
         plan, _, outputs = planner("pull_request", BASE_FAIL="1")
         assert "scripts/mutation_plan.py full --shards 24 " in plan
-        assert outputs["shadow"] == "false"
+        assert outputs["gate_set"] == "full"
 
     @pytest.mark.parametrize("event", ["pull_request", "push"])
     def test_an_irrelevant_change_plans_nothing(self, planner, event):
@@ -958,7 +968,6 @@ exit 0
         assert "scripts/mutation_plan.py none " in plan
         assert not any("mutation_plan.py base " in line for line in log)
         assert outputs["gate_set"] == ""
-        assert outputs["shadow"] == "false"
 
     def test_a_proven_push_plans_nothing_and_names_the_run(self, planner):
         # `proven` said this tree is the one a green PR run tested: no shards,
@@ -967,7 +976,6 @@ exit 0
                                    PR_RUN_ID="4242")
         assert "scripts/mutation_plan.py none --reason proven by PR run 4242 " in plan
         assert outputs["gate_set"] == ""
-        assert outputs["shadow"] == "false"
 
     def test_an_unproven_irrelevant_push_keeps_its_old_reason(self, planner):
         plan, _, _ = planner("push", relevant="false")
@@ -1061,42 +1069,55 @@ class TestScopeByEvent:
 
 
 FULL2 = '[{"set":"full","index":0},{"set":"full","index":1}]'
-SHADOW3 = ('[{"set":"full","index":0},{"set":"full","index":1},'
-           '{"set":"diff","index":0}]')
+DIFF1 = '[{"set":"diff","index":0}]'
+DIFF2 = '[{"set":"diff","index":0},{"set":"diff","index":1}]'
+#: The plan the old shadow mode ran: both sets in one matrix. Nothing plans it
+#: now, and the conclusive step refuses it rather than gate on half of it.
+MIXED = '[{"set":"full","index":0},{"set":"diff","index":0}]'
+
+GATES = "needs.mutation-plan.outputs.gate_set == '%s'"
+FULL_OR_DIFF = "%s || %s" % (GATES % "full", GATES % "diff")
 
 
 @needs_bash
-@pytest.mark.parametrize("plan, shards, matrix, gate_set, shadow, rc", [
-    # nothing mutable changed: the only green with no shards
-    ("success", "skipped", "[]", "", "false", 0),
+@pytest.mark.parametrize("plan, shards, matrix, gate_set, rc", [
+    # nothing mutable changed: no shards, and the plan gates on nothing
+    ("success", "skipped", "[]", "", 0),
     # the planner did not finish: its empty outputs must not read as "none"
-    ("failure", "skipped", "", "", "", 1),
-    ("cancelled", "skipped", "", "", "", 1),
-    # push: full plan
-    ("success", "success", FULL2, "full", "false", 0),
-    ("success", "failure", FULL2, "full", "false", 1),
-    ("success", "cancelled", FULL2, "full", "false", 1),
-    # PR / merge_group: shadow plan. A failed DIFF shard is red too -- the
-    # matrix is one job, and a comparison with a hole in it is not one.
-    ("success", "success", SHADOW3, "full", "true", 0),
-    ("success", "failure", SHADOW3, "full", "true", 1),
-    ("success", "cancelled", SHADOW3, "full", "true", 1),
+    ("failure", "skipped", "", "", 1),
+    ("cancelled", "skipped", "", "", 1),
+    # push / schedule / dispatch, or a PR with a full-run trigger: full
+    ("success", "success", FULL2, "full", 0),
+    ("success", "failure", FULL2, "full", 1),
+    ("success", "cancelled", FULL2, "full", 1),
     # a full gate with nothing to score
-    ("success", "skipped", "[]", "full", "false", 1),
-    # `diff` is legal in the plan but nothing here binds on it yet
-    ("success", "success", '[{"set":"diff","index":0}]', "diff", "false", 1),
-    ("success", "skipped", "[]", "diff", "false", 1),
-    # unknown, and a shadow plan that would not gate on the full set
-    ("success", "success", FULL2, "bogus", "false", 1),
-    ("success", "success", SHADOW3, "", "true", 1),
+    ("success", "skipped", "[]", "full", 1),
+    # PR / merge_group: the diff gate binds
+    ("success", "success", DIFF1, "diff", 0),
+    ("success", "failure", DIFF1, "diff", 1),
+    ("success", "cancelled", DIFF2, "diff", 1),
+    # no core function with mutants changed: the planner's empty scope
+    ("success", "skipped", "[]", "diff", 0),
+    # shards with no gate to score them would go green ungated (T1 M3 / T7 M1)
+    ("success", "success", FULL2, "", 1),
+    ("success", "success", DIFF1, "", 1),
+    # unknown gate sets, and a matrix holding a set the gate does not score
+    ("success", "success", FULL2, "bogus", 1),
+    ("success", "skipped", "[]", "bogus", 1),
+    ("success", "success", MIXED, "full", 1),
+    ("success", "success", MIXED, "diff", 1),
+    ("success", "success", DIFF1, "full", 1),
+    # an unreadable matrix is not an empty one
+    ("success", "success", "not json", "diff", 1),
 ])
 def test_the_gate_is_conclusive_for_every_upstream_outcome(
-        jobs, tmp_path, plan, shards, matrix, gate_set, shadow, rc):
+        jobs, tmp_path, plan, shards, matrix, gate_set, rc):
     step = _step(jobs["mutation"], name="upstream jobs must be conclusive")
     assert "if" not in step, "the conclusive check must never be skipped"
-    assert step["env"]["SHADOW"] == "${{ needs.mutation-plan.outputs.shadow }}"
+    assert "continue-on-error" not in step
+    assert "SHADOW" not in step["env"]
     proc = _bash(step, tmp_path, {"PLAN": plan, "SHARDS": shards, "MATRIX": matrix,
-                                  "GATE_SET": gate_set, "SHADOW": shadow})
+                                  "GATE_SET": gate_set})
     assert proc.returncode == rc, proc.stdout + proc.stderr
     if rc:
         assert "::error::" in proc.stdout
@@ -1109,162 +1130,257 @@ def test_full_and_diff_results_download_to_separate_dirs(jobs):
     full_dir, diff_dir = full["with"]["path"], diff["with"]["path"]
     assert full_dir != diff_dir
     assert not full_dir.startswith(diff_dir) and not diff_dir.startswith(full_dir)
-    assert full["if"] == "needs.mutation-plan.outputs.gate_set == 'full'"
-    assert diff["if"] == "needs.mutation-plan.outputs.shadow == 'true'"
+    assert full["if"] == GATES % "full"
+    assert diff["if"] == GATES % "diff"
     # Every consumer reads the dir its set landed in.
     merge = _step(job, runs="mutation_shards.py merge")["run"]
     assert "--source %s " % full_dir in merge
     assert "--prefix mutation-full-shard-" in merge
-    shadow = _step(job, step_id="shadow")["run"]
-    assert "--full-source %s " % full_dir in shadow
-    assert "--diff-source %s " % diff_dir in shadow
-    assert "--source %s " % diff_dir in shadow
-    assert "--prefix mutation-diff-shard-" in shadow
-    # The gate and compare read the plan the shards ran from.
-    assert downloads["mutation-plan"]["if"] == "needs.mutation-plan.outputs.shadow == 'true'"
+    gate = _step(job, runs="mutation_diff.py gate")["run"]
+    assert "--source %s " % diff_dir in gate
+    assert "--prefix mutation-diff-shard-" in gate
+    # The diff gate reads the plan the shards ran from; the summary reads it
+    # in either mode.
+    assert downloads["mutation-plan"]["if"] == FULL_OR_DIFF
+    assert '--plan "$RUNNER_TEMP/mutation-plan/mutation-plan.json"' in gate
 
 
-def test_only_the_shadow_step_continues_on_error(jobs):
+def test_no_mutation_step_continues_on_error(jobs):
+    # The gate `gate_set` names is the verdict. A lenient step anywhere in the
+    # three jobs is a way for a failure to read as green.
+    for name in MUTATION_JOBS:
+        lenient = [s.get("name") or s.get("uses") for s in jobs[name]["steps"]
+                   if s.get("continue-on-error")]
+        assert lenient == [], (name, lenient)
+
+
+def test_the_diff_gate_binds_when_the_plan_gates_on_diff(jobs):
     job = jobs["mutation"]
-    lenient = [s for s in job["steps"] if s.get("continue-on-error")]
-    assert [s.get("id") for s in lenient] == ["shadow"]
-    shadow = lenient[0]
-    assert shadow["continue-on-error"] is True
-    assert shadow["if"] == "needs.mutation-plan.outputs.shadow == 'true'"
-    run = shadow["run"]
-    assert ".venv/bin/python scripts/mutation_diff.py compare " in run
-    assert ".venv/bin/python scripts/mutation_diff.py gate " in run
+    gate = _step(job, runs="mutation_diff.py gate")
+    assert gate["if"] == GATES % "diff"
+    assert "continue-on-error" not in gate
+    run = " ".join(w for w in gate["run"].split() if w != "\\")
+    assert run.startswith(".venv/bin/python scripts/mutation_diff.py gate ")
+    # Binding, so survivors are annotated at their `def` in this checkout.
     assert '--root "$GITHUB_WORKSPACE"' in run
-    # Advisory: no ::warning on every changed function of every PR.
-    assert " --no-annotations" in run
-    # Nowhere else: in shadow the diff gate is data, never the verdict.
-    others = "\n".join(s.get("run", "") for s in job["steps"] if s is not shadow)
+    assert "--no-annotations" not in run
+    # Its verdict is the step's exit code: no `|| true`, no `set +e`.
+    assert "||" not in run and "set +e" not in run
+    # The one step of the job that runs it.
+    others = "\n".join(s.get("run", "") for s in job["steps"] if s is not gate)
     assert "mutation_diff.py" not in others
 
 
 def test_the_binding_gate_is_the_one_gate_set_names(jobs):
     job = jobs["mutation"]
     gate = _step(job, runs="scripts/mutation_gate.py")
-    assert gate["if"] == "needs.mutation-plan.outputs.gate_set == 'full'"
+    assert gate["if"] == GATES % "full"
     assert "continue-on-error" not in gate
     # The merge it scores comes from full shards only, and is what the weights
     # are measured from: a diff run's partial weights would repack on a sliver.
     assert "--into mutants " in _step(job, runs="mutation_shards.py merge")["run"]
+    assert _step(job, runs="mutation_shards.py merge")["if"] == GATES % "full"
     weights = _uploads(job)["mutation-weights"]
-    assert weights["if"] == "needs.mutation-plan.outputs.gate_set == 'full'"
+    assert weights["if"] == GATES % "full"
+    assert _step(job, runs="mutation_shards.py weights")["if"] == GATES % "full"
     assert "--source mutants" in _step(job, runs="mutation_shards.py weights")["run"]
 
 
-def test_the_shadow_report_is_summarised_and_uploaded(jobs):
+def test_both_gates_get_the_checkout_and_venv_they_run_in(jobs):
     job = jobs["mutation"]
-    run = _step(job, step_id="shadow")["run"]
-    assert "Diff-gate shadow" in run
-    assert '>> "$GITHUB_STEP_SUMMARY"' in run
-    report = _uploads(job)["mutation-shadow-report"]
-    assert report["with"]["path"] == "mutation-shadow-report.md"
-    assert report["if"] == "needs.mutation-plan.outputs.shadow == 'true'"
-    assert "continue-on-error" not in report
-    # After the shadow step, before the merge: a red full gate is exactly the
-    # run whose report is worth reading.
-    names = [s.get("id") or s.get("name") or s.get("uses") for s in job["steps"]]
-    order = [names.index("shadow"), names.index(report.get("name")),
-             names.index(_step(job, runs="mutation_shards.py merge")["name"])]
-    assert order == sorted(order)
+    steps = job["steps"]
+    checkout = next(s for s in steps if s.get("uses", "").startswith("actions/checkout"))
+    python = next(s for s in steps if s.get("uses", "").startswith("actions/setup-python"))
+    venv = _step(job, runs="requirements/mutation-tools.txt")
+    for step in (checkout, python, venv):
+        assert step["if"] == FULL_OR_DIFF, step
+    first_gate = min(steps.index(_step(job, runs="mutation_diff.py gate")),
+                     steps.index(_step(job, runs="mutation_shards.py merge")))
+    assert max(steps.index(s) for s in (checkout, python, venv)) < first_gate
 
 
-@needs_bash
-@pytest.mark.parametrize("gate_rc, compare_rc, rc", [
-    (0, 0, 0),
-    (1, 0, 0),   # the diff gate says FAIL: data for the comparison, not an error
-    (0, 1, 1),   # a killed/not-killed disagreement: the step goes red, visibly
-    (0, 2, 1),   # an incomplete comparison
-    (2, 2, 1),   # unrun diff results
-    (2, 0, 1),
-])
-def test_the_shadow_step_fails_visibly_on_disagreement(
-        jobs, tmp_path, gate_rc, compare_rc, rc):
-    step = _step(jobs["mutation"], step_id="shadow")
-    _stub(tmp_path / ".venv" / "bin" / "python", r'''
-case "$*" in
-  *"mutation_diff.py gate "*)
-    echo "mutation diff gate: stub"
-    [ -n "$GITHUB_STEP_SUMMARY" ] && echo "### Mutation (diff scope): STUB" >> "$GITHUB_STEP_SUMMARY"
-    exit "$GATE_RC" ;;
-  *"mutation_diff.py compare "*)
-    echo "agree 7, disagree 0, excluded-timeouts 0"
-    exit "$COMPARE_RC" ;;
-esac
-exit 99
-''')
-    summary = tmp_path / "summary.md"
+def _diff_gate_tree(tmp_path: Path) -> Path:
+    """A workspace where the gate step's own command runs the real gate:
+    ``.venv/bin/python`` is this interpreter, ``scripts/`` the repo's."""
+    _stub(tmp_path / ".venv" / "bin" / "python", 'exec "%s" "$@"\n' % sys.executable)
+    (tmp_path / "scripts").symlink_to(ROOT / "scripts", target_is_directory=True)
     runner_temp = tmp_path / "runner-temp"
-    runner_temp.mkdir()
-    proc = _bash(step, tmp_path, {
-        "GATE_RC": str(gate_rc), "COMPARE_RC": str(compare_rc),
-        "GITHUB_STEP_SUMMARY": str(summary), "RUNNER_TEMP": str(runner_temp),
-        "GITHUB_WORKSPACE": str(tmp_path)})
-    assert proc.returncode == rc, proc.stdout + proc.stderr
-    report = (tmp_path / "mutation-shadow-report.md").read_text(encoding="utf-8")
-    assert report.startswith("## Diff-gate shadow\n")
-    assert "agree 7, disagree 0, excluded-timeouts 0" in report
-    # The diff gate's own summary lands in the report, not as a top-level
-    # verdict in the job summary a reader would take for the binding one.
-    assert "### Mutation (diff scope): STUB" in report
-    assert summary.read_text(encoding="utf-8") == report
+    (runner_temp / "mutation-plan").mkdir(parents=True)
+    return runner_temp
 
 
 @needs_bash
-@pytest.mark.parametrize("present, rc", [
-    (["full/mutation-full-shard-0", "full/mutation-full-shard-1",
-      "diff/mutation-diff-shard-0"], 0),
-    (["full/mutation-full-shard-0", "full/mutation-full-shard-1"], 1),
-    (["full/mutation-full-shard-0", "diff/mutation-diff-shard-0"], 1),
+@pytest.mark.parametrize("case, rc, verdict", [
+    ("empty scope", 0, "PASS"),        # zero shards: nothing to score
+    ("all killed", 0, "PASS"),
+    ("survivor", 1, "FAIL"),           # under ten mutants, so one fails it
+    ("shard missing", 2, "INCOMPLETE"),
 ])
-def test_every_planned_shard_must_have_uploaded(jobs, tmp_path, present, rc):
+def test_the_diff_gate_step_is_the_verdict(jobs, tmp_path, request, case, rc, verdict):
+    if case in ("all killed", "survivor"):
+        request.getfixturevalue("needs_mutmut")   # scoring reads mutmut's statuses
+    step = _step(jobs["mutation"], runs="mutation_diff.py gate")
+    runner_temp = _diff_gate_tree(tmp_path)
+    q = "boost_cli.core.m.x_a"
+    if case == "empty scope":
+        spec = {"shards": [], "mutants": 0, "functions": [], "counts": {}}
+    else:
+        spec = {"shards": [[q + "__mutmut_*"]], "mutants": 2, "functions": [q],
+                "counts": {q: 2}}
+    (runner_temp / "mutation-plan" / "mutation-plan.json").write_text(json.dumps(
+        {"gate_set": "diff", "reasons": ["test"], "sets": {"diff": spec}}),
+        encoding="utf-8")
+    if case in ("all killed", "survivor"):
+        diff_dir = _downloads(jobs["mutation"])["mutation-diff-shard-*"]["with"]["path"]
+        meta = tmp_path / diff_dir / "mutation-diff-shard-0" / "m.py.meta"
+        meta.parent.mkdir(parents=True)
+        meta.write_text(json.dumps({"exit_code_by_key": {
+            q + "__mutmut_1": 1, q + "__mutmut_2": 0 if case == "survivor" else 1}}),
+            encoding="utf-8")
+        core = tmp_path / "boost_cli" / "core"
+        core.mkdir(parents=True)
+        (core / "m.py").write_text("def a(x):\n    return x + 1\n", encoding="utf-8")
+    summary = tmp_path / "summary.md"
+    proc = _bash(step, tmp_path, {"RUNNER_TEMP": str(runner_temp),
+                                  "GITHUB_WORKSPACE": str(tmp_path),
+                                  "GITHUB_STEP_SUMMARY": str(summary)})
+    assert proc.returncode == rc, proc.stdout + proc.stderr
+    assert "mutation diff gate: %s" % verdict in proc.stdout
+    # The binding verdict is the summary's own heading now, not a section
+    # inside an advisory report.
+    assert "### Mutation (diff scope): %s" % verdict in summary.read_text(encoding="utf-8")
+    if case == "survivor":
+        assert "::warning file=boost_cli/core/m.py,line=1::" in proc.stdout
+
+
+def _summary(jobs, tmp_path: Path, plan: dict, matrix: str, reason: str) -> str:
+    step = _step(jobs["mutation"], name="what the plan runs")
+    runner_temp = tmp_path / "runner-temp"
+    (runner_temp / "mutation-plan").mkdir(parents=True)
+    (runner_temp / "mutation-plan" / "mutation-plan.json").write_text(
+        json.dumps(plan), encoding="utf-8")
+    summary = tmp_path / "summary.md"
+    proc = _bash(step, tmp_path, {"RUNNER_TEMP": str(runner_temp),
+                                  "GITHUB_STEP_SUMMARY": str(summary),
+                                  "GATE_SET": plan["gate_set"] or "",
+                                  "MATRIX": matrix, "REASON": reason})
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    return summary.read_text(encoding="utf-8")
+
+
+def test_the_summary_step_reads_the_plan_through_env(jobs):
+    step = _step(jobs["mutation"], name="what the plan runs")
+    assert step["if"] == FULL_OR_DIFF
+    assert step["env"] == {"GATE_SET": "${{ needs.mutation-plan.outputs.gate_set }}",
+                           "MATRIX": "${{ needs.mutation-plan.outputs.matrix }}",
+                           "REASON": "${{ needs.mutation-plan.outputs.reason }}"}
+    # Before either gate, so a red gate still leaves the plan in the summary.
+    steps = jobs["mutation"]["steps"]
+    assert steps.index(step) < steps.index(_step(jobs["mutation"], runs="mutation_diff.py gate"))
+    assert steps.index(step) < steps.index(_step(jobs["mutation"], runs="mutation_shards.py merge"))
+
+
+@needs_bash
+def test_the_summary_names_mode_reasons_mutants_and_shards(jobs, tmp_path):
+    plan = {"gate_set": "diff", "reasons": ["diff scope: 36 mutants in 2 functions"],
+            "sets": {"diff": {"shards": [["a"], ["b"]], "mutants": 36}}}
+    text = _summary(jobs, tmp_path, plan, DIFF2, "diff scope: 36 mutants in 2 functions")
+    assert "Mutation plan: diff" in text
+    assert "diff scope: 36 mutants in 2 functions" in text
+    assert "**Mutants:** 36" in text
+    assert "**Shards:** 2" in text
+    assert "no core function changed" not in text
+
+
+@needs_bash
+def test_an_empty_diff_scope_says_no_core_function_changed(jobs, tmp_path):
+    plan = {"gate_set": "diff", "reasons": ["diff scope: no boost_cli/core function changed"],
+            "sets": {"diff": {"shards": [], "mutants": 0}}}
+    text = _summary(jobs, tmp_path, plan, "[]", plan["reasons"][0])
+    assert "**Mutants:** 0" in text
+    assert "**Shards:** 0" in text
+    assert "no core function changed" in text
+
+
+@needs_bash
+def test_a_full_plan_says_its_mutants_are_not_counted(jobs, tmp_path):
+    # The planner never generates the full set's mutants, so it has no count;
+    # the summary must not print that as 0.
+    plan = {"gate_set": "full", "reasons": ["whole-codebase run (schedule)"],
+            "sets": {"full": {"shards": [["x"], ["y"]], "mutants": None}}}
+    text = _summary(jobs, tmp_path, plan, FULL2, "whole-codebase run (schedule)")
+    assert "Mutation plan: full" in text
+    assert "**Mutants:** not counted" in text
+    assert "**Shards:** 2" in text
+
+
+COMPLETE = "every planned shard uploaded results"
+
+
+@needs_bash
+@pytest.mark.parametrize("matrix, present, rc", [
+    (FULL2, ["full/mutation-full-shard-0", "full/mutation-full-shard-1"], 0),
+    (FULL2, ["full/mutation-full-shard-0"], 1),
+    (DIFF2, ["diff/mutation-diff-shard-0", "diff/mutation-diff-shard-1"], 0),
+    (DIFF2, ["diff/mutation-diff-shard-1"], 1),
+    # zero diff shards: nothing was planned, so nothing is missing
+    ("[]", [], 0),
+])
+def test_every_planned_shard_must_have_uploaded(jobs, tmp_path, matrix, present, rc):
     job = jobs["mutation"]
-    step = _step(job, name="every planned shard uploaded results")
-    assert step["if"] == "needs.mutation-plan.outputs.gate_set == 'full'"
+    step = _step(job, name=COMPLETE)
+    assert step["if"] == FULL_OR_DIFF
     assert "continue-on-error" not in step
     root = Path(_downloads(job)["mutation-full-shard-*"]["with"]["path"]).parent
     for rel in present:
         (tmp_path / root / rel).mkdir(parents=True)
-    proc = _bash(step, tmp_path, {"MATRIX": SHADOW3})
+    proc = _bash(step, tmp_path, {"MATRIX": matrix})
     assert proc.returncode == rc, proc.stdout + proc.stderr
 
 
 @needs_bash
-def test_a_lone_shard_downloaded_flat_is_put_back_under_its_name(jobs, tmp_path):
+def test_an_unreadable_matrix_is_red_not_an_empty_check(jobs, tmp_path):
+    # jq ran inside `< <(...)`, whose exit status nothing sees: a jq failure
+    # read as "no shards planned" and the step passed (Task 7 review M4).
+    proc = _bash(_step(jobs["mutation"], name=COMPLETE), tmp_path, {"MATRIX": "not json"})
+    assert proc.returncode != 0, proc.stdout + proc.stderr
+
+
+@needs_bash
+@pytest.mark.parametrize("set_name, matrix", [("diff", DIFF1), ("full", '[{"set":"full","index":0}]')])
+def test_a_lone_shard_downloaded_flat_is_put_back_under_its_name(
+        jobs, tmp_path, set_name, matrix):
     # download-artifact (v8.0.2, src/download-artifact.ts) writes a pattern
     # download that matches ONE artifact straight into `path:`, with no
     # <artifact-name>/ level -- `artifacts.length === 1 ? resolvedPath : ...`.
     # One diff shard is the commonest diff plan, so without this every such
-    # PR would read "no results from diff shard 0" and go red.
+    # PR's binding gate would read "no artifact at ...shard-0" and go red.
     job = jobs["mutation"]
-    step = _step(job, name="every planned shard uploaded results")
+    step = _step(job, name=COMPLETE)
     root = tmp_path / Path(_downloads(job)["mutation-full-shard-*"]["with"]["path"]).parent
-    for i in range(2):
-        (root / "full" / ("mutation-full-shard-%d" % i)).mkdir(parents=True)
-    (root / "diff").mkdir()
-    (root / "diff" / "m.py.meta").write_text("{}", encoding="utf-8")
-    proc = _bash(step, tmp_path, {"MATRIX": SHADOW3})
+    (root / set_name).mkdir(parents=True)
+    (root / set_name / "m.py.meta").write_text("{}", encoding="utf-8")
+    proc = _bash(step, tmp_path, {"MATRIX": matrix})
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert (root / "diff" / "mutation-diff-shard-0" / "m.py.meta").is_file()
-    assert not (root / "diff" / "m.py.meta").exists()
+    shard = root / set_name / ("mutation-%s-shard-0" % set_name)
+    assert (shard / "m.py.meta").is_file()
+    assert not (root / set_name / "m.py.meta").exists()
 
 
 @needs_bash
-def test_a_flat_download_of_several_planned_shards_stays_red(jobs, tmp_path):
+@pytest.mark.parametrize("set_name, matrix", [("diff", DIFF2), ("full", FULL2)])
+def test_a_flat_download_of_several_planned_shards_stays_red(
+        jobs, tmp_path, set_name, matrix):
     # Two planned, one arrived (flat, because it was the only match): which
     # shard it was is unknowable, so nothing is moved and the check fails.
     job = jobs["mutation"]
-    step = _step(job, name="every planned shard uploaded results")
+    step = _step(job, name=COMPLETE)
     root = tmp_path / Path(_downloads(job)["mutation-full-shard-*"]["with"]["path"]).parent
-    (root / "full").mkdir(parents=True)
-    (root / "full" / "m.py.meta").write_text("{}", encoding="utf-8")
-    (root / "diff" / "mutation-diff-shard-0").mkdir(parents=True)
-    proc = _bash(step, tmp_path, {"MATRIX": SHADOW3})
+    (root / set_name).mkdir(parents=True)
+    (root / set_name / "m.py.meta").write_text("{}", encoding="utf-8")
+    proc = _bash(step, tmp_path, {"MATRIX": matrix})
     assert proc.returncode == 1, proc.stdout + proc.stderr
-    assert not (root / "full" / "mutation-full-shard-0").exists()
+    assert not (root / set_name / ("mutation-%s-shard-0" % set_name)).exists()
 
 
 def test_the_planner_runs_the_mutmut_backed_tests(jobs):

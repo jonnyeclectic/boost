@@ -750,12 +750,8 @@ jobs:
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
       gate_set: ${{ steps.plan.outputs.gate_set }}
-      # "true" when the plan carries both a full and a diff set, which is what
-      # `mutation` keys its comparison on. A step's `if:` cannot look inside
-      # the matrix JSON, so the planner says it in one word.
-      shadow: ${{ steps.plan.outputs.shadow }}
-      # The plan's reasons on one line, for `mutation`'s summary when there is
-      # nothing to run -- "proven by PR run <id>" is not "nothing changed".
+      # The plan's reasons on one line, for `mutation`'s summary -- when there
+      # is nothing to run, "proven by PR run <id>" is not "nothing changed".
       reason: ${{ steps.plan.outputs.reason }}
     steps:
       - name: harden runner (egress audit)
@@ -883,15 +879,17 @@ jobs:
         env:
           BOOST_REQUIRE_MUTMUT: "1"
         run: .venv/bin/python -m pytest -q tests/unit/test_mutation_diff.py tests/unit/test_mutation_plan.py
-      # Shadow mode. A pull request or merge-queue entry plans BOTH sets: the
-      # full 24-shard run, which still decides `mutation`, and the diff set
-      # (the functions the branch changed plus their direct callers, see
-      # scripts/mutation_diff.py), which runs alongside on the same commit so
-      # `mutation` can compare the two per mutant before the diff gate is
-      # trusted to bind. Anything else (a push to main) plans full. A full-run
-      # trigger in the diff (a mutation script, this job, setup.cfg [mutmut],
-      # ...) makes `diff --shadow` return the full plan alone -- including on
-      # the PR that edits these lines.
+      # A pull request or merge-queue entry plans the diff set -- the
+      # functions the branch changed plus their direct callers, see
+      # scripts/mutation_diff.py -- and `mutation` binds on the diff gate.
+      # The nightly full run holds the whole codebase to 80%. The diff gate
+      # earned that by running in shadow beside the full run on the same
+      # commit, compared per mutant, to a bar of zero killed/survived
+      # disagreements over five release trains. Anything else (a push to
+      # main, the nightly, a dispatch) plans full. A full-run trigger in the
+      # diff (a mutation script, this job, setup.cfg [mutmut], ...) makes
+      # `diff` return the full plan -- including on the PR that edits these
+      # lines.
       - name: write the plan
         id: plan
         env:
@@ -924,13 +922,15 @@ jobs:
                 # the gate refuse a shortfall whenever main had changed a
                 # scoped function since the branch point. The near end is the
                 # merge commit's first parent -- the PR exactly as applied --
-                # else the merge base of the event's base and head (wider);
-                # the queue's is its base_sha. `base` logs which it chose.
-                # No base (unfetched, or an empty SHA) widens to full.
+                # when its second parent is the PR head, else the merge base
+                # of the event's base and head (wider); the queue's is its
+                # base_sha. `base` logs which it chose. No base (unfetched,
+                # or an empty SHA) widens to full.
                 if DIFF_BASE="$(python3 scripts/mutation_plan.py base --event "$EVENT" \
                     --sha "$GITHUB_SHA" --base-sha "$BASE_SHA" --head-sha "$HEAD_SHA")"; then
                   # .venv: the diff planner imports mutmut, libcst and PyYAML.
-                  .venv/bin/python scripts/mutation_plan.py diff --shadow --shards 24 \
+                  # --shards 24 is the full set's width if a trigger forces it.
+                  .venv/bin/python scripts/mutation_plan.py diff --shards 24 \
                     --base "$DIFF_BASE" --head "$GITHUB_SHA" \
                     --stats mutants/mutmut-stats.json --out mutation-plan.json
                 else
@@ -948,7 +948,6 @@ jobs:
           cat mutation-plan.json
           MATRIX="$(python3 scripts/mutation_plan.py matrix --plan mutation-plan.json)"
           GATE_SET="$(jq -r '.gate_set // ""' mutation-plan.json)"
-          SHADOW="$(jq -r '.sets | has("full") and has("diff")' mutation-plan.json)"
           # One line, whatever the reasons hold: a newline would end this
           # output and start another.
           REASON="$(jq -r '(.reasons // []) | join("; ")' mutation-plan.json)"
@@ -957,7 +956,6 @@ jobs:
           {
             echo "matrix=$MATRIX"
             echo "gate_set=$GATE_SET"
-            echo "shadow=$SHADOW"
             echo "reason=$REASON"
           } >> "$GITHUB_OUTPUT"
       - name: upload the plan
@@ -1363,9 +1361,8 @@ jobs:
           SHARDS: ${{ needs.mutation-shard.result }}
           MATRIX: ${{ needs.mutation-plan.outputs.matrix }}
           GATE_SET: ${{ needs.mutation-plan.outputs.gate_set }}
-          SHADOW: ${{ needs.mutation-plan.outputs.shadow }}
         run: |
-          echo "plan=$PLAN shards=$SHARDS gate_set=$GATE_SET shadow=$SHADOW matrix=$MATRIX"
+          echo "plan=$PLAN shards=$SHARDS gate_set=$GATE_SET matrix=$MATRIX"
           # `always()` means this job runs whatever happened upstream, so it has
           # to judge for itself. Without this step a failed or cancelled shard
           # would surface as a green required check.
@@ -1376,33 +1373,38 @@ jobs:
             echo "::error::mutation-plan did not succeed ($PLAN) — cannot gate"
             exit 1
           fi
-          # One matrix job runs both sets, so a failed DIFF shard in shadow
-          # mode lands here too, and is red: the comparison it feeds would
-          # have a hole in it, and nobody reads past a green check to notice.
           if [ "$MATRIX" != "[]" ] && [ "$SHARDS" != "success" ]; then
             echo "::error::a mutation shard did not succeed ($SHARDS)"
             exit 1
           fi
-          # A full plan with no shards would score nothing and pass.
-          if [ "$GATE_SET" = "full" ] && [ "$MATRIX" = "[]" ]; then
-            echo "::error::the plan gates on the full set but planned no shards"
-            exit 1
-          fi
-          # Every gating step below is keyed on a gate set it knows. One it
-          # does not would skip them all and report green, so refuse it here.
+          # Every gating step below is keyed on a gate set it knows, so one it
+          # does not -- or shards with no gate set at all -- would skip them
+          # all and report green over results nobody scored.
           case "$GATE_SET" in
-            ""|full) ;;
-            # Legal in the plan schema -- `mutation_plan.py diff` without
-            # --shadow writes it -- but no step below binds on it yet: this
-            # workflow only ever plans diff in shadow, which gates on full.
-            diff) echo "::error::gate set 'diff' is not wired to bind yet (shadow mode gates on 'full') — cannot gate"
-               exit 1 ;;
+            "") if [ "$MATRIX" != "[]" ]; then
+                  echo "::error::the plan gates on nothing but planned shards — cannot gate"
+                  exit 1
+                fi ;;
+            # A full plan with no shards would score nothing and pass.
+            full) if [ "$MATRIX" = "[]" ]; then
+                    echo "::error::the plan gates on the full set but planned no shards"
+                    exit 1
+                  fi ;;
+            # Zero shards is legal here: the planner found no core function
+            # with mutants in the diff, and the diff gate passes that below.
+            diff) ;;
             *) echo "::error::unknown gate set '$GATE_SET' — cannot gate"
                exit 1 ;;
           esac
-          # The comparison steps run only beside the full gate's checkout.
-          if [ "$SHADOW" = "true" ] && [ "$GATE_SET" != "full" ]; then
-            echo "::error::a shadow plan must gate on the full set, not '$GATE_SET'"
+          # Every shard belongs to the set the gate scores. A shard of any
+          # other set is work no step reads -- the old shadow plan's shape,
+          # which nothing plans now. Captured, never piped: no pipefail here.
+          if ! sets="$(jq -r '[.[].set] | unique | join(" ")' <<< "$MATRIX")"; then
+            echo "::error::the shard matrix is not readable — cannot gate"
+            exit 1
+          fi
+          if [ -n "$sets" ] && [ "$sets" != "$GATE_SET" ]; then
+            echo "::error::the matrix runs '$sets' shards but the plan gates on '$GATE_SET'"
             exit 1
           fi
       # Reached only past the step above, so the planner succeeded: an empty
@@ -1417,30 +1419,30 @@ jobs:
           echo "The plan runs no mutants: $REASON"
           echo "- **Mutation:** skipped — $REASON" >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: needs.mutation-plan.outputs.gate_set == 'full'
+        if: needs.mutation-plan.outputs.gate_set == 'full' || needs.mutation-plan.outputs.gate_set == 'diff'
         with:
           fetch-depth: 0    # tags for setuptools-scm version resolution
           persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        if: needs.mutation-plan.outputs.gate_set == 'full'
+        if: needs.mutation-plan.outputs.gate_set == 'full' || needs.mutation-plan.outputs.gate_set == 'diff'
         with:
           python-version: "3.14"
       # The same venv the shards build: mutation_gate.py shells out to mutmut,
       # and mutation_diff.py imports mutmut and PyYAML.
       - name: install mutmut (for export-cicd-stats and the diff gate)
-        if: needs.mutation-plan.outputs.gate_set == 'full'
+        if: needs.mutation-plan.outputs.gate_set == 'full' || needs.mutation-plan.outputs.gate_set == 'diff'
         run: |
           python -m venv .venv
           .venv/bin/pip -q install -r requirements/mutation-tools.txt
       - name: download the plan
-        if: needs.mutation-plan.outputs.shadow == 'true'
+        if: needs.mutation-plan.outputs.gate_set == 'full' || needs.mutation-plan.outputs.gate_set == 'diff'
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: mutation-plan
           path: ${{ runner.temp }}/mutation-plan
-      # One directory per set, so neither reader can pick up the other's
+      # One directory per set, so neither gate can pick up the other's
       # results: the merge re-derives the 24-way pack and reads only full
-      # shards, and the comparison reads each set from its own side.
+      # shards, and the diff gate reads only diff shards.
       - name: download full shard results
         if: needs.mutation-plan.outputs.gate_set == 'full'
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -1448,30 +1450,36 @@ jobs:
           pattern: mutation-full-shard-*
           path: shard-results/full
       - name: download diff shard results
-        if: needs.mutation-plan.outputs.shadow == 'true'
+        if: needs.mutation-plan.outputs.gate_set == 'diff'
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: mutation-diff-shard-*
           path: shard-results/diff
       - name: every planned shard uploaded results
-        if: needs.mutation-plan.outputs.gate_set == 'full'
+        if: needs.mutation-plan.outputs.gate_set == 'full' || needs.mutation-plan.outputs.gate_set == 'diff'
         env:
           MATRIX: ${{ needs.mutation-plan.outputs.matrix }}
         # A download by pattern that matches nothing is not an error, so check
-        # each matrix entry, for both sets. A missing full shard would also stop
-        # the merge below; a missing diff shard would only make the advisory
-        # comparison say so, from a step allowed to fail -- so it stops here.
+        # each matrix entry. Both gates would refuse a missing shard too (the
+        # merge, and the diff gate's exit 2); this names the shard first.
         #
         # And a pattern that matches exactly ONE artifact is written straight
         # into `path:`, with no <artifact-name>/ level (download-artifact
         # v8.0.2, src/download-artifact.ts: `artifacts.length === 1 ?
         # resolvedPath : path.join(resolvedPath, artifact.name)`). A one-shard
         # diff set is the commonest diff plan, so put a lone set's results back
-        # under its shard's name first. Only when the set planned one shard:
+        # under its shard's name first -- without it every such PR's binding
+        # gate would find no shard 0. Only when the set planned one shard:
         # with several planned and one arrived, which one it was is unknowable,
         # and the check below fails it.
+        #
+        # jq's output is captured before the loops read it: under `< <(...)`
+        # its exit status was lost, and a failure read as "nothing planned".
         run: |
+          counts="$(jq -r 'group_by(.set)[] | "\(.[0].set) \(length)"' <<< "$MATRIX")"
+          pairs="$(jq -r '.[] | "\(.set) \(.index)"' <<< "$MATRIX")"
           while read -r set planned; do
+            [ -n "$set" ] || continue
             dir="shard-results/$set"
             one="$dir/mutation-$set-shard-0"
             if [ "$planned" = 1 ] && [ ! -d "$one" ] && [ -n "$(ls -A "$dir" 2>/dev/null)" ]; then
@@ -1479,81 +1487,55 @@ jobs:
               mkdir -p "$dir"
               mv "$dir.lone" "$one"
             fi
-          done < <(jq -r 'group_by(.set)[] | "\(.[0].set) \(length)"' <<< "$MATRIX")
+          done <<< "$counts"
           missing=0
           while read -r set index; do
+            [ -n "$set" ] || continue
             if [ ! -d "shard-results/$set/mutation-$set-shard-$index" ]; then
               echo "::error::no results from $set shard $index"
               missing=1
             fi
-          done < <(jq -r '.[] | "\(.set) \(.index)"' <<< "$MATRIX")
+          done <<< "$pairs"
           exit "$missing"
-      # The only step here allowed to fail without failing the check. It runs
-      # the diff gate and the per-mutant comparison over the same commit's
-      # full and diff results; neither decides `mutation` -- the full gate
-      # below does. It runs before the merge so a red full gate still leaves
-      # a report: that run is the one most worth comparing. The step goes
-      # red, visibly, on any disagreement or incomplete comparison; a FAIL
-      # from the diff gate is the data being compared, not an error.
-      - name: diff-gate shadow (advisory; the full gate below decides)
-        id: shadow
-        if: needs.mutation-plan.outputs.shadow == 'true'
-        continue-on-error: true
+      # Before either gate, so a red gate still leaves the plan it scored in
+      # the summary. The full set's mutants are never generated by the
+      # planner, so it has no count to print.
+      - name: what the plan runs
+        if: needs.mutation-plan.outputs.gate_set == 'full' || needs.mutation-plan.outputs.gate_set == 'diff'
+        env:
+          GATE_SET: ${{ needs.mutation-plan.outputs.gate_set }}
+          MATRIX: ${{ needs.mutation-plan.outputs.matrix }}
+          REASON: ${{ needs.mutation-plan.outputs.reason }}
         run: |
           plan="$RUNNER_TEMP/mutation-plan/mutation-plan.json"
-          report=mutation-shadow-report.md
-          # The diff gate writes its own summary section; send it into the
-          # report, so the job summary never shows a diff verdict at top level
-          # where a reader would take it for the binding one.
-          gate_md="$RUNNER_TEMP/diff-gate-summary.md"
-          : > "$gate_md"
-          # No pipefail under this job's default shell, so exit codes are
-          # captured, never read through a pipe.
-          set +e
-          # --no-annotations: an advisory gate posting a ::warning on every
-          # changed function of every PR is noise; the report lists them.
-          # --root stays, so binding it later is one flag removed.
-          GITHUB_STEP_SUMMARY="$gate_md" .venv/bin/python scripts/mutation_diff.py gate \
-            --plan "$plan" --source shard-results/diff --prefix mutation-diff-shard- \
-            --root "$GITHUB_WORKSPACE" --no-annotations > "$RUNNER_TEMP/gate.txt" 2>&1
-          gate_rc=$?
-          .venv/bin/python scripts/mutation_diff.py compare --plan "$plan" \
-            --full-source shard-results/full --diff-source shard-results/diff \
-            > "$RUNNER_TEMP/compare.txt" 2>&1
-          compare_rc=$?
-          set -e
-          cat "$RUNNER_TEMP/gate.txt" "$RUNNER_TEMP/compare.txt"
+          mutants="$(jq -r --arg s "$GATE_SET" \
+            '.sets[$s].mutants // "not counted (every mutant in boost_cli/core)"' "$plan")"
+          shards="$(jq 'length' <<< "$MATRIX")"
           {
-            echo "## Diff-gate shadow"
+            echo "### Mutation plan: $GATE_SET"
             echo
-            echo "Advisory. The full run decides this check; the diff set ran beside it on the same commit."
-            echo "The bar before the diff gate binds is \`disagree 0\` (timeouts excluded and listed)."
+            echo "- **Mode:** $GATE_SET"
+            echo "- **Reasons:** $REASON"
+            echo "- **Mutants:** $mutants"
+            echo "- **Shards:** $shards"
+            if [ "$GATE_SET" = diff ] && [ "$shards" = 0 ]; then
+              echo "- **Mutation:** no core function changed that has mutants to run, so the diff gate has nothing to score and passes"
+            fi
             echo
-            echo "Comparison exit $compare_rc, diff gate exit $gate_rc."
-            echo
-            echo '~~~text'
-            cat "$RUNNER_TEMP/compare.txt"
-            echo '~~~'
-            echo
-            cat "$gate_md"
-          } > "$report"
-          cat "$report" >> "$GITHUB_STEP_SUMMARY"
-          # compare: 1 = disagreement, 2 = incomplete. gate: 2 = unrun or
-          # missing results, anything above = it crashed.
-          if [ "$compare_rc" != 0 ] || [ "$gate_rc" -gt 1 ]; then
-            echo "::error::diff-gate shadow: comparison exit $compare_rc, diff gate exit $gate_rc"
-            exit 1
-          fi
-      - name: upload the shadow report
-        if: needs.mutation-plan.outputs.shadow == 'true'
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: mutation-shadow-report
-          path: mutation-shadow-report.md
-          # Collected from the first release-train runs before the diff gate
-          # is switched on, which can be some days after this one.
-          retention-days: 30
-          if-no-files-found: warn
+          } >> "$GITHUB_STEP_SUMMARY"
+      # The binding gate on a pull request or merge-queue entry: >=80% of the
+      # in-scope mutants killed, or every one below 10. Exit 1 is a FAIL, 2 is
+      # a malformed plan or a missing, partial or unrun shard. It writes its
+      # verdict and the unkilled mutants to the job summary, and one
+      # `::warning` per function that lost mutants, at its `def` in this
+      # checkout ($GITHUB_SHA, the commit the shards mutated).
+      - name: mutation strength gate on the diff (>=80% killed)
+        if: needs.mutation-plan.outputs.gate_set == 'diff'
+        run: |
+          .venv/bin/python scripts/mutation_diff.py gate \
+            --plan "$RUNNER_TEMP/mutation-plan/mutation-plan.json" \
+            --source shard-results/diff --prefix mutation-diff-shard- \
+            --root "$GITHUB_WORKSPACE"
       - name: merge shard results
         if: needs.mutation-plan.outputs.gate_set == 'full'
         # Refuses on a missing or half-finished shard rather than gating on a
@@ -1572,8 +1554,9 @@ jobs:
         # one: real per-symbol mutant counts, and the per-file DURATIONS that let
         # the planner balance on time instead of count. `|| true` because a
         # balance hint is never worth failing a green gate over. It reads the
-        # merged FULL results in mutants/ only; diff results stay in
-        # shard-results/diff, so a shadow run's weights are still whole-tree.
+        # merged FULL results in mutants/, so it runs on full plans only: a
+        # diff run times a few functions, and weights taken from it would
+        # describe those and mis-pack the rest of the tree.
         run: python3 scripts/mutation_shards.py weights --source mutants || true
       - name: upload balance hints
         if: needs.mutation-plan.outputs.gate_set == 'full'
