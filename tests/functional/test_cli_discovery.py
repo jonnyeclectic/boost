@@ -2976,6 +2976,34 @@ class TestReindex:
         assert "indexed" in r.out                 # BM25 still builds
         assert "dense index skipped" in r.out
 
+    def test_dense_skipped_past_the_onnx_ceiling_names_the_move(
+            self, boost, tapped, monkeypatch):
+        """The extra is in, its model runtime cannot be: no "install it".
+
+        On a Python onnxruntime has no wheel for, the generic fallback note
+        names the extra this machine already has; the status row names the
+        interpreter move that brings the model.
+        """
+        import importlib.util
+
+        from boost_cli.core import dense, embed, localembed, selfupdate
+        real = importlib.util.find_spec
+        monkeypatch.setattr(
+            importlib.util, "find_spec",
+            lambda name, *a, **k: None if name == "onnxruntime"
+            else real(name, *a, **k))
+        monkeypatch.setattr(localembed, "ONNX_WHEEL_CEILING", (3, 0))
+        monkeypatch.setattr(selfupdate, "detect", lambda *a, **k: "pipx")
+        monkeypatch.setattr(embed, "local_available", lambda: False)
+        monkeypatch.setattr(dense, "_load", lambda: object())
+        for env in embed.KEY_ENV.values():
+            monkeypatch.delenv(env, raising=False)
+        r = boost("reindex", "--dense")
+        out = " ".join(r.out.split())
+        assert "dense index skipped" in out
+        assert "`boost self-update --python 3.13`" in out
+        assert "pipx inject" not in out
+
     def test_dense_builds_vector_store(self, boost, tapped, monkeypatch):
         if not _vec_loadable():
             pytest.skip("sqlite-vec extension not loadable here")

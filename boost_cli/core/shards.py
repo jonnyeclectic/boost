@@ -85,10 +85,11 @@ TRANSPORT_LEAD = "shards are optional — "
 #: Reasons a plain `boost reindex --dense` cannot answer: it cannot run, or
 #: it refuses a store it would have to destroy. `dense.fix_hint` words each.
 _UNBUILDABLE = frozenset({"disabled", "no-backend", "no-extension-load",
-                          "no-key", "corrupt", "provider-changed",
+                          "no-key", "no-local-wheel", "corrupt",
+                          "provider-changed",
                           "model-changed", "dim-changed"})
 _CANNOT_RUN = frozenset({"disabled", "no-backend", "no-extension-load",
-                         "no-key"})
+                         "no-key", "no-local-wheel"})
 
 
 def _how(prov: str | None) -> str:

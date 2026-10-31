@@ -366,6 +366,9 @@ jobs:
     # passing on rerun. So the condition names the one OS that keeps 30 —
     # Linux, the 12.7-18.3 min cells — and macOS shares Windows' cap.
     timeout-minutes: ${{ startsWith(matrix.os, 'ubuntu') && 30 || 80 }}
+    # The 3.15 cells are advisory (see the matrix comment): a red one must not
+    # fail the ci run, because publish.yml releases only on its `success`.
+    continue-on-error: ${{ matrix.python == '3.15' }}
     permissions:
       contents: write  # coverage badge push (main only)
     defaults:
@@ -379,7 +382,19 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
         # floor, middle, ceiling — same shape as before, shifted by the >=3.12
         # floor. 3.13 is the middle rather than a second point near the edge.
-        python: ["3.12", "3.13", "3.14"]
+        # 3.15 added 2026-10-28, when Homebrew's python3 became 3.15 and took
+        # 3.14 away: it is now the interpreter a new user's pipx picks. Its
+        # cells are a compatibility signal, not a gate, on both edges: NOT in
+        # .github/required-checks.txt (no merge block), and job-level
+        # `continue-on-error` above (no release block — publish.yml fires on
+        # a *successful* ci run, and one red cell fails the run, as the
+        # cancelled windows-3.14 cell recorded above once did). Nothing here
+        # needs onnxruntime (this job installs sqlite-vec alone; the onnx
+        # tests skip without the runtime), whose missing cp315 wheel is what
+        # pyproject's [rag] marker is for. requirements/test-tools.txt has
+        # cp315 wheels for coverage and pyyaml's sdist hash, so the hashed
+        # install builds on this leg.
+        python: ["3.12", "3.13", "3.14", "3.15"]
     steps:
       - name: harden runner (egress audit)
         if: runner.os == 'Linux'   # harden-runner is Linux-only

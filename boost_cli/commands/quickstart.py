@@ -17,7 +17,11 @@ them, and left alone.
 """
 from __future__ import annotations
 
-from .. import cliparse, spin
+import os
+import shlex
+import sys
+
+from .. import __version__, cliparse, spin
 from ..core import (
     bootstrap,
     catalog,
@@ -25,8 +29,10 @@ from ..core import (
     config,
     dense,
     journal,
+    localembed,
     rag,
     registry,
+    selfupdate,
     shards,
     util,
 )
@@ -342,8 +348,75 @@ def _reindex_moved(moved: list[str]) -> int:
     return entries
 
 
+def _relocate(argv: list[str], dry_run: bool) -> None:
+    """Move a pipx or uv install to the recommended Python, then start over.
+
+    A plain `pipx install 'boost-skill-cli[rag]'` on a Python onnxruntime has
+    no wheel for installs the store and no model, and a wheel cannot run code
+    at install time to fix that. Quickstart is the first command a new user
+    runs, so it offers the move (`selfupdate.relocation_reason` decides) and
+    re-execs itself on the rebuilt venv, where this process's imports are
+    stale. `RELOCATED_ENV` marks the child, so a move that did not take
+    continues here with the usual hint instead of looping.
+
+    Returns only when quickstart should carry on in this process.
+    """
+    if selfupdate.relocated():
+        return
+    method = selfupdate.detect()
+    reason = selfupdate.relocation_reason(method)
+    if not reason:
+        return
+    py = localembed.RECOMMENDED_PYTHON
+    try:
+        cmd = selfupdate.relocation_command(method)
+    except BoostError as e:
+        # pipx or uv is not on PATH, e.g. pipx run as `python3 -m pipx`.
+        # Quickstart still works without the move, so it says why there is
+        # none and carries on keyword-only.
+        out.warn("%s, so quickstart cannot move boost to Python %s"
+                 % (e.message, py), wrap=True)
+        if e.hint:
+            out.info(e.hint, wrap=True)
+        out.info("`--keep-python` skips this check", wrap=True)
+        return
+    out.warn(selfupdate.relocation_offer(method, reason), wrap=True)
+    if dry_run:
+        out.info("would run: %s, then `boost quickstart` again"
+                 % shlex.join(cmd), wrap=True)
+        return
+    if not out.confirm("Move boost to Python %s?" % py):
+        out.info("staying on this Python; `boost self-update --python %s` "
+                 "moves it later" % py, wrap=True)
+        return
+    out.info("reinstalling via %s: %s" % (method, shlex.join(cmd)), wrap=True)
+    # The manager rebuilds the venv this process runs from: everything used
+    # below is imported at the top of this module, never lazily.
+    selfupdate.run_upgrade(cmd, timeout=selfupdate.REINSTALL_TIMEOUT)
+    seen = selfupdate.observed_python()
+    # The manager replays the spec unpinned, so the move can land a newer
+    # release; this process imported its version before it, so ask a fresh one.
+    new = selfupdate.observed_version()
+    journal.log("self-update", new or __version__, previous=__version__,
+                method=method, python=seen[0] if seen else py)
+    ok, warn = selfupdate.python_report(method, seen)
+    out.ok(ok)
+    if warn:
+        out.warn(warn, wrap=True)
+    again = selfupdate.reexec_argv(["quickstart", *argv])
+    if again is None:
+        raise BoostError(
+            "boost moved to Python %s, but the rebuilt install was not found "
+            "to continue from" % py,
+            hint="run `boost quickstart` again")
+    os.environ[selfupdate.RELOCATED_ENV] = "1"
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os.execv(again[0], again)  # noqa: S606 -- argv list, no shell; the venv just rebuilt
+
+
 def cmd_quickstart(argv) -> int:
-    """boost quickstart [--catalog] [--no-vectors] [--dry-run]"""
+    """boost quickstart [--catalog] [--no-vectors] [--keep-python] [--dry-run]"""
     p = cliparse.parser(
         prog="boost quickstart",
         description="Tap the starter registries and load prebuilt vectors")
@@ -352,9 +425,13 @@ def cmd_quickstart(argv) -> int:
                         "starters, and fetch vectors for all of them")
     p.add_argument("--no-vectors", action="store_true",
                    help="set up taps and keyword search only, skip shards")
+    p.add_argument("--keep-python", action="store_true",
+                   help="skip moving to the recommended Python")
     p.add_argument("--dry-run", action="store_true",
                    help="print what would happen, change nothing")
     args = p.parse_args(argv)
+    if not args.keep_python:
+        _relocate(list(argv), args.dry_run)
 
     manifest = None
     pins: dict[str, dict] = {}
@@ -428,7 +505,7 @@ def cmd_quickstart(argv) -> int:
             elif not dense.have_backend():
                 out.info("0 because semantic search needs the extra: `%s` — "
                          "keyword search works without it"
-                         % dense.install_extra(), wrap=True)
+                         % dense.extra_hint(), wrap=True)
             elif manifest is None:
                 _muted("(0 because the shard manifest could not be read — "
                        "keyword search is unaffected)")
@@ -470,7 +547,7 @@ def cmd_quickstart(argv) -> int:
         out.info(out.role("skipped vectors as asked", "muted"))
     elif not dense.have_backend():
         out.info("semantic search needs the extra: `%s`, then `boost "
-                 "quickstart` again" % dense.install_extra(), wrap=True)
+                 "quickstart` again" % dense.extra_hint(), wrap=True)
     elif want_vectors:
         # The whole vector step was skipped, and the only word about it was a
         # warning many screens back. Without this the run ends "✓ ready" as

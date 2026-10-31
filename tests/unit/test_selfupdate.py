@@ -345,6 +345,31 @@ class TestRunUpgrade:
         assert err.value.message == "upgrade failed (pipx exited 1)"
         assert err.value.hint == "ERROR: No matching dist"
 
+    def test_a_wrapped_message_is_rejoined(self, monkeypatch):
+        # pipx 1.18's real output when a standalone download fails: the last
+        # line alone is a URL fragment that names neither the error nor 3.13.
+        err_text = (
+            "Downloading python 3.13.18 build...\n"
+            "⚠️ No executable for the provided Python version '3.13' found in the\n"
+            "    python-build-standalone project. Please make sure the provided version is\n"
+            "    listed in\n"
+            "    https://github.com/astral-sh/python-build-standalone/releases/latest.\n")
+        monkeypatch.setattr(selfupdate.subprocess, "run",
+                            lambda *a, **k: _proc(1, err=err_text))
+        with pytest.raises(BoostError) as err:
+            selfupdate.run_upgrade(["/usr/bin/pipx", "reinstall"])
+        assert err.value.hint == (
+            "⚠️ No executable for the provided Python version '3.13' found in the"
+            " python-build-standalone project. Please make sure the provided"
+            " version is listed in"
+            " https://github.com/astral-sh/python-build-standalone/releases/latest.")
+
+    def test_last_message_stops_at_the_first_unindented_line(self):
+        assert selfupdate.last_message(["a", "b", "  c", "  d"]) == "b c d"
+        assert selfupdate.last_message(["  only", "  indented"]) == (
+            "only indented")
+        assert selfupdate.last_message([]) == ""
+
     def test_error_text_falls_back_to_stdout(self, monkeypatch):
         # pip writes its resolution failures to stdout, not stderr.
         monkeypatch.setattr(

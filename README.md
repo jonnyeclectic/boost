@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/jonnyeclectic/boost/actions/workflows/ci.yml/badge.svg)](https://github.com/jonnyeclectic/boost/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/jonnyeclectic/boost)](https://github.com/jonnyeclectic/boost/releases/latest)
-[![Python 3.12–3.14](https://img.shields.io/badge/python-3.12%E2%80%933.14-blue)](https://github.com/jonnyeclectic/boost/blob/main/.github/workflows/ci.yml)
+[![Python 3.12–3.15](https://img.shields.io/badge/python-3.12%E2%80%933.15-blue)](https://github.com/jonnyeclectic/boost/blob/main/.github/workflows/ci.yml)
 [![Coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fjonnyeclectic%2Fboost%2Fbadges%2Fcoverage.json)](https://github.com/jonnyeclectic/boost/actions/workflows/ci.yml)
 [![Mutation score](https://img.shields.io/badge/mutation_score-%E2%89%A580%25_killed-blueviolet)](https://github.com/jonnyeclectic/boost/blob/main/scripts/mutation_gate.py)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey)](https://github.com/jonnyeclectic/boost/actions/workflows/ci.yml)
@@ -90,10 +90,41 @@ way to end up at `boost: command not found`.
 ## Install
 
 ```bash
-pipx install boost-skill-cli
+pipx install --python 3.13 --fetch-python=always "boost-skill-cli[rag]"
 boost --version
 boost tap --defaults
 ```
+
+With uv it is
+`uv tool install --managed-python --python 3.13 "boost-skill-cli[rag]"`.
+Plain `pipx install boost-skill-cli` also works if you only want keyword
+search.
+
+The command pins the interpreter because pipx and uv build boost's
+environment on one Python and keep a link to it. When Homebrew upgrades past
+a `python@3.X` formula it deletes the old one, the link breaks, and `boost`
+fails before it starts with `bad interpreter: no such file or directory`.
+[DEBUGGING](docs/DEBUGGING.md#boost-bad-interpreter-after-a-homebrew-upgrade)
+has the one-command fix. `--fetch-python=always` (pipx 1.18 or later) makes
+pipx download its own 3.13 even when Homebrew has one, and
+`--managed-python` does the same for uv, so a Homebrew cleanup can't touch
+either. The older flag, `--fetch-missing-python`, only downloads when no
+`python3.13` is on PATH. On a Mac with Homebrew's 3.13 it uses that one, and
+you are back where you started.
+
+The install command pins 3.13 rather than the newest Python because the
+`[rag]` extra's local embedding model runs on onnxruntime, and onnxruntime
+has wheels for 3.11 to 3.14 but not 3.15. On 3.15 the extra installs without
+it. Keyword search still works, and so does semantic search if you set
+`VOYAGE_API_KEY` or `OPENAI_API_KEY`.
+
+If you installed with plain `pipx install "boost-skill-cli[rag]"` or
+`uv tool install "boost-skill-cli[rag]"` and landed on 3.15 with no key set,
+`boost quickstart` and `boost self-update` offer to move boost to a Python
+3.13 that pipx or uv downloads and manages. They ask first. Say yes and the
+manager rebuilds boost's environment on 3.13 with the extra, and quickstart
+then carries on from the new install. Pass `--keep-python` to either command
+to stay where you are.
 
 `pipx` keeps boost in its own isolated environment, which is why it is the recommended
 route. Without pipx, use an explicit interpreter — a bare `pip` is often absent
@@ -112,7 +143,15 @@ Upgrading later is one command, whichever way you installed:
 ```bash
 boost self-update             # detects pipx / pip / uv / a git checkout and drives it
 boost self-update --dry-run   # print the command it would run, change nothing
+boost self-update --python 3.13   # rebuild a pipx / uv install on another Python, extras kept
+boost self-update --keep-python   # upgrade only, never move to Python 3.13
 ```
+
+On a Python the `[rag]` extra has no onnxruntime wheel for, a pipx or uv
+install with the extra and no API key gets one extra question: move to Python
+3.13 first? Yes runs a single `pipx reinstall` or `uv tool install` on 3.13,
+which also picks up the latest release. No runs the normal upgrade. `--dry-run`
+prints the reason and the exact command without running it.
 
 It reads evidence on disk — `.git`, then `pipx_metadata.json` or `uv-receipt.toml`,
 then installed package metadata — and for a pip install runs `sys.executable -m pip`
@@ -152,6 +191,11 @@ extra:
 pipx inject boost-skill-cli "boost-skill-cli[rag]"   # or: uv tool install "boost-skill-cli[rag]"
 boost quickstart                                     # downloads prebuilt vectors
 ```
+
+The keyless model needs Python 3.14 or older until onnxruntime publishes 3.15
+wheels. On 3.15, `boost quickstart` offers to move a pipx or uv install to
+3.13 and keeps the extra. `boost self-update --python 3.13` does the same move
+on its own.
 
 `boost quickstart` is the fast path: it taps the starter registries **pinned to
 the commits the published vectors were built from**, then downloads and imports

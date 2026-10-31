@@ -181,7 +181,7 @@
     </div>
     <div class="group" data-group="cfg">
       <div class="group-h">Config &amp; setup</div>
-      <a class="cmd-link" href="#cmd-quickstart" data-search="quickstart tap the starter registries and index them for search tap the starter registries and load prebuilt vectors --catalog --no-vectors --dry-run">quickstart</a>
+      <a class="cmd-link" href="#cmd-quickstart" data-search="quickstart tap the starter registries and index them for search tap the starter registries and load prebuilt vectors --catalog --no-vectors --keep-python --dry-run">quickstart</a>
       <a class="cmd-link" href="#cmd-config" data-search="config display or modify boost configuration  --json {list,get,set,unset} key value">config</a>
       <a class="cmd-link" href="#cmd-clean" data-search="clean clear stale caches &amp; broken symlinks  --dry-run --deep -y, --yes --json">clean</a>
       <a class="cmd-link" href="#cmd-compact" data-search="compact shrink tap clones to the files boost indexes  --dry-run --reclone --json tap">compact</a>
@@ -194,7 +194,7 @@
       <a class="cmd-link" href="#cmd-mcp" data-search="mcp register boost as an mcp server (claude code, gemini cli, antigravity cli, codex cli) register boost as an mcp server for your agent clis --host h --stdio --dry-run --force --seed --no-seed {register,unregister}">mcp</a>
       <a class="cmd-link" href="#cmd-hooks" data-search="hooks manage agent hooks (claude code, gemini cli, codex cli) manage agent hooks (scope- and host-aware) in an agent&#x27;s settings --host h -c, --command command -n, --name name -s, --scope {global,project} -m, --matcher matcher --timeout timeout --json --force {add,remove,list} event">hooks</a>
       <a class="cmd-link" href="#cmd-bmad" data-search="bmad bmad method autopilot — `bmad on` routes every task to a persona bmad method autopilot: personas, prompt routing, workflows -s, --scope {project,global} --modules modules -y, --yes --startup --plain --force --host h action value">bmad</a>
-      <a class="cmd-link" href="#cmd-self-update" data-search="self-update update boost itself to the latest version  --dry-run">self-update</a>
+      <a class="cmd-link" href="#cmd-self-update" data-search="self-update update boost itself to the latest version  --dry-run --python version --keep-python">self-update</a>
     </div>
     <div class="group" data-group="team">
       <div class="group-h">Team &amp; sharing</div>
@@ -1044,15 +1044,16 @@
         </div>
       </section>
       <h2 class="group-h" id="grp-cfg">Config &amp; setup</h2>
-      <section class="cmd" id="cmd-quickstart" data-search="quickstart tap the starter registries and index them for search tap the starter registries and load prebuilt vectors --catalog --no-vectors --dry-run">
+      <section class="cmd" id="cmd-quickstart" data-search="quickstart tap the starter registries and index them for search tap the starter registries and load prebuilt vectors --catalog --no-vectors --keep-python --dry-run">
         <h3><span class="cname">quickstart</span><span class="gtag">cfg</span></h3>
         <p class="summary">Tap the starter registries and index them for search</p>
-        <pre class="syn">boost quickstart [--catalog] [--no-vectors] [--dry-run]</pre>
+        <pre class="syn">boost quickstart [--catalog] [--no-vectors] [--keep-python] [--dry-run]</pre>
         <p class="desc">Tap the starter registries and load prebuilt vectors</p>
         <div class="args-h">Options</div>
         <div class="args">
           <div class="arg"><code>--catalog</code><span>tap every catalogued registry, not just the 7 starters, and fetch vectors for all of them</span></div>
           <div class="arg"><code>--no-vectors</code><span>set up taps and keyword search only, skip shards</span></div>
+          <div class="arg"><code>--keep-python</code><span>skip moving to the recommended Python</span></div>
           <div class="arg"><code>--dry-run</code><span>print what would happen, change nothing</span></div>
         </div>
       </section>
@@ -1243,13 +1244,15 @@
           <div class="arg"><code>--host H</code><span>on/startup: hosts to hook (claude | gemini | codex; default auto: claude + any in use) · route/orient: output format</span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-self-update" data-search="self-update update boost itself to the latest version  --dry-run">
+      <section class="cmd" id="cmd-self-update" data-search="self-update update boost itself to the latest version  --dry-run --python version --keep-python">
         <h3><span class="cname">self-update</span><span class="gtag">cfg</span></h3>
         <p class="summary">Update boost itself to the latest version</p>
-        <pre class="syn">boost self-update [--dry-run]</pre>
+        <pre class="syn">boost self-update [--dry-run] [--python VERSION] [--keep-python]</pre>
         <div class="args-h">Options</div>
         <div class="args">
           <div class="arg"><code>--dry-run</code><span>show how boost would update itself, change nothing</span></div>
+          <div class="arg"><code>--python VERSION</code><span>rebuild boost&#x27;s pipx or uv tool venv on this Python (e.g. 3.13), downloading the manager&#x27;s own build of it, and keep its extras — the way off an interpreter Homebrew removed, or one the [rag] extra has no wheel for</span></div>
+          <div class="arg"><code>--keep-python</code><span>skip moving to the recommended Python</span></div>
         </div>
       </section>
       <h2 class="group-h" id="grp-team">Team &amp; sharing</h2>

@@ -249,6 +249,36 @@ class TestQuickstartWithoutTheExtra:
         extra = dense.install_extra()
         assert dry.count(extra) == live.count(extra) == 1
 
+    def test_past_the_onnx_ceiling_both_lines_move_boost(
+            self, boost, monkeypatch):
+        # On a Python onnxruntime has no wheel for, `pipx inject` installs
+        # the store and no model; both lines must name the move to 3.13.
+        import importlib.util
+
+        from boost_cli.core import dense, embed, localembed, selfupdate
+        real = importlib.util.find_spec
+        # No sqlite_vec either: the extra was never installed, so there is
+        # nothing for quickstart to move, only a command to print.
+        monkeypatch.setattr(
+            importlib.util, "find_spec",
+            lambda name, *a, **k: None if name in ("onnxruntime", "sqlite_vec")
+            else real(name, *a, **k))
+        monkeypatch.setattr(localembed, "ONNX_WHEEL_CEILING", (3, 0))
+        monkeypatch.setattr(selfupdate, "detect", lambda *a, **k: "pipx")
+        monkeypatch.setattr(selfupdate.shutil, "which",
+                            lambda t: "/opt/bin/" + t)
+        monkeypatch.setattr(selfupdate, "pipx_version", lambda *a, **k: (1, 18))
+        for env in embed.KEY_ENV.values():
+            monkeypatch.delenv(env, raising=False)
+        monkeypatch.setattr(dense, "have_backend", lambda: False)
+        _fake_add_many(monkeypatch, ["ok"] * 7)
+        want = ('`pipx uninstall boost-skill-cli && pipx install --python 3.13 '
+                '--fetch-python=always "boost-skill-cli[rag]"`')
+        dry = _flat(boost("quickstart", "--dry-run").out)
+        live = _flat(boost("quickstart").out)
+        assert want in dry and want in live
+        assert "pipx inject" not in dry + live
+
     def test_zero_shards_says_why_it_is_zero(self, boost, monkeypatch):
         """"import 0 shard(s)" reads as "none are published".
 
@@ -1449,3 +1479,164 @@ class TestThePreviewHeadlineFitsThePane:
         block = self._headline(boost("quickstart", "--dry-run").out)
         assert len(block) > 1, block
         assert any("(28B)" in ln for ln in block), block
+
+
+class _Execd(BaseException):
+    """Stands in for `os.execv`, which never returns.
+
+    A BaseException so the CLI's crash handler, which catches Exception,
+    lets it through the way it lets a real exec through: unseen.
+    """
+
+
+class TestQuickstartMovesAStrandedInstall:
+    """A plain `pipx install 'boost-skill-cli[rag]'` on a Python onnxruntime
+    has no wheel for. Quickstart is the first command a new user runs, so it
+    offers the move to 3.13, makes it, and starts itself over on the rebuilt
+    venv. `BOOST_RELOCATED` marks that second run so a failed move cannot
+    loop.
+    """
+
+    MOVE = ("/opt/bin/pipx", "reinstall", "--python", "3.13",
+            "--fetch-python=always", "boost-skill-cli")
+
+    @pytest.fixture()
+    def stranded(self, monkeypatch):
+        import importlib.util
+        import sys
+
+        from boost_cli.core import dense, embed, localembed, selfupdate
+        monkeypatch.setattr(localembed, "ONNX_WHEEL_CEILING", (3, 0))
+        real = importlib.util.find_spec
+
+        def find_spec(name, *a, **k):
+            if name == "onnxruntime":
+                return None
+            if name == "sqlite_vec":
+                return object()
+            return real(name, *a, **k)
+        monkeypatch.setattr(importlib.util, "find_spec", find_spec)
+        for env in embed.KEY_ENV.values():
+            monkeypatch.delenv(env, raising=False)
+        monkeypatch.setattr(selfupdate, "detect", lambda *a, **k: "pipx")
+        monkeypatch.setattr(selfupdate.shutil, "which",
+                            lambda t: "/opt/bin/" + t)
+        monkeypatch.setattr(selfupdate, "pipx_version", lambda *a, **k: (1, 18))
+        monkeypatch.setattr(selfupdate, "observed_python",
+                            lambda: ("3.13.9", "/x/pipx/py/cpython-3.13.9"))
+        monkeypatch.setattr(selfupdate, "observed_version", lambda: "9.9.9")
+        # Recorded so monkeypatch removes whatever the command sets.
+        monkeypatch.setenv(selfupdate.RELOCATED_ENV, "")
+        monkeypatch.setattr(dense, "have_backend", lambda: False)
+        state: dict = {"ran": [], "execd": None,
+                       "taps": _fake_add_many(monkeypatch, ["ok"] * 7)}
+        monkeypatch.setattr(selfupdate, "run_upgrade",
+                            lambda cmd, **kw: state["ran"].append((cmd, kw)))
+
+        def execv(path, argv):
+            import os
+            state["execd"] = (path, list(argv),
+                              os.environ.get(selfupdate.RELOCATED_ENV))
+            raise _Execd
+        monkeypatch.setattr("os.execv", execv)
+        state["python"] = sys.executable
+        return state
+
+    def test_it_moves_then_starts_over_on_the_new_venv(self, boost, stranded):
+        with pytest.raises(_Execd):
+            boost("quickstart", "--no-vectors", expect=None)
+        assert stranded["ran"] == [(list(self.MOVE), {"timeout": 900.0})]
+        py = stranded["python"]
+        assert stranded["execd"] == (
+            py, [py, "-P", "-m", "boost_cli", "quickstart", "--no-vectors"],
+            "1")
+        # Nothing was tapped by the process that is about to be replaced.
+        assert "urls" not in stranded["taps"]
+
+    def test_it_says_what_it_did_before_starting_over(self, boost, stranded,
+                                                      capsys):
+        with pytest.raises(_Execd):
+            boost("quickstart", "--no-vectors", expect=None)
+        said = _flat(capsys.readouterr().out)
+        assert "has no onnxruntime wheel" in said
+        assert "reinstalling via pipx: %s" % " ".join(self.MOVE) in said
+        assert "boost now runs on Python 3.13.9" in said
+
+    def test_the_journal_records_the_release_the_move_landed(
+            self, boost, stranded):
+        # The reinstall replays the spec unpinned, so it can land a newer
+        # release than the one this process imported.
+        from boost_cli import __version__
+        from boost_cli.core import journal
+        with pytest.raises(_Execd):
+            boost("quickstart", "--no-vectors", expect=None)
+        ev = journal.events(action="self-update")[0]
+        assert ev["subject"] == "9.9.9"
+        assert ev["previous"] == __version__
+        assert ev["python"] == "3.13.9"
+
+    @pytest.mark.parametrize("dry", [False, True])
+    def test_no_manager_on_path_carries_on_here(self, boost, stranded,
+                                                monkeypatch, dry):
+        # `python3 -m pipx install` can leave no `pipx` on PATH. The move is
+        # impossible, and quickstart still taps and finishes keyword-only.
+        from boost_cli.core import selfupdate
+
+        def no_confirm(*a, **k):
+            raise AssertionError("nothing to confirm without a manager")
+        monkeypatch.setattr("boost_cli.core.output.confirm", no_confirm)
+        monkeypatch.setattr(selfupdate.shutil, "which", lambda t: None)
+        args = ("--dry-run",) if dry else ("--no-vectors",)
+        r = boost("quickstart", *args)
+        said = _flat(r.out + r.err)
+        assert stranded["ran"] == [] and stranded["execd"] is None
+        assert "pipx is not on PATH" in said
+        assert "cannot move boost to Python 3.13" in said
+        assert "`--keep-python` skips this check" in said
+        assert "has no onnxruntime wheel" not in said
+        assert ("would tap" in said) if dry else ("urls" in stranded["taps"])
+
+    def test_the_relocated_run_does_not_move_again(self, boost, stranded,
+                                                   monkeypatch):
+        from boost_cli.core import selfupdate
+        monkeypatch.setenv(selfupdate.RELOCATED_ENV, "1")
+        out = _flat(boost("quickstart", "--no-vectors").out)
+        assert stranded["ran"] == [] and stranded["execd"] is None
+        assert "urls" in stranded["taps"]
+        assert "has no onnxruntime wheel" not in out
+
+    def test_keep_python_stays(self, boost, stranded):
+        boost("quickstart", "--keep-python", "--no-vectors")
+        assert stranded["ran"] == [] and stranded["execd"] is None
+        assert "urls" in stranded["taps"]
+
+    def test_a_declined_move_carries_on_here(self, boost, stranded,
+                                             monkeypatch):
+        monkeypatch.setattr("boost_cli.core.output.confirm",
+                            lambda *a, **k: False)
+        out = _flat(boost("quickstart", "--no-vectors").out)
+        assert stranded["ran"] == [] and stranded["execd"] is None
+        assert "`boost self-update --python 3.13` moves it later" in out
+        assert "urls" in stranded["taps"]
+
+    def test_dry_run_names_the_move_and_makes_none(self, boost, stranded,
+                                                   monkeypatch):
+        def no_confirm(*a, **k):
+            raise AssertionError("--dry-run must not ask")
+        monkeypatch.setattr("boost_cli.core.output.confirm", no_confirm)
+        out = _flat(boost("quickstart", "--dry-run").out)
+        assert stranded["ran"] == [] and stranded["execd"] is None
+        assert ("would run: %s, then `boost quickstart` again"
+                % " ".join(self.MOVE)) in out
+        assert "would tap" in out
+
+    def test_no_venv_to_return_to_stops_with_the_next_step(
+            self, boost, stranded, monkeypatch):
+        from boost_cli.core import selfupdate
+        monkeypatch.setattr(selfupdate, "reexec_argv", lambda argv: None)
+        r = boost("quickstart", "--no-vectors", expect=1)
+        assert stranded["execd"] is None
+        said = _flat(r.err)
+        assert "the rebuilt install was not found" in said
+        assert "run `boost quickstart` again" in said
+        assert "urls" not in stranded["taps"]

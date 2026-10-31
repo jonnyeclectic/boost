@@ -1831,9 +1831,13 @@ def _report_search_engine(rep) -> None:
                  hint=fix, wrap=True)
         return
 
+    # "not configured" is wrong for `no-local-wheel`: the extra is installed,
+    # and it is this interpreter that cannot carry its model runtime.
+    what = ("unavailable on this Python" if st["reason"] == "no-local-wheel"
+            else "not configured")
     rep.note("search-engine",
-             "semantic search not configured — using the full-content BM25 "
-             "engine (%s)" % fix, hint=fix, wrap=True)
+             "semantic search %s — using the full-content BM25 "
+             "engine (%s)" % (what, fix), hint=fix, wrap=True)
 
 
 def _print_skipped(skipped: list[dict]) -> None:

@@ -621,6 +621,10 @@ EXTRA_SPEC = "boost-skill-cli[rag]"
 #: Stands in for :func:`install_extra`'s answer inside ``_FIX``, which is data
 #: built at import time and cannot know how this boost was installed.
 _INSTALL = "{install-extra}"
+#: ``_FIX``'s placeholders for :func:`_move_python` and this interpreter's
+#: version, filled the same way and for the same reason.
+_MOVE = "{move-python}"
+_HERE = "{this-python}"
 
 
 def install_extra() -> str:
@@ -666,6 +670,80 @@ def install_extra() -> str:
             _shell_word(sys.executable),
             _shell_word("%s%s" % (paths.repo_root(), extra), always=True))
     return 'pip install "%s"' % EXTRA_SPEC
+
+
+def relocate_extra() -> str | None:
+    """The command that installs boost *with* the extra on an older Python.
+
+    For an interpreter the extra's onnxruntime has no wheel for (see
+    :func:`localembed.no_wheel_here`), where :func:`install_extra` is a dead
+    end: pip honours the extra's ``python_version`` marker, installs sqlite-vec
+    and the tokenizer, skips the runtime, and leaves a store that can import
+    vectors and never embed a query. Only the two managers that own their
+    interpreter can be told to move it — pipx fetches a standalone build,
+    uv uses its own managed one — so None for every other method, whose venv
+    boost did not make and cannot rebuild.
+
+    pipx needs two steps: ``install --force --python`` keeps the existing
+    venv's interpreter (pipx 1.18.5's help says so, and a probe stayed on
+    3.15), and ``reinstall`` replays the original spec, which has no extra.
+    Its fetch flag is :data:`selfupdate.FETCH_ALWAYS`, unprobed: this renders
+    on every search past the ceiling, and asking pipx its version costs a
+    subprocess each time (see :func:`selfupdate.fetch_flag_here`).
+    """
+    from . import localembed, selfupdate
+    method = selfupdate.detect()
+    py = localembed.RECOMMENDED_PYTHON
+    if method == selfupdate.PIPX:
+        return ('pipx uninstall %s && pipx install --python %s %s "%s"'
+                % (selfupdate.DIST, py, selfupdate.FETCH_ALWAYS, EXTRA_SPEC))
+    if method == selfupdate.UV_TOOL:
+        return ('uv tool install --force --managed-python --python %s "%s"'
+                % (py, EXTRA_SPEC))
+    return None
+
+
+def extra_hint() -> str:
+    """The command a user *should* run to get the extra working, here.
+
+    :func:`install_extra`, except on an interpreter the local model cannot run
+    on, where that command succeeds and changes nothing a user can see — so
+    every surface that offers the extra for semantic search (quickstart, the
+    reindex fallback note, doctor and search) asks this instead, and moves a
+    pipx or uv install to a Python that has the wheel, and any other install
+    to the command that gets boost there (:func:`selfupdate.move_command`) —
+    on 3.15 a plain install would bring the store and no model to fill it.
+    Not with a key set: Voyage and OpenAI embed over HTTP, so there the
+    extra's sqlite-vec is all that is missing and the plain install is right.
+    `_unreadable_vectors` keeps :func:`install_extra`: it is after sqlite-vec,
+    which installs on any interpreter.
+
+    Always a bare command — callers wrap it in backticks.
+    """
+    from . import localembed, selfupdate
+    if (localembed.no_wheel_here()
+            and not embed.any_key()):
+        return relocate_extra() or selfupdate.move_command(
+            selfupdate.detect(), localembed.RECOMMENDED_PYTHON)
+    return install_extra()
+
+
+def _move_python() -> str:
+    """How to get boost onto a Python the local model has a wheel for.
+
+    Fills ``_FIX["no-local-wheel"]`` at call time, because it depends on how
+    this boost was installed: the two managers that own their interpreter get
+    the one command that rebuilds the venv on 3.13 and keeps the extra
+    (:func:`selfupdate.reinstall_command`); any other install is told what to
+    do, since boost did not make that venv and cannot rebuild it.
+    """
+    from . import localembed, selfupdate
+    py = localembed.RECOMMENDED_PYTHON
+    method = selfupdate.detect()
+    if method in (selfupdate.PIPX, selfupdate.UV_TOOL):
+        return ("`boost self-update --python %s` moves boost there and keeps "
+                "the extra" % py)
+    return selfupdate.move_hint(method, py)
 
 
 def _shell_word(word: str, always: bool = False) -> str:
@@ -716,6 +794,15 @@ _FIX = {
     "no-key": ("reinstall the extra: `%s` "
                "(or set VOYAGE_API_KEY / OPENAI_API_KEY for a larger model)"
                % _INSTALL),
+    # The extra is in and its model runtime cannot be: onnxruntime publishes
+    # no wheel for this interpreter, so pyproject's marker skipped it. Every
+    # remedy above reinstalls the same half on the same Python. The key is the
+    # alternative it really is — Voyage and OpenAI embed over HTTP and need no
+    # onnxruntime — and is named second for the reason the no-key row gives.
+    "no-local-wheel": ("the local model needs onnxruntime, which has no wheel "
+                       "for Python %s yet — %s (or set VOYAGE_API_KEY / "
+                       "OPENAI_API_KEY, which need no local model)"
+                       % (_HERE, _MOVE)),
     # Keyless, or keyed with no local model to fall back on. A key that
     # outranks an installed local model is answered by `free_shard_path`
     # instead: with it in force, this build goes through the paid API.
@@ -921,7 +1008,7 @@ def fix_hint(reason: str, status: dict | None = None) -> str:
         free = free_shard_path(status.get("provider"))
         if free:
             return free
-    if reason in ("no-key", "provider-changed") and status:
+    if reason in ("no-key", "no-local-wheel", "provider-changed") and status:
         # `or ""` rather than a `get` default: a status that carries the key
         # explicitly set to None must reach the same lookup as one that omits
         # it, and `KEY_ENV` is missed either way.
@@ -944,20 +1031,35 @@ def fix_hint(reason: str, status: dict | None = None) -> str:
         if (env or built == "local") and (count is None or count > 0):
             n = (f"{int(count):,} vector{'' if count == 1 else 's'}"
                  if count else "vectors")
-            if reason == "no-key":
-                if env:
+            if reason in ("no-key", "no-local-wheel"):
+                if env and reason == "no-key":
                     return ("set the key it was built with: `export %s=...` — "
                             "reinstalling the extra swaps in the local model "
                             "and forces all %s to be re-embedded" % (env, n))
+                if env:
+                    # No extra reinstall brings a model here; moving boost
+                    # to an interpreter with the wheel is what would.
+                    return ("set the key it was built with: `export %s=...` — "
+                            "moving boost to a Python with onnxruntime swaps "
+                            "in the local model and forces all %s to be "
+                            "re-embedded" % (env, n))
                 # Local-built, and the model it was built with is what went
                 # missing. The table's row would be nearly right and ends in
                 # the one suggestion that is wrong for this store: setting a
                 # key displaces it into another space, and with the local
                 # backend still absent the next status is `provider-changed`
                 # with nothing to unset back to — the full re-embed.
-                return ("reinstall the extra: `%s` — it is the model all %s "
-                        "were built with, and a key instead re-embeds them"
-                        % (install_extra(), n))
+                if reason == "no-key":
+                    return ("reinstall the extra: `%s` — it is the model all "
+                            "%s were built with, and a key instead re-embeds "
+                            "them" % (extra_hint(), n))
+                # On an interpreter with no wheel the same model comes back
+                # only by moving boost, and the table row's "or set a key" is
+                # the re-embed this branch exists to keep off the table.
+                return ("the local model all %s were built with needs "
+                        "onnxruntime, which has no wheel for Python %d.%d yet "
+                        "— %s; a key instead re-embeds them"
+                        % (n, *sys.version_info[:2], _move_python()))
             live = status.get("provider")
             restore = (_restore_built_space(built, env) if env
                        else _restore_local_space())
@@ -974,8 +1076,23 @@ def fix_hint(reason: str, status: dict | None = None) -> str:
         # download here contradicted reindex's own warning, which already
         # leaves the network out for this stage.
         return "retry loading the local model: `boost reindex --dense`"
-    hint = _FIX.get(reason, "see `boost reindex --dense`")
-    return hint.replace(_INSTALL, install_extra()) if _INSTALL in hint else hint
+    return _render(_FIX.get(reason, "see `boost reindex --dense`"))
+
+
+def _render(hint: str) -> str:
+    """A ``_FIX`` row with its placeholders filled for this install.
+
+    Each is asked only when its row needs it: detecting the install method
+    reads package metadata, and the rows that do not name a command — most of
+    them — should not pay for it.
+    """
+    if _INSTALL in hint:
+        hint = hint.replace(_INSTALL, extra_hint())
+    if _MOVE in hint:
+        hint = hint.replace(_MOVE, _move_python())
+    if _HERE in hint:
+        hint = hint.replace(_HERE, "%d.%d" % sys.version_info[:2])
+    return hint
 
 
 def status(*, count: bool = False) -> dict:
@@ -1056,7 +1173,13 @@ def status(*, count: bool = False) -> dict:
         # Above the key: no provider can help a store that cannot be opened.
         reason = "no-extension-load"
     elif prov is None:
-        reason = "no-key"
+        # Split by interpreter: on a Python onnxruntime publishes no wheel for,
+        # the extra installs *without* its model runtime (pyproject's marker)
+        # and "reinstall the extra" — the no-key remedy — reinstalls the same
+        # half. Below the backend rung on purpose: sqlite-vec is present, so
+        # this is precisely "the extra is in, its local model cannot be".
+        from . import localembed
+        reason = "no-local-wheel" if localembed.no_wheel_here() else "no-key"
     elif not store_exists:
         reason = "no-store"
     elif b_ver != INDEX_VERSION:

@@ -143,7 +143,7 @@
       <div class="stat"><b>28</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
       <div class="stat"><b>76</b><span>Planned</span></div>
-      <div class="stat"><b>556</b><span>Loop finds</span></div>
+      <div class="stat"><b>557</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -6668,6 +6668,18 @@ All of the above is pure logic in <code>core/browse.py</code> under unit tests a
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★</b></span>
           <span class="m">934 text writes take the platform line ending; five are bugs, and the walker was blind to the worst one</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="rag-on-python-315-and-homebrew-proof-installs">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Compat · Install</span></div>
+        <h3>Python 3.15 broke the <code>[rag]</code> extra, and a Homebrew upgrade broke the install</h3>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/rag-on-python-315-and-homebrew-proof-installs.md">Write-up &middot; rag-on-python-315-and-homebrew-proof-installs.md</a></p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">Homebrew removed python@3.14 and stranded the pipx venv; on 3.15 the [rag] extra would not install at all. The extra now installs there, doctor names the gap, and self-update and quickstart offer to move a pipx or uv install to 3.13</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->

@@ -35,6 +35,7 @@ from ..core import (
     installscan,
     integrity,
     journal,
+    localembed,
     lockfile,
     mcp,
     mcphost,
@@ -2915,9 +2916,27 @@ def cmd_self_update(argv) -> int:
         description="Update boost itself to the latest version")
     p.add_argument("--dry-run", action="store_true",
                    help="show how boost would update itself, change nothing")
+    p.add_argument("--python", type=util.nonempty_str, metavar="VERSION",
+                   help="rebuild boost's pipx or uv tool venv on this Python "
+                        "(e.g. 3.13), downloading the manager's own build "
+                        "of it, and keep its extras — the way off an "
+                        "interpreter Homebrew removed, or one the [rag] "
+                        "extra has no wheel for")
+    p.add_argument("--keep-python", action="store_true",
+                   help="skip moving to the recommended Python")
     args = p.parse_args(argv)
 
     method = selfupdate.detect()
+    if args.python is not None:
+        return _self_update_python(method, args.python, dry_run=args.dry_run)
+    reason = None if args.keep_python else selfupdate.relocation_reason(method)
+    if reason:
+        py = localembed.RECOMMENDED_PYTHON
+        out.warn(selfupdate.relocation_offer(method, reason), wrap=True)
+        if args.dry_run or out.confirm("Move boost to Python %s?" % py):
+            return _self_update_python(method, py, dry_run=args.dry_run)
+        out.info("staying on this Python; `boost self-update --python %s` "
+                 "moves it later" % py, wrap=True)
     if method != selfupdate.GIT:
         return _self_update_package(method, dry_run=args.dry_run)
     return _self_update_git(dry_run=args.dry_run)
@@ -2945,6 +2964,36 @@ def _self_update_package(method: str, dry_run: bool) -> int:
         out.ok("upgraded via %s; run `boost --version` to confirm" % method)
         return 0
     return _report_no_op(method, new)
+
+
+def _self_update_python(method: str, python: str, dry_run: bool) -> int:
+    """Rebuild a pipx / uv-tool venv on another interpreter, keeping extras.
+
+    The observed interpreter is reported, not the requested one: the venv
+    keeps its path, so a fresh process at `sys.executable` is the honest
+    witness — and a manager that resolved `3.13` to something else says so.
+    """
+    cmd = selfupdate.reinstall_command(method, python)  # refuses pip/git
+    if dry_run:
+        out.info("installed with: %s" % method)
+        out.info("would run: %s" % shlex.join(cmd))
+        return 0
+    out.info("reinstalling via %s on Python %s: %s"
+             % (method, python, shlex.join(cmd)), wrap=True)
+    # The manager deletes and rebuilds the venv this process runs from, so
+    # from here on only modules already imported may be used.
+    selfupdate.run_upgrade(cmd, timeout=selfupdate.REINSTALL_TIMEOUT)
+    seen = selfupdate.observed_python()
+    new = selfupdate.observed_version()
+    journal.log("self-update", new or __version__, previous=__version__,
+                method=method, python=seen[0] if seen else python)
+    if new and new != __version__:
+        out.ok("boost v%s → v%s" % (__version__, new))
+    ok, warn = selfupdate.python_report(method, seen)
+    out.ok(ok)
+    if warn:
+        out.warn(warn, wrap=True)
+    return 0
 
 
 def _report_no_op(method: str, here: str) -> int:
