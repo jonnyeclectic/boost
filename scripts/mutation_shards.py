@@ -1195,6 +1195,7 @@ def cmd_merge(args: argparse.Namespace) -> int:
 #   tests/**       a new assertion kills a survivor without touching source.
 #   setup.cfg      mutmut's own config: source_paths, test selection, also_copy.
 #   pyproject.toml pytest configuration and the packaging metadata under it.
+#   pytest.ini     anywhere: pytest reads it before pyproject.toml.
 #   requirements/mutation-tools.txt  pins pytest+mutmut; the kill count is
 #                  defined relative to those versions.
 #   scripts/mutation_*.py, .github/workflows/ci.yml  the gate itself.
@@ -1227,6 +1228,10 @@ def is_relevant(changed: list[str]) -> bool:
         if name in RELEVANT_EXACT:
             return True
         if name.endswith("conftest.py"):
+            return True
+        # Read before pyproject.toml's ini options, wherever it sits; a
+        # full-run trigger in mutation_diff, reachable only from here.
+        if name.rpartition("/")[2] == "pytest.ini":
             return True
         if name.startswith(GATE_SCRIPT_PREFIX) and name.endswith(GATE_SCRIPT_SUFFIX):
             return True

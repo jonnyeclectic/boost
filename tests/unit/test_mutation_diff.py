@@ -151,6 +151,67 @@ def test_full_run_triggers(path, base, head, expect):
     assert bool(md.full_run_reasons([path], _reader(base, head))) is expect
 
 
+_PROJECT = "[project]\nname = 'boost'\nversion = '%s'\n"
+_MUTMUT_TOML = "[tool.mutmut]\ndo_not_mutate = [%s]\n"
+
+
+@pytest.mark.parametrize(
+    "base,head,want",
+    [
+        # mutmut 3.8.0 reads [tool.mutmut] in preference to setup.cfg, so
+        # adding the table changes what every run mutates (review I3)...
+        (_PROJECT % "1", _PROJECT % "1" + _MUTMUT_TOML % "'*store*'",
+         ["pyproject.toml [tool.mutmut] changed"]),
+        # ...and so does changing it
+        (_PROJECT % "1" + _MUTMUT_TOML % "'a'", _PROJECT % "1" + _MUTMUT_TOML % "'b'",
+         ["pyproject.toml [tool.mutmut] changed"]),
+        (_PROJECT % "1" + _MUTMUT_TOML % "'a'", _PROJECT % "1",
+         ["pyproject.toml [tool.mutmut] changed"]),
+        # an unrelated edit, with the table present and unchanged, is not
+        (_PROJECT % "1" + _MUTMUT_TOML % "'a'", _PROJECT % "2" + _MUTMUT_TOML % "'a'", []),
+        (_PROJECT % "1", _PROJECT % "2", []),
+        # both tables: one reason each
+        (_PROJECT % "1",
+         _PROJECT % "1" + "[tool.pytest.ini_options]\naddopts = '-x'\n"
+         + _MUTMUT_TOML % "'a'",
+         ["pyproject.toml [tool.pytest.ini_options] changed",
+          "pyproject.toml [tool.mutmut] changed"]),
+    ],
+)
+def test_pyproject_mutmut_table_is_a_trigger(base, head, want):
+    assert md.full_run_reasons(["pyproject.toml"], _reader(base, head)) == want
+
+
+@pytest.mark.parametrize(
+    "path,want",
+    [
+        # mutmut's source_paths is recursive, but diff scope reads only
+        # boost_cli/core/*.py: a subpackage would plan 0 shards and pass (M5)
+        ("boost_cli/core/pkg/x.py", ["core subpackage file changed: boost_cli/core/pkg/x.py"]),
+        ("boost_cli/core/pkg/__init__.py",
+         ["core subpackage file changed: boost_cli/core/pkg/__init__.py"]),
+        ("boost_cli/core/pkg/deep/y.py",
+         ["core subpackage file changed: boost_cli/core/pkg/deep/y.py"]),
+        ("boost_cli/core/pkg/notes.md", []),
+        ("boost_cli/core/x.py", []),
+        ("boost_cli/core/__init__.py", []),
+        ("boost_cli/commands/x.py", []),
+        # a conftest or a pytest.ini changes how every test runs, the same
+        # reason [tool.pytest.ini_options] is a trigger
+        ("tests/conftest.py", ["tests/conftest.py changed"]),
+        ("tests/langchain/conftest.py", ["tests/langchain/conftest.py changed"]),
+        ("conftest.py", ["conftest.py changed"]),
+        ("pytest.ini", ["pytest.ini changed"]),
+        ("tests/unit/pytest.ini", ["tests/unit/pytest.ini changed"]),
+        ("tests/unit/test_conftest.py", []),
+        ("tests/unit/pytest.ini.bak", []),
+    ],
+)
+def test_subpackages_conftests_and_pytest_ini_are_triggers(path, want):
+    read = _reader("def a():\n    return 1\n", "def a():\n    return 2\n")
+    assert md.full_run_reasons([path], read) == want
+
+
 def test_trigger_file_added_or_deleted_counts():
     assert md.full_run_reasons(
         ["setup.cfg"], lambda rev, p: None if rev == "base" else "[mutmut]\na=1\n"
