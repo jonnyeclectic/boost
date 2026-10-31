@@ -76,7 +76,8 @@ ms = _load_shards()
 
 CORE_DIR = "boost_cli/core"
 # Specific parse failures only; a bare except would hide real bugs. ValueError is
-# the non-mapping `jobs` case raised above.
+# the non-mapping ci.yml or `jobs`, and the non-table pyproject.toml step,
+# raised by the readers below.
 _PARSE_ERRORS = (
     configparser.Error,
     tomllib.TOMLDecodeError,
@@ -175,7 +176,12 @@ def _mutmut_table(text: str | None):
 def _mutation_jobs(text: str | None):
     if text is None:
         return None
-    jobs = (yaml.safe_load(text) or {}).get("jobs") or {}
+    doc = yaml.safe_load(text) or {}
+    # A list or a scalar at the top has no `.get`: unparsable as a workflow,
+    # and a full-run reason, never an AttributeError out of the planner.
+    if not isinstance(doc, dict):
+        raise ValueError("ci.yml is not a mapping")
+    jobs = doc.get("jobs") or {}
     if not isinstance(jobs, dict):
         raise ValueError("ci.yml `jobs` is not a mapping")
     return {k: v for k, v in jobs.items() if k.startswith("mutation")}
