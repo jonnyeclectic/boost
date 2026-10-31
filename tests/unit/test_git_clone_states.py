@@ -203,6 +203,55 @@ class TestOwnedClone:
         link.symlink_to(up, target_is_directory=True)
         assert gitutil.owned_clone(link) is False
 
+    def test_the_clone_spelled_in_another_case(self, owned):
+        # `resolve()` keeps the case it is given and git answers in the case
+        # on disk, so a configured `Leonxlnx/x` over `repos/leonxlnx__x` was
+        # never "owned" and `git clean` never ran on it.
+        clone = owned[1]
+        variant = clone.parent / clone.name.swapcase()
+        if not variant.exists():
+            pytest.skip("this filesystem is case-sensitive")
+        assert gitutil.owned_clone(variant) is True
+        evil, _ = _plant(clone)
+        gitutil.pull(variant)
+        assert not evil.exists()
+
+    @staticmethod
+    def _toplevel(monkeypatch, top: Path, same) -> None:
+        """git names ``top`` as the work tree; the filesystem answers ``same``."""
+        real_run = gitutil.run
+
+        def fake(argv, **kw):
+            if argv[-2:] == ["rev-parse", "--show-toplevel"]:
+                return subprocess.CompletedProcess(argv, 0, "%s\n" % top, "")
+            return real_run(argv, **kw)
+        monkeypatch.setattr(gitutil, "run", fake)
+        monkeypatch.setattr(gitutil.os.path, "samefile", same)
+
+    @pytest.mark.parametrize("same", [True, False])
+    def test_a_case_only_respelling_is_asked_of_the_filesystem(
+            self, owned, monkeypatch, same):
+        # Runs on any disk: git's answer differs from the path by case alone.
+        real = owned[1].resolve()
+        self._toplevel(monkeypatch, real.parent / real.name.swapcase(),
+                       lambda a, b: same)
+        assert gitutil.owned_clone(owned[1]) is same
+
+    def test_an_enclosing_repo_never_passes_though_every_path_is_one_file(
+            self, owned, monkeypatch):
+        # A mount reporting st_ino 0 makes `samefile` true for any two paths
+        # on it; only a case-only respelling may be asked about at all.
+        real = owned[1].resolve()
+        self._toplevel(monkeypatch, real.parent, lambda a, b: True)
+        assert gitutil.owned_clone(owned[1]) is False
+
+    def test_a_filesystem_error_is_not_ownership(self, owned, monkeypatch):
+        def gone(a, b):
+            raise OSError("vanished")
+        real = owned[1].resolve()
+        self._toplevel(monkeypatch, real.parent / real.name.swapcase(), gone)
+        assert gitutil.owned_clone(owned[1]) is False
+
 
 class TestUntrackedFilesAreRemoved:
     def test_pull_cleans_untracked_and_keeps_ignored(self, owned):

@@ -208,7 +208,6 @@ def cmd_clean(argv) -> int:
             and store.points_into_store(link)
         )
 
-    configured = {t.safe_name for t in registry.list_taps()}
     # With config.json unreadable or corrupt, the tap list is DEFAULTS' empty
     # one, so every tap's cache read as stale and was deleted — on a file
     # whose bytes, under a mode-000 config, still list every one of them.
@@ -220,11 +219,13 @@ def cmd_clean(argv) -> int:
         # Skip boost's own derived artifacts. They live in the same directory and
         # end in .json, but no tap is named `rag_index` or `discovery`, so the
         # stem test alone called both stale and deleted them every run — see
-        # paths.INTERNAL_CACHE_FILES.
+        # paths.INTERNAL_CACHE_FILES. A live tap's cache spelled in another
+        # case on disk is the same file, and `stale_caches` asks the disk.
         items.extend(
             (f, "stale tap cache", f.stat().st_size)
-            for f in sorted(paths.cache_dir().glob("*.json"))
-            if f.stem not in configured and f.name not in paths.INTERNAL_CACHE_FILES
+            for f in registry.stale_caches([
+                c for c in sorted(paths.cache_dir().glob("*.json"))
+                if c.name not in paths.INTERNAL_CACHE_FILES])
         )
 
     if paths.lock_history_dir().is_dir():

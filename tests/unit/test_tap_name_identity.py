@@ -216,7 +216,8 @@ class TestTapCommandSkip:
         registry.add(str(first))
         capsys.readouterr()
         assert taps_cmd.cmd_tap([str(tmp_path / "IDSKIP-SAME")]) == 0
-        assert "idskip-same already tapped" in capsys.readouterr().out
+        assert ("IDSKIP-SAME already tapped as idskip-same"
+                in capsys.readouterr().out)
         assert [t["name"] for t in config.get("taps")] == ["idskip-same"]
 
     def test_add_many_skips_a_local_case_variant(self, sandbox, tmp_path):
@@ -230,7 +231,39 @@ class TestTapCommandSkip:
     def test_case_variant_prints_the_configured_name(self, sandbox, capsys):
         _rows(_gh("idskip/repo"))
         assert taps_cmd._skip_if_already_tapped("IDSKIP/Repo") is True
-        assert "idskip/repo already tapped" in capsys.readouterr().out
+        assert ("IDSKIP/Repo already tapped as idskip/repo"
+                in capsys.readouterr().out)
+
+    def test_the_same_spelling_names_it_once(self, sandbox, capsys):
+        _rows(_gh("idskip/repo"))
+        assert taps_cmd._skip_if_already_tapped("idskip/repo") is True
+        out = capsys.readouterr().out
+        assert "idskip/repo already tapped" in out
+        assert "already tapped as" not in out
+
+    def test_several_specs_and_their_preview_name_it_alike(
+            self, sandbox, monkeypatch, capsys):
+        # `boost tap a b` must answer as `boost tap a` does.
+        _rows(_gh("idskip/repo"))
+        _no_clone(monkeypatch)
+        for argv in (["IDSKIP/Repo", "idskip/repo"],
+                     ["--dry-run", "IDSKIP/Repo", "idskip/repo"]):
+            assert taps_cmd.cmd_tap(argv) == 0
+            lines = [ln.strip()
+                     for ln in capsys.readouterr().out.splitlines()]
+            assert "IDSKIP/Repo already tapped as idskip/repo" in lines
+            assert "idskip/repo already tapped" in lines
+
+    def test_the_line_names_the_configured_spelling_only_when_it_differs(self):
+        assert registry.already_tapped("o/r", "o/r") == "o/r already tapped"
+        assert registry.already_tapped("O/r", "o/r") == (
+            "O/r already tapped as o/r")
+
+    def test_the_plan_carries_the_configured_spelling(self, sandbox):
+        _rows(_gh("idskip/repo"))
+        [row] = registry.plan_specs(["IDSKIP/Repo"])
+        assert row["skipped"] is True
+        assert row["tapped_as"] == "idskip/repo"
 
     def test_other_name_is_not_skipped(self, sandbox):
         _rows(_gh("idskip/repo"))
