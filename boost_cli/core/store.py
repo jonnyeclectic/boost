@@ -6605,7 +6605,8 @@ def link_skill_copy(name: str, entry: dict,
     """
     targets = [a for a in copy_link_targets(name, entry)
                if only is None or a in only]
-    if not targets or not os.path.isfile(_copy_row(entry)["path"]):
+    copy = _copy_row(entry)
+    if not targets or copy is None or not os.path.isfile(copy["path"]):
         return None
     return link_agents(name, only=targets, keep_theirs=True)
 
