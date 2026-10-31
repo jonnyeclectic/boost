@@ -25,15 +25,15 @@ The plan
                             "functions": [qualified, ...],     # diff only
                             "counts": {qualified: <int>}}}}    # diff only
 
-``sets`` is keyed by name so a run can carry more than one: ``full`` (the
-committed 24-way pack of every mutant in ``boost_cli/core``, selected by
-fnmatch patterns such as ``boost_cli.core.store.*``) and ``diff`` (the mutants
-of the functions a PR changed plus their direct callers, see
-``mutation_diff.py``, each named exactly --
-``boost_cli.core.store.x_install__mutmut_3`` -- because mutmut picks a shard's
-clean-run tests from exact names and falls back to the whole unit suite for a
-``__mutmut_*`` glob). ``gate_set`` names the set the required ``mutation``
-check scores. Two plans mean "nothing to score": ``null`` (``none``: nothing
+``sets`` is keyed by name: ``full`` (the committed 24-way pack of every
+mutant in ``boost_cli/core``, selected by fnmatch patterns such as
+``boost_cli.core.store.*``) or ``diff`` (the mutants of the functions a PR
+changed plus their direct callers, see ``mutation_diff.py``, each named
+exactly -- ``boost_cli.core.store.x_install__mutmut_3`` -- because mutmut
+picks a shard's clean-run tests from exact names and falls back to the whole
+unit suite for a ``__mutmut_*`` glob). ``gate_set``
+names the set the required ``mutation`` check scores, and a plan carries that
+set alone. Two plans mean "nothing to score": ``null`` (``none``: nothing
 mutable changed) and ``"diff"`` with ``sets.diff.shards == []`` (core changed,
 but no function body did). A changed function with no mutants plans ``full``:
 mutmut records no callers for it, so the diff scope cannot be known.
@@ -47,7 +47,7 @@ Usage
   mutation_plan.py base --event E --sha SHA --base-sha B --head-sha H
                                                     # the diff base, on stdout
   mutation_plan.py diff --base SHA --head SHA --stats mutants/mutmut-stats.json \
-                        [--shadow] --out PLAN       # the PR's functions, or full
+                        --out PLAN                  # the PR's functions, or full
   mutation_plan.py matrix --plan PLAN               # [{"set":..,"index":..}, ...]
   mutation_plan.py patterns --plan PLAN --set S --index I --out FILE
                                                     # one shard's argv, NUL-separated
@@ -215,17 +215,16 @@ def diff_base(root: Path, event: str, sha: str, *, base_sha: str,
 
 
 def diff_plan(root: Path, base: str, head: str, stats: Path, *,
-              shadow: bool = False, shards: int = FULL_SHARDS,
+              shards: int = FULL_SHARDS,
               per_shard: int | None = None) -> dict[str, Any]:
     """The diff-scoped plan for ``base..head``, or the full one when forced.
 
     A full-run trigger (``mutation_diff.full_run_reasons``) returns exactly
-    the ``full`` plan with those reasons, and so does a changed function that
-    has no mutants (its callers cannot be known, see below). Otherwise every
-    mutant of every in-scope function is counted with mutmut's own generator
-    at ``head`` and packed by measured time; ``--shadow`` also carries the
-    full set and gates on it, so the two can be compared on one SHA before
-    the diff gate binds.
+    the ``full`` plan with those reasons, ``shards`` wide, and so does a
+    changed function that has no mutants (its callers cannot be known, see
+    below). Otherwise every mutant of every in-scope function is counted with
+    mutmut's own generator at ``head`` and packed by measured time, and the
+    plan gates on that set.
     """
     md = _load_diff()
     read = git_reader(root, base, head)
@@ -298,7 +297,7 @@ def diff_plan(root: Path, base: str, head: str, stats: Path, *,
                "%d shards" % (total, len(counts), len(shard_names)))
     else:
         why = "diff scope: no boost_cli/core function changed"
-    plan: dict[str, Any] = {
+    return {
         "gate_set": "diff",
         "reasons": [why],
         "sets": {"diff": {"shards": shard_names, "mutants": total,
@@ -307,12 +306,6 @@ def diff_plan(root: Path, base: str, head: str, stats: Path, *,
                           # shortfall from another's surplus.
                           "counts": {q: counts[q] for q in sorted(counts)}}},
     }
-    if shadow:
-        plan["sets"]["full"] = full_plan(root, shards, [])["sets"]["full"]
-        plan["gate_set"] = "full"
-        plan["reasons"].append("shadow: gating on the full run; the diff set "
-                               "runs alongside for comparison")
-    return plan
 
 
 def none_plan(reason: str) -> dict[str, Any]:
@@ -369,10 +362,8 @@ def main(argv: list[str]) -> int:
     d.add_argument("--base", required=True, help="merge-base SHA")
     d.add_argument("--head", required=True, help="PR head SHA")
     d.add_argument("--stats", required=True, help="mutants/mutmut-stats.json")
-    d.add_argument("--shadow", action="store_true",
-                   help="also plan the full set, and gate on it")
     d.add_argument("--shards", type=int, default=FULL_SHARDS,
-                   help="full set's width when forced or shadowed")
+                   help="full set's width when a trigger forces the full run")
     d.add_argument("--root", default=str(ROOT), help="repo root (default: this checkout)")
     d.add_argument("--out", required=True)
 
@@ -409,8 +400,7 @@ def main(argv: list[str]) -> int:
         if args.shards < 1:
             ap.error("--shards must be at least 1")
         _write(args.out, diff_plan(Path(args.root), args.base, args.head,
-                                   Path(args.stats), shadow=args.shadow,
-                                   shards=args.shards))
+                                   Path(args.stats), shards=args.shards))
         return 0
     if args.cmd == "base":
         # The SHA alone on stdout, because ci.yml captures it with $(...); the

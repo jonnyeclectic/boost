@@ -22,11 +22,17 @@ The scope functions are pure: the caller supplies file text through
 Two CLIs read the shards' results back:
 
   mutation_diff.py gate --plan PLAN --source DIR --prefix mutation-diff-shard-
-                        [--min 80] [--small 10] [--root ROOT] [--no-annotations]
+                        [--min 80] [--small 10] [--root ROOT]
       Score the diff set: exit 0 pass, 1 fail, 2 unrun or missing results.
+      The required `mutation` check on a pull request or merge-queue entry.
   mutation_diff.py compare --plan PLAN --full-source DIR --diff-source DIR
       Per-mutant agreement between a full run and a diff run of the same SHA;
-      exit 1 on any killed/not-killed disagreement (timeouts excluded).
+      exit 1 on any killed/not-killed disagreement (timeouts excluded). A
+      manual tool: ci.yml ran it on every PR while the diff gate was in shadow,
+      as the evidence for letting it bind, and no longer runs it. It is how to
+      re-check that evidence -- for example a nightly's full shards against a
+      diff run of the same SHA (without a `full` set in the plan, it scores
+      whatever full shards it finds under --full-source).
 """
 
 from __future__ import annotations
@@ -783,13 +789,11 @@ def cmd_gate(args: argparse.Namespace) -> int:
 
     # One annotation per function that lost mutants, at its `def` in the head
     # source — the function is the unit mutmut regenerated, so it is the unit
-    # a reviewer acts on. Not while the gate is advisory (`--no-annotations`,
-    # ci.yml's shadow mode): a warning on every changed function of every PR
-    # from a check that decides nothing is noise, and the summary has the list.
+    # a reviewer acts on.
     by_function: dict[str, list[str]] = {}
     for key in lost:
         by_function.setdefault(key.rpartition(MUTANT_SEP)[0], []).append(key)
-    for q, keys in sorted(by_function.items()) if args.annotate else ():
+    for q, keys in sorted(by_function.items()):
         path, mangled = split_qualified(q)
         try:
             src = (Path(args.root) / path).read_text(encoding="utf-8")
@@ -929,8 +933,6 @@ def main(argv: list[str]) -> int:
                    help="below this many mutants, every one must be killed")
     g.add_argument("--root", default=str(ROOT),
                    help="head checkout, for annotation line numbers")
-    g.add_argument("--no-annotations", dest="annotate", action="store_false",
-                   help="print no ::warning annotations (the summary still lists survivors)")
 
     c = sub.add_parser("compare", help="diff run vs full run, per in-scope mutant")
     c.add_argument("--plan", required=True)

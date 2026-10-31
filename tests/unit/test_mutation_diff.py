@@ -663,26 +663,13 @@ def test_gate_fails_and_annotates_a_survivor(tmp_path, head_tree, monkeypatch, c
     assert f"{_K}__mutmut_1" in text and f"{_K}__mutmut_2" in text
 
 
-@pytest.mark.usefixtures("needs_mutmut")
-def test_gate_no_annotations_keeps_the_verdict_and_summary(
-        tmp_path, head_tree, monkeypatch, capsys):
-    # Shadow mode: the diff gate decides nothing yet, so it must not post a
-    # warning on every changed function of every PR -- but its verdict, exit
-    # code and summary are the data the shadow report compares.
-    summary = tmp_path / "summary.md"
-    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
-    plan = _diff_plan(tmp_path, [_n(_A, 1), _n(_K, 2)], 3)
-    _meta(tmp_path / "src", "mutation-diff-shard-", 0,
-          {f"{_A}__mutmut_1": 1, f"{_K}__mutmut_1": None})
-    _meta(tmp_path / "src", "mutation-diff-shard-", 1,
-          {f"{_A}__mutmut_1": None, f"{_K}__mutmut_1": 0, f"{_K}__mutmut_2": 33})
-    assert _gate(tmp_path, plan, head_tree, "--no-annotations") == 1
-    out = capsys.readouterr().out
-    assert "::" not in out, out
-    assert "mutation diff gate: FAIL" in out
-    text = summary.read_text(encoding="utf-8")
-    assert "1/3 killed" in text
-    assert f"{_K}__mutmut_1" in text and f"{_K}__mutmut_2" in text
+def test_gate_has_no_switch_to_silence_its_annotations():
+    # It binds on every PR that changes a core function, so a survivor is
+    # always posted at its `def`. The switch existed for the advisory shadow
+    # run alone.
+    with pytest.raises(SystemExit):
+        md.main(["gate", "--plan", "p", "--source", "s", "--prefix", "x",
+                 "--no-annotations"])
 
 
 @pytest.mark.usefixtures("needs_mutmut")

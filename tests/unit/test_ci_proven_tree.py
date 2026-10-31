@@ -1755,8 +1755,7 @@ def _outcome(name: str, scenario: dict) -> tuple[str, dict]:
     if name == "mutation-plan":
         proven = scenario.get("proven", ("", "", ""))
         matrix = "[]" if proven[1] == "true" else ONE_SHARD
-        return "success", {"matrix": matrix, "gate_set": "" if matrix == "[]" else "full",
-                           "shadow": "false"}
+        return "success", {"matrix": matrix, "gate_set": "" if matrix == "[]" else "full"}
     return "success", {}
 
 
