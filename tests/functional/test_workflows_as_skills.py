@@ -839,6 +839,25 @@ class TestCopyLinks:
         boost("quarantine", "--release", "reviewer")
         _assert_copy_links()
 
+    def test_release_names_a_link_the_users_own_link_holds(
+            self, boost, wf_tap, tmp_path):
+        boost("install", "reviewer")
+        boost("quarantine", "reviewer")
+        _link(".windsurf/skills").symlink_to(tmp_path)
+        r = boost("quarantine", "--release", "reviewer")
+        assert ("reviewer: skill copy not linked: ~/.windsurf/skills/reviewer "
+                "is in the way and is not boost's — left alone"
+                ) in _flat(r.out + r.err)
+        _assert_copy_links(present=(".gemini/antigravity-cli/skills",))
+
+    def test_release_of_a_copy_gone_before_quarantine_links_nothing(
+            self, boost, wf_tap):
+        boost("install", "reviewer")
+        shutil.rmtree(paths.store_dir() / "reviewer")
+        boost("quarantine", "reviewer")
+        boost("quarantine", "--release", "reviewer")
+        _assert_copy_links(present=(), absent=(*COPY_LINKED, *NATIVE))
+
     def test_dry_run_names_the_links(self, boost, wf_tap):
         r = boost("install", "reviewer", "--dry-run")
         assert ("as a skill → ~/.agents/skills/reviewer, linked → windsurf · "

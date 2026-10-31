@@ -5552,7 +5552,8 @@ def _taken_while_held(path: Path, content: str) -> bool:
 
 def release_materialized(kind: str, name: str, entry: dict,
                          skipped: list[str] | None = None,
-                         foreign: list[str] | None = None) -> list[str]:
+                         foreign: list[str] | None = None,
+                         problems: list[str] | None = None) -> list[str]:
     """Restore what :func:`quarantine_materialized` removed, byte-for-byte.
 
     A stash record whose ``content`` is None (the artifact was already gone at
@@ -5566,6 +5567,9 @@ def release_materialized(kind: str, name: str, entry: dict,
     ``materializations`` to the entry's ``foreign`` record, exactly as an
     install records it, so uninstall never deletes it and `boost sync` writes
     the item once the path is free. Its path is appended to ``foreign``.
+
+    A workflow's skill copy is linked again (:func:`link_skill_copy`), and
+    why a link was not made is appended to ``problems``, in install's words.
     """
     from . import rules
     # The stash names absolute paths under the row's base, so releasing a
@@ -5644,7 +5648,9 @@ def release_materialized(kind: str, name: str, entry: dict,
     # The copy is back (or forgotten, if something took its dir): its links
     # come back with it.
     if kind == "workflow":
-        link_skill_copy(name, entry)
+        res = link_skill_copy(name, entry)
+        if res is not None and problems is not None:
+            problems += copy_link_problems(res)
     journal.log("release", name)
     return restored
 
@@ -6582,8 +6588,12 @@ def stale_copy_reason(entry: dict, agent: str) -> str:
     return "which the workflow's --agent scope leaves out"
 
 
-def link_skill_copy(name: str, entry: dict) -> InstallResult | None:
-    """Link ``name``'s copy into :func:`copy_link_targets`.
+def link_skill_copy(name: str, entry: dict,
+                    only: Collection[str] | None = None
+                    ) -> InstallResult | None:
+    """Link ``name``'s copy into :func:`copy_link_targets` -- those in
+    ``only``, when given, which is how `boost sync` links just the agents its
+    plan named.
 
     None when there is no target: ``link_agents`` takes an empty ``only`` as
     every agent, which would link the copy beside claude-code's own file.
@@ -6593,10 +6603,11 @@ def link_skill_copy(name: str, entry: dict) -> InstallResult | None:
     materialization, whose repair links. ``keep_theirs``: a symlink of the
     user's at the path is left, as a conflict, never re-pointed at the store.
     """
-    targets = copy_link_targets(name, entry)
+    targets = [a for a in copy_link_targets(name, entry)
+               if only is None or a in only]
     if not targets or not os.path.isfile(_copy_row(entry)["path"]):
         return None
-    return link_agents(name, only=list(targets), keep_theirs=True)
+    return link_agents(name, only=targets, keep_theirs=True)
 
 
 def unlink_skill_copy(name: str,
@@ -6626,11 +6637,13 @@ def unlink_skill_copy(name: str,
     return removed
 
 
-def reconcile_copy_links(name: str, entry: dict
+def reconcile_copy_links(name: str, entry: dict,
+                         only: Collection[str] | None = None
                          ) -> tuple[list[str], list[str], list[str]]:
-    """Link ``name``'s copy where its row wants it and unlink it beside the
-    workflow's own file: ``(linked, problems, unlinked)``."""
-    res = link_skill_copy(name, entry)
+    """Link ``name``'s copy where its row wants it (within ``only``, as
+    :func:`link_skill_copy`) and unlink it where :func:`stale_copy_links`
+    says: ``(linked, problems, unlinked)``."""
+    res = link_skill_copy(name, entry, only=only)
     unlinked = unlink_skill_copy(name, only=stale_copy_links(name, entry))
     if res is None:
         return [], [], unlinked
@@ -9789,9 +9802,16 @@ def sync_apply(plan: dict[str, list]) -> list[str]:
         entry = lockfile.get_workflow(name)
         if entry is None:
             continue
-        linked, _problems, unlinked = reconcile_copy_links(name, entry)
-        actions += [_COPY_LINKED % (n, a) for n, a in missing
-                    if n == name and a in linked]
+        # Only the links the plan named: a target whose path the user's own
+        # link or file holds is not a fault doctor counts, and linking every
+        # target reported it, and failed the run, whenever another agent's
+        # link needed repair.
+        linked, problems, unlinked = reconcile_copy_links(
+            name, entry, only=[a for n, a in missing if n == name])
+        actions += [_COPY_LINKED % (name, a) for a in linked]
+        # A planned link refused since: a repair not made, so a warning, and
+        # `sync` and `heal` exit 1 over it (`is_unrepaired`).
+        actions += [_COPY_NOT_LINKED % (name, why) for why in problems]
         # Every link taken, planned or not: one a narrowing since the plan
         # made stale goes too, and is not taken silently.
         actions += [_COPY_UNLINKED % (name, a, stale_copy_reason(entry, a))
@@ -9805,6 +9825,7 @@ def sync_apply(plan: dict[str, list]) -> list[str]:
 
 _COPY_LINKED = "linked workflow %s's skill copy → %s"
 _COPY_WOULD_LINK = "would link workflow %s's skill copy → %s"
+_COPY_NOT_LINKED = "workflow %s's skill copy" + _NOT_LINKED_MARK + "%s"
 #: The last ``%s`` is :func:`stale_copy_reason`'s clause.
 _COPY_UNLINKED = "unlinked workflow %s's skill copy from %s, %s"
 _COPY_WOULD_UNLINK = "would unlink workflow %s's skill copy from %s, %s"
