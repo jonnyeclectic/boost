@@ -324,7 +324,10 @@ class TestMutantRssWatch:
         import sys
         script = tmp_path / "runaway.py"
         script.write_text(
-            "import importlib.util, sys, threading\n"
+            "import importlib.util, os, sys, threading\n"
+            # conftest imports its sibling helpers the way pytest's rootdir
+            # insertion lets it; a bare interpreter has to be given tests/.
+            "sys.path.insert(0, os.path.dirname(sys.argv[1]))\n"
             "spec = importlib.util.spec_from_file_location('c', sys.argv[1])\n"
             "mod = importlib.util.module_from_spec(spec)\n"
             "spec.loader.exec_module(mod)\n"
