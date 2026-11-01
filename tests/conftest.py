@@ -15,6 +15,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
 from pathlib import Path
 
 import _tapped_support
@@ -450,6 +451,82 @@ def _cap_mutant_memory() -> None:
     resource.setrlimit(resource.RLIMIT_AS, (cap, hard))
 
 
+#: Resident memory a mutant's test run may add on top of what it forked with.
+#: :data:`MUTANT_HEADROOM` alone did not keep the runner up. mutmut runs four
+#: workers, and a function's mutants sit next to each other in its run order,
+#: so the ones that make one loop endless run *together*: ``rules.block_spans``
+#: has four (its ``find`` stops advancing, or ``pos`` steps backwards) and each
+#: appends at ~0.87 GB/s. Four workers at the 3 GiB cap are 12 GiB on a 16 GB
+#: runner already holding mutmut's ~2.3 GB parent: shard 18 lost its runner as
+#: those mutants came up, on both attempts of run 41251356192, and main's run
+#: 41148140704 lost the same shard. A worker runs at ~140 MB, so 1 GiB is
+#: ample, and four of them add 4 GiB. It is a *resident* bound, not a second
+#: address-space one: a thread's malloc arena reserves 64 MB it never touches,
+#: which is why the address-space cap had to stay loose.
+MUTANT_RSS_HEADROOM = 1 << 30
+
+#: Seconds between the watchdog's reads. At 0.87 GB/s a runaway overshoots
+#: the limit by ~90 MB at most.
+MUTANT_RSS_INTERVAL = 0.1
+
+_RSS_WATCH: list[threading.Event] = []
+
+
+def mutant_rss_limit(mutant: str | None, resident: int | None,
+                     headroom: int = MUTANT_RSS_HEADROOM) -> int | None:
+    """The resident size past which a mutmut worker stops, or ``None``.
+
+    Gated exactly as :func:`mutant_address_cap` is: only a run with a mutant
+    active, never mutmut's ``stats``/clean/forced-fail passes or a plain
+    ``pytest``, and nothing where ``/proc`` cannot be read.
+    """
+    if not mutant or "__mutmut_" not in mutant or resident is None:
+        return None
+    return resident + headroom
+
+
+def _resident_bytes() -> int | None:
+    """This process's resident size from ``/proc/self/statm``, or ``None``."""
+    try:
+        pages = int(Path("/proc/self/statm").read_text(encoding="ascii").split()[1])
+    except (OSError, ValueError, IndexError):
+        return None
+    return pages * os.sysconf("SC_PAGE_SIZE")
+
+
+def watch_resident(limit: int, stop: threading.Event, mutant: str, *,
+                   read=_resident_bytes, interval: float = MUTANT_RSS_INTERVAL,
+                   end=os._exit) -> None:
+    """Poll ``read()`` until ``stop`` is set; past ``limit``, end with exit 1.
+
+    Exit 1 is what pytest returns for a failed test, so mutmut records the
+    mutant *killed* -- a mutant that cannot finish its tests without eating
+    the runner is one the tests caught. The OOM killer's SIGKILL would read as
+    ``segfault`` instead, which the mutation score does not count as killed.
+    ``os._exit`` because the main thread is the one spinning: nothing can be
+    raised into it, and the process is a throwaway fork either way.
+    """
+    while not stop.wait(interval):
+        resident = read()
+        if resident is not None and resident > limit:
+            os.write(2, ("mutant %s: resident memory %d MiB passed its %d MiB"
+                         " limit; stopping it as killed\n"
+                         % (mutant, resident >> 20, limit >> 20)).encode())
+            end(1)
+            return
+
+
+def _watch_mutant_memory() -> None:
+    mutant = os.environ.get("MUTANT_UNDER_TEST")
+    limit = mutant_rss_limit(mutant, _resident_bytes())
+    if limit is None or mutant is None:
+        return
+    stop = threading.Event()
+    _RSS_WATCH.append(stop)
+    threading.Thread(target=watch_resident, args=(limit, stop, mutant),
+                     name="mutant-rss-watch", daemon=True).start()
+
+
 # Variables that move boost's state, or an agent's, somewhere other than
 # under ``$HOME``. The `sandbox` fixture drops them per test; the session
 # backstop below drops them for the tests that never ask for it.
@@ -524,6 +601,9 @@ def _isolate_home() -> Path:
 def pytest_unconfigure(config):
     """Remove the session home `_isolate_home` made, if it made one."""
     del config
+    for stop in _RSS_WATCH:
+        stop.set()
+    _RSS_WATCH.clear()
     for home in _SESSION_HOME:
         shutil.rmtree(home, ignore_errors=True)
 
@@ -570,6 +650,7 @@ def pytest_configure(config):
     # that builds the tapped-HOME template is given this, not the live environ.
     _SESSION_ENV.update(os.environ)
     _cap_mutant_memory()
+    _watch_mutant_memory()
     if not os.environ.get("MUTANT_UNDER_TEST"):
         return          # not a mutmut run — nothing to normalize
     cfg = _mutmut_config()
