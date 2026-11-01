@@ -1290,11 +1290,20 @@ jobs:
       # `--shards 24`.
       matrix:
         include: ${{ fromJSON(needs.mutation-plan.outputs.matrix) }}
+    # NO harden-runner here, unlike every other Linux job in this file. On
+    # 2026-11-01 run 41283802186 lost the runner on full shards 1, 17 and 18
+    # ("The hosted runner lost communication"), twice. Rerunning those shards
+    # with the same plan and stats, changing only that one step:
+    #   without it   used memory flat at 3.0-4.2 GB on all three, all passed
+    #   with it      shard 1 climbed ~0.35 GB every 2 min to 14.7 GB of 16
+    #                and lost its runner; disable-file-monitoring did not help
+    # The process growing is harden-runner's own `agent` (root), ~200 MiB a
+    # minute while mutmut held at 1.9 GB: a mutmut shard forks a test process
+    # per mutant, far more execs in two hours than any other job here. v2.22.3
+    # (agent 0.18.0) leaks the same way. Upstream: step-security/harden-runner#709;
+    # put the step back once a release fixes it. It is egress *audit*, not
+    # block, so dropping it loses telemetry on this one job, not enforcement.
     steps:
-      - name: harden runner (egress audit)
-        uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
-        with:
-          egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0    # tags for setuptools-scm version resolution
