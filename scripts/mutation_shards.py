@@ -797,7 +797,30 @@ def unit_weight(root: Path, unit: Unit) -> int:
     # so once every function of a file is timed the units sum to less than the
     # file they were cut from (store.py: 178 ms short of its 53,114,371) and
     # the planner under-counts the very file that sets the slowest shard.
-    return max(-(-file_weight * shares.get(unit.symbol, 1) // total), 1)
+    share = shares.get(unit.symbol) or unmeasured_share(unit, recorded, total)
+    return max(-(-file_weight * share // total), 1)
+
+
+def unmeasured_share(unit: Unit, recorded: dict[str, int], total: int) -> int:
+    """A share for a function the measured run never saw: its lines, priced
+    at the rate per line of the functions it did see.
+
+    A function added since the weights were written has no record, and it
+    used to get a share of 1 -- one millisecond out of ``store.py``'s 53
+    million. So a PR that adds functions to a split file put every one of them
+    in whichever shard was lightest by a hair: 23 of them all landed in shard
+    9 of run 41251356192, which then ran 4,289 mutants against main's 3,828 and
+    hit its 145-minute timeout on both attempts with six left. Priced by size
+    at the file's own measured rate, they spread like any other unit until the
+    next measured run records them.
+    """
+    if not recorded or unit.symbol is None:
+        return 1
+    lines = symbol_weight(unit.path, [*recorded, unit.symbol])
+    measured = sum(lines.get(s, 0) for s in recorded)
+    if not measured or unit.symbol not in lines:
+        return 1
+    return max(-(-total * lines[unit.symbol] // measured), 1)
 
 
 def pack(root: Path, shards: int) -> list[list[Unit]]:
