@@ -187,6 +187,53 @@ class TestTheRecordIsProofNotThePartition:
                 assert p.endswith("__mutmut_*") and ".x_" in p
 
 
+class TestAnUnmeasuredFunctionIsPricedBySize:
+    """A function the weights file has no time for is priced at the file's
+    measured rate per line, not at 1 ms -- or every new function lands in the
+    one lightest shard."""
+
+    SRC = ("def alpha():\n" + "    x = 1\n" * 9 + "    return x\n\n\n"
+           "def beta():\n" + "    y = 2\n" * 19 + "    return y\n\n\n"
+           "def gamma():\n" + "    z = 3\n" * 9 + "    return z\n")
+
+    def weights(self, tmp_path):
+        path = make_tree(tmp_path, self.SRC, {"alpha": 1000, "beta": 2000})
+        return {u.symbol: ms.unit_weight(tmp_path, u)
+                for u in ms.units_for(tmp_path, path, 1)}
+
+    def test_it_costs_what_a_measured_function_its_size_costs(self, tmp_path):
+        w = self.weights(tmp_path)
+        # gamma is alpha's size, and alpha measured 1000 of the file's 3000.
+        assert w["gamma"] == w["alpha"] == 1000
+        assert w["beta"] == 2000
+
+    def test_a_measured_function_keeps_its_measured_share(self, tmp_path):
+        path = make_tree(tmp_path, self.SRC,
+                         {"alpha": 1000, "beta": 2000, "gamma": 7})
+        w = {u.symbol: ms.unit_weight(tmp_path, u)
+             for u in ms.units_for(tmp_path, path, 1)}
+        assert w["gamma"] == 7
+
+    def test_with_no_record_the_body_size_split_is_unchanged(self, tmp_path):
+        path = make_tree(tmp_path, self.SRC, None)
+        assert ms.unmeasured_share(ms.Unit(path, "gamma"), {}, 30) == 1
+
+    def test_new_functions_spread_across_shards(self, tmp_path):
+        """The regression: priced at 1, all the new functions shared a bin."""
+        new = "".join("\n\ndef new_%d():\n" % i + "    q = 0\n" * 9
+                      + "    return q\n" for i in range(6))
+        # Unequal measured bins (2000 / 1500 / 1000): at 1 ms each, six new
+        # functions all fit in the lightest one's gap and never leave it.
+        path = make_tree(tmp_path, self.SRC + new,
+                         {"alpha": 1000, "beta": 2000, "gamma": 1500})
+        units = ms.units_for(tmp_path, path, 1)
+        bins = ms.pack(tmp_path, 3)
+        holding = {i for i, b in enumerate(bins)
+                   for u in b if (u.symbol or "").startswith("new_")}
+        assert len(units) == 9
+        assert len(holding) > 1, "every new function went to one shard"
+
+
 class TestTheInvariantHoldsOverTheRealTree:
     """The relaxation rests on a claim about this repository, so assert it.
 

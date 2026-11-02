@@ -252,3 +252,95 @@ class TestMutantAddressCap:
         mod = load_conftest()
         assert mod.MUTANT_HEADROOM == 3 << 30
         assert mod.mutant_address_cap("m.x_f__mutmut_1", 0) == 3 << 30
+
+
+needs_proc = pytest.mark.skipif(not Path("/proc/self/statm").exists(),
+                                reason="reads /proc/self/statm (Linux)")
+
+
+class TestMutantRssWatch:
+    """A mutmut worker ends itself, killed, once it grows a fixed resident
+    amount -- tight enough that four runaways side by side leave the runner up."""
+
+    def test_a_mutant_run_is_limited_relative_to_its_resident_size(self):
+        limit = load_conftest().mutant_rss_limit(
+            "boost_cli.core.rules.x_block_spans__mutmut_7", 1000, headroom=50)
+        assert limit == 1050
+
+    @pytest.mark.parametrize("mutant", [None, "", "stats", "fail"])
+    def test_no_mutant_no_limit(self, mutant):
+        assert load_conftest().mutant_rss_limit(mutant, 1000) is None
+
+    def test_an_unreadable_size_is_no_limit(self):
+        assert load_conftest().mutant_rss_limit(
+            "boost_cli.core.x_f__mutmut_1", None) is None
+
+    def test_the_default_headroom_is_one_gib(self):
+        mod = load_conftest()
+        assert mod.MUTANT_RSS_HEADROOM == 1 << 30
+        assert mod.mutant_rss_limit("m.x_f__mutmut_1", 0) == 1 << 30
+        # The resident bound is the one that keeps a 16 GB runner up with
+        # four workers, so it has to be the tighter of the two.
+        assert mod.MUTANT_RSS_HEADROOM < mod.MUTANT_HEADROOM
+
+    def test_past_the_limit_the_process_ends_killed(self, capfd):
+        mod = load_conftest()
+        reads = iter([100, 200, 300, 400])
+        ended = []
+        mod.watch_resident(250, mod.threading.Event(), "m.x_f__mutmut_3",
+                           read=lambda: next(reads), interval=0,
+                           end=ended.append)
+        assert ended == [1]
+        assert next(reads) == 400          # stopped at the first read past it
+        err = capfd.readouterr().err
+        assert "m.x_f__mutmut_3" in err and "stopping it as killed" in err
+
+    def test_under_the_limit_it_runs_until_stopped(self):
+        mod = load_conftest()
+        stop = mod.threading.Event()
+        seen, ended = [], []
+
+        def read():
+            seen.append(1)
+            if len(seen) == 3:
+                stop.set()
+            return None if len(seen) == 2 else 10
+
+        mod.watch_resident(250, stop, "m.x_f__mutmut_3", read=read,
+                           interval=0, end=ended.append)
+        assert ended == []
+        assert len(seen) == 3
+
+    def test_unconfigure_stops_the_watch(self):
+        mod = load_conftest()
+        stop = mod.threading.Event()
+        mod._RSS_WATCH.append(stop)
+        mod.pytest_unconfigure(None)
+        assert stop.is_set() and mod._RSS_WATCH == []
+
+    @needs_proc
+    def test_a_real_runaway_is_stopped(self, tmp_path):
+        import subprocess
+        import sys
+        script = tmp_path / "runaway.py"
+        script.write_text(
+            "import importlib.util, os, sys, threading\n"
+            # conftest imports its sibling helpers the way pytest's rootdir
+            # insertion lets it; a bare interpreter has to be given tests/.
+            "sys.path.insert(0, os.path.dirname(sys.argv[1]))\n"
+            "spec = importlib.util.spec_from_file_location('c', sys.argv[1])\n"
+            "mod = importlib.util.module_from_spec(spec)\n"
+            "spec.loader.exec_module(mod)\n"
+            "limit = mod.mutant_rss_limit('m.x_f__mutmut_1',"
+            " mod._resident_bytes(), headroom=64 << 20)\n"
+            "threading.Thread(target=mod.watch_resident, daemon=True,"
+            " args=(limit, threading.Event(), 'm.x_f__mutmut_1')).start()\n"
+            "spans = []\n"
+            "while True:\n"
+            "    spans.append((len(spans), len(spans) + 1))\n",
+            encoding="utf-8")
+        proc = subprocess.run([sys.executable, str(script), str(CONFTEST)],
+                              capture_output=True, text=True, timeout=60,
+                              cwd=ROOT, check=False)
+        assert proc.returncode == 1, proc.stderr[-2000:]
+        assert "stopping it as killed" in proc.stderr

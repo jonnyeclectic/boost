@@ -1463,7 +1463,9 @@ class TestWhatTheRepairCannotFixIsNamed:
     def test_loadable_or_unreadable_is_not_refused(self, raw):
         assert workflows.gemini_agent_problem(raw) is None
 
-    def test_render_problem_judges_only_gemini_agents(self):
+    def test_render_problem_declines_only_gemini_agents(self):
+        """A Claude Code subagent Claude would refuse to launch is judged too,
+        but by `render_notes`: it is written and named, never declined."""
         bad = "Just a body\n"
         assert workflows.render_problem("gemini", workflows.SLOT_AGENTS,
                                         bad) is not None
@@ -1471,3 +1473,8 @@ class TestWhatTheRepairCannotFixIsNamed:
                                         bad) is None
         assert workflows.render_problem("claude-code", workflows.SLOT_AGENTS,
                                         bad) is None
+        foreign = "---\nname: x\ndescription: d\ntools: codebase\n---\nB\n"
+        assert workflows.render_problem("claude-code", workflows.SLOT_AGENTS,
+                                        foreign) is None
+        assert workflows.render_notes("claude-code", workflows.SLOT_AGENTS,
+                                      foreign)

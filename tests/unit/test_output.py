@@ -622,6 +622,24 @@ class TestPtyWidth:
         return primary, os.fdopen(secondary, "w", buffering=1,
                                   encoding="utf-8")
 
+    @staticmethod
+    def _read_until(fd, done, timeout=5.0):
+        """Read the pty's other end until ``done(text)`` or ``timeout`` s.
+
+        One ``os.read`` is not enough: Linux hands what the slave side wrote to
+        the master through a workqueue, so under load a read straight after
+        the flush returned only the first folded line (``assert 1 > 1`` on an
+        ubuntu cell running ``-n auto``).
+        """
+        import select
+        text, deadline = "", time.monotonic() + timeout
+        while not done(text):
+            left = deadline - time.monotonic()
+            if left <= 0 or not select.select([fd], [], [], left)[0]:
+                break
+            text += os.read(fd, 65536).decode()
+        return text
+
     def test_a_streams_own_terminal_is_measured(self, monkeypatch):
         monkeypatch.delenv("COLUMNS", raising=False)
         primary, tty = self._pty(200)
@@ -656,7 +674,7 @@ class TestPtyWidth:
         try:
             output.warn(" ".join(["remedy"] * 40), stream=narrow, wrap=True)
             narrow.flush()
-            got = os.read(p2, 65536).decode()
+            got = self._read_until(p2, lambda text: text.count("remedy") == 40)
         finally:
             wide.close()
             narrow.close()

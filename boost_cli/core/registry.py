@@ -458,6 +458,17 @@ def name_key(name: str) -> str:
     return name.casefold()
 
 
+def already_tapped(name: str, held: str) -> str:
+    """"x already tapped", naming the configured spelling when ``name``'s differs.
+
+    `boost tap leonxlnx/x` over a configured `Leonxlnx/x` is the same tap, and
+    saying so in the spelling the user typed hid which row holds it.
+    """
+    if name == held:
+        return "%s already tapped" % name
+    return "%s already tapped as %s" % (name, held)
+
+
 def _taken(name: str, url: str, existing: str) -> BoostError:
     """The error for `name` already belonging to a different repository."""
     return BoostError(
@@ -493,10 +504,28 @@ def unfinished_clones() -> list[Path]:
     root = paths.repos_dir()
     if not root.is_dir() or not gitutil.has_git():
         return []
-    listed = {t.path for t in list_taps()}
+    listed = _clone_paths()
     return sorted(d for d in root.iterdir()
-                  if d.is_dir() and d not in listed
+                  if d.is_dir() and not _is_listed(d, listed)
                   and not gitutil.head_commit(d))
+
+
+def _clone_paths() -> set[Path]:
+    """Every configured tap's :attr:`Tap.path`, as config spells it."""
+    return {t.path for t in list_taps()}
+
+
+def _is_listed(d: Path, listed: set[Path]) -> bool:
+    """True if the `repos/` entry `d` is one of the `listed` clone dirs.
+
+    The spelling is the fast path; the filesystem is asked only about an entry
+    it misses. `iterdir` spells a name as it sits on disk and config as the
+    user typed it, and on APFS `repos/leonxlnx__x` *is* tap `Leonxlnx/x`'s
+    clone — doctor called that live clone unlisted and advised deleting it.
+    Never folded: on ext4 the same pair is an orphan beside a missing clone,
+    and folding case would hide both.
+    """
+    return d in listed or _shared(d, list(listed))
 
 
 #: The staging dir a re-clone fills beside the tap (see `_reclone`). Not a
@@ -516,10 +545,31 @@ def unlisted_clones() -> list[tuple[Path, str]]:
     root = paths.repos_dir()
     if not root.is_dir() or not gitutil.has_git():
         return []
-    listed = {t.path for t in list_taps()}
+    listed = _clone_paths()
     return [(d, gitutil.remote_url(d)) for d in sorted(root.iterdir())
-            if d.is_dir() and d not in listed
+            if d.is_dir() and not _is_listed(d, listed)
             and not d.name.endswith(RECLONE_SUFFIX) and gitutil.head_commit(d)]
+
+
+def _own_clone_of(clone: Path, taps: list[Tap]) -> Tap | None:
+    """The configured tap whose clone ``clone`` is, under another name."""
+    return next((t for t in taps if _shared(clone, [t.path])), None)
+
+
+def _leftover_of(clone: Path, url: str, taps: list[Tap]) -> Tap | None:
+    """The configured tap ``clone`` is a leftover of: its dir in another case.
+
+    The case-sensitive half of :func:`_is_listed`: on ext4 `repos/o__r` beside
+    a configured `O/R` is not that tap's clone, and `boost tap <its url>`
+    answers "already tapped" and changes nothing. Matched on the dir name
+    (:attr:`Tap.safe_name`), not on a name rebuilt from it — `__` maps back
+    to `/` for `o__r` and not for a tap called `my__tap` — and only when the
+    clone's origin ``url`` is that tap's source or unknown: a clone of another
+    repository is not restored by `boost update`, so it keeps its own hint.
+    """
+    key = name_key(clone.name)
+    return next((t for t in taps if name_key(t.safe_name) == key
+                 and (not url or same_source(t.url, url))), None)
 
 
 def readd_hint(clone: Path, url: str) -> str:
@@ -527,17 +577,59 @@ def readd_hint(clone: Path, url: str) -> str:
 
     :func:`retap_hint` with the clone's dir name mapped back to a tap name, so
     a clone with no origin still gets an honest sentence rather than a
-    command that fails.
+    command that fails. A clone that is a configured tap's, or a leftover of
+    one (:func:`_leftover_of`: its dir in another case, from that tap's
+    source), gets `boost update` for that tap instead: re-tapping is a no-op.
     """
+    taps = list_taps()
+    tap = _own_clone_of(clone, taps) or _leftover_of(clone, url, taps)
+    if tap is not None:
+        return "`boost update %s`" % util.shell_arg(tap.name)
+    return _retap(clone, url)
+
+
+def _retap(clone: Path, url: str) -> str:
+    """:func:`retap_hint` for a clone dir, quoted when it is a command."""
     hint = retap_hint(clone.name.replace("__", "/"), url)
     return "`%s`" % hint if hint.startswith("boost tap ") else hint
 
 
 def unlisted_clone_line(clone: Path, url: str) -> str:
-    """The one line doctor and heal print for a :func:`unlisted_clones` row."""
+    """The one line doctor and heal print for a :func:`unlisted_clones` row.
+
+    Never "delete the directory" for one that is a configured tap's own clone
+    under another name: that deletes the tap.
+    """
+    taps = list_taps()
+    own = _own_clone_of(clone, taps)
+    if own is not None:
+        return ("%s is tap %s's own clone under another name, so boost "
+                "already reads it — leave it in place"
+                % (paths.tilde(clone), own.name))
+    left = _leftover_of(clone, url, taps)
+    if left is not None:
+        return ("%s is a leftover of tap %s, whose clone is %s, so boost reads "
+                "nothing from it — run `boost update %s`, then delete the "
+                "directory" % (paths.tilde(clone), left.name,
+                               paths.tilde(left.path),
+                               util.shell_arg(left.name)))
     return ("%s is a tap clone no configured tap lists, so boost reads "
             "nothing from it — re-add it with %s, or delete the directory"
-            % (paths.tilde(clone), readd_hint(clone, url)))
+            % (paths.tilde(clone), _retap(clone, url)))
+
+
+def stale_caches(files: Collection[Path]) -> list[Path]:
+    """The catalog caches among ``files`` that no configured tap owns.
+
+    Owned by its stem, or — asked of the filesystem, not the spelling — by
+    being the same file as a configured tap's :attr:`Tap.cache_file`: on APFS
+    `cache/leonxlnx__x.json` is tap `Leonxlnx/x`'s catalog, and `boost clean`
+    deleted it as stale. ``_shared`` skips a cache file that was never written.
+    """
+    taps = list_taps()
+    stems = {t.safe_name for t in taps}
+    caches = [t.cache_file for t in taps]
+    return [f for f in files if f.stem not in stems and not _shared(f, caches)]
 
 
 def broken_clone_line(name: str) -> str:
@@ -1014,7 +1106,8 @@ def plan_specs(specs: list[str]) -> list[dict]:
             continue
         if held is not None:
             results.append({"spec": spec, "name": name, "ok": False,
-                            "skipped": True, "error": "already tapped"})
+                            "skipped": True, "error": "already tapped",
+                            "tapped_as": held.name})
             continue
         # Two specs of this one run claiming a name is not "already used by":
         # nothing holds the name yet, and `boost untap` would not help.

@@ -183,7 +183,8 @@ class TestPlanSpecs:
         self._held(monkeypatch, ("owner/repo", "https://github.com/owner/repo"))
         assert registry.plan_specs(["owner/repo", "new/one"]) == [
             {"spec": "owner/repo", "name": "owner/repo", "ok": False,
-             "skipped": True, "error": "already tapped"},
+             "skipped": True, "error": "already tapped",
+             "tapped_as": "owner/repo"},
             {"spec": "new/one", "name": "new/one",
              "url": "https://github.com/new/one", "todo": True},
         ]

@@ -9,10 +9,12 @@ here rather than somewhere three commands away.
 from __future__ import annotations
 
 import hashlib
+import os
+from pathlib import Path
 
 import pytest
 
-from boost_cli.core import config, lockfile, paths, store
+from boost_cli.core import config, lockfile, paths, store, util
 
 ROW = {"agent": None, "slot": "skill", "path": "", "sha256": ""}
 
@@ -450,10 +452,11 @@ class TestBackfill:
         assert store.workflows_without_skill_copy() == ["reviewer"]
         assert store.backfill_skill_copies(dry=True) == [
             "would write workflow reviewer's skill copy to "
-            "~/.agents/skills/reviewer"]
+            "~/.agents/skills/reviewer and link it → windsurf · antigravity"]
         assert not _store_copy().exists()
         assert store.backfill_skill_copies() == [
-            "wrote workflow reviewer's skill copy to ~/.agents/skills/reviewer"]
+            "wrote workflow reviewer's skill copy to ~/.agents/skills/reviewer "
+            "and linked it → windsurf · antigravity"]
         assert _store_copy().read_text(encoding="utf-8") == COPY
         assert lockfile.get_workflow("reviewer")["materializations"][-1] == {
             "agent": None, "slot": "skill", "path": str(_store_copy()),
@@ -518,3 +521,680 @@ def test_install_spelling_names_one_item(tap, name, rel_dir, want):
 
 def test_workflow_spelling_without_a_lock_row_is_the_bare_name(sandbox):
     assert store._workflow_spelling("nothing") == "boost install nothing"
+
+
+# --------------------------------------------------------------------------
+# Copy links: the copy reaches the linking agents that get no workflow file
+# --------------------------------------------------------------------------
+# A skills-only agent (antigravity, a Claude Code profile added as
+# `skills_only`) and one with no slash-command format (windsurf) get no file
+# of the workflow's own, so without a link to the copy they got the procedure
+# in no form. claude-code and cursor hold agents/<name>.md and get no link:
+# that would show them the procedure twice.
+
+def _linked(entry, name="reviewer"):
+    return list(store.copy_link_targets(name, entry))
+
+
+def _workflow_entry(*agent_rows, **extra):
+    extra.setdefault("only_agents", None)
+    return _entry(*(_agent_row(a) for a in agent_rows),
+                  _copy_row("reviewer"), **extra)
+
+
+class TestCopyLinkTargets:
+    """A pure function of the lock row and the agent table: no disk."""
+
+    def test_the_linking_agents_with_no_row_of_their_own(self, sandbox):
+        entry = _workflow_entry("claude-code", "cursor")
+        assert _linked(entry) == ["windsurf", "antigravity"]
+        assert store.copy_link_targets("reviewer", entry) == {
+            "windsurf": paths.home() / ".windsurf" / "skills",
+            "antigravity": paths.home() / ".gemini" / "antigravity-cli"
+                           / "skills"}
+
+    def test_a_declared_narrowing_links_nowhere(self, sandbox):
+        assert _linked(_workflow_entry("claude-code",
+                                       only_agents=["claude-code"])) == []
+
+    def test_no_copy_row_links_nowhere(self, sandbox):
+        entry = _entry(_agent_row("claude-code"), _agent_row("cursor"),
+                       only_agents=None)
+        assert _linked(entry) == []
+        assert _linked(None) == []
+
+    def test_quarantined_links_nowhere(self, sandbox):
+        assert _linked(_workflow_entry("claude-code", "cursor",
+                                       quarantined=True)) == []
+
+    def test_a_copy_kept_only_because_it_was_edited_links_nowhere(self,
+                                                                  sandbox):
+        # --no-as-skill over an edited copy keeps the row, not the request.
+        assert _linked(_workflow_entry("claude-code", "cursor",
+                                       as_skill=False)) == []
+        config.set_value("workflows_as_skills", "false")
+        assert _linked(_workflow_entry("claude-code", "cursor")) == []
+        assert _linked(_workflow_entry("claude-code", "cursor",
+                                       as_skill=True)) == [
+            "windsurf", "antigravity"]
+
+    def test_a_skill_by_that_name_owns_the_store_dir(self, sandbox):
+        lockfile.set_skill("reviewer", {"tap": "t"})
+        assert _linked(_workflow_entry("claude-code", "cursor")) == []
+
+    @pytest.mark.parametrize("key", ["foreign", "declined"])
+    def test_an_agent_a_foreign_or_declined_row_names_is_left_out(
+            self, sandbox, key):
+        row = {"agent": "windsurf", "slot": "agents", "path": "/x",
+               "reason": "r"}
+        entry = _workflow_entry("claude-code", "cursor", **{key: [row]})
+        assert _linked(entry) == ["antigravity"]
+
+    def test_an_agent_due_its_own_file_is_left_out(self, sandbox):
+        # cursor takes workflows and has no row yet: `boost sync` writes its
+        # file, so a link now would only be taken back.
+        assert _linked(_workflow_entry("claude-code")) == [
+            "windsurf", "antigravity"]
+        # An entry from before `only_agents` was recorded replays its rows,
+        # so cursor is not due a file -- and its rows are the only record of
+        # an `--agent` narrowing, so an agent the workflow set writes with
+        # no row was left out, not left pending: no link either.
+        legacy = _workflow_entry("claude-code")
+        legacy.pop("only_agents")
+        assert _linked(legacy) == ["windsurf", "antigravity"]
+        cfg = config.load()
+        cfg["agents"]["windsurf"]["workflows"] = True
+        config.save(cfg)
+        assert _linked(legacy) == ["antigravity"]
+
+    def test_follows_the_agent_table(self, sandbox):
+        cfg = config.load()
+        cfg["agents"]["claude-personal"] = {
+            "dir": "~/.claude-personal/skills", "enabled": True,
+            "skills_only": True}
+        cfg["agents"]["antigravity"]["enabled"] = False
+        cfg["agents"]["windsurf"]["workflows"] = True
+        config.save(cfg)
+        entry = _workflow_entry("claude-code", "cursor", "windsurf")
+        assert _linked(entry) == ["claude-personal"]
+        # every linking agent has a file of its own: nothing to link
+        entry = _workflow_entry("claude-code", "cursor", "windsurf",
+                                "claude-personal")
+        assert _linked(entry) == []
+
+    def test_copy_link_agents(self, sandbox):
+        assert list(store.copy_link_agents({"claude-code", "cursor"})) == [
+            "windsurf", "antigravity"]
+        assert list(store.copy_link_agents(set())) == [
+            "claude-code", "windsurf", "cursor", "antigravity"]
+        assert store.copy_link_agents(set(), narrowed=True) == {}
+
+
+def _copy_on_disk(name="reviewer", text="T"):
+    d = paths.store_dir() / name
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "SKILL.md").write_text(text, encoding="utf-8")
+    return d
+
+
+def _agent_dir(agent):
+    from boost_cli.core import agents
+    d = agents.known_agents()[agent]["dir"]
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+class TestCopyLinksOnDisk:
+    def test_link_creates_only_the_targets_and_keeps_theirs(self, sandbox,
+                                                            tmp_path):
+        target = _copy_on_disk()
+        elsewhere = tmp_path / "mine"
+        elsewhere.mkdir()
+        (_agent_dir("windsurf") / "reviewer").symlink_to(elsewhere)
+        res = store.link_skill_copy("reviewer",
+                                    _workflow_entry("claude-code", "cursor"))
+        assert res is not None
+        assert res.linked == ["antigravity"]
+        assert res.conflicts == [str(_agent_dir("windsurf") / "reviewer")]
+        assert (_agent_dir("antigravity") / "reviewer").resolve() == \
+            target.resolve()
+        # the user's link is theirs, and stays pointing where it did
+        assert (_agent_dir("windsurf") / "reviewer").resolve() == \
+            elsewhere.resolve()
+        for agent in ("claude-code", "cursor"):
+            assert not (_agent_dir(agent) / "reviewer").is_symlink()
+
+    def test_only_limits_the_targets_and_empty_is_none(self, sandbox):
+        _copy_on_disk()
+        entry = _workflow_entry("claude-code", "cursor")
+        res = store.link_skill_copy("reviewer", entry, only=["windsurf",
+                                                             "cursor"])
+        assert res is not None
+        assert res.linked == ["windsurf"]
+        assert not os.path.lexists(_agent_dir("antigravity") / "reviewer")
+        assert not os.path.lexists(_agent_dir("cursor") / "reviewer")
+        # `link_agents` reads an empty `only` as every agent: never passed
+        assert store.link_skill_copy("reviewer", entry, only=[]) is None
+        assert store.reconcile_copy_links("reviewer", entry, only=[]) == (
+            [], [], [])
+        assert not os.path.lexists(_agent_dir("antigravity") / "reviewer")
+
+    def test_no_target_means_no_link_anywhere(self, sandbox):
+        """An empty `only` is every agent to `link_agents`, so the call is
+        never made with one."""
+        _copy_on_disk()
+        assert store.link_skill_copy(
+            "reviewer", _workflow_entry("claude-code",
+                                        only_agents=["claude-code"])) is None
+        for agent in ("claude-code", "windsurf", "cursor", "antigravity"):
+            assert not os.path.lexists(_agent_dir(agent) / "reviewer")
+
+    def test_missing_names_what_sync_can_link(self, sandbox, tmp_path):
+        _copy_on_disk()
+        _copy_on_disk("other")
+        entry = _workflow_entry("claude-code", "cursor")
+        assert store.missing_copy_links("reviewer", entry) == [
+            "windsurf", "antigravity"]
+        # boost's link into another store dir is wrong, and is replaced
+        (_agent_dir("windsurf") / "reviewer").symlink_to(
+            paths.store_dir() / "other")
+        # the right one is fine
+        (_agent_dir("antigravity") / "reviewer").symlink_to(
+            paths.store_dir() / "reviewer")
+        assert store.missing_copy_links("reviewer", entry) == ["windsurf"]
+        # the user's own link, or a file, is not boost's to replace
+        (_agent_dir("windsurf") / "reviewer").unlink()
+        (_agent_dir("windsurf") / "reviewer").symlink_to(tmp_path)
+        assert store.missing_copy_links("reviewer", entry) == []
+        (_agent_dir("windsurf") / "reviewer").unlink()
+        (_agent_dir("windsurf") / "reviewer").write_text("x",
+                                                         encoding="utf-8")
+        assert store.missing_copy_links("reviewer", entry) == []
+
+    def test_missing_needs_the_copy_on_disk(self, sandbox):
+        # Its own repair (a missing materialization) reinstalls, which links.
+        assert store.missing_copy_links(
+            "reviewer", _workflow_entry("claude-code", "cursor")) == []
+
+    def test_a_dangling_boost_link_is_missing(self, sandbox):
+        _copy_on_disk()
+        (_agent_dir("windsurf") / "reviewer").symlink_to(
+            paths.store_dir() / "gone")
+        assert store.missing_copy_links(
+            "reviewer", _workflow_entry("claude-code", "cursor")) == [
+            "windsurf", "antigravity"]
+
+    def test_stale_is_a_copy_link_beside_the_workflows_own_file(self,
+                                                                sandbox,
+                                                                tmp_path):
+        _copy_on_disk()
+        _copy_on_disk("other")
+        entry = _workflow_entry("claude-code", "cursor")
+        assert store.stale_copy_links("reviewer", entry) == []
+        (_agent_dir("claude-code") / "reviewer").symlink_to(
+            paths.store_dir() / "reviewer")
+        (_agent_dir("cursor") / "reviewer").symlink_to(
+            paths.store_dir() / "other")
+        (_agent_dir("windsurf") / "reviewer").symlink_to(
+            paths.store_dir() / "reviewer")
+        # cursor's leads elsewhere and windsurf's is wanted
+        assert store.stale_copy_links("reviewer", entry) == ["claude-code"]
+        # with no copy row, or a skill owning the dir, the link is not ours
+        assert store.stale_copy_links(
+            "reviewer", _entry(_agent_row("claude-code"))) == []
+        lockfile.set_skill("reviewer", {"tap": "t"})
+        assert store.stale_copy_links("reviewer", entry) == []
+
+    def test_under_a_narrowing_every_copy_link_is_stale(self, sandbox):
+        """A declared `--agent` narrowing links nowhere, so a link an
+        earlier, wider install made is stale wherever it is."""
+        _copy_on_disk()
+        entry = _workflow_entry("claude-code", only_agents=["claude-code"])
+        for agent in ("claude-code", "windsurf", "antigravity"):
+            (_agent_dir(agent) / "reviewer").symlink_to(
+                paths.store_dir() / "reviewer")
+        assert store.stale_copy_links("reviewer", entry) == [
+            "claude-code", "windsurf", "antigravity"]
+        entry["only_agents"] = None
+        assert store.stale_copy_links("reviewer", entry) == ["claude-code"]
+
+    def test_the_reason_a_link_is_stale(self, sandbox):
+        entry = _workflow_entry("claude-code", only_agents=["claude-code"],
+                                foreign=[{"agent": "cursor", "slot": "agents",
+                                          "path": "/x"}])
+        assert store.stale_copy_reason(entry, "claude-code") == (
+            "which has the workflow's own file")
+        assert store.stale_copy_reason(entry, "cursor") == (
+            "which has the workflow's own file")
+        assert store.stale_copy_reason(entry, "windsurf") == (
+            "which the workflow's --agent scope leaves out")
+
+    def test_a_dir_shared_with_an_agent_holding_its_own_file(self, sandbox):
+        """``~/.claude-personal/skills -> ../.claude/skills`` is claude-code's
+        dir under a second name: decided by name, the copy was linked there
+        for claude-personal and unlinked as claude-code's in the same run."""
+        _copy_on_disk()
+        home = paths.home()
+        (home / ".claude" / "skills").mkdir(parents=True, exist_ok=True)
+        (home / ".claude-personal").mkdir()
+        (home / ".claude-personal" / "skills").symlink_to(
+            os.path.join("..", ".claude", "skills"))
+        cfg = config.load()
+        cfg["agents"]["claude-personal"] = {
+            "dir": "~/.claude-personal/skills", "enabled": True,
+            "skills_only": True}
+        config.save(cfg)
+        entry = _workflow_entry("claude-code", "cursor")
+        assert _linked(entry) == ["windsurf", "antigravity"]
+        assert list(store.copy_link_agents({"claude-code", "cursor"})) == [
+            "windsurf", "antigravity"]
+        assert store.missing_copy_links("reviewer", entry) == [
+            "windsurf", "antigravity"]
+        # a link there is stale, and named once: by the agent with the file
+        (home / ".claude" / "skills" / "reviewer").symlink_to(
+            paths.store_dir() / "reviewer")
+        assert store.stale_copy_links("reviewer", entry) == ["claude-code"]
+        assert store.reconcile_copy_links("reviewer", entry)[2] == [
+            "claude-code"]
+        assert not os.path.lexists(home / ".claude" / "skills" / "reviewer")
+        # With claude-code no longer a linking agent its row still holds the
+        # file, so the profile's name is the one that speaks for the dir.
+        cfg["agents"]["claude-code"]["enabled"] = False
+        config.save(cfg)
+        (home / ".claude" / "skills" / "reviewer").symlink_to(
+            paths.store_dir() / "reviewer")
+        assert store.stale_copy_links("reviewer", entry) == ["claude-personal"]
+        assert store.stale_copy_reason(entry, "claude-personal") == (
+            "whose skills dir is claude-code's, which has the workflow's own "
+            "file")
+        assert "claude-personal" not in _linked(entry)
+
+    def test_unlink_takes_only_links_to_this_copy(self, sandbox, tmp_path):
+        _copy_on_disk()
+        _copy_on_disk("other")
+        (_agent_dir("windsurf") / "reviewer").symlink_to(
+            paths.store_dir() / "reviewer")
+        (_agent_dir("antigravity") / "reviewer").symlink_to(
+            paths.store_dir() / "reviewer")
+        (_agent_dir("claude-code") / "reviewer").symlink_to(
+            paths.store_dir() / "other")
+        (_agent_dir("cursor") / "reviewer").symlink_to(tmp_path)
+        assert store.unlink_skill_copy("reviewer", only=["antigravity"]) == [
+            "antigravity"]
+        assert (_agent_dir("windsurf") / "reviewer").is_symlink()
+        assert store.unlink_skill_copy("reviewer") == ["windsurf"]
+        assert not os.path.lexists(_agent_dir("windsurf") / "reviewer")
+        assert not os.path.lexists(_agent_dir("antigravity") / "reviewer")
+        assert (_agent_dir("claude-code") / "reviewer").is_symlink()
+        assert (_agent_dir("cursor") / "reviewer").is_symlink()
+        assert store.unlink_skill_copy("reviewer", only=[]) == []
+
+    def test_unlink_sweeps_dangling_disabled_and_former_dirs(self, sandbox):
+        from boost_cli.core import agents
+        old = paths.home() / ".old-windsurf" / "skills"
+        old.mkdir(parents=True)
+        agents.remember_link_dir("windsurf", old)
+        (old / "reviewer").symlink_to(paths.store_dir() / "reviewer")
+        cfg = config.load()
+        cfg["agents"]["antigravity"]["enabled"] = False
+        config.save(cfg)
+        (_agent_dir("antigravity") / "reviewer").symlink_to(
+            paths.store_dir() / "reviewer")
+        # dangling: no copy on disk at all
+        assert sorted(store.unlink_skill_copy("reviewer")) == [
+            "antigravity", "windsurf"]
+        assert not os.path.lexists(old / "reviewer")
+        assert not os.path.lexists(_agent_dir("antigravity") / "reviewer")
+
+    def test_unlink_leaves_a_skills_links(self, sandbox):
+        _copy_on_disk()
+        (_agent_dir("windsurf") / "reviewer").symlink_to(
+            paths.store_dir() / "reviewer")
+        lockfile.set_skill("reviewer", {"tap": "t"})
+        assert store.unlink_skill_copy("reviewer") == []
+        assert (_agent_dir("windsurf") / "reviewer").is_symlink()
+
+    def test_problems_are_worded(self, sandbox):
+        res = store.InstallResult("reviewer", paths.store_dir() / "reviewer")
+        res.conflicts = [str(paths.home() / ".windsurf/skills/reviewer")]
+        res.unwritable = [str(paths.home() / ".gemini")]
+        res.unlinkable = [str(paths.home() / ".x")]
+        res.blocked = [(str(paths.home() / ".y/skills"),
+                        str(paths.home() / ".y"))]
+        lines = store.copy_link_problems(res)
+        assert lines[0] == ("~/.windsurf/skills/reviewer is in the way and "
+                            "is not boost's — left alone")
+        assert lines[1] == "%s — %s" % store.unwritable_refusal(
+            res.unwritable[0])
+        assert lines[2] == "%s — %s" % store.link_refusal(*res.blocked[0])
+        assert lines[3] == "%s — %s" % store.symlink_refusal(
+            res.unlinkable[0])
+        assert len(lines) == 4
+
+
+class TestCopyLinksThroughInstall:
+    def _links(self):
+        return {a: os.path.realpath(_agent_dir(a) / "reviewer")
+                for a in ("claude-code", "windsurf", "cursor", "antigravity")
+                if os.path.lexists(_agent_dir(a) / "reviewer")}
+
+    def test_install_links_and_reports(self, tap):
+        res = store.install(_wf(tap))
+        want = os.path.realpath(paths.store_dir() / "reviewer")
+        assert self._links() == {"windsurf": want, "antigravity": want}
+        assert res.copy_linked == ["windsurf", "antigravity"]
+        assert res.copy_blocked == []
+        # none of it is recorded: the set is derived from the row each time
+        entry = lockfile.get_workflow("reviewer")
+        assert [m for m in entry["materializations"]
+                if lockfile.is_skill_copy(m)] == [store._copy_row(entry)]
+        assert "copy_links" not in entry
+
+    def test_a_narrowed_install_links_nothing(self, tap):
+        res = store.install(_wf(tap), only_agents=["claude-code"])
+        assert self._links() == {}
+        assert res.copy_linked == []
+
+    def test_a_narrowed_reinstall_takes_every_earlier_link(self, tap):
+        """Narrowed after a wide install: no copy links, the disabled
+        agent's included, and nothing left for doctor or sync to name."""
+        store.install(_wf(tap))
+        cfg = config.load()
+        cfg["agents"]["antigravity"]["enabled"] = False
+        config.save(cfg)
+        res = store.install(_wf(tap), force=True, only_agents=["claude-code"])
+        assert self._links() == {}
+        assert res.copy_linked == []
+        assert res.copy_unlinked == ["windsurf", "antigravity"]
+        entry = lockfile.get_workflow("reviewer")
+        assert store.missing_copy_links("reviewer", entry) == []
+        assert store.stale_copy_links("reviewer", entry) == []
+
+    def test_install_reports_what_is_in_the_way(self, tap, tmp_path):
+        (_agent_dir("windsurf") / "reviewer").symlink_to(tmp_path)
+        res = store.install(_wf(tap))
+        assert res.copy_linked == ["antigravity"]
+        assert res.copy_blocked == [
+            "~/.windsurf/skills/reviewer is in the way and is not boost's "
+            "— left alone"]
+        assert os.path.realpath(_agent_dir("windsurf") / "reviewer") == \
+            os.path.realpath(tmp_path)
+
+    def test_retiring_the_copy_unlinks_it(self, tap):
+        store.install(_wf(tap))
+        res = store.install(_wf(tap), force=True, as_skill=False)
+        assert self._links() == {}
+        assert res.copy_unlinked == ["windsurf", "antigravity"]
+
+    def test_an_edited_copy_kept_on_retire_keeps_its_links(self, tap):
+        store.install(_wf(tap))
+        _store_copy().write_text("mine", encoding="utf-8")
+        store.install(_wf(tap), force=True, as_skill=False)
+        assert set(self._links()) == {"windsurf", "antigravity"}
+
+    def test_a_skill_by_that_name_keeps_its_links(self, tap):
+        _copy_on_disk(text="---\nname: reviewer\ndescription: d\n---\nx\n")
+        lockfile.set_skill("reviewer", {"tap": "t"})
+        store.link_agents("reviewer")
+        store.install(_wf(tap), force=True)
+        assert set(self._links()) == {"claude-code", "windsurf", "cursor",
+                                      "antigravity"}
+        store._uninstall_workflow("reviewer",
+                                  lockfile.get_workflow("reviewer"))
+        assert set(self._links()) == {"claude-code", "windsurf", "cursor",
+                                      "antigravity"}
+
+    def test_moving_an_agent_into_the_workflow_set_unlinks_it(self, tap):
+        store.install(_wf(tap))
+        cfg = config.load()
+        cfg["agents"]["windsurf"]["workflows"] = True
+        config.save(cfg)
+        res = store.install(_wf(tap), force=True)
+        assert (paths.home() / ".windsurf" / "agents" / "reviewer.md").is_file()
+        assert set(self._links()) == {"antigravity"}
+        assert res.copy_unlinked == ["windsurf"]
+
+    def test_a_failed_lock_write_takes_a_fresh_copys_links_back(
+            self, tap, monkeypatch):
+        def boom(*_a, **_k):
+            raise KeyboardInterrupt
+        monkeypatch.setattr(lockfile, "set_workflow", boom)
+        with pytest.raises(KeyboardInterrupt):
+            store.install(_wf(tap))
+        assert self._links() == {}
+        assert not (paths.store_dir() / "reviewer").exists()
+
+    def test_uninstall_unlinks_and_an_edited_copy_keeps_them(self, tap):
+        store.install(_wf(tap))
+        store.uninstall("reviewer")
+        assert self._links() == {}
+        store.install(_wf(tap))
+        _store_copy().write_text("mine", encoding="utf-8")
+        store.uninstall("reviewer")
+        assert set(self._links()) == {"windsurf", "antigravity"}
+
+    def test_quarantine_unlinks_and_release_relinks(self, tap):
+        store.install(_wf(tap))
+        store.quarantine_materialized("workflow", "reviewer",
+                                      lockfile.get_workflow("reviewer"))
+        assert self._links() == {}
+        store.release_materialized("workflow", "reviewer",
+                                   lockfile.get_workflow("reviewer"))
+        assert set(self._links()) == {"windsurf", "antigravity"}
+
+    def test_release_names_a_link_it_could_not_make(self, tap, tmp_path):
+        store.install(_wf(tap))
+        store.quarantine_materialized("workflow", "reviewer",
+                                      lockfile.get_workflow("reviewer"))
+        (_agent_dir("windsurf") / "reviewer").symlink_to(tmp_path)
+        problems: list[str] = []
+        store.release_materialized("workflow", "reviewer",
+                                   lockfile.get_workflow("reviewer"),
+                                   problems=problems)
+        assert problems == ["~/.windsurf/skills/reviewer is in the way and "
+                            "is not boost's — left alone"]
+        assert set(self._links()) == {"windsurf", "antigravity"}
+        assert os.path.realpath(_agent_dir("windsurf") / "reviewer") == \
+            os.path.realpath(tmp_path)
+
+    def test_release_links_nothing_to_a_copy_it_did_not_restore(self, tap):
+        """A copy gone before quarantine stashes no content, so release
+        writes no file -- and a link to it would dangle."""
+        store.install(_wf(tap))
+        util.remove_path(paths.store_dir() / "reviewer")
+        store.quarantine_materialized("workflow", "reviewer",
+                                      lockfile.get_workflow("reviewer"))
+        assert self._links() == {}
+        store.release_materialized("workflow", "reviewer",
+                                   lockfile.get_workflow("reviewer"))
+        assert not (paths.store_dir() / "reviewer").exists()
+        assert self._links() == {}
+        assert store.link_skill_copy(
+            "reviewer", lockfile.get_workflow("reviewer")) is None
+
+    def test_a_copy_the_store_refused_is_not_linked(self, tap, monkeypatch):
+        """`_skill_copy` keeps the old row when the store refuses the write,
+        whether or not its file is still there."""
+        store.install(_wf(tap))
+        util.remove_path(paths.store_dir() / "reviewer")
+        store.unlink_skill_copy("reviewer")
+        write = util.atomic_write_text
+
+        def refuse(path, *a, **k):
+            if paths.store_dir() / "reviewer" in Path(path).parents:
+                raise PermissionError(13, "Permission denied")
+            return write(path, *a, **k)
+        monkeypatch.setattr(util, "atomic_write_text", refuse)
+        res = store.install(_wf(tap), force=True)
+        assert store._copy_row(lockfile.get_workflow("reviewer")) is not None
+        assert res.copy_linked == []
+        assert self._links() == {}
+
+    def test_backfill_links_what_it_writes(self, tap):
+        store.install(_wf(tap), as_skill=False)
+        entry = lockfile.get_workflow("reviewer")
+        entry.pop("as_skill")
+        lockfile.set_workflow("reviewer", entry)
+        assert store.backfill_skill_copies(dry=True) == [
+            "would write workflow reviewer's skill copy to "
+            "~/.agents/skills/reviewer and link it → windsurf · antigravity"]
+        assert self._links() == {}
+        assert store.backfill_skill_copies() == [
+            "wrote workflow reviewer's skill copy to ~/.agents/skills/"
+            "reviewer and linked it → windsurf · antigravity"]
+        assert set(self._links()) == {"windsurf", "antigravity"}
+
+    def test_backfill_names_a_link_it_could_not_make(self, tap, tmp_path):
+        store.install(_wf(tap), as_skill=False)
+        entry = lockfile.get_workflow("reviewer")
+        entry.pop("as_skill")
+        lockfile.set_workflow("reviewer", entry)
+        cfg = config.load()
+        cfg["agents"]["antigravity"]["enabled"] = False
+        config.save(cfg)
+        (_agent_dir("windsurf") / "reviewer").symlink_to(tmp_path)
+        assert store.backfill_skill_copies(dry=True) == [
+            "would write workflow reviewer's skill copy to "
+            "~/.agents/skills/reviewer and link it → windsurf"]
+        assert store.backfill_skill_copies() == [
+            "wrote workflow reviewer's skill copy to ~/.agents/skills/"
+            "reviewer",
+            "workflow reviewer: skill copy not linked: ~/.windsurf/skills/"
+            "reviewer is in the way and is not boost's — left alone"]
+        assert os.path.realpath(_agent_dir("windsurf") / "reviewer") == \
+            os.path.realpath(tmp_path)
+
+
+class TestCopyLinksThroughSync:
+    def test_plan_keys_are_their_own(self, tap):
+        plan = store.sync_plan()
+        assert plan["missing_copy_links"] == []
+        assert plan["stale_copy_links"] == []
+        store.install(_wf(tap))
+        (_agent_dir("windsurf") / "reviewer").unlink()
+        (_agent_dir("claude-code") / "reviewer").symlink_to(
+            paths.store_dir() / "reviewer")
+        plan = store.sync_plan()
+        assert plan["missing_copy_links"] == [("reviewer", "windsurf")]
+        assert plan["stale_copy_links"] == [("reviewer", "claude-code")]
+        assert plan["missing_links"] == []
+        assert store.plan_issues(plan) == 2
+        assert store.sync_preview(plan)[-2:] == [
+            "would link workflow reviewer's skill copy → windsurf",
+            "would unlink workflow reviewer's skill copy from claude-code, "
+            "which has the workflow's own file"]
+        actions = store.sync_apply(plan)
+        assert "linked workflow reviewer's skill copy → windsurf" in actions
+        assert ("unlinked workflow reviewer's skill copy from claude-code, "
+                "which has the workflow's own file") in actions
+        assert os.path.lexists(_agent_dir("windsurf") / "reviewer")
+        assert not os.path.lexists(_agent_dir("claude-code") / "reviewer")
+        assert lockfile.get_skill("reviewer") is None
+        plan = store.sync_plan()
+        assert plan["missing_copy_links"] == plan["stale_copy_links"] == []
+
+    def test_plan_rows_follow_the_workflow_names(self, tap):
+        store.install(_wf(tap, rel="agents/zeta.md", name="zeta"))
+        store.install(_wf(tap))
+        for name in ("zeta", "reviewer"):
+            (_agent_dir("windsurf") / name).unlink()
+            (_agent_dir("claude-code") / name).symlink_to(
+                paths.store_dir() / name)
+        plan = store.sync_plan()
+        assert plan["missing_copy_links"] == [("reviewer", "windsurf"),
+                                              ("zeta", "windsurf")]
+        assert plan["stale_copy_links"] == [("reviewer", "claude-code"),
+                                            ("zeta", "claude-code")]
+        assert store.sync_preview(plan)[-4:] == [
+            "would link workflow reviewer's skill copy → windsurf",
+            "would link workflow zeta's skill copy → windsurf",
+            "would unlink workflow reviewer's skill copy from claude-code, "
+            "which has the workflow's own file",
+            "would unlink workflow zeta's skill copy from claude-code, "
+            "which has the workflow's own file"]
+
+    def test_apply_links_only_what_the_plan_named(self, tap, tmp_path):
+        """The user's own link at windsurf is not a fault doctor counts, so
+        repairing antigravity must not report it -- or exit 1 over it."""
+        store.install(_wf(tap))
+        (_agent_dir("windsurf") / "reviewer").unlink()
+        (_agent_dir("windsurf") / "reviewer").symlink_to(tmp_path)
+        (_agent_dir("antigravity") / "reviewer").unlink()
+        plan = store.sync_plan()
+        assert plan["missing_copy_links"] == [("reviewer", "antigravity")]
+        actions = store.sync_apply(plan)
+        assert [a for a in actions if "skill copy" in a] == [
+            "linked workflow reviewer's skill copy → antigravity"]
+        assert not any(store.is_unrepaired(a) for a in actions)
+
+    def test_apply_names_a_planned_link_it_could_not_make(self, tap,
+                                                          tmp_path):
+        store.install(_wf(tap))
+        (_agent_dir("windsurf") / "reviewer").unlink()
+        plan = store.sync_plan()
+        assert plan["missing_copy_links"] == [("reviewer", "windsurf")]
+        # the user's link lands between the plan and the repair
+        (_agent_dir("windsurf") / "reviewer").symlink_to(tmp_path)
+        lines = [a for a in store.sync_apply(plan) if "skill copy" in a]
+        assert lines == [
+            "workflow reviewer's skill copy was not linked: ~/.windsurf/"
+            "skills/reviewer is in the way and is not boost's — left alone"]
+        assert store.is_unrepaired(lines[0])
+        assert os.path.realpath(_agent_dir("windsurf") / "reviewer") == \
+            os.path.realpath(tmp_path)
+
+    def test_a_legacy_narrowed_entry_never_links_cursor(self, tap):
+        """A row from before `only_agents` was recorded: sync links the
+        agents that take no workflow file, and never one that does."""
+        store.install(_wf(tap), only_agents=["claude-code"])
+        entry = lockfile.get_workflow("reviewer")
+        entry.pop("only_agents")
+        lockfile.set_workflow("reviewer", entry)
+        plan = store.sync_plan()
+        assert plan["missing_copy_links"] == [("reviewer", "windsurf"),
+                                              ("reviewer", "antigravity")]
+        store.sync_apply(plan)
+        assert not os.path.lexists(_agent_dir("cursor") / "reviewer")
+        assert os.path.islink(_agent_dir("windsurf") / "reviewer")
+
+    def test_the_mcp_doctor_words_both_keys(self, tap):
+        from boost_cli.commands import configuration
+        store.install(_wf(tap))
+        (_agent_dir("windsurf") / "reviewer").unlink()
+        (_agent_dir("claude-code") / "reviewer").symlink_to(
+            paths.store_dir() / "reviewer")
+        text, _ = configuration._tool_doctor({})
+        assert ("workflow reviewer's skill copy is not linked for windsurf — "
+                "`boost sync` links it") in text
+        assert ("workflow reviewer's skill copy is linked for claude-code, "
+                "which has the workflow's own file — `boost sync` removes "
+                "the link") in text
+
+    def test_a_link_under_a_narrowing_is_named_and_removed(self, tap):
+        store.install(_wf(tap), only_agents=["claude-code"])
+        (_agent_dir("windsurf") / "reviewer").symlink_to(
+            paths.store_dir() / "reviewer")
+        plan = store.sync_plan()
+        assert plan["stale_copy_links"] == [("reviewer", "windsurf")]
+        assert plan["missing_copy_links"] == []
+        line = ("unlink workflow reviewer's skill copy from windsurf, which "
+                "the workflow's --agent scope leaves out")
+        assert store.sync_preview(plan)[-1:] == ["would " + line]
+        assert [a for a in store.sync_apply(plan) if "skill copy" in a] == [
+            line.replace("unlink", "unlinked", 1)]
+        assert not os.path.lexists(_agent_dir("windsurf") / "reviewer")
+
+    def test_apply_rechecks_the_lock(self, tap):
+        """A plan from before a narrowing links nothing it now excludes, and
+        says which link the narrowing took."""
+        store.install(_wf(tap))
+        (_agent_dir("windsurf") / "reviewer").unlink()
+        plan = store.sync_plan()
+        entry = lockfile.get_workflow("reviewer")
+        entry["only_agents"] = ["claude-code"]
+        lockfile.set_workflow("reviewer", entry)
+        assert [a for a in store.sync_apply(plan) if "skill copy" in a] == [
+            "unlinked workflow reviewer's skill copy from antigravity, which "
+            "the workflow's --agent scope leaves out"]
+        assert not os.path.lexists(_agent_dir("windsurf") / "reviewer")
+        assert not os.path.lexists(_agent_dir("antigravity") / "reviewer")

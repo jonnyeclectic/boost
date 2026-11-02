@@ -281,6 +281,19 @@ def _report_result(res: store.InstallResult, no_mcp: bool = False) -> None:
         where = " (this repo)" if res.scope == "project" else ""
         out.ok("materialized%s → %s"
                % (where, " · ".join(res.linked) or "(no enabled agents)"))
+        # An agent the config keeps out gets no row, so nothing after this
+        # report would ever name it (`store.skipped_agents`) -- unless a
+        # workflow's skill copy was linked into it, which the line says.
+        copied = set(getattr(res, "copy_linked", None) or ())
+        for agent, why in getattr(res, "skipped_agents", None) or ():
+            out.dim("  %s" % agents.skip_line(agent, why,
+                                              via_copy=agent in copied),
+                    wrap=True)
+        # A subagent is not `/<name>`, and the install line alone reads as
+        # though it were (`workflows.invocation_hint`). It quotes the
+        # frontmatter `name`, a tap's text, so it is printed plain.
+        for line in getattr(res, "invocation", None) or ():
+            out.dim("  %s" % out.plain(line), wrap=True)
         _report_skill_copy(res)
         _warn_unwritable(res)
         out.ok("lock updated (.skill-lock.json)")
@@ -324,8 +337,14 @@ def _report_skill_copy(res) -> None:
     predicts. Why there is none is :func:`_warn_unwritable`'s to say, so
     update, reinstall and sync say it too."""
     copy = getattr(res, "skill_copy", None)
+    linked = getattr(res, "copy_linked", None) or []
     if copy is not None:
-        out.ok("as a skill → %s" % _tilde(copy))
+        # The agents that reach it through a link: those with no file of
+        # the workflow's own (`store.copy_link_targets`).
+        out.ok("as a skill → %s%s" % (_tilde(copy), ", linked → %s"
+                                      % " · ".join(linked) if linked else ""))
+    for agent in getattr(res, "copy_unlinked", None) or ():
+        out.dim("  %s: unlinked its skill copy" % agent, wrap=True)
 
 
 def _warn_submodules(res, stream=None) -> None:
@@ -353,9 +372,16 @@ def _warn_unwritable(res, stream=None) -> None:
     note = getattr(res, "skill_note", None)
     if note:
         out.info(note, stream=stream, wrap=True)
+    # A link to that copy something of the user's held the place of.
+    for line in getattr(res, "copy_blocked", None) or ():
+        out.warn("%s: skill copy not linked: %s" % (res.name, line),
+                 stream=stream, wrap=True)
     # Written, but not everything in the source survived the conversion.
+    # Plain: a note may quote the file it is about (a subagent's `tools`
+    # entries), and that file is a tap's.
     for line in getattr(res, "render_notes", None) or ():
-        out.warn("%s: %s" % (res.name, line), stream=stream, wrap=True)
+        out.warn("%s: %s" % (res.name, out.plain(line)), stream=stream,
+                 wrap=True)
     # A link in the skill the copy left out: the rest installed, and this
     # names the file the skill may still expect.
     for line in getattr(res, "skipped_links", None) or ():
@@ -549,9 +575,16 @@ def _install_closure(entries: list[dict], *, scope: str = scopes.SCOPE_USER,
 # ── install ──────────────────────────────────────────────────────────────
 
 def _preview_skill_copy(e: dict, seen: dict | None, as_skill: bool | None,
-                        scope: str) -> None:
+                        scope: str, written=(), narrowed: bool = False
+                        ) -> None:
     """The dry run's line for a workflow's skill copy, asked the way the run
-    decides it, so the two agree."""
+    decides it, so the two agree.
+
+    Its links go to the linking agents outside ``written``, the agents the
+    run writes the workflow's file for, and nowhere under a ``narrowed``
+    scope. A path the user's own file holds, or an agent that would reject
+    the file, is only found by the run, which leaves those out too.
+    """
     from ..core import workflows
     if scope == scopes.SCOPE_PROJECT or not store.wants_skill_copy(as_skill,
                                                                    seen):
@@ -570,7 +603,10 @@ def _preview_skill_copy(e: dict, seen: dict | None, as_skill: bool | None,
     if blocker:
         out.info("  %s" % blocker, wrap=True)
         return
-    out.info("  as a skill → %s" % _tilde(store.skill_store_dir(e["name"])))
+    linked = store.copy_link_agents(set(written), narrowed=narrowed)
+    out.info("  as a skill → %s%s"
+             % (_tilde(store.skill_store_dir(e["name"])),
+                ", linked → %s" % " · ".join(linked) if linked else ""))
 
 
 def _refuse_preview_by_policy(e: dict, scope: str, pbase, seen) -> None:
@@ -792,8 +828,10 @@ def cmd_install(argv: list[str]) -> int:
                                 e["tap"], where))
                     out.info("  materialize → %s" % " · ".join(mat))
                     if k == "workflow":
-                        _preview_skill_copy(e, seen, args.as_skill,
-                                            args.scope)
+                        _preview_skill_copy(
+                            e, seen, args.as_skill, args.scope, written=mat,
+                            narrowed=bool(only or (seen or {}).get(
+                                "only_agents")))
                     continue
                 # Same refusal as the run ("already installed", "is pinned");
                 # past it, a seen record is one --force overwrites.
@@ -1150,10 +1188,14 @@ _PLAN_LABELS = [
     ("unrecorded_store", "store dirs the lock file has lost"),
     ("missing_materializations", "missing rule/workflow files"),
     ("out_of_scope_links", "linked outside declared scope"),
+    ("missing_copy_links", "workflow skill copies missing a link"),
+    ("stale_copy_links", "workflow skill copies linked beside the "
+                         "workflow's own file or outside its --agent scope"),
 ]
 
 #: Plan keys whose items are ``(skill, agent)`` pairs rather than paths.
-_PAIR_KEYS = ("missing_links", "out_of_scope_links")
+_PAIR_KEYS = ("missing_links", "out_of_scope_links", "missing_copy_links",
+              "stale_copy_links")
 
 #: ``unrecorded_store``'s label over a lock that is corrupt or in another
 #: schema: sync re-records what a missing lock lost, and nothing over these.

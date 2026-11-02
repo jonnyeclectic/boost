@@ -35,6 +35,14 @@ _spec.loader.exec_module(ms)
     ["docs/roadmap/items/some-card.md", "README.md"],
     [".github/workflows/publish.yml"],
     ["style/boost.css", "docs/index.html"],
+    # under the gate-script prefix, but a packing hint and not a gate script:
+    # it moves which shard runs a mutant, never whether it is killed
+    ["scripts/mutation_weights.json"],
+    # a non-gate script is no more relevant than before
+    ["scripts/build_roadmap.py"],
+    # named like a pytest config file, but it is not one
+    ["docs/pytest.toml.md"],
+    ["docs/notes/.pytest.ini.bak"],
 ])
 def test_irrelevant_changes_skip(changed):
     assert ms.is_relevant(changed) is False
@@ -48,6 +56,20 @@ def test_irrelevant_changes_skip(changed):
     # a new assertion can kill a survivor without touching any source
     ["tests/unit/test_store.py"],
     ["tests/conftest.py"],
+    ["conftest.py"],
+    # pytest reads a pytest.ini before pyproject.toml's ini options, so it
+    # changes how every test runs wherever it sits (mutation_diff makes it a
+    # full-run trigger; that is only reachable if the change is relevant)
+    ["pytest.ini"],
+    ["tests/unit/pytest.ini"],
+    # ...and so does each of pytest's other config files, outside tests/ too
+    [".pytest.ini"],
+    ["pytest.toml"],
+    [".pytest.toml"],
+    ["docs/pytest.toml"],
+    # shared test support, a full-run trigger in mutation_diff
+    ["tests/_tapped_support.py"],
+    ["tests/make_fixture.py"],
     # mutmut's own configuration
     ["setup.cfg"],
     ["pyproject.toml"],
@@ -55,6 +77,8 @@ def test_irrelevant_changes_skip(changed):
     ["requirements/mutation-tools.txt"],
     ["scripts/mutation_gate.py"],
     ["scripts/mutation_shards.py"],
+    # any gate script, including ones that did not exist when the list was written
+    ["scripts/mutation_plan.py"],
     [".github/workflows/ci.yml"],
     # one relevant path among many irrelevant ones still counts
     ["docs/a.md", "README.md", "boost_cli/core/util.py"],
@@ -269,6 +293,50 @@ def test_merge_fails_closed_on_unrun_mutants(tmp_path, capsys):
     assert "INCOMPLETE" in out and "unrun" in out
 
 
+def _two_shard_metas(tmp_path, hashes_by_shard):
+    """One file owned by both shards (a lone file split per function)."""
+    repo = _repo(tmp_path, {"a.py": 40})
+    parent = tmp_path / "shard-results"
+    for i, h in enumerate(hashes_by_shard):
+        d = parent / ("mutation-shard-%d" % i) / "boost_cli" / "core"
+        d.mkdir(parents=True)
+        (d / "a.py.meta").write_text(json.dumps({
+            "exit_code_by_key": {"m.x_a__mutmut_1": 0 if i == 0 else None,
+                                 "m.x_b__mutmut_1": 0 if i == 1 else None},
+            "hash_by_function_name": h,
+            "type_check_error_by_key": {},
+            "durations_by_key": {},
+            "estimated_durations_by_key": {},
+        }), encoding="utf-8")
+    return repo, parent
+
+
+def _merge_two(tmp_path, monkeypatch, hashes_by_shard):
+    repo, parent = _two_shard_metas(tmp_path, hashes_by_shard)
+    # Force both shards to own the file, as a per-function split does.
+    monkeypatch.setattr(
+        ms, "pack", lambda root, n: [[repo / "boost_cli" / "core" / "a.py"]] * 2)
+    return ms.cmd_merge(_ns(root=str(repo), shards=2, into=str(tmp_path / "m"),
+                            source=str(parent), prefix="mutation-shard-"))
+
+
+def test_merge_round_trips_every_meta_field(tmp_path, monkeypatch):
+    h = {"x_a": "h1", "x_b": "h2"}
+    assert _merge_two(tmp_path, monkeypatch, [h, dict(h)]) == 0
+    got = json.loads((tmp_path / "m" / "boost_cli" / "core"
+                      / "a.py.meta").read_text(encoding="utf-8"))
+    assert got["hash_by_function_name"] == h
+    assert set(got) == {"exit_code_by_key", "hash_by_function_name",
+                        "type_check_error_by_key", "durations_by_key",
+                        "estimated_durations_by_key"}
+
+
+def test_merge_fails_when_shards_disagree_on_a_hash(tmp_path, monkeypatch, capsys):
+    rc = _merge_two(tmp_path, monkeypatch, [{"x_a": "h1"}, {"x_a": "other"}])
+    assert rc == 1
+    assert "shards disagree on function hashes" in capsys.readouterr().out
+
+
 class _ns:
     """Tiny argparse.Namespace stand-in with the defaults the commands expect."""
 
@@ -327,6 +395,21 @@ def test_init_files_get_no_pattern(tmp_path):
     assert "__init__.py" not in placed
 
 
+def test_patterns_for_bin_drops_init_and_matches_plan_index(tmp_path, capsys):
+    # One spelling of "what a shard runs", shared by `plan --index` and the
+    # mutation_plan.py planner, so the two cannot disagree with the merge.
+    repo = _repo(tmp_path, {"a.py": 10, "b.py": 10})
+    init = ms.Unit(repo / "boost_cli" / "core" / "__init__.py")
+    a = ms.Unit(repo / "boost_cli" / "core" / "a.py")
+    assert ms.patterns_for_bin(repo, [init, a]) == ["boost_cli.core.a.*"]
+    assert ms.patterns_for_bin(repo, [init]) == []
+    for i, b in enumerate(ms.pack(repo, 2)):
+        args = _ns(root=str(repo), shards=2, index=i)
+        args.timeout_minutes = None
+        assert ms.cmd_plan(args) == 0
+        assert capsys.readouterr().out.split() == ms.patterns_for_bin(repo, b)
+
+
 def test_merge_rejects_a_file_no_shard_owned(tmp_path, capsys, monkeypatch):
     """The backstop: any file the planner missed must redden the gate."""
     files = {"a.py": 30, "b.py": 20}
@@ -380,144 +463,6 @@ def test_same_basename_in_different_packages_stays_distinct(tmp_path):
     pats = {ms.pattern_for(repo, repo / "boost_cli/core/util.py"),
             ms.pattern_for(repo, nested / "util.py")}
     assert pats == {"boost_cli.core.util.*", "boost_cli.core.rag.util.*"}
-
-
-# --------------------------------------------------------------------------
-# cache-key: the hash half of a shard's actions/cache key
-# --------------------------------------------------------------------------
-
-def _cache_repo(tmp_path):
-    """A fake checkout with one file under every CACHE_KEY_PREFIXES entry,
-    plus a core source file and an irrelevant doc, so a single fixture can
-    exercise inclusion, exclusion, and irrelevance in one place."""
-    (tmp_path / "boost_cli" / "core").mkdir(parents=True)
-    (tmp_path / "boost_cli" / "core" / "store.py").write_text("x = 1\n",
-            encoding="utf-8")
-    (tmp_path / "tests").mkdir()
-    (tmp_path / "tests" / "test_store.py").write_text("def test_a(): pass\n",
-            encoding="utf-8")
-    (tmp_path / "requirements").mkdir()
-    (tmp_path / "requirements" / "mutation-tools.txt").write_text("mutmut==3.7.0\n",
-            encoding="utf-8")
-    (tmp_path / "scripts").mkdir()
-    (tmp_path / "scripts" / "mutation_gate.py").write_text("# gate\n", encoding="utf-8")
-    (tmp_path / "scripts" / "mutation_shards.py").write_text("# shards\n",
-            encoding="utf-8")
-    (tmp_path / ".github" / "workflows").mkdir(parents=True)
-    (tmp_path / ".github" / "workflows" / "ci.yml").write_text("name: ci\n",
-            encoding="utf-8")
-    (tmp_path / "setup.cfg").write_text("[mutmut]\n", encoding="utf-8")
-    (tmp_path / "pyproject.toml").write_text("[project]\n", encoding="utf-8")
-    (tmp_path / "docs").mkdir()
-    (tmp_path / "docs" / "index.html").write_text("<html></html>\n", encoding="utf-8")
-    return tmp_path
-
-
-def test_cache_key_paths_covers_every_prefix_and_excludes_core(tmp_path):
-    repo = _cache_repo(tmp_path)
-    names = {p.relative_to(repo).as_posix() for p in ms.cache_key_paths(repo)}
-    assert names == {
-        "tests/test_store.py",
-        "requirements/mutation-tools.txt",
-        "scripts/mutation_gate.py",
-        "scripts/mutation_shards.py",
-        ".github/workflows/ci.yml",
-        "setup.cfg",
-        "pyproject.toml",
-    }
-    assert "boost_cli/core/store.py" not in names
-    assert "docs/index.html" not in names
-
-
-def test_cache_key_paths_skips_missing_files(tmp_path):
-    """A fixture repo that only sets up part of the tree still works."""
-    (tmp_path / "tests").mkdir()
-    (tmp_path / "tests" / "test_a.py").write_text("x = 1\n", encoding="utf-8")
-    assert [p.name for p in ms.cache_key_paths(tmp_path)] == ["test_a.py"]
-
-
-def test_cache_key_hash_is_deterministic(tmp_path):
-    repo = _cache_repo(tmp_path)
-    first = ms.cache_key_hash(repo)
-    for _ in range(3):
-        assert ms.cache_key_hash(repo) == first
-
-
-def test_cache_key_hash_changes_when_a_relevant_file_changes(tmp_path):
-    repo = _cache_repo(tmp_path)
-    before = ms.cache_key_hash(repo)
-    (repo / "tests" / "test_store.py").write_text("def test_a(): assert False\n",
-            encoding="utf-8")
-    assert ms.cache_key_hash(repo) != before
-
-
-def test_cache_key_hash_changes_when_the_gate_scripts_change(tmp_path):
-    repo = _cache_repo(tmp_path)
-    before = ms.cache_key_hash(repo)
-    (repo / "scripts" / "mutation_gate.py").write_text("# gate v2\n", encoding="utf-8")
-    assert ms.cache_key_hash(repo) != before
-
-
-def test_cache_key_hash_changes_when_ci_yml_changes(tmp_path):
-    repo = _cache_repo(tmp_path)
-    before = ms.cache_key_hash(repo)
-    (repo / ".github" / "workflows" / "ci.yml").write_text("name: ci\non: push\n",
-            encoding="utf-8")
-    assert ms.cache_key_hash(repo) != before
-
-def test_cache_key_hash_ignores_core_source_changes(tmp_path):
-    """The whole point: mutmut's own per-file hashing already handles
-    boost_cli/ reuse, so the cache key must not evict on a core-only edit."""
-    repo = _cache_repo(tmp_path)
-    before = ms.cache_key_hash(repo)
-    (repo / "boost_cli" / "core" / "store.py").write_text("x = 2\n", encoding="utf-8")
-    assert ms.cache_key_hash(repo) == before
-
-
-def test_cache_key_hash_ignores_irrelevant_files(tmp_path):
-    repo = _cache_repo(tmp_path)
-    before = ms.cache_key_hash(repo)
-    (repo / "docs" / "index.html").write_text("<html>changed</html>\n",
-            encoding="utf-8")
-    (repo / "README.md").write_text("hello\n", encoding="utf-8")
-    assert ms.cache_key_hash(repo) == before
-
-
-def test_cache_key_hash_changes_on_a_new_relevant_file(tmp_path):
-    """Content alone is not enough: adding a file must also change the key,
-    or a brand-new test would silently reuse a cache that never ran it."""
-    repo = _cache_repo(tmp_path)
-    before = ms.cache_key_hash(repo)
-    (repo / "tests" / "test_new.py").write_text("def test_b(): pass\n",
-            encoding="utf-8")
-    assert ms.cache_key_hash(repo) != before
-
-
-def test_cache_key_hash_distinguishes_same_bytes_at_different_paths(tmp_path):
-    """Renaming a same-content file must change the key: the path is hashed
-    in too, not just the concatenated bytes."""
-    repo_a = tmp_path / "a"
-    (repo_a / "tests").mkdir(parents=True)
-    (repo_a / "tests" / "test_one.py").write_text("x = 1\n", encoding="utf-8")
-    repo_b = tmp_path / "b"
-    (repo_b / "tests").mkdir(parents=True)
-    (repo_b / "tests" / "test_two.py").write_text("x = 1\n", encoding="utf-8")
-    assert ms.cache_key_hash(repo_a) != ms.cache_key_hash(repo_b)
-
-
-def test_cache_key_hash_is_a_hex_sha256(tmp_path):
-    repo = _cache_repo(tmp_path)
-    key = ms.cache_key_hash(repo)
-    assert len(key) == 64
-    int(key, 16)  # raises ValueError if not valid hex
-
-
-def test_cmd_cache_key_prints_the_hash(tmp_path, capsys):
-    repo = _cache_repo(tmp_path)
-    rc = ms.cmd_cache_key(_ns(root=str(repo)))
-    assert rc == 0
-    out = capsys.readouterr().out.strip()
-    assert out == ms.cache_key_hash(repo)
 
 
 def test_pattern_is_dotted_on_every_platform(monkeypatch):

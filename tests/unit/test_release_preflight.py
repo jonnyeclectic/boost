@@ -182,6 +182,97 @@ class TestWaitForGates:
                         "/runs?head_sha=abc123&per_page=20"]
 
 
+def pushed(conclusion, url="https://ci.example/push"):
+    """A `ci` run fired by the push to main: the one a release is about."""
+    return {"event": "push", **done(conclusion, url)}
+
+
+def whole(event, status="completed", conclusion="success",
+          url="https://ci.example/nightly"):
+    """A nightly or dispatched whole-codebase `ci` run on the same commit."""
+    return {"event": event, "status": status, "conclusion": conclusion,
+            "html_url": url}
+
+
+class TestCiIsJudgedByItsPushRun:
+    """`ci` also runs on main's tip from `schedule` and `workflow_dispatch`.
+
+    Those are the whole-codebase mutation runs: about two hours, and on the
+    same commit as the push run whenever nothing merged in between. GitHub
+    lists runs newest first, so a nightly that started after the push run
+    became `runs[0]` -- the release waited on it, then failed at its
+    3600-second deadline. The push run is the verdict a release is about.
+    """
+
+    @pytest.mark.parametrize("event", ["schedule", "workflow_dispatch"])
+    def test_a_newer_running_whole_codebase_run_does_not_hold_the_release(
+            self, mod, event):
+        rc, log, calls = drive(
+            mod, {"ci.yml": [runs(whole(event, "in_progress", None), pushed("success"))]},
+            workflows=("ci.yml",))
+        assert rc == 0 and calls["ci.yml"] == 1
+        assert "ok   ci.yml" in log
+
+    @pytest.mark.parametrize("event", ["schedule", "workflow_dispatch"])
+    def test_a_newer_red_whole_codebase_run_does_not_block_a_green_push(
+            self, mod, event):
+        verdict, detail = mod.evaluate(
+            runs(whole(event, conclusion="failure"), pushed("success")), event="push")
+        assert (verdict, detail) == (mod.PASS, "https://ci.example/push")
+
+    @pytest.mark.parametrize("event", ["schedule", "workflow_dispatch"])
+    def test_a_newer_green_whole_codebase_run_does_not_rescue_a_red_push(
+            self, mod, event):
+        rc, log, _ = drive(mod, {"ci.yml": [runs(whole(event), pushed("failure"))]},
+                           workflows=("ci.yml",))
+        assert rc == 1
+        assert "https://ci.example/push" in log
+
+    def test_a_whole_codebase_run_alone_is_not_yet_a_verdict(self, mod):
+        rc, _, calls = drive(mod, {"ci.yml": [
+            runs(whole("schedule")),
+            runs(whole("schedule"), pushed("success"))]}, workflows=("ci.yml",))
+        assert rc == 0 and calls["ci.yml"] == 2
+
+    def test_a_run_that_does_not_name_its_event_is_not_the_push_run(self, mod):
+        verdict, detail = mod.evaluate(runs(done("success")), event="push")
+        assert verdict == mod.PENDING
+        assert "no push run" in detail
+
+    def test_the_newest_push_run_still_wins(self, mod):
+        # A re-run of the push run that went green overrules the red original.
+        verdict, _ = mod.evaluate(
+            runs(whole("schedule", "in_progress", None), pushed("success"),
+                 pushed("failure")), event="push")
+        assert verdict == mod.PASS
+
+    def test_ci_asks_github_for_push_runs_and_nothing_else_does(self, mod):
+        seen = []
+
+        def fetch(path):
+            seen.append(path)
+            return runs(pushed("success"))
+
+        mod.wait_for_gates("owner/repo", "abc123", ["ci.yml", "pip-audit.yml"],
+                           fetch=fetch, sleep=lambda s: None,
+                           clock=lambda: 0.0, log=lambda *_: None)
+        assert seen == [
+            "/repos/owner/repo/actions/workflows/ci.yml/runs?head_sha=abc123"
+            "&per_page=20&event=push",
+            "/repos/owner/repo/actions/workflows/pip-audit.yml/runs?head_sha=abc123"
+            "&per_page=20"]
+
+    def test_the_other_gates_keep_their_newest_run(self, mod):
+        # Only ci has a two-hour non-push run on main. pip-audit's weekly
+        # schedule re-audits the same commit against today's advisories, and
+        # a newer red one is a reason not to ship -- so it is not filtered.
+        rc, _, _ = drive(
+            mod, {"pip-audit.yml": [runs(whole("schedule", conclusion="failure"),
+                                         pushed("success"))]},
+            workflows=("pip-audit.yml",))
+        assert rc == 1
+
+
 class TestMain:
     def test_no_require_list_is_an_error_not_a_pass(self, mod, monkeypatch):
         # Exit 0 here would print nothing and read as a green gate in the

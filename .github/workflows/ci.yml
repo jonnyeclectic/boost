@@ -10,6 +10,19 @@ on:
   # never triggers the release workflow — publish still fires only on the real
   # push to main. Enabling the queue itself is a repo Setting (see CONTRIBUTING).
   merge_group:
+  # The whole-codebase mutation run. A pull request's gate is moving to the
+  # functions it changed, and a push to main whose tree a green PR run already
+  # tested skips the suite and the shards (`proven` below), so this is where
+  # the whole of boost_cli/core is still scored against 80%: the mutation jobs
+  # only, always the full 24-shard plan. 09:30 UTC is clear of the 04:00-08:00
+  # weekly crons and the `shards` bursts. A red or missing nightly turns the
+  # proven-tree skip off (scripts/ci_proven_tree.py), and ci-failure-issue.yml
+  # already watches `ci`, so a red one opens the tracking issue.
+  # publish.yml ignores both events: it releases only from a `push` run.
+  schedule:
+    - cron: "30 9 * * *"
+  # The same run by hand, e.g. to clear a red nightly without waiting a day.
+  workflow_dispatch:
 
 # Least-privilege default for any job that doesn't declare its own block. Every
 # job below currently does — and a job-level block REPLACES this one rather than
@@ -48,12 +61,34 @@ permissions:
 # then leave a main commit whose ci never completes, so workflow_run never fires
 # and that commit never releases. A sha is unique per commit, so main and the
 # merge queue simply never share a group.
+#
+# The EVENT is in the key too. A nightly runs on main's tip, which is usually
+# the sha the last push ran on, and keyed on the sha alone the two would share
+# a group: a release run would wait behind a two-hour whole-codebase run, and
+# a dispatch arriving third would cancel whichever was pending. Per event, a
+# push only ever queues behind a push of the same commit, which never happens.
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.sha }}
+  group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# WHICH JOB RUNS ON WHICH EVENT. A nightly or a dispatch is the whole-codebase
+# mutation run and nothing else, so every job outside mutation-plan,
+# mutation-shard and mutation carries `github.event_name != 'schedule' &&
+# github.event_name != 'workflow_dispatch'`, or is pull_request-only already.
+# On a push to main, `proven` decides whether the suite, the shards and the
+# coverage collection have already been done by the PR run; lint (with
+# zizmor), evals, install-smoke, bdd and onnx-inference run regardless.
+#
+# A job that needs `proven` says `!cancelled()`, never the implicit
+# `success()`: `proven` is SKIPPED on every pull request, a job whose need was
+# skipped is skipped with it, and a skipped required check reads as passing.
+# That implicit `success()` also looks past the direct needs at every
+# ancestor (actions/runner#491), so mutation-shard, two levels down, says it
+# too. tests/unit/test_ci_proven_tree.py evaluates every job's `if:` for each
+# event and fails on a job that runs, or is skipped, where its table says not.
 jobs:
   lint:
+    if: github.event_name != 'schedule' && github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -70,6 +105,37 @@ jobs:
         with:
           fetch-depth: 0    # tags for setuptools-scm version resolution
           persist-credentials: false
+      # What this pull_request run builds, in a name the push can ask for.
+      # The checkout above has no `ref:`, so HEAD is github.sha: the merge of
+      # the PR head into the base the PR had when this run started -- which
+      # every job here checks out too. `proven` (scripts/ci_proven_tree.py)
+      # skips a push's suite and shards only when the PR run it names carries
+      # `tested-tree-<the pushed commit's tree>`. A head SHA alone does not
+      # say which base a run merged it into: a PR retargeted to main after
+      # its run (a base change starts no new run), or one head open into two
+      # bases, leaves a green run that built head + another branch.
+      #
+      # Here, in `lint`, because lint runs on every pull_request, once per
+      # run (no matrix: an artifact name is unique per run), and its result
+      # is part of the run's conclusion. Kept 14 days, at least as long as a
+      # PR run may prove a tree for (MAX_PR_RUN_AGE, 13 days), so the record
+      # cannot expire first. The tree reaches the name through a step output,
+      # never through `${{ }}` inside `run:`.
+      - name: record the tree this pull_request run builds
+        id: tested
+        if: github.event_name == 'pull_request'
+        run: |
+          tree="$(git rev-parse --verify 'HEAD^{tree}')"
+          printf '%s\n' "$tree" > "$RUNNER_TEMP/tested-tree"
+          echo "tree=$tree" >> "$GITHUB_OUTPUT"
+      - name: publish the tree this run builds (proves a push of it)
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tested-tree-${{ steps.tested.outputs.tree }}
+          path: ${{ runner.temp }}/tested-tree
+          if-no-files-found: error
+          retention-days: 14
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
@@ -314,6 +380,7 @@ jobs:
     # network and NO API key — it generates its own corpus and taps it into a
     # disposable BOOST_HOME — so it must stay green even when GitHub is having a
     # bad day. Pure stdlib; nothing to install beyond Python and git.
+    if: github.event_name != 'schedule' && github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
     # Measured well under a minute (corpus + BM25 index + 36 queries x 2 engines
     # + a 10k-resample bootstrap, all stdlib); 15 is slack for a cold runner.
@@ -335,7 +402,56 @@ jobs:
       - name: evaluation harness gate (floors + significance)
         run: python scripts/eval_gate.py --run
 
+  # Is this push to main a tree CI has already proven? In 17 of the last 17
+  # merges the merge commit's tree was byte-identical to a PR head whose `ci`
+  # run was green, and main ran the whole suite and every shard again before
+  # publish.yml could release. scripts/ci_proven_tree.py answers yes only when
+  # that tree equality holds, the PR head's own first-attempt pull_request run
+  # succeeded and carries a live `tested-tree-<this commit's tree>` artifact
+  # (uploaded by `lint`: the run built exactly this tree, not the head merged
+  # into some other base), and the newest nightly on main is green and under
+  # 48 h old; any missing fact, API error or rate limit is `skip=false`. The
+  # artifact listing needs `actions: read`, which the job already holds for
+  # the runs. It always exits 0,
+  # so its outputs are the verdict -- and if the job fails anyway they are
+  # empty, which every consumer below reads as "run everything".
+  #
+  # Push only. On every other event this job is skipped, which is why the
+  # jobs that need it say `!cancelled()` (see the note above `lint`).
+  proven:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    # A handful of API calls with their own timeouts; `tests` waits on this.
+    timeout-minutes: 5
+    permissions:
+      contents: read        # the checkout that carries the script
+      actions: read         # the PR head's ci runs, and the nightly's
+      pull-requests: read   # the PRs associated with this commit
+    outputs:
+      skip: ${{ steps.decide.outputs.skip }}
+      pr_run_id: ${{ steps.decide.outputs.pr_run_id }}
+    steps:
+      - name: harden runner (egress audit)
+        uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: did a green PR run already test this tree?
+        id: decide
+        # Stdlib only, so the runner's python3 is enough: no setup-python, no
+        # install, nothing between the push and the verdict `tests` waits on.
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 scripts/ci_proven_tree.py --sha "$GITHUB_SHA"
+
   tests:
+    needs: proven
+    # Skipped only on an explicit `skip == 'true'`: a pull request (proven
+    # skipped, output empty) and a push whose proven job failed (empty again)
+    # both test. Never on a nightly or a dispatch, which are mutation only.
+    if: ${{ !cancelled() && github.event_name != 'schedule' && github.event_name != 'workflow_dispatch' && needs.proven.outputs.skip != 'true' }}
     runs-on: ${{ matrix.os }}
     # One cap for nine cells was one cap for three very different machines.
     # Over 40 ci runs (every attempt, 2026-09-28) the per-cell medians were
@@ -369,8 +485,10 @@ jobs:
     # The 3.15 cells are advisory (see the matrix comment): a red one must not
     # fail the ci run, because publish.yml releases only on its `success`.
     continue-on-error: ${{ matrix.python == '3.15' }}
+    # Read only: the badge push moved to `coverage-badge`, so twelve cells no
+    # longer hold a token that can write the repository for one cell's step.
     permissions:
-      contents: write  # coverage badge push (main only)
+      contents: read
     defaults:
       run:
         # Windows' default runner shell is pwsh; Git for Windows ships a bash
@@ -433,7 +551,7 @@ jobs:
           # unlocked and best-effort: it is an optional runtime extra, not part
           # of the toolchain, and some matrix legs have no wheel for it.
           "$VENV_BIN/pip" -q install sqlite-vec || true
-      - name: unit + functional (90% coverage gate)
+      - name: unit + functional (90% coverage gate, ubuntu-3.12 only)
         # Every failing test is re-emitted as a `::error::` workflow command so
         # it lands as a check-run annotation. The step conclusion already says
         # WHICH STEP broke; the annotation is what says WHICH TEST. Without it
@@ -447,14 +565,48 @@ jobs:
         # keeps -e from killing the step before the annotations are emitted.
         # set -o pipefail is restated anyway so this does not silently become a
         # green step if the job's shell: is ever changed.
+        #
+        # `-n auto` (pytest-xdist) in every cell, and coverage in ONE cell.
+        # Every cell used to trace the whole suite, and then patch-coverage ran
+        # it a thirteenth time only to write the coverage.xml the ubuntu-3.12
+        # cell had just discarded. Tracing is what Windows paid for most, and
+        # Windows was the critical path (the 80 min cap above). So
+        # ubuntu-3.12 alone measures — and alone enforces `fail_under`, which
+        # pytest-cov applies only under `--cov` — and publishes the report as
+        # the `coverage-report` artifact patch-coverage downloads. The cell is
+        # chosen in `env:` rather than by a matrix expression in the script, so
+        # the upload step's `if:` below can say the same thing the same way.
+        # `-n` lives here and never in pyproject's addopts: mutmut drives the
+        # same pytest and must keep one process
+        # (tests/unit/test_ci_coverage_single_cell.py pins both).
+        env:
+          MEASURE_COVERAGE: ${{ matrix.os == 'ubuntu-latest' && matrix.python == '3.12' }}
         run: |
           set -o pipefail
           rc=0
-          "$VENV_BIN/pytest" tests/unit tests/functional \
-            --cov=boost_cli --cov-report=term-missing --cov-report=json -q \
+          cov=()
+          if [ "$MEASURE_COVERAGE" = true ]; then
+            cov=(--cov=boost_cli --cov-report=term-missing --cov-report=json --cov-report=xml)
+          fi
+          "$VENV_BIN/pytest" tests/unit tests/functional -n auto "${cov[@]}" -q \
             | tee /tmp/pytest.out || rc=$?
           grep -E '^(FAILED|ERROR) ' /tmp/pytest.out | sed 's/^/::error::/' || true
           exit "$rc"
+      - name: publish coverage report (for patch-coverage and the badge)
+        # Default `success()` on purpose, never `always()`: a red suite must
+        # leave NO artifact, so patch-coverage fails on the missing download
+        # instead of gating a diff against a half-run suite's report. The
+        # 14 days are also how long a proven push on main can still read a
+        # PR run's report for the badge (see `coverage-badge`).
+        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.12'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: coverage-report
+          path: |
+            coverage.xml
+            coverage.json
+          if-no-files-found: error
+          retention-days: 14
       - name: shell smoke suite (sandboxed)
         run: bash tests/smoke.sh | tee /tmp/smoke.out
       - name: job summary (coverage + counts)
@@ -491,15 +643,90 @@ jobs:
               echo "- **Smoke suite:** ${SMOKE}"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
-      - name: publish coverage badge
-        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.12' && github.ref == 'refs/heads/main'
+
+  # The README's coverage badge: a one-file orphan `badges` branch, force-
+  # pushed from main. This was the last step of the ubuntu-3.12 `tests` cell,
+  # which put `contents: write` on all twelve cells and stops existing on a
+  # proven push, when the suite is skipped. So it is its own job, the only one
+  # in this workflow that can write, and it reads the `coverage-report`
+  # artifact from wherever the suite last ran on this tree: this run, or the
+  # PR run `proven` names (same tree, so the same number).
+  #
+  # `always()` so it runs on a proven push, where `tests` is skipped -- and
+  # therefore it judges for itself, first: this run's suite succeeded, or the
+  # suite was skipped because `proven` said so and named a run. Anything else
+  # (a red or cancelled suite, a failed `proven`) is a red job, never a green
+  # badge-less one, and so is a missing artifact: no step here continues on
+  # error.
+  #
+  # The JOB does. The badge is cosmetic, and a red one must not decide whether
+  # main releases: publish.yml fires on the run's conclusion, and job-level
+  # continue-on-error leaves this job red on the run page while the run
+  # concludes on the real gates. (In the tests cell a failed badge push used to
+  # hold the release.) The PR run's report is kept 14 days; ci_proven_tree.py
+  # stops counting a PR run as proof after 13, so a proven push never names one
+  # whose artifact has expired.
+  coverage-badge:
+    needs: [proven, tests]
+    if: ${{ always() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write   # force-push the badges branch
+      actions: read     # download coverage-report from the proving PR run
+    steps:
+      - name: harden runner (egress audit)
+        uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
+        with:
+          egress-policy: audit
+      - name: which run measured this tree
+        id: source
+        env:
+          TESTS: ${{ needs.tests.result }}
+          SKIP: ${{ needs.proven.outputs.skip }}
+          PR_RUN_ID: ${{ needs.proven.outputs.pr_run_id }}
         run: |
-          PCT=$("$VENV_BIN/python" -c "import json; print(round(json.load(open('coverage.json'))['totals']['percent_covered']))")
-          mkdir /tmp/badges && cd /tmp/badges
+          if [ "$TESTS" = success ] && [ "$SKIP" != true ]; then
+            echo "from=this" >> "$GITHUB_OUTPUT"
+          elif [ "$TESTS" = skipped ] && [ "$SKIP" = true ] && [ -n "$PR_RUN_ID" ]; then
+            echo "coverage from PR run $PR_RUN_ID, which tested this exact tree"
+            echo "from=pr" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::no coverage to publish: tests '$TESTS', proven skip '$SKIP', PR run '$PR_RUN_ID'"
+            exit 1
+          fi
+      - name: coverage-report from this run
+        if: steps.source.outputs.from == 'this'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: coverage-report
+      # The same pin mutation-weights-refresh.yml downloads another run's
+      # artifact with; `run-id` needs `github-token` (and `actions: read`).
+      - name: coverage-report from the proving PR run
+        if: steps.source.outputs.from == 'pr'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: coverage-report
+          run-id: ${{ needs.proven.outputs.pr_run_id }}
+          github-token: ${{ github.token }}
+      - name: publish coverage badge
+        # Moved from the tests cell. Same badge, same branch, same force-push;
+        # the token and repository arrive through env (zizmor's template-
+        # injection rule), python3 replaces the cell's venv, and the job sets
+        # its own git identity because no `git identity` step ran here.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          PCT=$(python3 -c "import json; print(round(json.load(open('coverage.json'))['totals']['percent_covered']))")
+          mkdir "$RUNNER_TEMP/badges" && cd "$RUNNER_TEMP/badges"
           printf '{"schemaVersion":1,"label":"coverage","message":"%s%%","color":"brightgreen"}\n' "$PCT" > coverage.json
           git init -q -b badges
+          git config user.email ci@boost.test
+          git config user.name "Boost CI"
           git add coverage.json && git commit -qm "coverage ${PCT}%"
-          git push -qf "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" badges:badges
+          git push -qf "https://x-access-token:${GH_TOKEN}@github.com/${REPO}" badges:badges
 
   # The mutation gate runs ~10.5k mutants over boost_cli/core. As one job it took
   # ~26 minutes — three times the next-longest job in CI — so it alone decided how
@@ -507,9 +734,11 @@ jobs:
   # main's own run. The same gate, charged twice per change.
   #
   # It is now three jobs:
-  #   mutation-scope   can the score have changed at all? (for 38% of this
+  #   mutation-plan    can the score have changed at all? (for 38% of this
   #                    repo's merged PRs — docs, roadmap cards, other workflows
-  #                    — provably not)
+  #                    — provably not) If so, collect mutmut's test-to-function
+  #                    stats ONCE and write the plan the shards run from
+  #                    (scripts/mutation_plan.py).
   #   mutation-shard   twenty-four parallel slices of the mutant set. A file heavier
   #                    than an even share is split per top-level function
   #                    (mutant names are addressable that way), so store.py —
@@ -520,6 +749,19 @@ jobs:
   #                    than quietly shrinking the denominator.
   #   mutation         THE REQUIRED CHECK: merges the slices and applies the gate.
   #
+  # Shadow mode: on a pull request or merge-queue entry the plan also carries a
+  # diff set (the changed functions and their direct callers), sharded in the
+  # same matrix. The full run still decides `mutation`; the diff set's verdict
+  # and per-mutant results are compared against it in an advisory step, until
+  # enough runs agree for the diff gate to bind.
+  #
+  # By event: a push to main that `proven` vouches for plans `none` with the
+  # reason "proven by PR run <id>" and collects no stats, so no shard starts
+  # and `mutation` reports the planner's reason; any other push plans full. A
+  # nightly or a dispatch plans full, always: with pushes able to skip, that
+  # run is where the whole codebase is held to 80%, and with an unproven push
+  # it is the only full run whose `mutation-weights` the refresh workflow takes.
+  #
   # `mutation` is the context named in .github/required-checks.txt, so it must run
   # and report on every pull request. Neither path-filtering it nor letting
   # `needs:` skip it is acceptable — a required check that never reports leaves
@@ -527,13 +769,29 @@ jobs:
   # how this repo has deadlocked before. Hence `if: always()`, plus an explicit
   # inspection of what the upstream jobs did: `always()` on its own would report a
   # failed shard as a green required check.
-  mutation-scope:
+  mutation-plan:
+    needs: proven
+    # Every event, including the ones where `proven` is skipped (all but
+    # push) or failed (empty outputs, so the plan is decided as before).
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # The scope check takes seconds. A relevant change then pays mutant
+    # generation plus one `Running stats` pass of tests/unit -- the 5.5-8.8
+    # min every shard used to pay on its own -- so 40 leaves a slow runner
+    # room without letting a hung one hold up the matrix for long.
+    timeout-minutes: 40
     permissions:
       contents: read
     outputs:
-      relevant: ${{ steps.scope.outputs.relevant }}
+      matrix: ${{ steps.plan.outputs.matrix }}
+      gate_set: ${{ steps.plan.outputs.gate_set }}
+      # "true" when the plan carries both a full and a diff set, which is what
+      # `mutation` keys its comparison on. A step's `if:` cannot look inside
+      # the matrix JSON, so the planner says it in one word.
+      shadow: ${{ steps.plan.outputs.shadow }}
+      # The plan's reasons on one line, for `mutation`'s summary when there is
+      # nothing to run -- "proven by PR run <id>" is not "nothing changed".
+      reason: ${{ steps.plan.outputs.reason }}
     steps:
       - name: harden runner (egress audit)
         uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
@@ -541,14 +799,42 @@ jobs:
           egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0    # need the base commit to diff against
+          # Every commit and every blob, and no `filter:`: the base commit to
+          # diff against, and the diff planner reads base and head sources
+          # with `git show`. It errors on a file the tree lists but git cannot
+          # produce rather than read it as deleted, so a blobless clone would
+          # fail every PR's planner instead of quietly shrinking the scope.
+          fetch-depth: 0
           persist-credentials: false
       - name: can the mutation score have changed?
         id: scope
         env:
           BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
           HEAD: ${{ github.sha }}
+          EVENT: ${{ github.event_name }}
+          SKIP: ${{ needs.proven.outputs.skip }}
+          PR_RUN_ID: ${{ needs.proven.outputs.pr_run_id }}
         run: |
+          # A proven push: the PR run already tested this exact tree, and the
+          # nightly holds the whole codebase to 80%. relevant=false is what
+          # skips the stats run, the planner tests and the stats upload below.
+          # Push only -- `proven` runs nowhere else, so a value seen on any
+          # other event is not its verdict.
+          if [ "$EVENT" = push ] && [ "$SKIP" = true ]; then
+            echo "proven by PR run $PR_RUN_ID — nothing to collect"
+            echo "relevant=false" >> "$GITHUB_OUTPUT"
+            echo "proven=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # The whole-codebase run is relevant by definition, whatever the
+          # event payload happens to carry as a base.
+          case "$EVENT" in
+            schedule|workflow_dispatch)
+              echo "whole-codebase run ($EVENT) — the full gate"
+              echo "relevant=true" >> "$GITHUB_OUTPUT"
+              exit 0
+              ;;
+          esac
           # Fail safe. With no usable base commit (a first push, a force push, a
           # shallow clone) we cannot prove the score is unchanged, so run the
           # whole gate. A wasted 26 minutes is a far better outcome than a gate
@@ -569,10 +855,171 @@ jobs:
           RELEVANT="$(python3 scripts/mutation_shards.py scope --changed changed.txt)"
           echo "mutation-relevant: $RELEVANT"
           echo "relevant=$RELEVANT" >> "$GITHUB_OUTPUT"
+      # From here to the stats run, this job must match `mutation-shard`
+      # step for step: Python, the install set, the git identity the fixture
+      # repos need. Stats taken in a different environment can collect a
+      # different set of test ids, and a shard that meets an id the stats
+      # file lacks re-runs stats collection for it -- quietly paying back the
+      # minutes this job exists to save. tests/unit/test_mutation_plan.py pins
+      # the Python version and the install lines against the shard's.
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        if: steps.scope.outputs.relevant == 'true'
+        with:
+          python-version: "3.14"
+      - name: git identity (fixture repos)
+        if: steps.scope.outputs.relevant == 'true'
+        run: |
+          git config --global user.email ci@boost.test
+          git config --global user.name "Boost CI"
+      - name: install test deps
+        if: steps.scope.outputs.relevant == 'true'
+        run: |
+          python -m venv .venv
+          .venv/bin/pip -q install -r requirements/mutation-tools.txt
+          .venv/bin/pip -q install sqlite-vec || true
+      - name: collect mutmut stats once
+        if: steps.scope.outputs.relevant == 'true'
+        # mutmut has no stats-only command: `run` generates every mutant,
+        # runs `Running stats` over tests/unit, runs the clean tests for what
+        # it was asked to mutate, then mutates it. So ask for ONE mutant, by
+        # its exact name. Measured locally (mutmut 3.8.0): a glob such as
+        # `...x__plural__mutmut_*` never matches a key in
+        # tests_by_mangled_function_name (those carry no `__mutmut_` suffix),
+        # so mutmut's clean run falls back to the WHOLE unit suite: 27.4 min
+        # for that run, against 15.1 for the exact name -- 14.5 of it the
+        # stats pass itself, 4 s after it, because the clean run is that
+        # function's three tests. The diff shards name their mutants exactly
+        # for the same reason (mutation_diff.mutant_names). Only the stats
+        # file leaves this job.
+        # A shard that restores it goes straight to `Listing all tests`
+        # (collect_or_load_stats re-collects only for ids the file lacks):
+        # 39 s from start to `Running mutation testing` locally, stats in
+        # place. The name is pinned by test_mutation_plan.py, because a
+        # mutant that does not exist is an assertion failure inside mutmut.
+        env:
+          STATS_MUTANT: "boost_cli.core.installplan.x__plural__mutmut_1"
+        run: |
+          set +e
+          .venv/bin/mutmut run "$STATS_MUTANT"
+          rc=$?
+          set -e
+          # 2 is "a mutant survived", which is not this job's business.
+          if [ "$rc" != "0" ] && [ "$rc" != "2" ]; then
+            echo "::error::mutmut stats run failed (rc=$rc)"
+            exit 1
+          fi
+          test -s mutants/mutmut-stats.json
+      # The tests of the planner and the diff gate that reach mutmut skip in
+      # every `tests` cell, which installs requirements/test-tools.txt and so
+      # has no mutmut. They run here instead, in the venv the shards mutate
+      # with, where BOOST_REQUIRE_MUTMUT makes a skip an error. After the stats
+      # run, so nothing they write is in the checkout mutmut took stats of;
+      # before the planner, which leans on what they pin.
+      - name: test the planner and the diff gate (needs mutmut)
+        if: steps.scope.outputs.relevant == 'true'
+        env:
+          BOOST_REQUIRE_MUTMUT: "1"
+        run: .venv/bin/python -m pytest -q tests/unit/test_mutation_diff.py tests/unit/test_mutation_plan.py
+      # Shadow mode. A pull request or merge-queue entry plans BOTH sets: the
+      # full 24-shard run, which still decides `mutation`, and the diff set
+      # (the functions the branch changed plus their direct callers, see
+      # scripts/mutation_diff.py), which runs alongside on the same commit so
+      # `mutation` can compare the two per mutant before the diff gate is
+      # trusted to bind. Anything else (a push to main) plans full. A full-run
+      # trigger in the diff (a mutation script, this job, setup.cfg [mutmut],
+      # ...) makes `diff --shadow` return the full plan alone -- including on
+      # the PR that edits these lines.
+      - name: write the plan
+        id: plan
+        env:
+          RELEVANT: ${{ steps.scope.outputs.relevant }}
+          PROVEN: ${{ steps.scope.outputs.proven }}
+          PR_RUN_ID: ${{ needs.proven.outputs.pr_run_id }}
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
+        run: |
+          plan_full() {
+            python3 scripts/mutation_plan.py full --shards 24 --reason "$1" \
+              --out mutation-plan.json
+          }
+          if [ "$RELEVANT" != "true" ]; then
+            if [ "$PROVEN" = "true" ]; then
+              reason="proven by PR run $PR_RUN_ID"
+            else
+              reason="no change under boost_cli/, tests/, or the mutation configuration"
+            fi
+            python3 scripts/mutation_plan.py none --reason "$reason" \
+              --out mutation-plan.json
+          else
+            case "$EVENT" in
+              pull_request|merge_group)
+                # The far end is $GITHUB_SHA, not the PR head: it is the commit
+                # the stats were just taken at and every shard checks out (a
+                # PR's merge commit), so the planner counts mutants of the tree
+                # the shards mutate. Counting the PR head's instead would make
+                # the gate refuse a shortfall whenever main had changed a
+                # scoped function since the branch point. The near end is the
+                # merge commit's first parent -- the PR exactly as applied --
+                # else the merge base of the event's base and head (wider);
+                # the queue's is its base_sha. `base` logs which it chose.
+                # No base (unfetched, or an empty SHA) widens to full.
+                if DIFF_BASE="$(python3 scripts/mutation_plan.py base --event "$EVENT" \
+                    --sha "$GITHUB_SHA" --base-sha "$BASE_SHA" --head-sha "$HEAD_SHA")"; then
+                  # .venv: the diff planner imports mutmut, libcst and PyYAML.
+                  .venv/bin/python scripts/mutation_plan.py diff --shadow --shards 24 \
+                    --base "$DIFF_BASE" --head "$GITHUB_SHA" \
+                    --stats mutants/mutmut-stats.json --out mutation-plan.json
+                else
+                  plan_full "no diff base for $EVENT at $GITHUB_SHA, so no diff scope"
+                fi
+                ;;
+              schedule|workflow_dispatch)
+                plan_full "whole-codebase run ($EVENT)"
+                ;;
+              *)
+                plan_full "a mutation-relevant path changed, or there was no usable base commit"
+                ;;
+            esac
+          fi
+          cat mutation-plan.json
+          MATRIX="$(python3 scripts/mutation_plan.py matrix --plan mutation-plan.json)"
+          GATE_SET="$(jq -r '.gate_set // ""' mutation-plan.json)"
+          SHADOW="$(jq -r '.sets | has("full") and has("diff")' mutation-plan.json)"
+          # One line, whatever the reasons hold: a newline would end this
+          # output and start another.
+          REASON="$(jq -r '(.reasons // []) | join("; ")' mutation-plan.json)"
+          REASON="${REASON//[$'\r\n']/ }"
+          REASON="${REASON:0:500}"
+          {
+            echo "matrix=$MATRIX"
+            echo "gate_set=$GATE_SET"
+            echo "shadow=$SHADOW"
+            echo "reason=$REASON"
+          } >> "$GITHUB_OUTPUT"
+      - name: upload the plan
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mutation-plan
+          path: mutation-plan.json
+          retention-days: 1
+          if-no-files-found: error
+      - name: upload the stats
+        if: steps.scope.outputs.relevant == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mutation-stats
+          path: mutants/mutmut-stats.json
+          retention-days: 1
+          if-no-files-found: error
 
   mutation-shard:
-    needs: mutation-scope
-    if: needs.mutation-scope.outputs.relevant == 'true'
+    needs: mutation-plan
+    # The planner's result is spelled out because `!cancelled()` replaces the
+    # implicit `success()` -- which this job cannot keep: it would look past
+    # mutation-plan to `proven`, skipped on every pull request, and skip the
+    # shards there too. Same meaning as before: a green planner with work.
+    if: ${{ !cancelled() && needs.mutation-plan.result == 'success' && needs.mutation-plan.outputs.matrix != '[]' }}
     # mutmut needs 3.11+; one representative environment keeps CI fast
     runs-on: ubuntu-latest
     # WHY 75 AND NOT 45 — the record from `5769dd94` (2026-09-01), past-tensed
@@ -823,8 +1270,9 @@ jobs:
     # work running 2-2.4x slower is the runner, not the weights, and
     # TAIL_MULTIPLIER is not re-fitted on it, per its own note.
     #
-    # tests/unit/test_mutation_shard_count.py pins all of it: that this number
-    # and the matrix below and every `--shards` in this repo agree, and that
+    # tests/unit/test_mutation_shard_count.py pins all of it: that this number,
+    # the planner's FULL_SHARDS (the matrix below is built from its plan) and
+    # every `--shards` in this repo agree, and that
     # the committed pack passes `plan --timeout-minutes` against this cap with
     # 20% headroom. So the next pack that would be cancelled fails a unit test
     # instead, which is the point.
@@ -836,13 +1284,26 @@ jobs:
       # one shard fails would only turn a single failure into all of them — and cost a
       # rerun of the whole matrix to learn anything.
       fail-fast: false
+      # One entry per shard of every set in the plan, {set, index}. The full
+      # set is the committed 24-way pack, so its width is still pinned by
+      # tests/unit/test_mutation_shard_count.py, through the planner's
+      # `--shards 24`.
       matrix:
-        index: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
+        include: ${{ fromJSON(needs.mutation-plan.outputs.matrix) }}
+    # NO harden-runner here, unlike every other Linux job in this file. On
+    # 2026-11-01 run 41283802186 lost the runner on full shards 1, 17 and 18
+    # ("The hosted runner lost communication"), twice. Rerunning those shards
+    # with the same plan and stats, changing only that one step:
+    #   without it   used memory flat at 3.0-4.2 GB on all three, all passed
+    #   with it      shard 1 climbed ~0.35 GB every 2 min to 14.7 GB of 16
+    #                and lost its runner; disable-file-monitoring did not help
+    # The process growing is harden-runner's own `agent` (root), ~200 MiB a
+    # minute while mutmut held at 1.9 GB: a mutmut shard forks a test process
+    # per mutant, far more execs in two hours than any other job here. v2.22.3
+    # (agent 0.18.0) leaks the same way. Upstream: step-security/harden-runner#709;
+    # put the step back once a release fixes it. It is egress *audit*, not
+    # block, so dropping it loses telemetry on this one job, not enforcement.
     steps:
-      - name: harden runner (egress audit)
-        uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
-        with:
-          egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0    # tags for setuptools-scm version resolution
@@ -854,41 +1315,6 @@ jobs:
         run: |
           git config --global user.email ci@boost.test
           git config --global user.name "Boost CI"
-      # A re-push of the same PR re-pays this shard's whole ~20 minutes from
-      # zero even when only tests/ changed one assertion, because nothing
-      # carries mutmut's recorded exit codes to the next push. The hash names
-      # everything that decides what those exit codes MEAN -- tests/, the
-      # gate's own scripts, setup.cfg, pyproject.toml,
-      # requirements/mutation-tools.txt -- and deliberately excludes
-      # boost_cli/ itself: mutmut already reuses one source file's own
-      # results by its content hash (scripts/mutation_shards.py's "cache key"
-      # section), so folding boost_cli/ in here too would evict every mutant
-      # in the cache on a one-file core edit instead of just that file's.
-      - name: mutation cache key
-        id: cachekey
-        run: |
-          HASH="$(python3 scripts/mutation_shards.py cache-key)"
-          echo "hash=$HASH" >> "$GITHUB_OUTPUT"
-      # Keyed on shard + Python version + that hash, with NO restore-keys on
-      # purpose, same reasoning as the eval corpus cache above: a near-miss
-      # restore would resurrect exit codes recorded under different tests or a
-      # different mutmut/pytest pin, and mutmut trusts a recorded result
-      # rather than re-proving it -- an inexact match must miss and pay the
-      # full run.
-      #
-      # Reuse rests on mutmut 3's own documented behaviour (skip a mutant with
-      # a recorded exit code; regenerate a file's mutants when its source
-      # changes), which is described in scripts/mutation_shards.py's module
-      # docstring as NOT independently re-verified against the 3.7.0 pin here
-      # -- mutmut isn't installed outside CI. If that description is wrong the
-      # failure mode is a warm cache buying nothing: mutmut still runs every
-      # mutant it does not recognise, so a bad restore can only cost time, not
-      # correctness of the gate itself.
-      - name: restore mutation results
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: mutants/boost_cli/core
-          key: mutation-shard-${{ matrix.index }}-py314-${{ steps.cachekey.outputs.hash }}
       - name: install test deps
         run: |
           python -m venv .venv
@@ -898,48 +1324,70 @@ jobs:
           .venv/bin/pip -q install -r requirements/mutation-tools.txt
           # sqlite-vec so dense.py's mutants are covered by the dense tests
           .venv/bin/pip -q install sqlite-vec || true
-      - name: mutate shard ${{ matrix.index }} of 24
+      # Outside the workspace on purpose: mutmut's change detection lists
+      # untracked non-.py files against the commit the stats were taken at,
+      # and a plan or stats file in the checkout would be one.
+      - name: download the plan
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: mutation-plan
+          path: ${{ runner.temp }}/mutation-plan
+      - name: download the stats
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: mutation-stats
+          path: ${{ runner.temp }}/mutation-stats
+      - name: mutate ${{ matrix.set }} shard ${{ matrix.index }}
         # Under the job's 160 so a stalled shard fails as a step, with a log
         # the API will serve. The four "runner lost communication" losses on
         # 2026-10-22 (94-124 min into this step) all 404 on their logs.
         timeout-minutes: 145
         env:
+          SET: ${{ matrix.set }}
           SHARD: ${{ matrix.index }}
         run: |
           # No per-process `ulimit -v` here: a 4 GiB address-space cap was
           # tried on 2026-10-23 and raised MemoryError inside the clean-test
           # run of mutmut (shards 0, 7 and 16 of run 40010598954), while
           # runners kept being lost with it in place, so it bought nothing.
-          PATTERNS="$(python3 scripts/mutation_shards.py plan --shards 24 --index "$SHARD")"
-          echo "shard $SHARD patterns: $PATTERNS"
-          # `mutmut run` with no arguments runs EVERY mutant. An empty plan must
-          # therefore run nothing at all, not silently become a full 26-minute
-          # run in every shard at once.
-          if [ -z "$PATTERNS" ]; then
-            echo "::error::shard $SHARD planned no patterns — refusing to run unfiltered"
+          # The stats the planner collected, in place before mutmut starts --
+          # the whole saving. Missing is an error, not a fallback: mutmut
+          # would quietly re-collect and this shard would just be slow again.
+          mkdir -p mutants
+          cp "$RUNNER_TEMP/mutation-stats/mutmut-stats.json" mutants/mutmut-stats.json
+          # `patterns` exits 1, writing nothing, for an empty or unknown
+          # shard: `mutmut run` with no arguments runs EVERY mutant, so an
+          # empty answer must stop here, not become a full 26-minute run in
+          # every shard at once. It writes one NUL-terminated entry per
+          # argument -- a diff shard's are exact mutant names, up to 1500,
+          # whose module part a PR's file name chose -- and they reach mutmut
+          # as a quoted array: never word-split, never globbed against the
+          # tree. `--` keeps an entry from ever being read as an option.
+          ARGS_FILE="$RUNNER_TEMP/mutmut-args"
+          python3 scripts/mutation_plan.py patterns --plan "$RUNNER_TEMP/mutation-plan/mutation-plan.json" --set "$SET" --index "$SHARD" --out "$ARGS_FILE"
+          MUTMUT_ARGS=()
+          while IFS= read -r -d '' arg; do
+            MUTMUT_ARGS+=("$arg")
+          done < "$ARGS_FILE"
+          if [ "${#MUTMUT_ARGS[@]}" -eq 0 ]; then
+            echo "::error::$SET shard $SHARD has nothing to run"
             exit 1
           fi
           set +e
-          set -f
-          # The word split is deliberate: each pattern must reach mutmut as its
-          # own argument. Globbing is off (set -f) so the shell cannot expand
-          # them against the working tree first.
-          # shellcheck disable=SC2086
-          .venv/bin/mutmut run $PATTERNS
+          .venv/bin/mutmut run -- "${MUTMUT_ARGS[@]}"
           rc=$?
           set -e
-          set +f
           # mutmut reports surviving mutants with a non-zero status. Survivors
           # are the gate's business, not a shard's — only a genuine failure to
           # run should fail this job. (Matches scripts/mutation_gate.py.)
           if [ "$rc" != "0" ] && [ "$rc" != "2" ]; then
-            echo "::error::mutmut run failed in shard $SHARD (rc=$rc)"
+            echo "::error::mutmut run failed in $SET shard $SHARD (rc=$rc)"
             exit 1
           fi
       - name: upload shard results
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: mutation-shard-${{ matrix.index }}
+          name: mutation-${{ matrix.set }}-shard-${{ matrix.index }}
           # Only the .meta results are needed downstream: `mutmut
           # export-cicd-stats` reads mutants/<path>.meta and never looks at the
           # generated mutant sources.
@@ -948,8 +1396,8 @@ jobs:
           if-no-files-found: error
 
   mutation:
-    needs: [mutation-scope, mutation-shard]
-    # Required check — see the comment above mutation-scope. This must run and
+    needs: [mutation-plan, mutation-shard]
+    # Required check — see the comment above mutation-plan. This must run and
     # report even when every shard was skipped.
     if: always()
     runs-on: ubuntu-latest
@@ -963,69 +1411,224 @@ jobs:
           egress-policy: audit
       - name: upstream jobs must be conclusive
         env:
-          SCOPE: ${{ needs.mutation-scope.result }}
+          PLAN: ${{ needs.mutation-plan.result }}
           SHARDS: ${{ needs.mutation-shard.result }}
-          RELEVANT: ${{ needs.mutation-scope.outputs.relevant }}
+          MATRIX: ${{ needs.mutation-plan.outputs.matrix }}
+          GATE_SET: ${{ needs.mutation-plan.outputs.gate_set }}
+          SHADOW: ${{ needs.mutation-plan.outputs.shadow }}
         run: |
-          echo "scope=$SCOPE shards=$SHARDS relevant=$RELEVANT"
+          echo "plan=$PLAN shards=$SHARDS gate_set=$GATE_SET shadow=$SHADOW matrix=$MATRIX"
           # `always()` means this job runs whatever happened upstream, so it has
           # to judge for itself. Without this step a failed or cancelled shard
           # would surface as a green required check.
-          if [ "$SCOPE" != "success" ]; then
-            echo "::error::mutation-scope did not succeed ($SCOPE) — cannot gate"
+          #
+          # The planner first: a failed planner leaves its outputs EMPTY, and
+          # an empty matrix is otherwise the "nothing to run" answer.
+          if [ "$PLAN" != "success" ]; then
+            echo "::error::mutation-plan did not succeed ($PLAN) — cannot gate"
             exit 1
           fi
-          if [ "$RELEVANT" = "true" ] && [ "$SHARDS" != "success" ]; then
+          # One matrix job runs both sets, so a failed DIFF shard in shadow
+          # mode lands here too, and is red: the comparison it feeds would
+          # have a hole in it, and nobody reads past a green check to notice.
+          if [ "$MATRIX" != "[]" ] && [ "$SHARDS" != "success" ]; then
             echo "::error::a mutation shard did not succeed ($SHARDS)"
             exit 1
           fi
-      - name: nothing mutable changed
-        if: needs.mutation-scope.outputs.relevant != 'true'
+          # A full plan with no shards would score nothing and pass.
+          if [ "$GATE_SET" = "full" ] && [ "$MATRIX" = "[]" ]; then
+            echo "::error::the plan gates on the full set but planned no shards"
+            exit 1
+          fi
+          # Every gating step below is keyed on a gate set it knows. One it
+          # does not would skip them all and report green, so refuse it here.
+          case "$GATE_SET" in
+            ""|full) ;;
+            # Legal in the plan schema -- `mutation_plan.py diff` without
+            # --shadow writes it -- but no step below binds on it yet: this
+            # workflow only ever plans diff in shadow, which gates on full.
+            diff) echo "::error::gate set 'diff' is not wired to bind yet (shadow mode gates on 'full') — cannot gate"
+               exit 1 ;;
+            *) echo "::error::unknown gate set '$GATE_SET' — cannot gate"
+               exit 1 ;;
+          esac
+          # The comparison steps run only beside the full gate's checkout.
+          if [ "$SHADOW" = "true" ] && [ "$GATE_SET" != "full" ]; then
+            echo "::error::a shadow plan must gate on the full set, not '$GATE_SET'"
+            exit 1
+          fi
+      # Reached only past the step above, so the planner succeeded: an empty
+      # gate set here is the planner's own `none`, never a failed planner's
+      # empty output. Its reason is either "no change under boost_cli/ ..."
+      # or "proven by PR run <id>".
+      - name: nothing to mutate
+        if: needs.mutation-plan.outputs.gate_set == ''
+        env:
+          REASON: ${{ needs.mutation-plan.outputs.reason }}
         run: |
-          echo "No change under boost_cli/, tests/, or the mutation configuration,"
-          echo "so the mutation score is identical to the base commit's."
-          echo "- **Mutation:** skipped — no mutable code changed" >> "$GITHUB_STEP_SUMMARY"
+          echo "The plan runs no mutants: $REASON"
+          echo "- **Mutation:** skipped — $REASON" >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: needs.mutation-scope.outputs.relevant == 'true'
+        if: needs.mutation-plan.outputs.gate_set == 'full'
         with:
           fetch-depth: 0    # tags for setuptools-scm version resolution
           persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        if: needs.mutation-scope.outputs.relevant == 'true'
+        if: needs.mutation-plan.outputs.gate_set == 'full'
         with:
           python-version: "3.14"
-      - name: install mutmut (for export-cicd-stats)
-        if: needs.mutation-scope.outputs.relevant == 'true'
+      # The same venv the shards build: mutation_gate.py shells out to mutmut,
+      # and mutation_diff.py imports mutmut and PyYAML.
+      - name: install mutmut (for export-cicd-stats and the diff gate)
+        if: needs.mutation-plan.outputs.gate_set == 'full'
         run: |
           python -m venv .venv
           .venv/bin/pip -q install -r requirements/mutation-tools.txt
-      - name: download shard results
-        if: needs.mutation-scope.outputs.relevant == 'true'
+      - name: download the plan
+        if: needs.mutation-plan.outputs.shadow == 'true'
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          pattern: mutation-shard-*
-          path: shard-results
+          name: mutation-plan
+          path: ${{ runner.temp }}/mutation-plan
+      # One directory per set, so neither reader can pick up the other's
+      # results: the merge re-derives the 24-way pack and reads only full
+      # shards, and the comparison reads each set from its own side.
+      - name: download full shard results
+        if: needs.mutation-plan.outputs.gate_set == 'full'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: mutation-full-shard-*
+          path: shard-results/full
+      - name: download diff shard results
+        if: needs.mutation-plan.outputs.shadow == 'true'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: mutation-diff-shard-*
+          path: shard-results/diff
+      - name: every planned shard uploaded results
+        if: needs.mutation-plan.outputs.gate_set == 'full'
+        env:
+          MATRIX: ${{ needs.mutation-plan.outputs.matrix }}
+        # A download by pattern that matches nothing is not an error, so check
+        # each matrix entry, for both sets. A missing full shard would also stop
+        # the merge below; a missing diff shard would only make the advisory
+        # comparison say so, from a step allowed to fail -- so it stops here.
+        #
+        # And a pattern that matches exactly ONE artifact is written straight
+        # into `path:`, with no <artifact-name>/ level (download-artifact
+        # v8.0.2, src/download-artifact.ts: `artifacts.length === 1 ?
+        # resolvedPath : path.join(resolvedPath, artifact.name)`). A one-shard
+        # diff set is the commonest diff plan, so put a lone set's results back
+        # under its shard's name first. Only when the set planned one shard:
+        # with several planned and one arrived, which one it was is unknowable,
+        # and the check below fails it.
+        run: |
+          while read -r set planned; do
+            dir="shard-results/$set"
+            one="$dir/mutation-$set-shard-0"
+            if [ "$planned" = 1 ] && [ ! -d "$one" ] && [ -n "$(ls -A "$dir" 2>/dev/null)" ]; then
+              mv "$dir" "$dir.lone"
+              mkdir -p "$dir"
+              mv "$dir.lone" "$one"
+            fi
+          done < <(jq -r 'group_by(.set)[] | "\(.[0].set) \(length)"' <<< "$MATRIX")
+          missing=0
+          while read -r set index; do
+            if [ ! -d "shard-results/$set/mutation-$set-shard-$index" ]; then
+              echo "::error::no results from $set shard $index"
+              missing=1
+            fi
+          done < <(jq -r '.[] | "\(.set) \(.index)"' <<< "$MATRIX")
+          exit "$missing"
+      # The only step here allowed to fail without failing the check. It runs
+      # the diff gate and the per-mutant comparison over the same commit's
+      # full and diff results; neither decides `mutation` -- the full gate
+      # below does. It runs before the merge so a red full gate still leaves
+      # a report: that run is the one most worth comparing. The step goes
+      # red, visibly, on any disagreement or incomplete comparison; a FAIL
+      # from the diff gate is the data being compared, not an error.
+      - name: diff-gate shadow (advisory; the full gate below decides)
+        id: shadow
+        if: needs.mutation-plan.outputs.shadow == 'true'
+        continue-on-error: true
+        run: |
+          plan="$RUNNER_TEMP/mutation-plan/mutation-plan.json"
+          report=mutation-shadow-report.md
+          # The diff gate writes its own summary section; send it into the
+          # report, so the job summary never shows a diff verdict at top level
+          # where a reader would take it for the binding one.
+          gate_md="$RUNNER_TEMP/diff-gate-summary.md"
+          : > "$gate_md"
+          # No pipefail under this job's default shell, so exit codes are
+          # captured, never read through a pipe.
+          set +e
+          # --no-annotations: an advisory gate posting a ::warning on every
+          # changed function of every PR is noise; the report lists them.
+          # --root stays, so binding it later is one flag removed.
+          GITHUB_STEP_SUMMARY="$gate_md" .venv/bin/python scripts/mutation_diff.py gate \
+            --plan "$plan" --source shard-results/diff --prefix mutation-diff-shard- \
+            --root "$GITHUB_WORKSPACE" --no-annotations > "$RUNNER_TEMP/gate.txt" 2>&1
+          gate_rc=$?
+          .venv/bin/python scripts/mutation_diff.py compare --plan "$plan" \
+            --full-source shard-results/full --diff-source shard-results/diff \
+            > "$RUNNER_TEMP/compare.txt" 2>&1
+          compare_rc=$?
+          set -e
+          cat "$RUNNER_TEMP/gate.txt" "$RUNNER_TEMP/compare.txt"
+          {
+            echo "## Diff-gate shadow"
+            echo
+            echo "Advisory. The full run decides this check; the diff set ran beside it on the same commit."
+            echo "The bar before the diff gate binds is \`disagree 0\` (timeouts excluded and listed)."
+            echo
+            echo "Comparison exit $compare_rc, diff gate exit $gate_rc."
+            echo
+            echo '~~~text'
+            cat "$RUNNER_TEMP/compare.txt"
+            echo '~~~'
+            echo
+            cat "$gate_md"
+          } > "$report"
+          cat "$report" >> "$GITHUB_STEP_SUMMARY"
+          # compare: 1 = disagreement, 2 = incomplete. gate: 2 = unrun or
+          # missing results, anything above = it crashed.
+          if [ "$compare_rc" != 0 ] || [ "$gate_rc" -gt 1 ]; then
+            echo "::error::diff-gate shadow: comparison exit $compare_rc, diff gate exit $gate_rc"
+            exit 1
+          fi
+      - name: upload the shadow report
+        if: needs.mutation-plan.outputs.shadow == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mutation-shadow-report
+          path: mutation-shadow-report.md
+          # Collected from the first release-train runs before the diff gate
+          # is switched on, which can be some days after this one.
+          retention-days: 30
+          if-no-files-found: warn
       - name: merge shard results
-        if: needs.mutation-scope.outputs.relevant == 'true'
+        if: needs.mutation-plan.outputs.gate_set == 'full'
         # Refuses on a missing or half-finished shard rather than gating on a
         # partial result: mutmut counts an unrun mutant as "not checked" and the
         # gate divides by total, so silently accepting one would quietly lower
         # the score instead of failing.
-        run: python3 scripts/mutation_shards.py merge --shards 24 --into mutants --source shard-results
+        run: python3 scripts/mutation_shards.py merge --shards 24 --into mutants --source shard-results/full --prefix mutation-full-shard-
       - name: mutation strength gate (>=80% killed)
-        if: needs.mutation-scope.outputs.relevant == 'true'
+        if: needs.mutation-plan.outputs.gate_set == 'full'
         run: .venv/bin/python scripts/mutation_gate.py --min 80
       - name: refresh balance hints
-        if: needs.mutation-scope.outputs.relevant == 'true'
+        if: needs.mutation-plan.outputs.gate_set == 'full'
         # Advisory only — scripts/mutation_weights.json is an optimisation, never
         # a correctness input, so this neither gates nor commits. It is uploaded
         # so a maintainer can drop a measured file in rather than hand-editing
         # one: real per-symbol mutant counts, and the per-file DURATIONS that let
         # the planner balance on time instead of count. `|| true` because a
-        # balance hint is never worth failing a green gate over.
+        # balance hint is never worth failing a green gate over. It reads the
+        # merged FULL results in mutants/ only; diff results stay in
+        # shard-results/diff, so a shadow run's weights are still whole-tree.
         run: python3 scripts/mutation_shards.py weights --source mutants || true
       - name: upload balance hints
-        if: needs.mutation-scope.outputs.relevant == 'true'
+        if: needs.mutation-plan.outputs.gate_set == 'full'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: mutation-weights
@@ -1038,6 +1641,7 @@ jobs:
     # broken artifact: missing package-data, a bad entry point, or an undeclared
     # runtime dependency only surface in the built wheel. A merge to main cuts a
     # PyPI release, so build the real wheel + sdist and install what a user gets.
+    if: github.event_name != 'schedule' && github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -1079,14 +1683,26 @@ jobs:
   patch-coverage:
     # Coverage on the CHANGED lines of a PR: the 93%+ project number can hide a
     # PR that adds wholly-untested code, so gate the diff itself. Self-hosted —
-    # diff-cover reads a Cobertura coverage.xml the suite emits, no external
-    # service. PR-only: there's nothing to diff a push to main against.
-    if: github.event_name == 'pull_request'
+    # diff-cover reads a Cobertura coverage.xml, no external service. PR-only:
+    # there's nothing to diff a push to main against.
+    #
+    # It runs no tests. The coverage.xml is the one `tests (ubuntu-latest,
+    # 3.12)` measured, downloaded as the `coverage-report` artifact; this job
+    # used to run the whole suite a second time under coverage (~20 min) to
+    # produce the same file. Hence `needs: tests`, and hence `always()`: this
+    # is a required check, and a plain `needs` would SKIP it when a tests cell
+    # fails — and a skipped required check reads as passing. Under `always()`
+    # the verdict comes from the download instead: that cell uploads only on
+    # a green suite, so a failed or cancelled ubuntu-3.12 cell leaves no
+    # artifact and the download step fails this job — the second line of
+    # defence behind the first step, which fails on any `tests` result other
+    # than success.
+    needs: tests
+    if: always() && github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    # The same suite as the Linux `tests` cells, under coverage, so the same
-    # cap: at 15 the 2026-10-22 train was killed three attempts running at
-    # 93% of a suite that was still progressing, not wedged.
-    timeout-minutes: 30
+    # A download and a diff: well under 3 min. The cap exists only for a
+    # wedged step, so it no longer needs the suite's 30.
+    timeout-minutes: 10
     permissions:
       contents: read
     # JOB-level, not step-level: a secret cannot be referenced directly in an
@@ -1102,6 +1718,21 @@ jobs:
           # catches a compromised action exfiltrating a token, paired with
           # zizmor's static analysis. Flip to block + an allowlist to enforce.
           egress-policy: audit
+      - name: tests must be conclusive
+        # The artifact proves only that the measuring STEP passed: a red smoke
+        # step in that same cell, or any red Windows/macOS cell, still leaves
+        # `coverage-report` behind. So the matrix's result is read here, as a
+        # step that always runs — a job-level `if:` on it would SKIP this
+        # required check, and a skipped required check reads as passing.
+        # TO CONFIRM on the first PR run: that a red 3.15 cell (job-level
+        # continue-on-error) still reports needs.tests.result == 'success'.
+        env:
+          TESTS: ${{ needs.tests.result }}
+        run: |
+          if [ "$TESTS" != "success" ]; then
+            echo "::error::tests concluded '$TESTS' — patch coverage cannot be trusted"
+            exit 1
+          fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0    # full history so origin/main is a real diff base
@@ -1109,23 +1740,19 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
-      - name: git identity (fixture repos)
-        run: |
-          git config --global user.email ci@boost.test
-          git config --global user.name "Boost CI"
-      - name: install test deps
+      - name: install diff-cover
         run: |
           python -m venv .venv
           # Hash-pinned; test-tools.txt plus diff-cover.
           .venv/bin/pip -q install -r requirements/coverage-tools.txt
-          # [rag] extra so dense.py counts the same lines the matrix does
-          .venv/bin/pip -q install sqlite-vec || true
-      - name: suite -> Cobertura coverage.xml
-        # --cov-fail-under=0: the project coverage gate (`fail_under` in
-        # pyproject.toml) is the matrix job's to own; this comment names no
-        # percentage so it cannot drift away from it.
-        # This job gates ONLY the patch. Same suite the matrix runs.
-        run: .venv/bin/pytest tests/unit tests/functional --cov=boost_cli --cov-report=xml --cov-fail-under=0 -q
+      - name: coverage.xml from tests (ubuntu-latest, 3.12)
+        # Fails the job when the artifact is absent — which is exactly the
+        # case of a red or cancelled measuring cell (see the job comment).
+        # The project gate (`fail_under` in pyproject.toml) was enforced in
+        # that cell; this job gates ONLY the patch.
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: coverage-report
       - name: diff-cover (changed-line coverage vs main)
         # 80% of each PR's changed, coverable lines must be tested — pairs with
         # the project gate so new code can't ride in untested. Tune --fail-under
@@ -1215,6 +1842,7 @@ jobs:
   # documented .github/required-checks.txt path instead of quietly turning an
   # existing required check into the gate for a second suite.
   bdd:
+    if: github.event_name != 'schedule' && github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -1265,6 +1893,7 @@ jobs:
     # the value here is the model contract, which is platform-independent. The
     # matrix keeps testing that a machine WITHOUT the extra degrades cleanly,
     # which is the more common user state.
+    if: github.event_name != 'schedule' && github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:

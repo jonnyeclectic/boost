@@ -101,10 +101,18 @@ def mutate(base, fn: Callable[[dict], bool | None]) -> bool:
     project` runs used to each read, add their row and write, and the second
     write dropped the first's row — leaving a copy on disk that install then
     refused and uninstall disowned. ``fn`` returning False skips the write;
-    returns whether it wrote. Refuses over a corrupt lock (:func:`write`).
+    returns whether it wrote.
+
+    Refuses over a corrupt lock before ``fn`` runs, so a no-op ``fn`` cannot
+    report "nothing to change" about a record boost cannot read. That check
+    is a read too, and it belongs here under the guard: on Windows a read
+    that lands inside another process's ``os.replace`` is refused
+    (Permission denied), and ``remove_skill`` doing it unlocked reported a
+    sound lock as corrupt on windows-latest.
     """
     with util.file_lock(guard_path(base), what="the project lock",
                         strict=False):
+        refuse_corrupt(base)
         lock = read(base)
         if fn(lock) is False:
             return False
@@ -239,8 +247,9 @@ def remove_skill(base, name: str) -> bool:
 
     Refuses over a corrupt lock even though it reads as holding nothing:
     "not present" would be a false answer about a record boost cannot read.
+    :func:`mutate` makes that check under the lock; only the existence probe
+    runs unlocked, so a missing lock creates no ``.boost/`` sidecar.
     """
-    refuse_corrupt(base)
     if not exists(base):
         return False    # nothing to remove, and no reason to create .boost/
 

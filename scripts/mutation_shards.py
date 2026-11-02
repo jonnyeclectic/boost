@@ -116,14 +116,12 @@ Usage
   mutation_shards.py merge --shards N --into mutants results/*  # rebuild results
   mutation_shards.py weights --source mutants    # refresh the balance hints
   mutation_shards.py drift --candidate new.json # is a refresh worth a PR?
-  mutation_shards.py cache-key                   # hash half of a shard's actions/cache key
 """
 from __future__ import annotations
 
 import argparse
 import ast
 import contextlib
-import hashlib
 import json
 import math
 import sys
@@ -799,7 +797,30 @@ def unit_weight(root: Path, unit: Unit) -> int:
     # so once every function of a file is timed the units sum to less than the
     # file they were cut from (store.py: 178 ms short of its 53,114,371) and
     # the planner under-counts the very file that sets the slowest shard.
-    return max(-(-file_weight * shares.get(unit.symbol, 1) // total), 1)
+    share = shares.get(unit.symbol) or unmeasured_share(unit, recorded, total)
+    return max(-(-file_weight * share // total), 1)
+
+
+def unmeasured_share(unit: Unit, recorded: dict[str, int], total: int) -> int:
+    """A share for a function the measured run never saw: its lines, priced
+    at the rate per line of the functions it did see.
+
+    A function added since the weights were written has no record, and it
+    used to get a share of 1 -- one millisecond out of ``store.py``'s 53
+    million. So a PR that adds functions to a split file put every one of them
+    in whichever shard was lightest by a hair: 23 of them all landed in shard
+    9 of run 41251356192, which then ran 4,289 mutants against main's 3,828 and
+    hit its 145-minute timeout on both attempts with six left. Priced by size
+    at the file's own measured rate, they spread like any other unit until the
+    next measured run records them.
+    """
+    if not recorded or unit.symbol is None:
+        return 1
+    lines = symbol_weight(unit.path, [*recorded, unit.symbol])
+    measured = sum(lines.get(s, 0) for s in recorded)
+    if not measured or unit.symbol not in lines:
+        return 1
+    return max(-(-total * lines[unit.symbol] // measured), 1)
 
 
 def pack(root: Path, shards: int) -> list[list[Unit]]:
@@ -1029,9 +1050,18 @@ def cmd_plan(args: argparse.Namespace) -> int:
     if not 0 <= args.index < args.shards:
         raise SystemExit("mutation_shards plan: --index %d out of range for %d shards"
                          % (args.index, args.shards))
-    patterns = [pattern_for(root, u) for u in bins[args.index]]
-    print(" ".join(p for p in patterns if p))
+    print(" ".join(patterns_for_bin(root, bins[args.index])))
     return 0
+
+
+def patterns_for_bin(root: Path, units: list[Unit]) -> list[str]:
+    """One packed bin's mutmut patterns, with ``__init__.py``'s ``None`` dropped.
+
+    The single spelling of "what does this shard run", shared by ``plan
+    --index`` and ``mutation_plan.py full`` so the two cannot drift apart --
+    ``merge --shards N`` re-derives the same pack and trusts that they agree.
+    """
+    return [p for p in (pattern_for(root, u) for u in units) if p]
 
 
 def shard_meta(parent: Path, prefix: str, shard: int, name: str):
@@ -1084,6 +1114,8 @@ def cmd_merge(args: argparse.Namespace) -> int:
         # reported below, exactly as a dropped whole file already was.
         codes: dict[str, object] = {}
         extras: dict[str, dict[str, object]] = {}
+        hashes: dict[str, object] = {}
+        disagree = False
         missing = []
         for shard in sorted(shards):
             src = shard_meta(Path(args.source), args.prefix, shard, name)
@@ -1094,6 +1126,14 @@ def cmd_merge(args: argparse.Namespace) -> int:
             for key, value in (data.get("exit_code_by_key") or {}).items():
                 if codes.get(key) is None:
                     codes[key] = value
+            # hash_by_function_name is what a later diff-scoped run compares
+            # against the merge base to find changed functions. Every shard
+            # mutates the whole tree, so the same function legitimately shows up
+            # in several shards with the SAME hash; a different hash means the
+            # shards ran different sources, and merging them would hide that.
+            for key, value in (data.get("hash_by_function_name") or {}).items():
+                if hashes.setdefault(key, value) != value:
+                    disagree = True
             # Carry the parallel per-key maps mutmut writes, so a merged .meta
             # is shaped exactly like an unsharded one.
             for field in ("type_check_error_by_key", "durations_by_key",
@@ -1102,6 +1142,9 @@ def cmd_merge(args: argparse.Namespace) -> int:
                 for key, value in (data.get(field) or {}).items():
                     if bucket.get(key) is None:
                         bucket[key] = value
+        if disagree:
+            problems.append("%s: shards disagree on function hashes" % name)
+            continue
         if missing:
             problems.append("%s: no results from shard%s %s under %s/%s*"
                             % (name, "" if len(missing) == 1 else "s",
@@ -1117,7 +1160,8 @@ def cmd_merge(args: argparse.Namespace) -> int:
             continue
         dest = dest_dir / (name + ".meta")
         dest.parent.mkdir(parents=True, exist_ok=True)
-        payload = {"exit_code_by_key": codes}
+        payload = {"exit_code_by_key": codes,
+                   "hash_by_function_name": hashes}
         for field in ("type_check_error_by_key", "durations_by_key",
                       "estimated_durations_by_key"):
             payload[field] = extras.get(field, {})
@@ -1174,6 +1218,9 @@ def cmd_merge(args: argparse.Namespace) -> int:
 #   tests/**       a new assertion kills a survivor without touching source.
 #   setup.cfg      mutmut's own config: source_paths, test selection, also_copy.
 #   pyproject.toml pytest configuration and the packaging metadata under it.
+#   pytest.ini, .pytest.ini, pytest.toml, .pytest.toml
+#                  anywhere: pytest's rootdir search reads each before
+#                  pyproject.toml.
 #   requirements/mutation-tools.txt  pins pytest+mutmut; the kill count is
 #                  defined relative to those versions.
 #   scripts/mutation_*.py, .github/workflows/ci.yml  the gate itself.
@@ -1184,11 +1231,20 @@ RELEVANT_PREFIXES = (
     "boost_cli/",
     "tests/",
     "requirements/mutation-tools.txt",
-    "scripts/mutation_gate.py",
-    "scripts/mutation_shards.py",
     ".github/workflows/ci.yml",
 )
 RELEVANT_EXACT = ("setup.cfg", "pyproject.toml")
+#: pytest config files, by base name, wherever they sit (mutation_diff's
+#: PYTEST_FILES less conftest.py, which `is_relevant` matches by suffix).
+PYTEST_CONFIG_NAMES = ("pytest.ini", ".pytest.ini", "pytest.toml", ".pytest.toml")
+
+#: Every gate script, by shape rather than by name, so the next one
+#: (`mutation_plan.py` was the third) is covered the day it lands. Only
+#: `.py`: `scripts/mutation_weights.json` sits under the same prefix and is a
+#: packing hint, never a correctness input -- a refresh moves which shard runs
+#: a mutant, not whether it is killed, so it must not buy a 24-shard run.
+GATE_SCRIPT_PREFIX = "scripts/mutation_"
+GATE_SCRIPT_SUFFIX = ".py"
 
 
 def is_relevant(changed: list[str]) -> bool:
@@ -1200,6 +1256,12 @@ def is_relevant(changed: list[str]) -> bool:
         if name in RELEVANT_EXACT:
             return True
         if name.endswith("conftest.py"):
+            return True
+        # Read before pyproject.toml's ini options, wherever they sit; a
+        # full-run trigger in mutation_diff, reachable only from here.
+        if name.rpartition("/")[2] in PYTEST_CONFIG_NAMES:
+            return True
+        if name.startswith(GATE_SCRIPT_PREFIX) and name.endswith(GATE_SCRIPT_SUFFIX):
             return True
         for prefix in RELEVANT_PREFIXES:
             if name.startswith(prefix):
@@ -1228,76 +1290,6 @@ def cmd_scope(args: argparse.Namespace) -> int:
         print("true")
         return 0
     print("true" if is_relevant(changed) else "false")
-    return 0
-
-
-# --------------------------------------------------------------------------
-# cache key: reuse a shard's mutants/ results across pushes of the same PR
-# --------------------------------------------------------------------------
-
-# Same list as RELEVANT_PREFIXES, minus boost_cli/ itself. mutmut already
-# reuses a source file's own results by content hash (per the module
-# docstring's "Balance without a chicken-and-egg" -- mutmut's per-source
-# hashing, not re-verified locally against the 3.7.0 pin here), so keying the
-# actions/cache entry on boost_cli/ too would just repeat that reuse one
-# level up, at the cost of evicting every mutant in the cache -- not just the
-# ones in the file that changed -- on every core edit, which is most pushes.
-# What mutmut does NOT re-derive on its own is which tests ran, which
-# mutmut/pytest built the recorded exit codes, and the gate's own scripts;
-# any of those changing must miss the cache and pay the full run, exactly as
-# `is_relevant` already says for the scope job.
-CACHE_KEY_PREFIXES = tuple(p for p in RELEVANT_PREFIXES if p != "boost_cli/")
-CACHE_KEY_EXACT = RELEVANT_EXACT
-
-
-def cache_key_paths(root: Path) -> list[Path]:
-    """Every file whose content can change a shard's cache key.
-
-    Mirrors ``is_relevant``'s own file list, minus ``boost_cli/`` (see
-    ``CACHE_KEY_PREFIXES``). A named file or directory that does not exist is
-    skipped rather than raising, so a fixture repo that only sets up part of
-    the tree still produces a stable key.
-    """
-    found: set[Path] = set()
-    for name in CACHE_KEY_EXACT:
-        path = root / name
-        if path.is_file():
-            found.add(path)
-    for prefix in CACHE_KEY_PREFIXES:
-        base = root / prefix
-        if base.is_dir():
-            found.update(f for f in base.rglob("*") if f.is_file())
-        elif base.is_file():
-            found.add(base)
-    return sorted(found)
-
-
-def cache_key_hash(root: Path) -> str:
-    """A deterministic digest of every file ``cache_key_paths`` names.
-
-    Hashes content, not mtime or git status: a checkout's timestamps are not
-    reproducible across machines, but bytes are. Each file's path is folded
-    in alongside its content (relative to `root`, POSIX-normalized) so a
-    rename or an added/removed file changes the digest even when every
-    remaining file's bytes are untouched.
-    """
-    digest = hashlib.sha256()
-    for path in cache_key_paths(root):
-        digest.update(path.relative_to(root).as_posix().encode("utf-8"))
-        digest.update(b"\0")
-        digest.update(path.read_bytes())
-        digest.update(b"\0")
-    return digest.hexdigest()
-
-
-def cmd_cache_key(args: argparse.Namespace) -> int:
-    """Print the hash half of a mutation shard's ``actions/cache`` key.
-
-    The workflow builds the full key itself (shard index + Python version +
-    this hash) -- this script has no reason to know either of the first two,
-    and folding them in here would just make the CI YAML a pass-through.
-    """
-    print(cache_key_hash(Path(args.root)))
     return 0
 
 
@@ -1706,9 +1698,6 @@ def main() -> int:
     d.add_argument("--github-output",
                    help="append `moved=` and `makespan=` to this file ($GITHUB_OUTPUT)")
     d.set_defaults(func=cmd_drift)
-
-    k = sub.add_parser("cache-key", help="hash half of a shard's actions/cache key")
-    k.set_defaults(func=cmd_cache_key)
 
     args = ap.parse_args()
     return args.func(args)

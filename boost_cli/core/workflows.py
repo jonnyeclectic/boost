@@ -1208,14 +1208,168 @@ def render_skill(name: str, description: str, raw: str) -> str:
     return "%s\n\n%s" % (head, _skill_body(raw))
 
 
-def render_notes(agent: str | None, slot: str, raw: str) -> list[str]:
-    """What :func:`render` could not carry over for ``agent`` in ``slot``.
+#: Claude Code's agent name in the config, the one target whose subagent
+#: ``tools`` line :func:`claude_agent_notes` reads.
+CLAUDE_AGENT = "claude-code"
 
-    The file is still written; these are said beside it. Only Gemini's TOML
-    commands have any (:func:`gemini_command_notes`).
+#: Claude Code's built-in tool names, every row of the tools table at
+#: https://code.claude.com/docs/en/tools-reference (read 2026-10-31), which
+#: says they are "the exact strings you use in ... subagent tool lists".
+#: ``TaskOutput`` is listed there as removed in 2.1.277 and is kept: a file
+#: written for an older Claude Code still names it, and it is Claude-shaped.
+#: The list is the evidence for :data:`_CLAUDE_TOOL_SHAPE` rather than a gate
+#: of its own -- a test pins that the shape covers every name here, so a
+#: built-in the shape rejected would fail the build rather than be warned
+#: about as foreign. It also gives a lowercase ``read`` its spelling.
+CLAUDE_TOOL_NAMES = frozenset({
+    "Agent", "Artifact", "AskUserQuestion", "Bash", "CronCreate",
+    "CronDelete", "CronList", "Edit", "EndConversation", "EnterPlanMode",
+    "EnterWorktree", "ExitPlanMode", "ExitWorktree", "Glob", "Grep",
+    "ListAgents", "ListMcpResourcesTool", "LSP", "Monitor", "NotebookEdit",
+    "PowerShell", "PushNotification", "Read", "ReadMcpResourceTool",
+    "RemoteTrigger", "ReportFindings", "ScheduleWakeup", "SendFeedback",
+    "SendMessage", "SendUserFile", "ShareOnboardingGuide", "Skill",
+    "SubagentHandback", "TaskCreate", "TaskGet", "TaskList", "TaskOutput",
+    "TaskStop", "TaskUpdate", "TodoWrite", "ToolSearch", "WaitForMcpServers",
+    "WebFetch", "WebSearch", "Workflow", "Write"})
+#: "In version 2.1.63, the Task tool was renamed to Agent. Existing `Task(...)`
+#: references in settings and agent definitions still work as aliases."
+#: (https://code.claude.com/docs/en/sub-agents, read 2026-10-31.)
+CLAUDE_TOOL_ALIASES = frozenset({"Task"})
+
+#: The shape of a Claude Code tool entry: a capitalised name, optionally with
+#: a ``(specifier)`` -- ``Bash(git add *)``, ``Agent(worker, researcher)``.
+#: Deciding by shape rather than by :data:`CLAUDE_TOOL_NAMES` is what keeps a
+#: list that goes stale with every Claude Code release from warning about a
+#: tool added since: ``FutureTool`` is quiet, ``codebase`` is not.
+_CLAUDE_TOOL_SHAPE = re.compile(r"^[A-Z][A-Za-z0-9]*(\(.*\))?$")
+#: An MCP tool, or a whole server's: ``mcp__github__create_issue``,
+#: ``mcp__github``, ``mcp__github__*``.
+CLAUDE_MCP_PREFIX = "mcp__"
+_CLAUDE_TOOL_BY_FOLD = {name.casefold(): name for name in CLAUDE_TOOL_NAMES}
+
+
+def _split_claude_tools(text: str) -> list[str]:
+    """A ``tools: Read, Grep, Bash`` string as its entries, split on commas
+    *outside* parentheses.
+
+    Claude Code's own string form, and the reason :func:`_tools_entries` is
+    not reused: it splits on every comma, so ``Agent(worker, researcher)``
+    became ``Agent(worker`` and ``researcher)``, neither of them a tool, and
+    a line Claude Code launches fine read as granting nothing. A stray ``)``
+    leaves the depth at zero rather than below it, so it cannot swallow the
+    commas after it.
+    """
+    parts: list[str] = []
+    buf, depth = "", 0
+    for ch in text:
+        if ch == "(":
+            depth += 1
+        elif ch == ")" and depth:
+            depth -= 1
+        if ch == "," and not depth:
+            parts.append(buf)
+            buf = ""
+        else:
+            buf += ch
+    parts.append(buf)
+    return [p.strip() for p in parts if p.strip()]
+
+
+def claude_tool_resolves(entry: str) -> bool:
+    """Whether Claude Code could read ``entry`` in a ``tools`` list as a tool.
+
+    ``*``, an ``mcp__`` name, or anything Claude-shaped
+    (:data:`_CLAUDE_TOOL_SHAPE`) -- which covers every built-in, the ``Task``
+    alias and the ``Name(spec)`` form. Generous on purpose: this decides
+    whether to *warn*, and a false warning on a working subagent is worse
+    than a quiet one on a made-up ``ReadFile``.
+    """
+    return (entry == "*" or entry.startswith(CLAUDE_MCP_PREFIX)
+            or _CLAUDE_TOOL_SHAPE.match(entry) is not None)
+
+
+def claude_agent_notes(raw: str) -> list[str]:
+    """What is wrong with subagent ``raw``'s ``tools`` line for Claude Code.
+
+    One case: the line grants something and *none* of it is a Claude Code
+    tool -- a tap's agent written for GitHub Copilot (``tools: codebase,
+    edit/editFiles, terminalCommand, search, githubRepo``). Claude Code loads
+    that file and then refuses to launch it, "would be spawned with zero
+    tools" (https://code.claude.com/docs/en/sub-agents: "If no entry in the
+    list resolves to a tool, the subagent usually fails to launch").
+
+    A note, never a refusal. Declining the file would take back a copy the
+    user may already have fixed by hand, and dropping the line would make it
+    inherit every tool -- a wider grant than its author wrote, the move
+    :func:`_key_is_dropped` refuses for Gemini. So the file is written as
+    the tap has it and the line to fix is named.
+
+    Quiet for everything Claude Code itself is quiet about: no ``tools`` key
+    (inherit every tool), an empty or null one, a line with at least one
+    Claude entry (Claude Code launches with the subset), and any value this
+    module cannot read. ``disallowedTools`` is not read: a deny entry that
+    resolves to nothing never stops a launch.
+    """
+    span = _locate_frontmatter(raw)
+    if span is None:
+        return []
+    lines = _lines_of(raw[span[0]:span[1]])
+    keys = _scan_keys(lines)
+    key = next((k for k in keys or () if k.name == "tools"), None)
+    if key is None:
+        return []
+    shape, text, items = _read_value(lines, key)
+    if shape == _LIST:
+        entries = items
+    elif shape == _SCALAR and text.lower() not in _NULL_TEXTS:
+        entries = _split_claude_tools(text)
+    else:
+        entries = []
+    if not entries or any(claude_tool_resolves(e) for e in entries):
+        return []
+    spelled = ["`%s` as `%s`" % (e, _CLAUDE_TOOL_BY_FOLD[e.casefold()])
+               for e in entries if e.casefold() in _CLAUDE_TOOL_BY_FOLD]
+    return ["`tools` grants %s, none of which is a Claude Code tool, and "
+            "Claude Code refuses to launch a subagent whose tools resolve to "
+            "nothing — fix the `tools` line%s; written as the tap has it"
+            % (", ".join("`%s`" % e for e in entries),
+               " (Claude Code spells %s)" % ", ".join(spelled)
+               if spelled else "")]
+
+
+def invocation_hint(agent: str | None, slot: str, name: str,
+                    raw: str) -> str | None:
+    """How a user reaches what was written for ``agent`` in ``slot``, when
+    it is not the ``/<name>`` a slash command would be; else None.
+
+    A Claude Code subagent is the case: it is run by an @-mention or by
+    asking Claude, never as a slash command, and the mention is the
+    frontmatter ``name`` -- "identity comes only from the `name` frontmatter
+    field" (https://code.claude.com/docs/en/sub-agents) -- which need not be
+    the file boost wrote. ``name`` (boost's) stands in when there is none.
+    """
+    if agent != CLAUDE_AGENT or slot != SLOT_AGENTS:
+        return None
+    meta, _ = frontmatter.parse(raw)
+    called = str(meta.get("name") or "").strip() or name
+    return ("a subagent, not a slash command — @-mention it as "
+            "`@agent-%s`, or ask Claude to use it" % called)
+
+
+def render_notes(agent: str | None, slot: str, raw: str) -> list[str]:
+    """What :func:`render` could not carry over for ``agent`` in ``slot``,
+    or what the agent will make of what it carried.
+
+    The file is still written; these are said beside it. Gemini's TOML
+    commands have them (:func:`gemini_command_notes`), and so does a Claude
+    Code subagent whose ``tools`` name no Claude tool
+    (:func:`claude_agent_notes`) -- written verbatim, and refused at launch.
     """
     if target_ext(agent, slot) == TOML_EXT:
         return gemini_command_notes(raw)
+    if agent == CLAUDE_AGENT and slot == SLOT_AGENTS:
+        return claude_agent_notes(raw)
     return []
 
 
@@ -1225,7 +1379,10 @@ def render_problem(agent: str | None, slot: str, text: str) -> str | None:
 
     Only Gemini's subagent slot is judged (:func:`gemini_agent_problem`): it
     is the one target with a strict load-time schema, and the one whose repair
-    can decline. A caller that gets a reason does not write the file.
+    can decline. A caller that gets a reason does not write the file. A
+    Claude Code subagent that would fail at *launch* is not declined here:
+    its file is written and :func:`render_notes` says what to fix
+    (:func:`claude_agent_notes` says why).
     """
     if agent in TOML_COMMAND_AGENTS and slot == SLOT_AGENTS:
         return gemini_agent_problem(text)
@@ -1240,7 +1397,9 @@ def render(agent: str | None, slot: str, name: str, raw: str) -> str:
     and its ``agents`` slot has its frontmatter sanitized by
     :func:`sanitize_gemini_agent` — the body is still verbatim there. Pairs
     with :func:`target_ext`: the two agree on exactly which combination is
-    special, so the extension and the content can never disagree.
+    special, so the extension and the content can never disagree. A Claude
+    Code subagent stays verbatim even when its ``tools`` line names no Claude
+    tool: :func:`render_notes` says so rather than this rewriting it.
 
     The skill slot (:data:`SLOT_SKILL`) is asked first and belongs to no
     agent: it is the copy in the canonical store, rendered by
