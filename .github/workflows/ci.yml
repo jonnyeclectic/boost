@@ -1277,7 +1277,8 @@ jobs:
     # stood then. The retraction at the end of this block is NOT part of that
     # snapshot and is dated separately. For what the cap is worth against the
     # pack committed today, run `scripts/mutation_shards.py plan --shards 24
-    # --explain --timeout-minutes 160` rather than trust a number restated here.
+    # --explain --timeout-minutes 190` rather than trust a number restated here.
+    # 190 is the mutate step's cap, not this job's: the step's fires first.
     #
     # The split was never the problem — the runners were. The committed pack
     # balances to within a hundredth of a percent (`--explain` prints each
@@ -1407,7 +1408,7 @@ jobs:
     #
     # Figures re-derived 2026-10-05 against the pack committed that day, and
     # they go stale on the next weights refresh: run `plan --shards 24
-    # --explain --timeout-minutes 160` for the live ones rather than trusting
+    # --explain --timeout-minutes 190` for the live ones rather than trusting
     # these, and read them next to the observed 34.6 / 55.8 rather than alone.
     #
     # THE FIXED COST WAS MEASURED, AND MOST OF IT WAS A TEST (2026-10-09).
@@ -1520,13 +1521,46 @@ jobs:
     # work running 2-2.4x slower is the runner, not the weights, and
     # TAIL_MULTIPLIER is not re-fitted on it, per its own note.
     #
+    # 160 / 145 -> 200 / 190, AND THE CHECK NOW SCORES THE STEP (2026-11-04).
+    # The weights were refreshed from main's nightly 41682296301 (head
+    # b294d51c), and on them `plan` puts the floor shard, store.install
+    # alone at 14,199,920 ms, at a 134.4-minute tail. That is 84% of the old
+    # 160 and 93% of the old 145. The check scored the job's 160, but since
+    # c1ab6cf5 (2026-10-22) the mutate step's 145 fired first. The step
+    # covers almost the whole job, so a slow shard stopped at 145, not 160:
+    # run 41251356192's shard 9 did on its second attempt (job 124732016551,
+    # "timed out after 145 minutes"); the first lost its runner at 143.2 min.
+    # The weights being replaced already scored 121.5 min, 76% of 160 but
+    # 84% of 145, so the check passed a pack that was already past its gate.
+    # It now reads the step's cap.
+    #
+    # At 190 the 11-03 weights score 71%. The night before, the same commit
+    # measured 1.15x slower (nightly 41512174636, 384.3M ms against 334.8M),
+    # and those weights score 150.2 min, 79%. Both are inside the 80% gate,
+    # and the second is close to it. The model held on both nightlies:
+    # mutant time / 4 matched the `Running mutation testing` phase at a
+    # median 0.982 and 0.983, so RUNNER_EFFICIENCY stands.
+    #
+    # Seven runs since harden-runner left this job (b02f0075) were measured:
+    # 41373164603, 41387655215, 41387907117, 41512174636, 41682296301,
+    # 41767138461 and 41783223118, 168 successful full-shard jobs. Their
+    # longest job took 114.1 min, and the longest mutation phase 108.0.
+    #
+    # The 10 minutes between the two caps is for the work outside the step.
+    # Over those 168 jobs, job start to the mutate step took a median 0.38
+    # min (max 3.40). The mutant results to job end took 0.14 (max 1.85),
+    # and the two together never exceeded 3.67. So the step still fails
+    # first, as a step with a log; the job's cap only catches a setup or
+    # upload that hangs.
+    #
     # tests/unit/test_mutation_shard_count.py pins all of it: that this number,
     # the planner's FULL_SHARDS (the matrix below is built from its plan) and
-    # every `--shards` in this repo agree, and that
-    # the committed pack passes `plan --timeout-minutes` against this cap with
-    # 20% headroom. So the next pack that would be cancelled fails a unit test
-    # instead, which is the point.
-    timeout-minutes: 160
+    # every `--shards` in this repo agree; that the committed pack passes
+    # `plan --timeout-minutes` with 20% headroom against the mutate step's
+    # cap, which is the one that fires first; and that the step's cap sits
+    # under this one. So the next pack that would be cancelled fails a unit
+    # test instead, which is the point.
+    timeout-minutes: 200
     permissions:
       contents: read
     strategy:
@@ -1588,10 +1622,14 @@ jobs:
           name: mutation-stats
           path: ${{ runner.temp }}/mutation-stats
       - name: mutate ${{ matrix.set }} shard ${{ matrix.index }}
-        # Under the job's 160 so a stalled shard fails as a step, with a log
+        # Under the job's 200 so a stalled shard fails as a step, with a log
         # the API will serve. The four "runner lost communication" losses on
         # 2026-10-22 (94-124 min into this step) all 404 on their logs.
-        timeout-minutes: 145
+        # This is the cap that fires first, so it is the one the headroom
+        # check in tests/unit/test_mutation_shard_count.py scores. The 10-min
+        # gap to the job's cap is 2.7x the most time any of 168 jobs spent
+        # outside this step (3.67 min; see the block above the job's cap).
+        timeout-minutes: 190
         env:
           SET: ${{ matrix.set }}
           SHARD: ${{ matrix.index }}

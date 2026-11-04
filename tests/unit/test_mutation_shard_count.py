@@ -1,6 +1,6 @@
 # Copyright the boost contributors.
 # SPDX-License-Identifier: Apache-2.0
-"""The shard count agrees everywhere, and the pack fits inside the job cap.
+"""The shard count agrees everywhere, and the pack fits inside the cap that fires.
 
 Two things this repo cannot derive and therefore has to assert.
 
@@ -24,7 +24,9 @@ runs.
 **The headroom.** ``timeout-minutes`` cannot be read through ``${{ }}``, so no
 job can check itself against it. The check runs here instead, which is better
 anyway: a pack that would be cancelled fails in the ``test`` job in
-milliseconds rather than 75 minutes into a matrix.
+milliseconds rather than 75 minutes into a matrix. The cap it checks is the
+mutate step's, not the job's. The step is nearly the whole job and its cap is
+lower, so that is the cap a slow shard reaches (see :func:`timeout_minutes`).
 
 Why that matters is on the record. On the merge of #1015 ``mutation-shard (4)``
 ran the cap out and was cancelled; ``ci`` then concluded ``cancelled`` rather
@@ -104,14 +106,118 @@ def test_every_shards_flag_in_the_workflows_matches(path):
         % (path.name, sorted(set(found)), ms.SHARDS))
 
 
-def timeout_minutes() -> int:
-    """`mutation-shard`'s own `timeout-minutes`, not some other job's."""
-    body = _ci()
+def _shard_job(text: str | None = None) -> str:
+    """`mutation-shard`'s block of ci.yml, not some other job's."""
+    body = _ci() if text is None else text
     start = body.index("  mutation-shard:")
     end = body.index("\n  mutation:", start)
-    m = re.search(r"^\s+timeout-minutes:\s*(\d+)", body[start:end], re.M)
-    assert m, "mutation-shard has no timeout-minutes"
+    return body[start:end]
+
+
+def job_timeout_minutes(text: str | None = None) -> int:
+    """`mutation-shard`'s job-level `timeout-minutes` (four spaces in)."""
+    m = re.search(r"^    timeout-minutes:\s*(\d+)", _shard_job(text), re.M)
+    assert m, "mutation-shard has no job-level timeout-minutes"
     return int(m.group(1))
+
+
+def step_timeout_minutes(text: str | None = None) -> int:
+    """The `timeout-minutes` of the step that runs `mutmut run`.
+
+    Found by what the step runs, not by its name, and only on a line that
+    runs it: the comments in that step say "`mutmut run`" too.
+    """
+    steps = re.split(r"^      - ", _shard_job(text), flags=re.M)[1:]
+    mutate = [s for s in steps
+              if re.search(r"^\s+[^#\s]\S*mutmut run\b", s, re.M)]
+    assert len(mutate) == 1, (
+        "expected one mutation-shard step that runs `mutmut run`, found %d"
+        % len(mutate))
+    m = re.search(r"^        timeout-minutes:\s*(\d+)", mutate[0], re.M)
+    assert m, "the step that runs `mutmut run` has no timeout-minutes"
+    return int(m.group(1))
+
+
+def timeout_minutes(text: str | None = None) -> int:
+    """The cap a slow shard actually reaches: the mutate step's.
+
+    Not the job's. The step covers almost the whole job and its cap is
+    lower, so it fires first. Scoring the job's cap is how a pack at 84% of
+    the step's 145 passed as 76% of the job's 160. The test below holds the
+    step's cap under the job's, which is what keeps this the cap that fires.
+    """
+    return step_timeout_minutes(text)
+
+
+#: The most time any of 168 successful full-shard jobs spent outside the
+#: mutate step. That is job start to the step (median 0.38, max 3.40), plus
+#: the step's `Mutant results` to job end (median 0.14, max 1.85); the sum
+#: has a median of 0.53. The jobs come from seven runs, 2026-11-02..04, the
+#: ones listed in ci.yml above the job's cap. Frozen: it describes those jobs.
+OUTSIDE_THE_STEP_MAX_MIN = 3.67
+
+
+def check_step_fires_first(text: str | None = None) -> None:
+    job, step = job_timeout_minutes(text), step_timeout_minutes(text)
+    assert step < job, (
+        "the mutate step's timeout-minutes (%d) is not under the job's (%d), "
+        "so the job's cap fires first and the headroom check scores a cap "
+        "that never fires" % (step, job))
+    assert job - step > OUTSIDE_THE_STEP_MAX_MIN, (
+        "the job's cap (%d) leaves %d min for the work outside the mutate "
+        "step, which has taken up to %.2f min: a slow setup would hit the "
+        "job's cap before the step's" % (job, job - step,
+                                         OUTSIDE_THE_STEP_MAX_MIN))
+
+
+def _synthetic_ci(job: int, step: int) -> str:
+    # A step before the mutate step carries its own cap, so a reader that
+    # takes the first step-level number reads the wrong one.
+    return (
+        "jobs:\n"
+        "  mutation-shard:\n"
+        "    runs-on: ubuntu-latest\n"
+        "    timeout-minutes: %d\n"
+        "    steps:\n"
+        "      - name: install test deps\n"
+        "        timeout-minutes: 7\n"
+        "        run: pip install -r requirements/mutation-tools.txt\n"
+        "      - name: mutate shard 0\n"
+        "        # `mutmut run` with no arguments runs every mutant\n"
+        "        timeout-minutes: %d\n"
+        "        run: |\n"
+        "          .venv/bin/mutmut run -- \"${MUTMUT_ARGS[@]}\"\n"
+        "      - name: upload shard results\n"
+        "        run: true\n"
+        "  mutation:\n"
+        "    timeout-minutes: 20\n"
+    ) % (job, step)
+
+
+class TestWhichCapFires:
+    """The headroom check scores the cap that stops a slow shard."""
+
+    def test_the_step_cap_sits_under_the_job_cap(self):
+        check_step_fires_first()
+
+    @pytest.mark.parametrize("job, step", [(200, 210), (200, 200),
+                                           (200, 197)],
+                             ids=["over", "equal", "gap-too-small"])
+    def test_a_step_cap_that_would_not_fire_first_is_refused(self, job, step):
+        with pytest.raises(AssertionError):
+            check_step_fires_first(_synthetic_ci(job, step))
+
+    def test_the_check_reads_the_step_cap_not_the_jobs(self):
+        # The job's cap comes first in the text, so reading the first
+        # `timeout-minutes` in the job (as this file did) returns 200 here.
+        text = _synthetic_ci(200, 190)
+        assert job_timeout_minutes(text) == 200
+        assert step_timeout_minutes(text) == 190
+        assert timeout_minutes(text) == 190
+
+    def test_the_committed_check_scores_the_step(self):
+        assert timeout_minutes() == step_timeout_minutes()
+        assert timeout_minutes() != job_timeout_minutes()
 
 
 class TestHeadroom:
@@ -222,7 +328,7 @@ class TestPlanCliContract:
     @real_tree_only
     def test_a_pack_that_fits_exits_zero_and_one_that_does_not_exits_one(self,
                                                                         capsys):
-        # The committed cap, read from ci.yml: a literal here went stale the
+        # The mutate step's cap, read from ci.yml: a literal here went stale the
         # day the cap moved off 75.
         cap = timeout_minutes()
         assert ms.cmd_plan(self._args(explain=True, timeout_minutes=cap)) == 0

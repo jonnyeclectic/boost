@@ -226,7 +226,8 @@ jobs:
             echo "The hints are an **optimisation, never a correctness input**:"
             echo "a stale file costs shard balance and can no more change the"
             echo "mutation score than a missing one can. What it does change is"
-            echo "headroom — the slowest shard carries \`timeout-minutes: 160\`,"
+            echo "headroom — the slowest shard's mutate step carries"
+            echo "\`timeout-minutes: 190\`,"
             echo "and #1000 lost a required check to a shard that ran 75.6"
             echo "under the 75 it carried then."
             echo
