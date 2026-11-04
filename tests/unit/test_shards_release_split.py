@@ -26,6 +26,7 @@ import gzip
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -83,10 +84,37 @@ def _write(path, data):
     return path
 
 
+def _child_env(base, extra):
+    """The environment a workflow step runs in here: ``base`` plus ``extra``,
+    minus mutmut's ``MUTANT_UNDER_TEST``.
+
+    The steps start ``python3 scripts/publish_shards.py``, which imports
+    ``boost_cli``. Under mutmut that is the mutated copy, whose trampolines
+    read the variable: in the ``stats`` pass a child that inherits it records a
+    trampoline hit, which loads mutmut's config from the child's cwd -- a
+    tmp dir with no setup.cfg -- and dies with "Could not figure out where the
+    code to mutate is" (PR #1305's first mutation-plan run, 41858584377). The
+    child runs no mutant, so it gets none, as tests/_tapped_support.py's
+    child processes do.
+    """
+    env = {**base, **extra}
+    env.pop("MUTANT_UNDER_TEST", None)
+    return env
+
+
+def test_a_step_never_inherits_the_mutant_under_test():
+    env = _child_env({"MUTANT_UNDER_TEST": "stats", "KEEP": "1"}, {"GH_TOKEN": "x"})
+    assert env == {"KEEP": "1", "GH_TOKEN": "x"}
+    # and an explicit one from a caller cannot slip through either
+    assert "MUTANT_UNDER_TEST" not in _child_env({}, {"MUTANT_UNDER_TEST": "fail"})
+
+
 # ------------------------------------------------------------ names and URLs
 
 class TestAssetNames:
 
+    @pytest.mark.skipif(shutil.which("tr") is None,
+                        reason="no `tr` on PATH (the workflow runs it on ubuntu)")
     @pytest.mark.parametrize("tap", ["o/r", "Some-Org/a.b_c", "x/y-z"])
     def test_dense_name_is_what_the_export_steps_tr_writes(self, tap):
         # The workflow names the file in shell; the projection names it in
@@ -987,9 +1015,10 @@ class FakeRepo:
         _write(self.state / "releases.json", self.releases)
         script = self.root / "step.sh"
         script.write_text(_step(job, step)["run"], encoding="utf-8")
-        full = {**os.environ, "PATH": "%s:%s" % (self.bin, os.environ["PATH"]),
-                "GH_TOKEN": "x", "REPO": "o/r",
-                "FAKE_GH_STATE": str(self.state), **env}
+        full = _child_env(os.environ, {
+            "PATH": "%s:%s" % (self.bin, os.environ["PATH"]),
+            "GH_TOKEN": "x", "REPO": "o/r",
+            "FAKE_GH_STATE": str(self.state), **env})
         proc = subprocess.run(["bash", "--noprofile", "--norc", "-eo",
                                "pipefail", str(script)], cwd=self.root,
                               env=full, capture_output=True, text=True,
