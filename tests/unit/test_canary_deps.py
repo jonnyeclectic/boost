@@ -40,7 +40,7 @@ the person adding it, not defaulted to "probably fine".
 weekly ``floors`` cron went red on 2026-09-30 with the same seventeen
 ``ModuleNotFoundError: No module named 'setuptools'``. That job also builds
 its venv by hand, and this file had been written to read exactly one job —
-``jobs["canary"]`` in ci.yml — so it had nothing to say about the second
+``jobs["canary"]`` (then in ci.yml, now compat.yml) — so it had nothing to say about the second
 place the same mistake lives. :func:`_harness_jobs` now finds them by shape
 rather than by name: **five** jobs across three workflow files run
 ``tests/unit``/``tests/functional`` out of a venv they assemble themselves,
@@ -73,6 +73,8 @@ yaml = pytest.importorskip("yaml")
 
 ROOT = Path(__file__).resolve().parents[2]
 CI = ROOT / ".github" / "workflows" / "ci.yml"
+#: Where the canary lives since it left the PR path: after a merge, and daily.
+COMPAT = ROOT / ".github" / "workflows" / "compat.yml"
 WORKFLOWS = ROOT / ".github" / "workflows"
 
 
@@ -593,7 +595,7 @@ def _harness_jobs() -> list[tuple[str, str, set[str], list[Path]]]:
 
 
 def _canary_step() -> dict:
-    jobs = yaml.safe_load(CI.read_text(encoding="utf-8"))["jobs"]
+    jobs = yaml.safe_load(COMPAT.read_text(encoding="utf-8"))["jobs"]
     assert "canary" in jobs, "the canary job was renamed or removed"
     for step in jobs["canary"]["steps"]:
         run = step.get("run", "")
@@ -638,7 +640,8 @@ def _canary_targets(run: str) -> list[Path]:
 #: diff-cover, so there is no suite import for its venv to be missing.
 HARNESS_JOBS = {
     "ci.yml:tests",            # the required coverage gate (-r test-tools.txt)
-    "ci.yml:canary",           # 3.14t free-threaded, explicit pip line
+    "compat.yml:canary",       # 3.14t free-threaded, explicit pip line
+    "compat.yml:compat",       # macOS/Windows 3.15 (-r test-tools.txt)
     "ci.yml:onnx-inference",   # one file out of tests/unit, own venv, .[rag]
     "floors.yml:lowest",       # uv lowest-direct, explicit pip line
     "sonarcloud.yml:sonar-analyze",
@@ -865,15 +868,25 @@ class TestCanaryDependencies:
             f"{unknown} is imported by the suite and is in neither "
             f"MODULE_TO_DIST nor REPO_LOCAL — say which it is")
 
-    def test_the_canary_still_allows_failure(self):
+    def test_the_canary_still_blocks_nothing(self):
         """Green is the point; blocking on it is not.
 
-        The leg is a signal. If it ever becomes required, this file's premise
-        (a red canary is ignorable, so it must be green to mean anything)
-        stops holding and the docstring above needs rewriting.
+        The leg is a signal. It lives in compat.yml, which no pull request or
+        merge queue runs and publish.yml does not wait on, so a red canary
+        opens a tracker and stops neither a merge nor a release. If that ever
+        changes, this file's premise (a red canary blocks nothing, so it must
+        be green to mean anything) stops holding and the docstring above needs
+        rewriting.
         """
-        jobs = yaml.safe_load(CI.read_text(encoding="utf-8"))["jobs"]
-        assert jobs["canary"]["continue-on-error"] is True
+        doc = yaml.safe_load(COMPAT.read_text(encoding="utf-8"))
+        on = doc.get("on", doc.get(True))
+        assert "canary" in doc["jobs"]
+        assert not {"pull_request", "pull_request_target", "merge_group"} & set(on)
+        publish = yaml.safe_load(
+            (WORKFLOWS / "publish.yml").read_text(encoding="utf-8"))
+        publish_on = publish.get("on", publish.get(True))
+        assert publish_on["workflow_run"]["workflows"] == ["ci"]
+        assert "canary" not in yaml.safe_load(CI.read_text(encoding="utf-8"))["jobs"]
 
 
 class TestGuardDetection:
@@ -1430,11 +1443,12 @@ jobs:
         assert committed == {
             "ci.yml:tests", "ci.yml:onnx-inference",
             "sonarcloud.yml:sonar-analyze", "ci.yml:mutation-plan",
+            "compat.yml:compat",
         }
         assert generated == {"floors.yml:lowest"}
-        # `ci.yml:canary` is in neither: it names every distribution on the
+        # `compat.yml:canary` is in neither: it names every distribution on the
         # command line, which is why it is the job this file pins hardest.
-        assert "ci.yml:canary" not in committed | generated
+        assert "compat.yml:canary" not in committed | generated
 
     def test_the_single_file_job_resolves_to_that_file(self):
         """A pin on what a job's targets *are*, not that it has some.

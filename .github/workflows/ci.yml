@@ -503,10 +503,10 @@ jobs:
     # passing on rerun. So the condition names the one OS that keeps 30 —
     # Linux, the 12.7-18.3 min cells — and macOS shares Windows' cap.
     timeout-minutes: ${{ startsWith(matrix.os, 'ubuntu') && 30 || 80 }}
-    # The 3.15 cells are advisory (see the matrix comment): a red one must not
+    # The 3.15 cell is advisory (see the matrix comment): a red one must not
     # fail the ci run, because publish.yml releases only on its `success`.
     continue-on-error: ${{ matrix.python == '3.15' }}
-    # Read only: the badge push moved to `coverage-badge`, so twelve cells no
+    # Read only: the badge push moved to `coverage-badge`, so the cells no
     # longer hold a token that can write the repository for one cell's step.
     permissions:
       contents: read
@@ -523,7 +523,7 @@ jobs:
         # floor. 3.13 is the middle rather than a second point near the edge.
         # 3.15 added 2026-10-28, when Homebrew's python3 became 3.15 and took
         # 3.14 away: it is now the interpreter a new user's pipx picks. Its
-        # cells are a compatibility signal, not a gate, on both edges: NOT in
+        # cell is a compatibility signal, not a gate, on both edges: NOT in
         # .github/required-checks.txt (no merge block), and job-level
         # `continue-on-error` above (no release block — publish.yml fires on
         # a *successful* ci run, and one red cell fails the run, as the
@@ -534,6 +534,15 @@ jobs:
         # cp315 wheels for coverage and pyyaml's sdist hash, so the hashed
         # install builds on this leg.
         python: ["3.12", "3.13", "3.14", "3.15"]
+        # 3.15 on ubuntu only. Its macOS and Windows cells, advisory like it,
+        # cost every PR push ~2 slots (one of the five macOS ones) for a
+        # signal that could block nothing; compat.yml runs them after a
+        # merge and daily, alarmed.
+        exclude:
+          - os: macos-latest
+            python: "3.15"
+          - os: windows-latest
+            python: "3.15"
     steps:
       - name: harden runner (egress audit)
         if: runner.os == 'Linux'   # harden-runner is Linux-only
@@ -1855,56 +1864,9 @@ jobs:
           files: coverage.xml
           fail_ci_if_error: false
 
-  canary:
-    # Allow-failure early-warning leg on the free-threaded (no-GIL) CPython
-    # build: a GIL-removal regression surfaces here before a user on 3.14t hits
-    # it on release day. boost's runtime is stdlib-only, so this should stay
-    # green; `continue-on-error` keeps a red canary from blocking the gate (and
-    # the release) — it's a signal, not a required check. PR-only.
-    name: canary (3.14t free-threaded)
-    if: github.event_name == 'pull_request'
-    continue-on-error: true
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions:
-      contents: read
-    steps:
-      - name: harden runner (egress audit)
-        uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
-        with:
-          # audit: record egress, never block — the runtime signal that
-          # catches a compromised action exfiltrating a token, paired with
-          # zizmor's static analysis. Flip to block + an allowlist to enforce.
-          egress-policy: audit
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0    # tags for setuptools-scm version resolution
-          persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "3.14t"
-      - name: git identity (fixture repos)
-        run: |
-          git config --global user.email ci@boost.test
-          git config --global user.name "Boost CI"
-      - name: unit + functional on free-threaded 3.14
-        # Plain pytest (no coverage gate) — this leg is a compatibility signal,
-        # not the coverage/mutation gate. [rag] deps with no free-threaded wheel
-        # importorskip themselves, exactly as on the main matrix.
-        run: |
-          python -m venv .venv
-          # setuptools is a TEST dependency here, not a build one: `pip install
-          # -e .` resolves the backend in an isolated build env, so nothing it
-          # does puts setuptools in .venv, and a modern `venv` seeds pip alone.
-          # tests/unit/test_sdist_contents.py runs setuptools' own MANIFEST
-          # matcher (`setuptools._distutils.filelist`) rather than building an
-          # sdist over the network, so without this the leg is red on 17
-          # ModuleNotFoundErrors and a real no-GIL regression would not change
-          # its colour. tests/unit/test_canary_deps.py keeps this list in step
-          # with what the suite imports unguarded.
-          .venv/bin/pip -q install pytest pytest-cov coverage hypothesis setuptools pyyaml
-          .venv/bin/pip -q install -e .
-          .venv/bin/pytest tests/unit tests/functional -q
+  # The free-threaded 3.14t canary moved to compat.yml, which runs after a
+  # merge and daily and alarms when red: here it was PR-only and
+  # continue-on-error, so it could block nothing and cost every PR push a slot.
 
   # The behave suite (tests/bdd) ran nowhere in CI:
   # `make bdd` only ever executed if a contributor remembered to run it. Unlike
