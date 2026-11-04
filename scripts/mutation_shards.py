@@ -1216,6 +1216,13 @@ def cmd_merge(args: argparse.Namespace) -> int:
 #                  mutants/, and the tests import it — a change in commands/
 #                  or cli.py can flip a core mutant from survived to killed.
 #   tests/**       a new assertion kills a survivor without touching source.
+#                  Except tests/visual/, the puppeteer harnesses: Node scripts
+#                  and their npm lock, which mutmut never runs (it selects
+#                  tests/unit/). Unit tests read those files as text
+#                  (test_visual_harness_*, test_sdist_contents) and import no
+#                  boost_cli code to do it, so they cannot change whether a core
+#                  mutant is killed. A .py file there still counts: the
+#                  exclusion is by what the files are, not where.
 #   setup.cfg      mutmut's own config: source_paths, test selection, also_copy.
 #   pyproject.toml pytest configuration and the packaging metadata under it.
 #   pytest.ini, .pytest.ini, pytest.toml, .pytest.toml
@@ -1246,6 +1253,9 @@ PYTEST_CONFIG_NAMES = ("pytest.ini", ".pytest.ini", "pytest.toml", ".pytest.toml
 GATE_SCRIPT_PREFIX = "scripts/mutation_"
 GATE_SCRIPT_SUFFIX = ".py"
 
+#: The browser harnesses' tree; see the RELEVANT_PREFIXES comment.
+VISUAL_HARNESS_PREFIX = "tests/visual/"
+
 
 def is_relevant(changed: list[str]) -> bool:
     """True when the mutation score could differ from the base commit's."""
@@ -1263,6 +1273,8 @@ def is_relevant(changed: list[str]) -> bool:
             return True
         if name.startswith(GATE_SCRIPT_PREFIX) and name.endswith(GATE_SCRIPT_SUFFIX):
             return True
+        if name.startswith(VISUAL_HARNESS_PREFIX) and not name.endswith(".py"):
+            continue
         for prefix in RELEVANT_PREFIXES:
             if name.startswith(prefix):
                 return True

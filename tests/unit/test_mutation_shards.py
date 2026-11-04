@@ -43,6 +43,9 @@ _spec.loader.exec_module(ms)
     # named like a pytest config file, but it is not one
     ["docs/pytest.toml.md"],
     ["docs/notes/.pytest.ini.bak"],
+    # the puppeteer harnesses: Node, run by no mutant (a Dependabot npm bump)
+    ["tests/visual/package.json", "tests/visual/package-lock.json"],
+    ["tests/visual/visual_check.mjs", "docs/index.html"],
 ])
 def test_irrelevant_changes_skip(changed):
     assert ms.is_relevant(changed) is False
@@ -82,6 +85,13 @@ def test_irrelevant_changes_skip(changed):
     [".github/workflows/ci.yml"],
     # one relevant path among many irrelevant ones still counts
     ["docs/a.md", "README.md", "boost_cli/core/util.py"],
+    # tests/visual/ is excluded by kind, not by place: Python there still counts
+    ["tests/visual/helper.py"],
+    ["tests/visual/conftest.py"],
+    ["tests/visual/pytest.ini"],
+    ["tests/visual/a11y_check.mjs", "tests/unit/test_visual_harness_flags.py"],
+    # only that subtree: a sibling that merely starts with the same letters
+    ["tests/visualize/notes.md"],
 ])
 def test_relevant_changes_run(changed):
     assert ms.is_relevant(changed) is True
