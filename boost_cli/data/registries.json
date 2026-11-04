@@ -1,8 +1,8 @@
 {
   "generated_note": "Curated skill/rule/workflow registries for boost. est_items are research estimates; verify by tapping. list_only repos are index/awesome lists that link out.",
-  "count": 537,
-  "est_items_total": 40486,
-  "est_items_scannable": 35995,
+  "count": 536,
+  "est_items_total": 39703,
+  "est_items_scannable": 35212,
   "registries": [
     {
       "name": "Aaronontheweb/dotnet-cursor-rules",
@@ -5646,17 +5646,6 @@
       "est_items": 50,
       "confidence": "med",
       "list_only": true,
-      "curated": false
-    },
-    {
-      "name": "loulanyue/awesome-claude-notes",
-      "url": "https://github.com/loulanyue/awesome-claude-notes",
-      "type": "workflow",
-      "category": "meta",
-      "focus": "Community-maintained distribution of reusable AI coding agents... (135 skills, 648 workflows)",
-      "est_items": 783,
-      "confidence": "high",
-      "list_only": false,
       "curated": false
     },
     {

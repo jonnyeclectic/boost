@@ -751,8 +751,7 @@ WORKFLOWS = [
     ("hnaymyh123-henry/claude-dev-skill", "general", "A Claude Code custom skill that turns Claude into a Tech Lead... (26 workflows)", 26, "high"),
     ("anthropics/financial-services", "general", "8 workflows", 8, "high"),
     ("jeremylongshore/tons-of-skills-marketplace", "general", "471 plugins, 3,069 skills, 347 agents for Claude Code. Open-source... (3482 skills, 771 workflows)", 4253, "med"),
-    # meta (7 repos, 1133 measured items)
-    ("loulanyue/awesome-claude-notes", "meta", "Community-maintained distribution of reusable AI coding agents... (135 skills, 648 workflows)", 783, "high"),
+    # meta (6 repos, 350 measured items)
     ("agentlas-ai/Agentlas-OS", "meta", "Agent OS: keep specialist agents in a hub, spin up a temporary... (48 skills, 2 rules, 62 workflows)", 112, "high"),
     ("composio-community/awesome-claude-plugins", "meta", "A curated list of Plugins that let you extend Claude Code with custom... (23 skills, 38 workflows)", 61, "high"),
     ("anthropics/claude-plugins-official", "meta", "Official, Anthropic-managed directory of high quality Claude Code Plugins (60 workflows)", 60, "high"),
