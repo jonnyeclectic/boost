@@ -32,12 +32,17 @@ on:
     # guard only looked for a cron or a push, so three workflows that run on
     # main after everything else has reported were invisible to it. `release`
     # is publish.yml — the job that actually uploads to PyPI on every merge.
+    #
+    # `nightly-watch` is the one entry that reports an ABSENCE: `ci`'s
+    # whole-codebase run not happening at all, which no `workflow_run` of `ci`
+    # can report, since nothing completes. It fails when that run is overdue,
+    # and so opens its own tracker here.
     workflows: ["adapter-conformance", "boost-langchain", "ci", "codeql",
       "demo", "eval-corpus-refresh", "eval-explain", "eval-scale",
       "eval-stats", "floors", "fuzz", "html-validate", "licenses",
       "lighthouse", "links", "lock-refresh", "markdownlint",
-      "mutation-weights-refresh", "package-metadata", "pip-audit",
-      "post-deploy", "prose-lint", "release", "sbom",
+      "mutation-weights-refresh", "nightly-watch", "package-metadata",
+      "pip-audit", "post-deploy", "prose-lint", "release", "sbom",
       "scorecard", "shards", "sonarcloud", "theme-lint", "visual"]
     types: [completed]
 

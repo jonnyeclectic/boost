@@ -18,7 +18,9 @@ on:
   # weekly crons and the `shards` bursts. A red or missing nightly turns the
   # proven-tree skip off, and stops any push planning no mutation run on its
   # base's verdict (scripts/ci_proven_tree.py), and ci-failure-issue.yml
-  # already watches `ci`, so a red one opens the tracking issue.
+  # already watches `ci`, so a red one opens the tracking issue. A missing
+  # one opens one too: nightly-watch.yml fails when ci's newest completed
+  # schedule/dispatch run on main is more than 36 h old.
   # publish.yml ignores both events: it releases only from a `push` run.
   schedule:
     - cron: "30 9 * * *"
