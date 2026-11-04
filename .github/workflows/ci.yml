@@ -14,7 +14,10 @@ on:
   # functions it changed, and a push to main whose tree a green PR run already
   # tested skips the suite and the shards (`proven` below), so this is where
   # the whole of boost_cli/core is still scored against 80%: the mutation jobs
-  # only, always the full 24-shard plan. 09:30 UTC is clear of the 04:00-08:00
+  # only, and the full 24-shard plan unless the night is idle -- main still at
+  # the commit and tree of a green, full run created under 7 days before
+  # (`idle-nightly` below), in which case it plans none and says which run it
+  # inherits. A dispatch always plans full. 09:30 UTC is clear of the 04:00-08:00
   # weekly crons and the `shards` bursts. A red or missing nightly turns the
   # proven-tree skip off, and stops any push planning no mutation run on its
   # base's verdict (scripts/ci_proven_tree.py), and ci-failure-issue.yml
@@ -77,7 +80,9 @@ concurrency:
 # WHICH JOB RUNS ON WHICH EVENT. A nightly or a dispatch is the whole-codebase
 # mutation run and nothing else, so every job outside mutation-plan,
 # mutation-shard and mutation carries `github.event_name != 'schedule' &&
-# github.event_name != 'workflow_dispatch'`, or is pull_request-only already.
+# github.event_name != 'workflow_dispatch'`, or is pull_request-only already
+# -- except `idle-nightly`, which runs on `schedule` alone and only asks the
+# API whether tonight's plan may be none.
 # On a push to main, `proven` decides whether the suite, the shards and the
 # coverage collection have already been done by the PR run; lint (with
 # zizmor), evals, install-smoke, bdd and onnx-inference run regardless.
@@ -467,6 +472,64 @@ jobs:
           BEFORE: ${{ github.event.before }}
         run: python3 scripts/ci_proven_tree.py --sha "$GITHUB_SHA" --before "$BEFORE"
 
+  # May tonight's nightly inherit the last real whole-codebase run instead of
+  # mutating the same bytes again? Run 41512174636 (2026-11-02) mutated
+  # b294d51c in full and passed; run 41682296301 (2026-11-03) mutated the same
+  # commit again, all 24 shards, because nothing had merged in between.
+  # scripts/ci_idle_nightly.py (the walk is ci_proven_tree.idle) answers yes
+  # only when the newest real run before this one -- found first, its verdict
+  # read second, red never looked past -- is a completed first attempt of
+  # this same commit and tree, green with a green `mutation` job, created under
+  # 7 days before this run, and every skip between names it. The clock runs
+  # from that real run, never from a skip. Any push to main, proven or not,
+  # moves the commit, so the next nightly is full. Every unknown -- an API
+  # error, a rate limit, a listing longer than its page, an undated run -- is
+  # `idle=false`; the script always exits 0.
+  #
+  # Its own job, rather than `actions: read` on mutation-plan: the planner
+  # installs the mutation toolchain and runs tests/unit, and keeps the
+  # `contents: read` token tests/unit/test_ci_base_mutation.py pins -- the
+  # same reason the base's verdict is asked in `proven`. If this job fails
+  # outright (not an answer: the runner, the checkout), its outputs are empty
+  # and the plan is full, but the run concludes failure with `mutation` green
+  # -- so the next nightly reads a red run, plans full, and fact 3 turns the
+  # proven-push skip off until a whole-codebase run is green again. That is
+  # the conservative direction, and loud: ci-failure-issue.yml opens the
+  # tracker.
+  #
+  # Schedule only, on main (the only place a schedule runs; checked anyway).
+  # First attempt only, too, but a "re-run failed jobs" does not run this job
+  # again: mutation-plan gets its outputs from the attempt before, so the
+  # scope step there checks the attempt itself.
+  idle-nightly:
+    if: github.event_name == 'schedule' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    # A dozen API calls with their own timeouts; mutation-plan waits on this.
+    timeout-minutes: 5
+    permissions:
+      contents: read        # the checkout that carries the script
+      actions: read         # ci's whole-codebase runs, their artifacts and jobs
+    outputs:
+      idle: ${{ steps.idle.outputs.idle }}
+      source_run: ${{ steps.idle.outputs.source_run }}
+      source_tree: ${{ steps.idle.outputs.source_tree }}
+      reason: ${{ steps.idle.outputs.reason }}
+    steps:
+      - name: harden runner (egress audit)
+        uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: has main moved since the last real whole-codebase run?
+        id: idle
+        # Stdlib only, like `proven`: no setup-python between the cron and
+        # the answer the planner waits on.
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 scripts/ci_idle_nightly.py --sha "$GITHUB_SHA" --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT"
+
   tests:
     needs: proven
     # Skipped only on an explicit `skip == 'true'`: a pull request (proven
@@ -803,9 +866,24 @@ jobs:
   # push until a whole-codebase run is green again. This file is itself
   # mutation-relevant: this change's own PR run plans the full set, and its
   # push is either proven by that run on a green base or plans full. A
-  # nightly or a dispatch plans full, always: with pushes able to skip, that
-  # run is where the whole codebase is held to 80%, and with an unproven push
-  # it is the only full run whose `mutation-weights` the refresh workflow takes.
+  # dispatch plans full, always, and so does a nightly unless `idle-nightly`
+  # says main is still the commit and tree of a green real run under 7 days
+  # old: with pushes able to skip, those runs are where the whole codebase is
+  # held to 80%, and with an unproven push the only full runs whose
+  # `mutation-weights` the refresh workflow takes. An idle nightly uploads no
+  # weights; its plan reason names the run, tree and time it inherits.
+  #
+  # WHAT A WHOLE-CODEBASE RUN WAS, RECORDED BEFORE ITS OUTCOME. Every
+  # schedule/dispatch run whose plan is written uploads exactly one marker, right
+  # after `write the plan` and before any shard starts: `mutated-tree-<tree>`
+  # when the gate set is full, `inherited-tree-<tree>-from-<run>` when an idle
+  # nightly planned none. Uploaded whatever the run goes on to conclude, so a
+  # red real run is marked like a green one -- the walk finds it as the newest
+  # real run, reads it red, and plans full, rather than passing an unmarked
+  # run by to inherit an older green one. A failed upload fails this job, and
+  # so `mutation`. Kept 14 days: a fact-3 re-check (ci_proven_tree.py) of a skip
+  # up to 48 h old reads a real run up to 7 days before that, 9 in all, and
+  # tests/unit/test_ci_idle_nightly.py pins retention against those constants.
   #
   # `mutation` is the context named in .github/required-checks.txt, so it must run
   # and report on every pull request. Neither path-filtering it nor letting
@@ -815,9 +893,10 @@ jobs:
   # inspection of what the upstream jobs did: `always()` on its own would report a
   # failed shard as a green required check.
   mutation-plan:
-    needs: proven
+    needs: [proven, idle-nightly]
     # Every event, including the ones where `proven` is skipped (all but
-    # push) or failed (empty outputs, so the plan is decided as before).
+    # push) or failed (empty outputs, so the plan is decided as before), and
+    # likewise `idle-nightly` (all but schedule; failed: the full plan).
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     # The scope check takes seconds. A relevant change then pays mutant
@@ -851,6 +930,17 @@ jobs:
           # fail every PR's planner instead of quietly shrinking the scope.
           fetch-depth: 0
           persist-credentials: false
+      # The tree this whole-codebase run mutates (or inherits a verdict for),
+      # in a step output: the scope step compares it with the tree
+      # `idle-nightly` vouched for, and both marker uploads below are named for
+      # it -- through `with:`, never through `${{ }}` inside `run:`.
+      - name: record the tree this whole-codebase run is about
+        id: tree
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        run: |
+          tree="$(git rev-parse --verify 'HEAD^{tree}')"
+          printf '%s %s\n' "$tree" "$GITHUB_SHA" > "$RUNNER_TEMP/whole-codebase-tree"
+          echo "tree=$tree" >> "$GITHUB_OUTPUT"
       - name: can the mutation score have changed?
         id: scope
         env:
@@ -861,6 +951,10 @@ jobs:
           PR_RUN_ID: ${{ needs.proven.outputs.pr_run_id }}
           BASE_GREEN: ${{ needs.proven.outputs.base_mutation_green }}
           BASE_MUTATION: ${{ needs.proven.outputs.base_mutation }}
+          IDLE: ${{ needs.idle-nightly.outputs.idle }}
+          IDLE_RUN: ${{ needs.idle-nightly.outputs.source_run }}
+          IDLE_TREE: ${{ needs.idle-nightly.outputs.source_tree }}
+          TREE: ${{ steps.tree.outputs.tree }}
         run: |
           # A proven push: the PR run already tested this exact tree, and the
           # nightly holds the whole codebase to 80%. relevant=false is what
@@ -888,9 +982,41 @@ jobs:
             echo "proven by PR run $PR_RUN_ID, but the base's mutation is not green — not inheriting it"
           fi
           # The whole-codebase run is relevant by definition, whatever the
-          # event payload happens to carry as a base.
+          # event payload happens to carry as a base -- unless it is an idle
+          # nightly: `idle-nightly` found main still at the commit and tree of
+          # a green real run under 7 days old. Schedule only (`idle-nightly`
+          # runs nowhere else, so a value seen on a dispatch is not its
+          # verdict), exactly "true", a run id that is all digits, and the
+          # tree it vouched for equal to the one this checkout holds. Anything
+          # else is the full gate.
+          #
+          # And on a first attempt, checked here and not only in idle-nightly.
+          # "Re-run failed jobs" (or "re-run this job") on mutation-plan does
+          # not re-run idle-nightly: GitHub's re-run docs say the outputs of
+          # jobs that succeeded in the attempt before are used for the re-run.
+          # So attempt 2 would read attempt 1's yes -- which the same docs let
+          # it do up to 30 days later, long after the 7 days that yes was good
+          # for -- and plan none on it, without ci_idle_nightly.py ever seeing
+          # an attempt but 1. GITHUB_RUN_ATTEMPT is a runner default, read
+          # fresh by this attempt; unset or anything but exactly 1 is a re-run.
           case "$EVENT" in
             schedule|workflow_dispatch)
+              if [ "$EVENT" = schedule ] && [ "$IDLE" = true ] && [ "$GITHUB_RUN_ATTEMPT" != 1 ]; then
+                echo "idle-nightly's yes is an earlier attempt's, reused by this re-run (attempt ${GITHUB_RUN_ATTEMPT//[^0-9]/}) — the full gate"
+                echo "idle=rerun" >> "$GITHUB_OUTPUT"
+              elif [ "$EVENT" = schedule ] && [ "$IDLE" = true ]; then
+                if [[ "$IDLE_RUN" =~ ^[1-9][0-9]{0,19}$ ]] && [ -n "$TREE" ] && [ "$IDLE_TREE" = "$TREE" ]; then
+                  echo "idle nightly — inherits whole-codebase run $IDLE_RUN, tree ${TREE:0:12}"
+                  {
+                    echo "relevant=false"
+                    echo "idle=true"
+                    echo "source_run=$IDLE_RUN"
+                  } >> "$GITHUB_OUTPUT"
+                  exit 0
+                fi
+                echo "idle-nightly vouched for another run or tree than this checkout's — the full gate"
+                echo "idle=mismatch" >> "$GITHUB_OUTPUT"
+              fi
               echo "whole-codebase run ($EVENT) — the full gate"
               echo "relevant=true" >> "$GITHUB_OUTPUT"
               exit 0
@@ -1020,6 +1146,13 @@ jobs:
           # Set only when the scope step widened an irrelevant push because
           # its base's `mutation` was not green; it names the base and why.
           WIDENED: ${{ steps.scope.outputs.widened_reason }}
+          # "true" only on a nightly the scope step let inherit; "mismatch"
+          # when idle-nightly said yes for another run or tree than this one;
+          # "rerun" when its yes was an earlier attempt's, reused by a re-run.
+          IDLE: ${{ steps.scope.outputs.idle }}
+          # idle-nightly's one line: which real run is inherited (id, event,
+          # created_at, tree, until when), or why this nightly is not idle.
+          IDLE_REASON: ${{ needs.idle-nightly.outputs.reason }}
           EVENT: ${{ github.event_name }}
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
@@ -1031,6 +1164,8 @@ jobs:
           if [ "$RELEVANT" != "true" ]; then
             if [ "$PROVEN" = "true" ]; then
               reason="proven by PR run $PR_RUN_ID"
+            elif [ "$EVENT" = schedule ] && [ "$IDLE" = true ]; then
+              reason="${IDLE_REASON:-idle nightly: main has not moved since a green real whole-codebase run}"
             else
               reason="no change under boost_cli/, tests/, or the mutation configuration"
             fi
@@ -1060,7 +1195,17 @@ jobs:
                 fi
                 ;;
               schedule|workflow_dispatch)
-                plan_full "whole-codebase run ($EVENT)"
+                if [ "$IDLE" = mismatch ]; then
+                  plan_full "whole-codebase run ($EVENT) — idle-nightly vouched for another run or tree than this checkout's"
+                elif [ "$IDLE" = rerun ]; then
+                  # Not IDLE_REASON: that is the reused yes, and would name
+                  # the run this plan is refusing to inherit.
+                  plan_full "whole-codebase run ($EVENT) — a re-run: idle-nightly's yes is an earlier attempt's, and only a first attempt may inherit"
+                elif [ "$EVENT" = schedule ]; then
+                  plan_full "whole-codebase run ($EVENT) — ${IDLE_REASON:-idle-nightly gave no answer}"
+                else
+                  plan_full "whole-codebase run ($EVENT)"
+                fi
                 ;;
               *)
                 plan_full "${WIDENED:-a mutation-relevant path changed, or there was no usable base commit}"
@@ -1082,6 +1227,26 @@ jobs:
             echo "shadow=$SHADOW"
             echo "reason=$REASON"
           } >> "$GITHUB_OUTPUT"
+      # The markers (see "WHAT A WHOLE-CODEBASE RUN WAS" above), keyed on the
+      # plan this step just wrote rather than on a second reading of its
+      # inputs: `gate_set` is what `mutation` gates on. Both events, and only
+      # those: a pull request's or a push's gate set is `full` too.
+      - name: record that this whole-codebase run mutates its tree in full
+        if: (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && steps.plan.outputs.gate_set == 'full'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mutated-tree-${{ steps.tree.outputs.tree }}
+          path: ${{ runner.temp }}/whole-codebase-tree
+          retention-days: 14
+          if-no-files-found: error
+      - name: record which real run this idle nightly inherits
+        if: github.event_name == 'schedule' && steps.scope.outputs.idle == 'true' && steps.plan.outputs.gate_set == ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: inherited-tree-${{ steps.tree.outputs.tree }}-from-${{ steps.scope.outputs.source_run }}
+          path: ${{ runner.temp }}/whole-codebase-tree
+          retention-days: 14
+          if-no-files-found: error
       - name: upload the plan
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -1544,8 +1709,10 @@ jobs:
           fi
       # Reached only past the step above, so the planner succeeded: an empty
       # gate set here is the planner's own `none`, never a failed planner's
-      # empty output. Its reason is either "no change under boost_cli/ ..."
-      # or "proven by PR run <id>".
+      # empty output. Its reason is "no change under boost_cli/ ...", "proven
+      # by PR run <id>", or "idle nightly: ..." naming the real run inherited
+      # (id, created_at, tree) and until when -- so the summary of a skip says
+      # whose green it is, never a bare one.
       - name: nothing to mutate
         if: needs.mutation-plan.outputs.gate_set == ''
         env:

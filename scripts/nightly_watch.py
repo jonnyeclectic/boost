@@ -13,11 +13,21 @@ run is more than 48 h old, which is the safe direction, and tells nobody. Every
 push then runs the full gate, and nothing says why or that the nightly is gone.
 
 This script is that alarm. It asks GitHub for exactly what ``ci_proven_tree``
-asks -- the newest completed ``schedule`` / ``workflow_dispatch`` run of
-``ci.yml`` on ``main``, through that script's own ``_last_whole``, so the two
-cannot drift onto different definitions -- and exits 1 when there is none or
-it was created more than ``MAX_AGE`` ago. Its conclusion is printed but not
-judged: a red one has its own alarm.
+asks first -- the newest completed ``schedule`` / ``workflow_dispatch`` run of
+``ci.yml`` on ``main``, through that script's own ``_newest_completed_whole``,
+the query ``_last_whole`` starts from, so the two cannot drift onto different
+definitions -- and exits 1 when there is none or it was created more than
+``MAX_AGE`` ago. Its conclusion is printed but not judged: a red one has its
+own alarm.
+
+An idle nightly (one that planned no mutation run because main had not moved
+since a green real run, ``ci_proven_tree.idle``) is a completed ``schedule``
+run like any other, so it counts here as the cron having fired -- which it
+did -- and raises no false alarm. It cannot stand in for a missing one: a
+cron that stopped leaves no run at all, idle or not, and that still fails at
+``MAX_AGE``. Whether the skip's inheritance still holds is not this alarm's
+question: ``_last_whole`` re-derives it for every reader that trusts the
+result, and reads ``unproven_skip`` when it does not.
 
 THE DIRECTION: an alarm that cannot look must be loud. A 4xx/5xx, a timeout, a
 body of the wrong shape, a run on another branch, a ``created_at`` that is
@@ -87,24 +97,20 @@ PREFIX = "nightly_watch"
 
 
 def _newest_whole(api: Api) -> tuple[Any, dict[str, Any] | None]:
-    """``ci_proven_tree._last_whole``'s answer, plus the run object it chose.
+    """The newest completed whole-codebase run as a ``Nightly``, plus its run object.
 
-    The verdict is ``_last_whole``'s; the run object is only for naming the run
-    in the log. It is recovered by reading the same responses ``_last_whole``
-    read and picking the newest the same way (``_newest`` over all of them is
-    the newest of each query's newest), so no second request is made.
+    Both from ``ci_proven_tree._newest_completed_whole`` -- the same two
+    ``per_page=1`` requests ``_last_whole`` begins with, and nothing else. The
+    run object is only for naming the run in the log. Not ``_last_whole``
+    itself: for a green run that goes on to read the run's marker, and for an
+    idle nightly the whole window -- a question about the skip's provenance,
+    not about whether the cron fired.
     """
-    bodies: list[Any] = []
-
-    def spy(path: str) -> Any:
-        body = api(path)
-        bodies.append(body)
-        return body
-
-    nightly = pt._last_whole(spy)
+    run = pt._newest_completed_whole(api)
+    nightly = pt._as_nightly(run)
     if nightly is None:
         return None, None
-    return nightly, pt._newest([run for body in bodies for run in pt._runs(body)])
+    return nightly, run
 
 
 def judge(nightly: Any, run: dict[str, Any] | None, now: datetime) -> tuple[bool, str]:
