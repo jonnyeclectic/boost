@@ -17,23 +17,30 @@ on:
   # and the full 24-shard plan unless the night is idle -- main still at the
   # commit and tree of a green, full run created under 7 days before
   # (`idle-nightly` below), in which case it plans none and says which run it
-  # inherits. A dispatch always plans full. Plus `tests-extended` (the macOS
-  # and Windows 3.13/3.14 legs no pull request runs), on every nightly, idle
-  # or not, so a runner image or interpreter that moves overnight is heard
-  # about on a day with no merge: an idle night inherits a mutation verdict,
-  # never a platform one. 09:30 UTC is clear of the 04:00-08:00 weekly crons
-  # and the `shards` bursts. A red `mutation` in the newest nightly, or a
-  # missing nightly, turns the proven-tree skip off and stops any push
-  # planning no mutation run on its base's verdict (scripts/ci_proven_tree.py,
-  # fact 3). It reads the `mutation` job, and looks past the run's conclusion
-  # only when `tests-extended` legs are all that is red: a red extended leg
-  # says nothing about the score, every push runs those legs itself before it
-  # can release, and read as the run it would put every push on the full
-  # mutation run until someone reran the leg. Do not rerun the leg on an idle
-  # night, though: "re-run failed jobs" makes the run attempt 2, an idle
-  # night counts for fact 3 only on attempt 1, so every push would then run
-  # in full until the next nightly. Leave it; the next green run closes the
-  # tracker. Any other red job (`idle-nightly`) still turns the skip off.
+  # inherits. A dispatch always plans full. A full nightly also runs the diff
+  # set since the newest green real whole-codebase run's commit, as advisory
+  # evidence for binding the PR diff gate (`nightly-shadow-base`,
+  # `mutation-advisory-shard`), which never changes its verdict. Plus
+  # `tests-extended` (the macOS and Windows 3.13/3.14 legs no pull request
+  # runs), on every nightly, idle or not, so a runner image or interpreter
+  # that moves overnight is heard about on a day with no merge: an idle night
+  # inherits a mutation verdict, never a platform one. 09:30 UTC is clear of
+  # the 04:00-08:00 weekly crons and the `shards` bursts. A red `mutation` in
+  # the newest nightly, or a missing nightly, turns the proven-tree skip off
+  # and stops any push planning no mutation run on its base's verdict
+  # (scripts/ci_proven_tree.py, fact 3). It reads the `mutation` job, and
+  # looks past the run's conclusion only when `tests-extended` legs are all
+  # that is red: a red extended leg says nothing about the score, every push
+  # runs those legs itself before it can release, and read as the run it
+  # would put every push on the full mutation run until someone reran the
+  # leg. Do not rerun the leg on an idle night, though: "re-run failed jobs"
+  # makes the run attempt 2, an idle night counts for fact 3 only on attempt
+  # 1, so every push would then run in full until the next nightly. Leave it;
+  # the next green run closes the tracker. Any other red job (`idle-nightly`)
+  # still turns the skip off. The diff shadow's two jobs are job-level
+  # continue-on-error, so they never make the run red, and fact 3 drops them
+  # from the jobs it reads before it asks whether only extended legs are red:
+  # a red one neither explains a red run nor refuses one.
   # ci-failure-issue.yml watches the run's conclusion, so a red one of
   # either kind opens the tracking issue. A missing one opens one too:
   # nightly-watch.yml fails when ci's newest completed schedule/dispatch run
@@ -108,9 +115,12 @@ concurrency:
 # mutation-plan, mutation-shard, mutation and tests-extended carries
 # `github.event_name != 'schedule' && github.event_name != 'workflow_dispatch'`,
 # or is pull_request-only already -- except `idle-nightly`, which runs on
-# `schedule` alone and only asks the API whether tonight's plan may be none.
-# `tests-extended` is the reverse: it never runs on a pull request or the
-# merge queue, and nothing about an idle night skips it.
+# `schedule` alone and only asks the API whether tonight's plan may be none,
+# and the two jobs of the nightly diff shadow, `nightly-shadow-base` and
+# `mutation-advisory-shard`, which run on `schedule` alone and carry
+# job-level `continue-on-error: true`, so neither can change the conclusion
+# the idle walk reads. `tests-extended` is the reverse: it never runs on a
+# pull request or the merge queue, and nothing about an idle night skips it.
 # On a push to main, `proven` decides whether the suite, the shards and the
 # coverage collection have already been done by the PR run; lint (with
 # zizmor), evals, install-smoke, bdd, onnx-inference and tests-extended run
@@ -530,7 +540,8 @@ jobs:
   # -- so the next nightly reads a red run and plans full (the walk reads the
   # run's conclusion, as well as its `mutation` job), and fact 3 turns the
   # proven-push skip off until a newer whole-codebase run is green: it looks
-  # past a red run only when every red job is a `tests-extended` leg, and
+  # past a red run only when every red job is a `tests-extended` leg (the
+  # diff shadow's two continue-on-error jobs, below, dropped first), and
   # tells this failure from that one by the run's job listing. That `mutation`
   # green is a real measurement -- nothing was inherited -- but it is not the
   # red fact 3 was written to look past, and before `tests-extended` the run's
@@ -569,6 +580,62 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: python3 scripts/ci_idle_nightly.py --sha "$GITHUB_SHA" --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT"
+
+  # What should tonight's advisory diff set be diffed from? Evidence before the
+  # PR diff gate may bind (docs/superpowers/plans/2026-10-31-ci-speed.md, Task
+  # 7 Step 6): until 2026-11-04 the only shadow report on record (artifact
+  # 13127375493, run 41387907117) compared 0 mutants over 0 functions, so a
+  # pull request's shadow alone is slow to reach the bar. Once the gate binds,
+  # the nightly is its backstop (spec option B), so a nightly that also runs
+  # the diff set of everything merged since main was last proven whole is the
+  # comparison that matters most. ci_proven_tree.shadow_base names the
+  # `head_sha` of the newest green real whole-codebase run before tonight,
+  # read through the same `mutated-tree-` / `inherited-tree-` markers the idle
+  # walk reads. Every unknown -- an API error, a re-run, an unmarked run,
+  # nothing in the window, tonight's own commit -- is an empty base, and the
+  # plan is full with no shadow.
+  #
+  # Its own job, not a step in `idle-nightly`: that job's shape is pinned, and
+  # a hang there could fail the run. Job-level `continue-on-error`, because a
+  # lost runner or a timeout here must not turn the run red: the run's
+  # conclusion is what tomorrow's idle walk reads, and fact 3 reads it beside
+  # the run's job listing, from which it drops this job and the
+  # `mutation-advisory-shard` legs by name (ci_proven_tree.ADVISORY_JOB_NAMES)
+  # -- a red one there is still red on the page. Evidence only; its outputs
+  # never change which set gates.
+  #
+  # It runs on an idle night too, beside `idle-nightly` rather than after it,
+  # and its answer is then unused: an idle plan is none, and only a full
+  # nightly's plan reads it. A minute of runner is cheaper than making the
+  # planner wait on the two questions in series.
+  nightly-shadow-base:
+    if: github.event_name == 'schedule' && github.ref == 'refs/heads/main'
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    # Two window listings, then two requests per run looked at, each with its
+    # own request timeout, like idle-nightly's.
+    timeout-minutes: 5
+    permissions:
+      contents: read        # the checkout that carries the script
+      actions: read         # ci's whole-codebase runs, their artifacts and jobs
+    outputs:
+      shadow_base: ${{ steps.shadow.outputs.shadow_base }}
+      shadow_base_run: ${{ steps.shadow.outputs.shadow_base_run }}
+      shadow_reason: ${{ steps.shadow.outputs.shadow_reason }}
+    steps:
+      - name: harden runner (egress audit)
+        uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: which commit does tonight's diff shadow start from?
+        id: shadow
+        # Stdlib only, like idle-nightly: no setup-python before the answer.
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 scripts/ci_idle_nightly.py --shadow-base --sha "$GITHUB_SHA" --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT"
 
   tests:
     needs: proven
@@ -1060,7 +1127,10 @@ jobs:
   # diff set (the changed functions and their direct callers), sharded in the
   # same matrix. The full run still decides `mutation`; the diff set's verdict
   # and per-mutant results are compared against it in an advisory step, until
-  # enough runs agree for the diff gate to bind.
+  # enough runs agree for the diff gate to bind. A full nightly carries one too
+  # -- the diff since `nightly-shadow-base`'s commit -- marked `advisory` in
+  # the plan, so its shards run in `mutation-advisory-shard` instead and a
+  # failed diff leg cannot turn the nightly red.
   #
   # By event: a push to main plans `none` in two cases only, and both need
   # `proven` to have read the base commit's own `mutation` as green (that
@@ -1108,10 +1178,11 @@ jobs:
   # inspection of what the upstream jobs did: `always()` on its own would report a
   # failed shard as a green required check.
   mutation-plan:
-    needs: [proven, idle-nightly]
+    needs: [proven, idle-nightly, nightly-shadow-base]
     # Every event, including the ones where `proven` is skipped (all but
     # push) or failed (empty outputs, so the plan is decided as before), and
-    # likewise `idle-nightly` (all but schedule; failed: the full plan).
+    # likewise `idle-nightly` (all but schedule; failed: the full plan) and
+    # `nightly-shadow-base` (all but schedule; failed: no shadow).
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     # The scope check takes seconds. A relevant change then pays mutant
@@ -1131,6 +1202,10 @@ jobs:
       # The plan's reasons on one line, for `mutation`'s summary when there is
       # nothing to run -- "proven by PR run <id>" is not "nothing changed".
       reason: ${{ steps.plan.outputs.reason }}
+      # The shards of the plan's `advisory` sets, `[]` when it has none (every
+      # event but a full nightly with a shadow). `matrix` above never holds
+      # them, so `mutation-shard` runs only sets that may decide the gate.
+      advisory_matrix: ${{ steps.plan.outputs.advisory_matrix }}
     steps:
       - name: harden runner (egress audit)
         uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
@@ -1351,7 +1426,16 @@ jobs:
       # trusted to bind. Anything else (a push to main) plans full. A full-run
       # trigger in the diff (a mutation script, this job, setup.cfg [mutmut],
       # ...) makes `diff --shadow` return the full plan alone -- including on
-      # the PR that edits these lines.
+      # the PR that edits these lines -- and so does an empty diff scope, so
+      # no shadow report compares nothing.
+      #
+      # A full nightly (not idle, first attempt) plans `nightly`: the same full
+      # set, plus the diff set since `nightly-shadow-base`'s commit marked
+      # advisory. Any doubt about that -- no base, a malformed one, the
+      # planner failing, a plan not gated on full or making anything but
+      # `diff` advisory -- plans full alone and says why. A dispatch is always
+      # full alone: it is the lever for clearing a red nightly, and kept that
+      # simple on purpose.
       - name: write the plan
         id: plan
         env:
@@ -1368,6 +1452,12 @@ jobs:
           # idle-nightly's one line: which real run is inherited (id, event,
           # created_at, tree, until when), or why this nightly is not idle.
           IDLE_REASON: ${{ needs.idle-nightly.outputs.reason }}
+          # nightly-shadow-base's answer: the commit a full nightly's advisory
+          # diff set starts from (empty: no shadow), the run it is the head
+          # of, and why. Read on `schedule` only.
+          SHADOW_BASE: ${{ needs.nightly-shadow-base.outputs.shadow_base }}
+          SHADOW_BASE_RUN: ${{ needs.nightly-shadow-base.outputs.shadow_base_run }}
+          SHADOW_REASON: ${{ needs.nightly-shadow-base.outputs.shadow_reason }}
           EVENT: ${{ github.event_name }}
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
@@ -1417,7 +1507,22 @@ jobs:
                   # the run this plan is refusing to inherit.
                   plan_full "whole-codebase run ($EVENT) — a re-run: idle-nightly's yes is an earlier attempt's, and only a first attempt may inherit"
                 elif [ "$EVENT" = schedule ]; then
-                  plan_full "whole-codebase run ($EVENT) — ${IDLE_REASON:-idle-nightly gave no answer}"
+                  why="whole-codebase run ($EVENT) — ${IDLE_REASON:-idle-nightly gave no answer}"
+                  # GITHUB_RUN_ATTEMPT is this attempt's own, as in the scope
+                  # step: a re-run of mutation-plan reuses nightly-shadow-base's
+                  # outputs from the attempt before.
+                  if [ "$GITHUB_RUN_ATTEMPT" != 1 ]; then
+                    plan_full "$why; no nightly shadow: a re-run plans full only"
+                  elif ! [[ "$SHADOW_BASE" =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ ]]; then
+                    plan_full "$why; no nightly shadow: ${SHADOW_REASON:-nightly-shadow-base named no base}"
+                  elif ! .venv/bin/python scripts/mutation_plan.py nightly --shards 24 \
+                        --base "$SHADOW_BASE" --base-run "$SHADOW_BASE_RUN" --head "$GITHUB_SHA" \
+                        --stats mutants/mutmut-stats.json --reason "$why" --out mutation-plan.json \
+                      || ! jq -e '.gate_set == "full" and (.sets.full.shards | length) > 0
+                                  and (((.advisory // []) - ["diff"]) | length) == 0' \
+                          mutation-plan.json > /dev/null; then
+                    plan_full "$why; no nightly shadow: the nightly planner did not write a full-gated plan"
+                  fi
                 else
                   plan_full "whole-codebase run ($EVENT)"
                 fi
@@ -1429,6 +1534,9 @@ jobs:
           fi
           cat mutation-plan.json
           MATRIX="$(python3 scripts/mutation_plan.py matrix --plan mutation-plan.json)"
+          # A plan that would make its gate set advisory exits 1 here, and the
+          # planner fails: `mutation` is red rather than gating on nothing.
+          ADVISORY_MATRIX="$(python3 scripts/mutation_plan.py matrix --plan mutation-plan.json --advisory)"
           GATE_SET="$(jq -r '.gate_set // ""' mutation-plan.json)"
           SHADOW="$(jq -r '.sets | has("full") and has("diff")' mutation-plan.json)"
           # One line, whatever the reasons hold: a newline would end this
@@ -1438,6 +1546,7 @@ jobs:
           REASON="${REASON:0:500}"
           {
             echo "matrix=$MATRIX"
+            echo "advisory_matrix=$ADVISORY_MATRIX"
             echo "gate_set=$GATE_SET"
             echo "shadow=$SHADOW"
             echo "reason=$REASON"
@@ -1898,8 +2007,149 @@ jobs:
           retention-days: 1
           if-no-files-found: error
 
+  # The diff legs of a full nightly's shadow (see `nightly-shadow-base`), and
+  # nothing else: `matrix` hands `mutation-shard` only the sets that may
+  # decide the gate, and `advisory_matrix` hands this job the plan's
+  # `advisory` ones, which only `mutation_plan.py nightly` writes.
+  #
+  # A job of its own because one matrix job's result cannot tell a failed
+  # diff leg from a failed full leg -- `mutation` reads that one result, and
+  # on a pull request a failed diff shard is red there on purpose. Here it
+  # must not be: job-level `continue-on-error` keeps a failed or lost leg from
+  # failing the run, and the nightly's verdict stays the full set's. What
+  # `needs.<job>.result` reads for a failed continue-on-error job is not
+  # confirmed (patch-coverage below says "TO CONFIRM" too), so `mutation`
+  # never decides anything on this job's result: a hole in the diff results
+  # is found from the artifacts by `mutation_diff.py compare`, which then
+  # reports INCOMPLETE.
+  #
+  # Cost: up to MAX_SHARDS (16) more legs on a nightly, queued under the same
+  # concurrency cap as the full set's 24, so a shadowed nightly takes longer
+  # end to end. Schedule only; never a dispatch, and never a pull request.
+  #
+  # Do NOT re-run a red leg of this job. A second attempt is not a first
+  # attempt, so tomorrow's idle walk will not inherit tonight and plans full;
+  # the report's INCOMPLETE is the record of what happened.
+  #
+  # The same runner, timeouts, permissions and steps as `mutation-shard`, and
+  # no harden-runner for the same reason (step-security/harden-runner#709,
+  # noted there); tests/unit/test_mutation_plan.py pins the steps and the
+  # job's cap equal, so both caps are `mutation-shard`'s: 200 for the job,
+  # 190 for the mutate step, which fires first. The headroom check in
+  # tests/unit/test_mutation_shard_count.py scores `mutation-shard`'s step
+  # alone, read from that job's own block, so this twin's identical step
+  # neither moves nor confuses it.
+  mutation-advisory-shard:
+    needs: mutation-plan
+    if: ${{ !cancelled() && github.event_name == 'schedule' && needs.mutation-plan.result == 'success' && needs.mutation-plan.outputs.advisory_matrix != '' && needs.mutation-plan.outputs.advisory_matrix != '[]' }}
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 200
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.mutation-plan.outputs.advisory_matrix) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0    # tags for setuptools-scm version resolution
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+      - name: git identity (fixture repos)
+        run: |
+          git config --global user.email ci@boost.test
+          git config --global user.name "Boost CI"
+      - name: install test deps
+        run: |
+          python -m venv .venv
+          # Hash-pinned; a superset of test-tools.txt plus mutmut. The mutant
+          # kill count depends on the pytest/mutmut versions, so pinning them
+          # is what keeps the 80% gate meaning the same thing run to run.
+          .venv/bin/pip -q install -r requirements/mutation-tools.txt
+          # sqlite-vec so dense.py's mutants are covered by the dense tests
+          .venv/bin/pip -q install sqlite-vec || true
+      # Outside the workspace on purpose: mutmut's change detection lists
+      # untracked non-.py files against the commit the stats were taken at,
+      # and a plan or stats file in the checkout would be one.
+      - name: download the plan
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: mutation-plan
+          path: ${{ runner.temp }}/mutation-plan
+      - name: download the stats
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: mutation-stats
+          path: ${{ runner.temp }}/mutation-stats
+      - name: mutate ${{ matrix.set }} shard ${{ matrix.index }}
+        # Under the job's 200 so a stalled shard fails as a step, with a log
+        # the API will serve. The four "runner lost communication" losses on
+        # 2026-10-22 (94-124 min into this step) all 404 on their logs.
+        # 190 is `mutation-shard`'s mutate-step cap, copied (the steps are
+        # pinned equal in tests/unit/test_mutation_plan.py). The headroom
+        # check in tests/unit/test_mutation_shard_count.py scores that job's
+        # step, not this one, and the measurements behind the 10-min gap to
+        # the job's cap sit above `mutation-shard`'s cap, not this job's.
+        timeout-minutes: 190
+        env:
+          SET: ${{ matrix.set }}
+          SHARD: ${{ matrix.index }}
+        run: |
+          # No per-process `ulimit -v` here: a 4 GiB address-space cap was
+          # tried on 2026-10-23 and raised MemoryError inside the clean-test
+          # run of mutmut (shards 0, 7 and 16 of run 40010598954), while
+          # runners kept being lost with it in place, so it bought nothing.
+          # The stats the planner collected, in place before mutmut starts --
+          # the whole saving. Missing is an error, not a fallback: mutmut
+          # would quietly re-collect and this shard would just be slow again.
+          mkdir -p mutants
+          cp "$RUNNER_TEMP/mutation-stats/mutmut-stats.json" mutants/mutmut-stats.json
+          # `patterns` exits 1, writing nothing, for an empty or unknown
+          # shard: `mutmut run` with no arguments runs EVERY mutant, so an
+          # empty answer must stop here, not become a full 26-minute run in
+          # every shard at once. It writes one NUL-terminated entry per
+          # argument -- a diff shard's are exact mutant names, up to 1500,
+          # whose module part a PR's file name chose -- and they reach mutmut
+          # as a quoted array: never word-split, never globbed against the
+          # tree. `--` keeps an entry from ever being read as an option.
+          ARGS_FILE="$RUNNER_TEMP/mutmut-args"
+          python3 scripts/mutation_plan.py patterns --plan "$RUNNER_TEMP/mutation-plan/mutation-plan.json" --set "$SET" --index "$SHARD" --out "$ARGS_FILE"
+          MUTMUT_ARGS=()
+          while IFS= read -r -d '' arg; do
+            MUTMUT_ARGS+=("$arg")
+          done < "$ARGS_FILE"
+          if [ "${#MUTMUT_ARGS[@]}" -eq 0 ]; then
+            echo "::error::$SET shard $SHARD has nothing to run"
+            exit 1
+          fi
+          set +e
+          .venv/bin/mutmut run -- "${MUTMUT_ARGS[@]}"
+          rc=$?
+          set -e
+          # mutmut reports surviving mutants with a non-zero status. Survivors
+          # are the gate's business, not a shard's — only a genuine failure to
+          # run should fail this job. (Matches scripts/mutation_gate.py.)
+          if [ "$rc" != "0" ] && [ "$rc" != "2" ]; then
+            echo "::error::mutmut run failed in $SET shard $SHARD (rc=$rc)"
+            exit 1
+          fi
+      - name: upload shard results
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mutation-${{ matrix.set }}-shard-${{ matrix.index }}
+          # Only the .meta results are needed downstream: `mutmut
+          # export-cicd-stats` reads mutants/<path>.meta and never looks at the
+          # generated mutant sources.
+          path: mutants/boost_cli/core
+          retention-days: 1
+          if-no-files-found: error
+
   mutation:
-    needs: [mutation-plan, mutation-shard]
+    needs: [mutation-plan, mutation-shard, mutation-advisory-shard]
     # Required check — see the comment above mutation-plan. This must run and
     # report even when every shard was skipped.
     if: always()
@@ -1919,8 +2169,15 @@ jobs:
           MATRIX: ${{ needs.mutation-plan.outputs.matrix }}
           GATE_SET: ${{ needs.mutation-plan.outputs.gate_set }}
           SHADOW: ${{ needs.mutation-plan.outputs.shadow }}
+          EVENT: ${{ github.event_name }}
+          ADVISORY_MATRIX: ${{ needs.mutation-plan.outputs.advisory_matrix }}
+          # Echoed, never tested: what `needs.<job>.result` reads for a failed
+          # job-level continue-on-error job is not confirmed, and a hole in
+          # the advisory results is found from the artifacts by `compare`,
+          # which reports INCOMPLETE.
+          ADVISORY: ${{ needs.mutation-advisory-shard.result }}
         run: |
-          echo "plan=$PLAN shards=$SHARDS gate_set=$GATE_SET shadow=$SHADOW matrix=$MATRIX"
+          echo "plan=$PLAN shards=$SHARDS advisory=$ADVISORY gate_set=$GATE_SET shadow=$SHADOW matrix=$MATRIX advisory_matrix=$ADVISORY_MATRIX"
           # `always()` means this job runs whatever happened upstream, so it has
           # to judge for itself. Without this step a failed or cancelled shard
           # would surface as a green required check.
@@ -1931,12 +2188,28 @@ jobs:
             echo "::error::mutation-plan did not succeed ($PLAN) — cannot gate"
             exit 1
           fi
-          # One matrix job runs both sets, so a failed DIFF shard in shadow
-          # mode lands here too, and is red: the comparison it feeds would
-          # have a hole in it, and nobody reads past a green check to notice.
+          # On a pull request one matrix job runs both sets, so a failed DIFF
+          # shard in shadow mode lands here too, and is red: the comparison it
+          # feeds would have a hole in it, and nobody reads past a green check
+          # to notice. A full nightly's diff legs are advisory and run in
+          # mutation-advisory-shard, so here `SHARDS` is its full legs alone.
           if [ "$MATRIX" != "[]" ] && [ "$SHARDS" != "success" ]; then
             echo "::error::a mutation shard did not succeed ($SHARDS)"
             exit 1
+          fi
+          # Advisory legs exist only as a full nightly's diff shadow: on any
+          # other event, beside any other gate set, or holding a full leg,
+          # they would be the gate's own work run where nothing reads its
+          # result, so refuse the plan instead.
+          if [ -n "$ADVISORY_MATRIX" ] && [ "$ADVISORY_MATRIX" != "[]" ]; then
+            if [ "$EVENT" != schedule ] || [ "$SHADOW" != true ] || [ "$GATE_SET" != full ]; then
+              echo "::error::advisory shards on a '$EVENT' run with gate set '$GATE_SET' (shadow '$SHADOW') — only a full nightly's diff shadow is advisory"
+              exit 1
+            fi
+            if jq -e 'any(.[]; .set != "diff")' <<< "$ADVISORY_MATRIX" > /dev/null; then
+              echo "::error::an advisory shard is not a diff shard — the gate set's work can never be advisory"
+              exit 1
+            fi
           fi
           # A full plan with no shards would score nothing and pass.
           if [ "$GATE_SET" = "full" ] && [ "$MATRIX" = "[]" ]; then
@@ -2014,10 +2287,14 @@ jobs:
         if: needs.mutation-plan.outputs.gate_set == 'full'
         env:
           MATRIX: ${{ needs.mutation-plan.outputs.matrix }}
+          ADVISORY_MATRIX: ${{ needs.mutation-plan.outputs.advisory_matrix }}
         # A download by pattern that matches nothing is not an error, so check
         # each matrix entry, for both sets. A missing full shard would also stop
         # the merge below; a missing diff shard would only make the advisory
         # comparison say so, from a step allowed to fail -- so it stops here.
+        # Except a nightly's advisory legs: those are evidence, never the
+        # verdict, so a missing one is a warning and the comparison reports
+        # INCOMPLETE.
         #
         # And a pattern that matches exactly ONE artifact is written straight
         # into `path:`, with no <artifact-name>/ level (download-artifact
@@ -2036,7 +2313,8 @@ jobs:
               mkdir -p "$dir"
               mv "$dir.lone" "$one"
             fi
-          done < <(jq -r 'group_by(.set)[] | "\(.[0].set) \(length)"' <<< "$MATRIX")
+          done < <(jq -rs 'add | group_by(.set)[] | "\(.[0].set) \(length)"' \
+                     <<< "$MATRIX ${ADVISORY_MATRIX:-[]}")
           missing=0
           while read -r set index; do
             if [ ! -d "shard-results/$set/mutation-$set-shard-$index" ]; then
@@ -2044,18 +2322,34 @@ jobs:
               missing=1
             fi
           done < <(jq -r '.[] | "\(.set) \(.index)"' <<< "$MATRIX")
+          while read -r set index; do
+            if [ ! -d "shard-results/$set/mutation-$set-shard-$index" ]; then
+              echo "::warning::no results from advisory $set shard $index — the shadow comparison will say INCOMPLETE"
+            fi
+          done < <(jq -r '.[] | "\(.set) \(.index)"' <<< "${ADVISORY_MATRIX:-[]}")
           exit "$missing"
       # The only step here allowed to fail without failing the check. It runs
       # the diff gate and the per-mutant comparison over the same commit's
       # full and diff results; neither decides `mutation` -- the full gate
       # below does. It runs before the merge so a red full gate still leaves
       # a report: that run is the one most worth comparing. The step goes
-      # red, visibly, on any disagreement or incomplete comparison; a FAIL
-      # from the diff gate is the data being compared, not an error.
+      # red, visibly, on any disagreement, ALARM or incomplete comparison; a
+      # FAIL from the diff gate is the data being compared, not an error, and
+      # a VACUOUS report (compare exit 3: too little compared to count) is a
+      # notice, not red -- it is recorded and never counted. The report's
+      # `shadow evidence:` line and mutation-shadow-evidence.json are what
+      # `mutation_diff.py evidence` counts against the plan's bar.
       - name: diff-gate shadow (advisory; the full gate below decides)
         id: shadow
         if: needs.mutation-plan.outputs.shadow == 'true'
         continue-on-error: true
+        env:
+          # The run's head as the artifact listing names it
+          # (workflow_run.head_sha): on a pull request the PR head, where
+          # GITHUB_SHA is the merge commit -- run 41387907117's listed head is
+          # PR 1288's head df5788b. `evidence` matches each report to its
+          # listed run by it.
+          SHADOW_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
         run: |
           plan="$RUNNER_TEMP/mutation-plan/mutation-plan.json"
           report=mutation-shadow-report.md
@@ -2076,7 +2370,7 @@ jobs:
           gate_rc=$?
           .venv/bin/python scripts/mutation_diff.py compare --plan "$plan" \
             --full-source shard-results/full --diff-source shard-results/diff \
-            > "$RUNNER_TEMP/compare.txt" 2>&1
+            --json mutation-shadow-evidence.json > "$RUNNER_TEMP/compare.txt" 2>&1
           compare_rc=$?
           set -e
           cat "$RUNNER_TEMP/gate.txt" "$RUNNER_TEMP/compare.txt"
@@ -2084,7 +2378,7 @@ jobs:
             echo "## Diff-gate shadow"
             echo
             echo "Advisory. The full run decides this check; the diff set ran beside it on the same commit."
-            echo "The bar before the diff gate binds is \`disagree 0\` (timeouts excluded and listed)."
+            echo "Counts toward the bar only when its \`shadow evidence:\` line says AGREE (docs/superpowers/plans/2026-10-31-ci-speed.md, Task 7 Step 6)."
             echo
             echo "Comparison exit $compare_rc, diff gate exit $gate_rc."
             echo
@@ -2095,9 +2389,21 @@ jobs:
             cat "$gate_md"
           } > "$report"
           cat "$report" >> "$GITHUB_STEP_SUMMARY"
-          # compare: 1 = disagreement, 2 = incomplete. gate: 2 = unrun or
-          # missing results, anything above = it crashed.
-          if [ "$compare_rc" != 0 ] || [ "$gate_rc" -gt 1 ]; then
+          # compare: 0 AGREE, 1 DISAGREE or ALARM, 2 INCOMPLETE, 3 VACUOUS,
+          # anything else = it crashed. gate: 2 = unrun or missing results,
+          # anything above = it crashed.
+          red=0
+          case "$compare_rc" in
+            0|3) ;;
+            *) red=1 ;;
+          esac
+          if [ "$gate_rc" -gt 1 ]; then
+            red=1
+          fi
+          if [ "$compare_rc" = 3 ]; then
+            echo "::notice::diff-gate shadow: VACUOUS — this report does not count toward the bar"
+          fi
+          if [ "$red" = 1 ]; then
             echo "::error::diff-gate shadow: comparison exit $compare_rc, diff gate exit $gate_rc"
             exit 1
           fi
@@ -2106,10 +2412,19 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: mutation-shadow-report
-          path: mutation-shadow-report.md
-          # Collected from the first release-train runs before the diff gate
-          # is switched on, which can be some days after this one.
-          retention-days: 30
+          path: |
+            mutation-shadow-report.md
+            mutation-shadow-evidence.json
+          # Collected from the first release-train runs and nightlies before
+          # the diff gate is switched on, which can be weeks after this one,
+          # and this artifact is the only record of a DISAGREE or ALARM (the
+          # step above is continue-on-error). So 90 days, the documented
+          # maximum for a public repository; at 30, artifact 13127375493 was
+          # listed to expire 30 days after upload. `evidence` refuses to count
+          # once the collection window is older than the shortest retention
+          # its listing shows, since a report from its start may be gone.
+          # tests/unit/test_mutation_plan.py pins this at 90.
+          retention-days: 90
           if-no-files-found: warn
       - name: merge shard results
         if: needs.mutation-plan.outputs.gate_set == 'full'

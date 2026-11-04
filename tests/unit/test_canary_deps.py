@@ -669,6 +669,9 @@ OUT_OF_SCOPE_JOBS = {
     # `requirements/mutation-tools.txt`, a hash-pinned superset of
     # test-tools.txt, so the same lock that covers `ci.yml:tests` covers it.
     "ci.yml:mutation-shard",
+    # A full nightly's advisory diff legs: `mutation-shard`'s steps verbatim
+    # (tests/unit/test_mutation_plan.py pins them equal), so the same reason.
+    "ci.yml:mutation-advisory-shard",
 }
 
 

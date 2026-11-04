@@ -19,14 +19,25 @@ The scope functions are pure: the caller supplies file text through
 `pack_functions` and names every mutant a shard runs exactly, as
 `mutant_names` lists them, so no cached verdict is ever trusted.
 
-Two CLIs read the shards' results back:
+Two CLIs read the shards' results back, and a third reads what the second wrote:
 
   mutation_diff.py gate --plan PLAN --source DIR --prefix mutation-diff-shard-
                         [--min 80] [--small 10] [--root ROOT] [--no-annotations]
       Score the diff set: exit 0 pass, 1 fail, 2 unrun or missing results.
   mutation_diff.py compare --plan PLAN --full-source DIR --diff-source DIR
-      Per-mutant agreement between a full run and a diff run of the same SHA;
-      exit 1 on any killed/not-killed disagreement (timeouts excluded).
+                           [--min 80] [--small 10] [--json PATH]
+      Per-mutant agreement between a full run and a diff run of the same SHA,
+      and the two runs' verdicts over the diff scope. It ends with one line,
+      ``shadow evidence: <STATUS> ...``, and exits by that status:
+      0 AGREE, 1 DISAGREE or ALARM, 2 INCOMPLETE, 3 VACUOUS (see
+      ``evidence_status``). ``--json`` writes the same facts for `evidence`.
+  mutation_diff.py evidence --reports DIR --listing PAGE [--listing PAGE ...]
+                            --since TIME [--probe-run ID] [--need 5] [--need-schedule 1]
+      Count the reports under DIR that meet the bar before the diff gate binds
+      (docs/superpowers/plans/2026-10-31-ci-speed.md, Task 7 Step 6), taking
+      which reports exist and whose they are from the saved API listing: exit
+      0 met, 1 a DISAGREE or ALARM on record, 2 a report unreadable, unread,
+      expired or not matching its run, 3 short.
 """
 
 from __future__ import annotations
@@ -35,6 +46,7 @@ import argparse
 import ast
 import configparser
 import contextlib
+import hashlib
 import importlib.util
 import json
 import math
@@ -44,6 +56,7 @@ import sys
 import tomllib
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -525,6 +538,81 @@ def passes(v: Verdict, min_pct: float = 80.0, small: int = 10) -> bool:
     return 100 * v.killed >= min_pct * v.denominator
 
 
+# --------------------------------------------------------------------------
+# Shadow evidence: what one comparison is worth toward binding the diff gate
+# --------------------------------------------------------------------------
+
+#: The least a shadow report must compare to count toward the plan's bar
+#: (docs/superpowers/plans/2026-10-31-ci-speed.md, Task 7 Step 6). The only
+#: report before this (artifact 13127375493, run 41387907117) compared 0
+#: mutants over 0 functions and exited 0, which read exactly like agreement.
+#: The spec (docs/superpowers/specs/2026-10-31-ci-speed-design.md) estimates a
+#: single branch at ~140 mutants and a median train at ~4,000, so 200 is above
+#: one small branch and far under a train.
+EVIDENCE_MIN_MUTANTS = 200
+EVIDENCE_MIN_FUNCTIONS = 3
+#: The bar itself, which `evidence` defaults to: this many reports from
+#: distinct comparisons, at least EVIDENCE_NEED_SCHEDULE of them from a
+#: nightly. A comparison is one pull-request branch or one nightly commit, as
+#: the artifact listing names the run (never as the report says), and one
+#: scope: under strict up-to-date checks every open PR is re-run after each
+#: merge to main, on a new merge commit and over the same functions, so
+#: counting distinct GITHUB_SHAs counted one PR once per merge.
+EVIDENCE_NEED = 5
+EVIDENCE_NEED_SCHEDULE = 1
+#: What `compare` writes, and `evidence` refuses any other version of. 2 adds
+#: `head_sha` and `scope`; no version-1 report was ever uploaded (the one
+#: report on record, artifact 13127375493, predates the JSON).
+EVIDENCE_SCHEMA = 2
+EVIDENCE_FILE = "mutation-shadow-evidence.json"
+#: The artifact ci.yml's `mutation` job uploads the report and JSON as.
+EVIDENCE_ARTIFACT = "mutation-shadow-report"
+#: A run on this branch is a nightly's (schedule) or a push's; any other
+#: branch is a pull request's. The merge queue's branches are neither: a
+#: queue run re-tests a PR whose own runs are counted by its branch, so one is
+#: read (a DISAGREE in it still stops) and never counted. No merge_group run
+#: of ci.yml exists (0 listed on 2026-11-04).
+DEFAULT_BRANCH = "main"
+QUEUE_BRANCH_PREFIX = "gh-readonly-queue/"
+
+STATUSES = ("AGREE", "VACUOUS", "ALARM", "DISAGREE", "INCOMPLETE")
+#: `compare`'s exit code per status. 3 is VACUOUS's own: an uncaught exception
+#: exits 1 and argparse exits 2, so a crash can never read as 0 or 3, and
+#: nothing that reads 0 as "agreed" can count a report that compared nothing.
+COMPARE_EXIT = {"AGREE": 0, "DISAGREE": 1, "ALARM": 1, "INCOMPLETE": 2, "VACUOUS": 3}
+
+# A commit id as GitHub writes one (sha-1 or sha-256). mutation_diff.py cannot
+# import ci_proven_tree's: neither module is a package, and the planner side
+# must not depend on the API side.
+_SHA = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?")
+
+
+def evidence_status(
+    *, problems: bool, disagree: int, compared: int, functions: int,
+    full_ok: bool, diff_ok: bool,
+) -> str:
+    """What one comparison says, most serious first.
+
+    INCOMPLETE: a result is missing, so nothing below can be trusted.
+    DISAGREE: a mutant killed on one side and not the other.
+    ALARM: the per-mutant results agree but the two verdicts over the diff
+      scope do not -- a one-sided timeout (excluded from agreement) or a
+      skipped-versus-unkilled pair can do that. Bound, the diff gate would
+      decide those functions differently from the full gate.
+    VACUOUS: everything agrees, over too little to mean anything.
+    AGREE: the only status that counts toward the bar.
+    """
+    if problems:
+        return "INCOMPLETE"
+    if disagree > 0:
+        return "DISAGREE"
+    if full_ok != diff_ok:
+        return "ALARM"
+    if compared < EVIDENCE_MIN_MUTANTS or functions < EVIDENCE_MIN_FUNCTIONS:
+        return "VACUOUS"
+    return "AGREE"
+
+
 def def_line(src: str, mangled: str) -> int | None:
     """Line of the `def` that mutmut keys as `mangled`, walking as mutmut does."""
     try:
@@ -865,14 +953,75 @@ def _collect_full(
     return codes, problems
 
 
+def _plan_base(plan: Any) -> str | None:
+    """`sets.diff.base` when it is a commit id (provenance only), else None."""
+    spec = (plan.get("sets") or {}).get("diff") if isinstance(plan, dict) else None
+    base = spec.get("base") if isinstance(spec, dict) else None
+    return base if isinstance(base, str) and _SHA.fullmatch(base) else None
+
+
+def scope_digest(names: list[str]) -> str:
+    """One comparison's identity: sha256 over the mutant names it scored.
+
+    Two reports over the same names compared the same thing, whichever
+    commit they ran on, so `evidence` counts them once.
+    """
+    return hashlib.sha256("\n".join(sorted(set(names))).encode("utf-8")).hexdigest()
+
+
+def _write_evidence(path: str | None, record: dict[str, Any]) -> None:
+    """`compare`'s facts as JSON, for `evidence` to count across runs.
+
+    The GITHUB_* values and SHADOW_HEAD_SHA are recorded, never judged here:
+    `evidence` checks each against the artifact listing's `workflow_run`,
+    which the run cannot write. SHADOW_HEAD_SHA is the run's head as that
+    listing names it -- on a pull request the PR head, where GITHUB_SHA is
+    the merge commit, so the two never match there.
+    """
+    if not path:
+        return
+    record = {
+        "schema": EVIDENCE_SCHEMA, **record,
+        "min_mutants": EVIDENCE_MIN_MUTANTS, "min_functions": EVIDENCE_MIN_FUNCTIONS,
+        "event": os.environ.get("GITHUB_EVENT_NAME", ""),
+        "sha": os.environ.get("GITHUB_SHA", ""),
+        "head_sha": os.environ.get("SHADOW_HEAD_SHA", ""),
+        "run_id": os.environ.get("GITHUB_RUN_ID", ""),
+        "run_attempt": os.environ.get("GITHUB_RUN_ATTEMPT", ""),
+    }
+    Path(path).write_text(json.dumps(record, indent=1) + "\n", encoding="utf-8")
+
+
+def _status_line(status: str, compared: int, functions: int) -> str:
+    bar = f"counts toward the bar only at >= {EVIDENCE_MIN_MUTANTS} over >= {EVIDENCE_MIN_FUNCTIONS}"
+    tail = {
+        "AGREE": "counts toward the bar",
+        "VACUOUS": bar,
+        "ALARM": "does not count, and stops the plan until explained",
+        "DISAGREE": "does not count, and stops the plan until explained",
+        "INCOMPLETE": "does not count: a result is missing",
+    }[status]
+    return (f"shadow evidence: {status} — compared {compared} mutants over "
+            f"{functions} functions ({tail})")
+
+
+def _scoped(v: Verdict, ok: bool) -> str:
+    return "%s (%d/%d)" % ("PASS" if ok else "FAIL", v.killed, v.denominator)
+
+
 def cmd_compare(args: argparse.Namespace) -> int:
     plan = json.loads(Path(args.plan).read_text(encoding="utf-8"))
+    empty = {"compared_mutants": 0, "compared_functions": 0, "agree": 0, "disagree": 0,
+             "excluded_timeouts": 0, "full_scoped": None, "diff_scoped": None,
+             "base": _plan_base(plan), "scope": scope_digest([])}
     spec, invalid = validate_plan(plan)
     if spec is None:
         print("mutation diff compare: malformed plan, refusing to compare:")
         for p in invalid:
             print(f"  - {_escape(p)}")
-        return 2
+        print(_status_line("INCOMPLETE", 0, 0))
+        _write_evidence(args.json, {"status": "INCOMPLETE", **empty})
+        return COMPARE_EXIT["INCOMPLETE"]
     diff, problems = collect_diff(spec, Path(args.diff_source), args.diff_prefix)
     functions = _functions_of(spec["shards"])
     files = {_core_rel(split_qualified(q)[0]) for q in functions}
@@ -886,32 +1035,361 @@ def cmd_compare(args: argparse.Namespace) -> int:
     def name(side: dict[str, Any], key: str) -> str:
         return "absent" if key not in side else status_of(side[key])
 
-    agree, disagree, timeouts = [], [], []
+    agree: list[str] = []
+    disagree: list[tuple[str, str]] = []
+    timeouts: list[str] = []
     for key in sorted(set(diff) | set(full)):
         f, d = name(full, key), name(diff, key)
         # A missing result first: a timeout on one side does not excuse the
         # other side never having run the mutant at all.
         if {f, d} & {"absent", "not checked"}:
-            disagree.append(f"{key}: full={f} diff={d}")
+            disagree.append((key, f"{key}: full={f} diff={d}"))
         elif "timeout" in (f, d):
             timeouts.append(f"{key}: full={f} diff={d}")
         elif (f == "killed") == (d == "killed"):
             agree.append(key)
         else:
-            disagree.append(f"{key}: full={f} diff={d}")
+            disagree.append((key, f"{key}: full={f} diff={d}"))
+
+    # What was compared, counted from the comparison itself and not from the
+    # plan: an excluded timeout is not compared, and a function the plan
+    # names but neither side ran is not one this report says anything about.
+    compared = len(agree) + len(disagree)
+    compared_functions = len({function_of(k) for k in agree + [k for k, _ in disagree]})
+
+    # Both verdicts over exactly the names the diff gate scores, so a full
+    # FAIL that comes from outside the PR's scope (main sits near 87.8% per
+    # the spec, so one can) is never read as the diff gate's miss.
+    planned = [n for shard in spec["shards"] for n in shard]
+    full_v = score({n: full.get(n) for n in planned})
+    diff_v = score({n: diff.get(n) for n in planned})
+    full_ok = passes(full_v, args.min, args.small)
+    diff_ok = passes(diff_v, args.min, args.small)
+    status = evidence_status(problems=bool(problems), disagree=len(disagree),
+                             compared=compared, functions=compared_functions,
+                             full_ok=full_ok, diff_ok=diff_ok)
 
     print(
         f"agree {len(agree)}, disagree {len(disagree)}, excluded-timeouts {len(timeouts)}"
     )
-    for line in disagree:
+    for _, line in disagree:
         print(f"  disagree: {_escape(line)}")
     for line in timeouts:
         print(f"  excluded timeout: {_escape(line)}")
     for p in problems:
         print(f"  - {_escape(p)}")
-    if problems:
+    print(f"scoped verdicts over {len(_functions_of([planned]))} functions: "
+          f"full {_scoped(full_v, full_ok)}, diff {_scoped(diff_v, diff_ok)}")
+    if status == "ALARM":
+        # A status, not a claim that a whole-codebase FAIL implies a diff
+        # FAIL: these are both verdicts over the same scoped names.
+        one, other = ("FAILS", "PASSES") if diff_ok else ("PASSES", "FAILS")
+        what = ("passed what the full gate refuses" if diff_ok
+                else "refused what the full gate passes")
+        print(f"ALARM: over the diff scope the full run {one} and the diff run {other} "
+              f"— bound, the diff gate would have {what} on these same functions")
+    print(_status_line(status, compared, compared_functions))
+    _write_evidence(args.json, {
+        "status": status, "compared_mutants": compared,
+        "compared_functions": compared_functions, "agree": len(agree),
+        "disagree": len(disagree), "excluded_timeouts": len(timeouts),
+        "full_scoped": "PASS" if full_ok else "FAIL",
+        "diff_scoped": "PASS" if diff_ok else "FAIL", "base": empty["base"],
+        "scope": scope_digest(planned)})
+    return COMPARE_EXIT[status]
+
+
+_DIGEST = re.compile(r"[0-9a-f]{64}")
+_RUN_ID = re.compile(r"[0-9]+")
+
+
+def _evidence_problems(rec: Any) -> list[str]:
+    """Every way one stored report is not the shape `compare` writes."""
+    if not isinstance(rec, dict):
+        return ["not a JSON object"]
+    problems = []
+    if not (_count(rec.get("schema")) and rec["schema"] == EVIDENCE_SCHEMA):
+        problems.append("schema is not %d" % EVIDENCE_SCHEMA)
+    if rec.get("status") not in STATUSES:
+        problems.append("unknown status")
+    problems.extend("%s is not an integer >= 0" % key
+                    for key in ("compared_mutants", "compared_functions", "agree",
+                                "disagree", "excluded_timeouts")
+                    if not (_count(rec.get(key)) and rec[key] >= 0))
+    problems.extend("%s is not PASS, FAIL or null" % key
+                    for key in ("full_scoped", "diff_scoped")
+                    if rec.get(key) not in ("PASS", "FAIL", None))
+    problems.extend("%s is not a commit id" % key for key in ("sha", "head_sha")
+                    if not isinstance(rec.get(key), str) or not _SHA.fullmatch(rec[key]))
+    if not isinstance(rec.get("event"), str):
+        problems.append("event is not a string")
+    if not isinstance(rec.get("run_id"), str) or not _RUN_ID.fullmatch(rec["run_id"]):
+        problems.append("run_id is not a run id")
+    if not isinstance(rec.get("scope"), str) or not _DIGEST.fullmatch(rec["scope"]):
+        problems.append("scope is not a sha256 digest")
+    return problems
+
+
+def qualifies(rec: dict[str, Any]) -> bool:
+    """Does a valid report count toward the bar, judged by TODAY's constants?
+
+    The stored status alone is not trusted: a report written under looser
+    thresholds than these could say AGREE over too little.
+    """
+    return (rec["status"] == "AGREE" and rec["disagree"] == 0
+            and rec["compared_mutants"] >= EVIDENCE_MIN_MUTANTS
+            and rec["compared_functions"] >= EVIDENCE_MIN_FUNCTIONS
+            and rec["full_scoped"] is not None
+            and rec["full_scoped"] == rec["diff_scoped"])
+
+
+#: A fork's entry is never read, so its times are never compared.
+_NEVER = datetime.min.replace(tzinfo=UTC)
+
+
+@dataclass(frozen=True)
+class Listed:
+    """One `mutation-shadow-report` artifact as the GitHub API lists it.
+
+    Everything here comes from the API (`GET /actions/artifacts`), which the
+    run that uploaded the artifact cannot write -- unlike the report inside.
+    """
+
+    artifact_id: int
+    run_id: int
+    #: `workflow_run.head_repository_id == repository_id`: a fork's run can
+    #: upload any JSON it likes, so a fork's artifact is never read.
+    same_repo: bool
+    expired: bool = False
+    created: datetime = _NEVER
+    expires: datetime = _NEVER
+    branch: str = ""
+    head_sha: str = ""
+
+
+def _when(value: Any) -> datetime | None:
+    """An ISO 8601 time, UTC when it names no zone; None when it is not one."""
+    if not isinstance(value, str):
+        return None
+    try:
+        when = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return when if when.tzinfo else when.replace(tzinfo=UTC)
+
+
+def _listed(art: Any) -> tuple[Listed | None, str]:
+    """One listing entry, or why it is not one."""
+    run = art.get("workflow_run") if isinstance(art, dict) else None
+    if not (isinstance(run, dict) and _count(art.get("id")) and _count(run.get("id"))
+            and _count(run.get("repository_id"))):
+        return None, "an entry has no artifact id, run id or repository id"
+    where = "artifact %d" % art["id"]
+    if art.get("name") != EVIDENCE_ARTIFACT:
+        return None, "%s is not named %s" % (where, EVIDENCE_ARTIFACT)
+    head_repo = run.get("head_repository_id")
+    if not (_count(head_repo) and head_repo == run["repository_id"]):
+        return Listed(art["id"], run["id"], same_repo=False), ""
+    created, expires = _when(art.get("created_at")), _when(art.get("expires_at"))
+    if not (created and expires and isinstance(art.get("expired"), bool)
+            and isinstance(run.get("head_branch"), str)
+            and isinstance(run.get("head_sha"), str) and _SHA.fullmatch(run["head_sha"])):
+        return None, "%s is not the shape the API lists" % where
+    return Listed(art["id"], run["id"], True, art["expired"], created, expires,
+                  run["head_branch"], run["head_sha"]), ""
+
+
+def _load_listing(paths: list[str]) -> tuple[dict[int, Listed], list[str]]:
+    """Every listed artifact by id, from saved pages of the API's listing.
+
+    Also every way those pages are not the whole of one listing: an artifact
+    left off a page is a report nobody read, which could be a DISAGREE.
+    """
+    listed: dict[int, Listed] = {}
+    totals: set[int] = set()
+    problems: list[str] = []
+    for p in paths:
+        try:
+            page = json.loads(Path(p).read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            problems.append("%s: unreadable (%s)" % (p, type(exc).__name__))
+            continue
+        if not (isinstance(page, dict) and _count(page.get("total_count"))
+                and isinstance(page.get("artifacts"), list)):
+            problems.append("%s: not a page of the artifact listing" % p)
+            continue
+        totals.add(page["total_count"])
+        for art in page["artifacts"]:
+            got, why = _listed(art)
+            if got is None:
+                problems.append("%s: %s" % (p, why))
+            else:
+                listed[got.artifact_id] = got
+    if len(totals) > 1:
+        problems.append("the pages disagree on total_count (%s): list them again"
+                        % ", ".join(map(str, sorted(totals))))
+    elif totals and len(listed) != min(totals) and not problems:
+        problems.append("the pages list %d of %d artifacts: fetch every page"
+                        % (len(listed), min(totals)))
+    return listed, problems
+
+
+def _subject(item: Listed) -> tuple[str, str] | None:
+    """What a counted report is a comparison of, from the listing alone.
+
+    A pull request's branch -- every re-run of it after a merge to main is
+    the same PR again -- or a nightly's commit. None for a merge-queue run.
+    """
+    if item.branch == DEFAULT_BRANCH:
+        return ("nightly commit", item.head_sha)
+    if item.branch.startswith(QUEUE_BRANCH_PREFIX):
+        return None
+    return ("branch", item.branch)
+
+
+def _mismatch(rec: dict[str, Any], item: Listed) -> list[str]:
+    """Every way a report disagrees with the run the listing says uploaded it."""
+    wrong = []
+    if rec["run_id"] != str(item.run_id):
+        wrong.append("run_id %s, listed run %d" % (rec["run_id"], item.run_id))
+    if rec["head_sha"] != item.head_sha:
+        wrong.append("head_sha %s, listed %s" % (rec["head_sha"][:12], item.head_sha[:12]))
+    on_main = item.branch == DEFAULT_BRANCH
+    if rec["event"] == "schedule" and not (on_main and rec["sha"] == item.head_sha):
+        wrong.append("says schedule, but its run is not on %s's listed commit" % DEFAULT_BRANCH)
+    if rec["event"] in ("pull_request", "merge_group") and on_main:
+        wrong.append("says %s, but its run is on %s" % (rec["event"], DEFAULT_BRANCH))
+    return wrong
+
+
+def _now() -> datetime:
+    """The clock expiry is judged by; a seam for the tests."""
+    return datetime.now(UTC)
+
+
+def _days(span: timedelta) -> str:
+    return "%.1f days" % (span.total_seconds() / 86400)
+
+
+def cmd_evidence(args: argparse.Namespace) -> int:
+    """Count downloaded shadow reports against the bar (module docstring).
+
+    The listing decides which reports exist and whose they are; a file only
+    says what its comparison found. So a fork's artifact is never read, a
+    listed report that was not downloaded or has expired is an unknown (it
+    could have been a DISAGREE), and so is a window that opened longer ago
+    than a report is kept. Every line starts with `evidence`, and every value
+    from a report or branch name goes through `_escape`: none may begin a
+    workflow command.
+    """
+    root = Path(args.reports)
+    if not root.is_dir():
+        print(f"evidence: {_escape(str(root))} is not a directory")
         return 2
-    return 1 if disagree else 0
+    since = _when(args.since)
+    if since is None:
+        print(f"evidence: --since {_escape(args.since)} is not an ISO 8601 time")
+        return 2
+    listed, listing_problems = _load_listing(args.listing)
+    for p in listing_problems:
+        print(f"evidence: listing: {_escape(p)}")
+    unknown, read, stops = len(listing_problems), 0, 0
+    files = {p.parent.name: p for p in root.glob("*/" + EVIDENCE_FILE)}
+    kept: timedelta | None = None
+    # (is a nightly, created, artifact id, subject, scope) of each qualifying report
+    candidates: list[tuple[bool, datetime, int, tuple[str, str], str]] = []
+    for item in sorted(listed.values(), key=lambda i: (i.created, i.artifact_id)):
+        path = files.pop(str(item.artifact_id), None)
+        where = "artifact %d (run %d)" % (item.artifact_id, item.run_id)
+        if not item.same_repo:
+            print(f"evidence: {where}: from another repository -- not read")
+            continue
+        if item.created < since:
+            print(f"evidence: {where}: from before --since -- not read")
+            continue
+        span = item.expires - item.created
+        kept = span if kept is None else min(kept, span)
+        if item.expired:
+            print(f"evidence: {where}: expired before it was read -- it could have been "
+                  "a DISAGREE")
+            unknown += 1
+            continue
+        if path is None:
+            print(f"evidence: {where}: listed, but no {item.artifact_id}/{EVIDENCE_FILE} "
+                  "was downloaded")
+            unknown += 1
+            continue
+        try:
+            rec = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            print(f"evidence: {where}: unreadable ({type(exc).__name__})")
+            unknown += 1
+            continue
+        problems = _evidence_problems(rec)
+        if problems:
+            print(f"evidence: {where}: malformed ({'; '.join(problems)})")
+            unknown += 1
+            continue
+        wrong = _mismatch(rec, item)
+        if wrong:
+            print(f"evidence: {where}: does not match its listed run "
+                  f"({_escape('; '.join(wrong))})")
+            unknown += 1
+            continue
+        read += 1
+        if rec["status"] in ("DISAGREE", "ALARM"):
+            stops += 1
+        subject = _subject(item)
+        if not qualifies(rec):
+            verdict = "does not count"
+        elif item.run_id in args.probe_run:
+            verdict = "the Step 7 probe -- never counted"
+        elif subject is None:
+            verdict = "a merge-queue run -- never counted"
+        else:
+            verdict = "qualifies"
+            candidates.append((rec["event"] == "schedule", item.created, item.artifact_id,
+                               subject, rec["scope"]))
+        what = "merge queue" if subject is None else "%s %s" % (
+            subject[0], subject[1][:12] if subject[0] == "nightly commit" else subject[1])
+        print("evidence: %s: %s, %d mutants over %d functions, %s run of %s -- %s" % (
+            where, rec["status"], rec["compared_mutants"], rec["compared_functions"],
+            _escape(rec["event"]) or "?", _escape(what), verdict))
+    for name in sorted(files):
+        print(f"evidence: {_escape(name)}/{EVIDENCE_FILE}: not in the listing -- "
+              "list again, or remove it")
+        unknown += 1
+    now = _now()
+    if kept is not None and now - since >= kept:
+        print(f"evidence: the window opened {_days(now - since)} ago and a report is kept "
+              f"{_days(kept)}: one from its start may be gone from the listing, and could "
+              "have been a DISAGREE")
+        unknown += 1
+    # Nightlies first, so a nightly whose scope a PR's report shares is the
+    # one kept; then oldest first. A report counts only when both its subject
+    # and its scope are new.
+    subjects: set[tuple[str, str]] = set()
+    scopes: set[str] = set()
+    counted = nightly = 0
+    for is_nightly, _, artifact_id, subject, scope in sorted(
+            candidates, key=lambda c: (not c[0], c[1], c[2])):
+        if subject in subjects or scope in scopes:
+            same = subject[0] if subject in subjects else "scope"
+            print(f"evidence: artifact {artifact_id}: the same {same} as a report already "
+                  "counted -- counted once")
+            continue
+        subjects.add(subject)
+        scopes.add(scope)
+        counted += 1
+        nightly += is_nightly
+    print(f"evidence: {counted} of {args.need} AGREE reports from distinct comparisons "
+          f"({nightly} of {args.need_schedule} from schedule); {read} read, "
+          f"{unknown} unreadable or unknown, {stops} DISAGREE or ALARM")
+    if stops:
+        return 1
+    if unknown:
+        return 2
+    return 0 if counted >= args.need and nightly >= args.need_schedule else 3
 
 
 def main(argv: list[str]) -> int:
@@ -920,13 +1398,18 @@ def main(argv: list[str]) -> int:
     )
     sub = ap.add_subparsers(dest="cmd", required=True)
 
+    def thresholds(p: argparse.ArgumentParser) -> None:
+        # One definition for `gate` and `compare`, so the scoped verdicts the
+        # comparison reports are the ones the diff gate would give.
+        p.add_argument("--min", type=float, default=80.0, help="minimum kill %%")
+        p.add_argument("--small", type=int, default=10,
+                       help="below this many mutants, every one must be killed")
+
     g = sub.add_parser("gate", help="score the diff set's shard results")
     g.add_argument("--plan", required=True)
     g.add_argument("--source", required=True, help="dir holding <prefix><i>/ artifacts")
     g.add_argument("--prefix", required=True)
-    g.add_argument("--min", type=float, default=80.0, help="minimum kill %%")
-    g.add_argument("--small", type=int, default=10,
-                   help="below this many mutants, every one must be killed")
+    thresholds(g)
     g.add_argument("--root", default=str(ROOT),
                    help="head checkout, for annotation line numbers")
     g.add_argument("--no-annotations", dest="annotate", action="store_false",
@@ -938,10 +1421,28 @@ def main(argv: list[str]) -> int:
     c.add_argument("--diff-source", required=True)
     c.add_argument("--full-prefix", default="mutation-full-shard-")
     c.add_argument("--diff-prefix", default="mutation-diff-shard-")
+    thresholds(c)
+    c.add_argument("--json", default=None,
+                   help="also write the report's facts here, for `evidence`")
+
+    e = sub.add_parser("evidence", help="count downloaded shadow reports against the bar")
+    e.add_argument("--reports", required=True,
+                   help="dir holding <artifact id>/%s files" % EVIDENCE_FILE)
+    e.add_argument("--listing", action="append", required=True, metavar="PAGE",
+                   help="a saved page of the API's %s artifact listing; repeat per page"
+                   % EVIDENCE_ARTIFACT)
+    e.add_argument("--since", required=True,
+                   help="when collection began (PR 4's merged_at), ISO 8601; never moved")
+    e.add_argument("--probe-run", type=int, action="append", default=[], metavar="RUN_ID",
+                   help="the Step 7 probe's run: read (a DISAGREE stops), never counted")
+    e.add_argument("--need", type=int, default=EVIDENCE_NEED)
+    e.add_argument("--need-schedule", type=int, default=EVIDENCE_NEED_SCHEDULE)
 
     args = ap.parse_args(argv)
     if args.cmd == "gate":
         return cmd_gate(args)
+    if args.cmd == "evidence":
+        return cmd_evidence(args)
     return cmd_compare(args)
 
 

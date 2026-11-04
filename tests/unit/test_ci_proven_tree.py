@@ -1941,6 +1941,160 @@ def test_a_dispatch_red_only_on_an_extended_leg_skips_idle_nightly_and_stays_gre
         == pt.BaseVerdict(True, "success")
 
 
+# --- ... and the diff shadow's advisory jobs are no part of it -----------
+#
+# A full nightly also runs `nightly-shadow-base` and the advisory diff legs,
+# `mutation-advisory-shard (diff, N)`. Both are job-level continue-on-error,
+# so a red one is red on the page while the run's conclusion ignores it, and
+# neither ever decides a verdict. Fact 3 drops them before it asks whether
+# only extended legs are red: they neither explain a red run nor refuse one.
+
+ADVISORY_RED = "mutation-advisory-shard (diff, 3)"
+
+
+def shadowed_nightly_jobs(*red, extended="failure"):
+    """A full nightly's page: plan, shadow base, one full and one diff leg, `mutation`.
+
+    Each name in ``red`` is listed with conclusion ``failure`` (added if not
+    already on the page); the rest are green.
+    """
+    names = ["mutation-plan", "nightly-shadow-base", "mutation-shard (full, 0)",
+             "mutation-advisory-shard (diff, 0)"]
+    names += [n for n in red if n not in names]
+    return job_list(*(job(n, conclusion="failure" if n in red else "success", run_id=100)
+                      for n in names),
+                    job(EXTENDED_RED, conclusion=extended, run_id=100),
+                    job(run_id=100))
+
+
+@pytest.mark.parametrize("red", [
+    (ADVISORY_RED,),
+    ("nightly-shadow-base",),
+    ("mutation-advisory-shard (diff, 0)", ADVISORY_RED, "nightly-shadow-base"),
+], ids=["advisory-leg", "shadow-base", "every-advisory-job"])
+def test_red_advisory_jobs_beside_a_red_extended_leg_leave_the_nightly_green(red, gh_env):
+    # The run is red on its extended leg, which fact 3 looks past; the red
+    # advisory jobs beside it are not "the" red leg and do not make it any
+    # other red either.
+    routes = red_run_nightly(**{jobs_path(100): shadowed_nightly_jobs(*red)})
+    merge_tree, cands, last = pt.gather(FakeApi(green_routes(**routes)), SHA)
+    assert last == pt.Nightly("success", datetime(2026, 10, 30, 10, tzinfo=UTC))
+    assert pt.decide(merge_tree, cands, last, now=NOW) == pt.Decision(True, ANY, 7)
+    assert pt.base_mutation(FakeApi(base_routes(**routes)), BEFORE) \
+        == pt.BaseVerdict(True, "success")
+    assert pt.main(BEFORE_ARGV, api=FakeApi(green_routes(**base_routes(**routes))),
+                   env=gh_env) == 0
+    assert _all_outputs(gh_env) == {"skip": "true", "pr_run_id": "7",
+                                    "base_mutation_green": "true",
+                                    "base_mutation": "success"}
+
+
+@pytest.mark.parametrize("conclusion", ["failure", "cancelled", "timed_out"])
+@pytest.mark.parametrize("red", [
+    (ADVISORY_RED,),
+    ("nightly-shadow-base",),
+    (ADVISORY_RED, "nightly-shadow-base"),
+], ids=["advisory-leg", "shadow-base", "both"])
+def test_a_run_red_only_on_advisory_jobs_is_not_a_green_nightly(red, conclusion, gh_env):
+    # Impossible in practice: continue-on-error keeps them out of the run's
+    # conclusion. But if the run says failure and they are all that is red,
+    # nothing on the page explains the red, so it is refused like a red run
+    # with nothing red on its page.
+    listing = shadowed_nightly_jobs(*red, extended="success")
+    for entry in listing["jobs"]:
+        if entry["name"] in red:
+            entry["conclusion"] = conclusion
+    routes = red_run_nightly(**{jobs_path(100): listing})
+    _, cands, last = pt.gather(FakeApi(green_routes(**routes)), SHA)
+    assert last.conclusion == pt.RED_BEYOND_EXTENDED
+    assert pt.decide(TREE, cands, last, now=NOW).skip is False
+    assert pt.base_mutation(FakeApi(base_routes(**routes)), BEFORE) \
+        == pt.BaseVerdict(False, "nightly-" + pt.RED_BEYOND_EXTENDED)
+    pt.main(BEFORE_ARGV, api=FakeApi(green_routes(**base_routes(**routes))), env=gh_env)
+    assert _all_outputs(gh_env) == {"skip": "false", "pr_run_id": "",
+                                    "base_mutation_green": "false",
+                                    "base_mutation": "nightly-red_beyond_extended"}
+
+
+@pytest.mark.parametrize(("status", "conclusion"), [
+    ("in_progress", None), ("queued", None), ("waiting", None), (None, None),
+    ("completed", None), ("completed", ""), ("completed", 0), ("Completed", "failure"),
+], ids=["in-progress", "queued", "waiting", "no-status", "no-conclusion",
+        "empty-conclusion", "non-string-conclusion", "misspelt-status"])
+@pytest.mark.parametrize("advisory", ["mutation-advisory-shard (diff, 0)",
+                                      "nightly-shadow-base"])
+def test_an_advisory_job_that_never_finished_is_not_dropped(advisory, status,
+                                                            conclusion, gh_env):
+    # Only a completed, concluded advisory job is dropped. One that has not
+    # completed (or carries no conclusion) inside a completed run is the
+    # contradiction `mutation` is refused for, so it stays in the red set
+    # beside the red extended leg, and the run reads RED_BEYOND_EXTENDED.
+    listing = shadowed_nightly_jobs()
+    for entry in listing["jobs"]:
+        if entry["name"] == advisory:
+            entry["status"], entry["conclusion"] = status, conclusion
+    routes = red_run_nightly(**{jobs_path(100): listing})
+    _, cands, last = pt.gather(FakeApi(green_routes(**routes)), SHA)
+    assert last.conclusion == pt.RED_BEYOND_EXTENDED
+    assert pt.decide(TREE, cands, last, now=NOW).skip is False
+    assert pt.base_mutation(FakeApi(base_routes(**routes)), BEFORE) \
+        == pt.BaseVerdict(False, "nightly-" + pt.RED_BEYOND_EXTENDED)
+    pt.main(BEFORE_ARGV, api=FakeApi(green_routes(**base_routes(**routes))), env=gh_env)
+    assert _all_outputs(gh_env) == {"skip": "false", "pr_run_id": "",
+                                    "base_mutation_green": "false",
+                                    "base_mutation": "nightly-red_beyond_extended"}
+
+
+@pytest.mark.parametrize("extended", ["failure", "success"])
+@pytest.mark.parametrize("advisory", [ADVISORY_RED, "nightly-shadow-base"])
+def test_a_red_idle_nightly_beside_a_red_advisory_job_is_not_a_green_nightly(advisory,
+                                                                           extended):
+    # Dropping the advisory job leaves `idle-nightly` red, which is not an
+    # extended leg, with or without one red beside it.
+    routes = red_run_nightly(**{jobs_path(100): shadowed_nightly_jobs(
+        "idle-nightly", advisory, extended=extended)})
+    _, cands, last = pt.gather(FakeApi(green_routes(**routes)), SHA)
+    assert last.conclusion == pt.RED_BEYOND_EXTENDED
+    assert pt.decide(TREE, cands, last, now=NOW).skip is False
+    assert pt.base_mutation(FakeApi(base_routes(**routes)), BEFORE) \
+        == pt.BaseVerdict(False, "nightly-" + pt.RED_BEYOND_EXTENDED)
+
+
+@pytest.mark.parametrize("name", [
+    "mutation-advisory-shard",              # the matrix never expanded
+    "mutation-advisory-shard (full, 0)",    # a full leg is never advisory
+    "mutation-advisory-shard (diff, 03)",
+    "mutation-advisory-shard (diff, 3) ",
+    "mutation-advisory-shard-x (diff, 3)",
+    "mutation-advisory-shards (diff, 3)",
+    "mutation-shard (diff, 3)",             # a PR-style diff leg in the gate's job
+    "nightly-shadow-base (x)",
+    "nightly-shadow-base-2",
+    "Nightly-shadow-base",
+    "x nightly-shadow-base",
+])
+def test_a_name_that_only_resembles_an_advisory_job_still_refuses(name):
+    # Matched whole, as ci.yml renders the two jobs: anything else stays in
+    # the red set, and a red set holding more than extended legs is refused.
+    routes = red_run_nightly(**{jobs_path(100): shadowed_nightly_jobs(name)})
+    _, cands, last = pt.gather(FakeApi(green_routes(**routes)), SHA)
+    assert last.conclusion == pt.RED_BEYOND_EXTENDED
+    assert pt.decide(TREE, cands, last, now=NOW).skip is False
+    assert pt.base_mutation(FakeApi(base_routes(**routes)), BEFORE) \
+        == pt.BaseVerdict(False, "nightly-" + pt.RED_BEYOND_EXTENDED)
+
+
+@pytest.mark.parametrize("name", [ADVISORY_RED, "nightly-shadow-base"])
+def test_an_advisory_job_of_another_run_is_still_an_error(name):
+    # Ownership is checked over every not-green job before any is dropped.
+    listing = shadowed_nightly_jobs()
+    listing["jobs"].insert(0, job(name, conclusion="failure", run_id=101))
+    listing["total_count"] += 1
+    routes = red_run_nightly(**{jobs_path(100): listing})
+    with pytest.raises(ValueError, match="another run's job"):
+        pt.gather(FakeApi(green_routes(**routes)), SHA)
+
+
 @pytest.mark.parametrize("conclusion", ["failure", "cancelled", "skipped", "timed_out",
                                         "neutral", "Success", "", None])
 def test_a_green_run_whose_mutation_job_is_not_green_is_a_red_nightly(conclusion):
@@ -2584,6 +2738,7 @@ SCENARIOS = {
 #: `idle-nightly` said idle -- and that step's bash is run against the same
 #: inputs in test_mutation_plan.py.
 ONE_SHARD = '[{"set":"full","index":0}]'
+ONE_ADVISORY = '[{"set":"diff","index":0}]'
 
 
 def _outcome(name: str, scenario: dict) -> tuple[str, dict]:
@@ -2595,12 +2750,18 @@ def _outcome(name: str, scenario: dict) -> tuple[str, dict]:
     if name == "idle-nightly":
         result, idle = scenario["idle"]
         return result, ({"idle": idle} if result == "success" else {})
+    if name == "nightly-shadow-base":
+        return "success", {"shadow_base": "b" * 40, "shadow_base_run": "41",
+                           "shadow_reason": "diff shadow against run 41 (schedule)"}
     if name == "mutation-plan":
         proven = scenario.get("proven", ("", "", ""))
         idle = scenario.get("idle", ("", ""))
         matrix = "[]" if proven[1] == "true" or idle[1] == "true" else ONE_SHARD
+        # The advisory diff legs exist only on a full nightly (C4).
+        advisory = (ONE_ADVISORY if scenario["event"] == "schedule" and matrix != "[]"
+                    else "[]")
         return "success", {"matrix": matrix, "gate_set": "" if matrix == "[]" else "full",
-                           "shadow": "false"}
+                           "shadow": "false", "advisory_matrix": advisory}
     return "success", {}
 
 
@@ -2658,6 +2819,7 @@ EXPECTED = {
     #                  PR  queue  skip=T  skip=F  failed  sched  idle  dispatch
     "proven":         (S,  S,     R,      R,      R,      S,     S,    S),
     "idle-nightly":   (S,  S,     S,      S,      S,      R,     R,    S),
+    "nightly-shadow-base": (S, S,  S,      S,      S,      R,     R,    S),
     "lint":           (R,  R,     R,      R,      R,      S,     S,    S),
     "evals":          (R,  R,     R,      R,      R,      S,     S,    S),
     "tests":          (R,  R,     S,      R,      R,      S,     S,    S),
@@ -2665,6 +2827,7 @@ EXPECTED = {
     "coverage-badge": (S,  S,     R,      R,      R,      S,     S,    S),
     "mutation-plan":  (R,  R,     R,      R,      R,      R,     R,    R),
     "mutation-shard": (R,  R,     S,      R,      R,      R,     S,    R),
+    "mutation-advisory-shard": (S, S, S,   S,      S,      R,     S,    S),
     "mutation":       (R,  R,     R,      R,      R,      R,     R,    R),
     "install-smoke":  (R,  R,     R,      R,      R,      S,     S,    S),
     "patch-coverage": (R,  S,     S,      S,      S,      S,     S,    S),
@@ -2674,12 +2837,17 @@ EXPECTED = {
 
 #: The only jobs a nightly or a dispatch may start: the whole-codebase
 #: mutation run, and the macOS/Windows 3.13/3.14 legs no pull request runs;
-#: on a nightly also the API question that may make it idle. An idle night
-#: drops the shards and nothing else -- `tests-extended` runs on it as on any
-#: other night, because what is inherited is the mutation verdict, not the
-#: platform legs.
+#: on a nightly also the API questions that may make it idle or name its diff
+#: shadow's base, and that shadow's advisory legs. An idle night drops the
+#: shards (both kinds) and nothing else -- `tests-extended` runs on it as on
+#: any other night, because what is inherited is the mutation verdict, not
+#: the platform legs. The two shadow jobs are continue-on-error, so they
+#: cannot change the run's conclusion the idle walk reads, and fact 3 drops
+#: them from the jobs it reads (test_the_nightlys_extra_jobs_cannot_redden_it,
+#: and the advisory cases beside the extended ones above).
 WHOLE_CODEBASE_JOBS = {"mutation-plan", "mutation-shard", "mutation", "tests-extended"}
-NIGHTLY_JOBS = WHOLE_CODEBASE_JOBS | {"idle-nightly"}
+NIGHTLY_JOBS = WHOLE_CODEBASE_JOBS | {"idle-nightly", "nightly-shadow-base",
+                                      "mutation-advisory-shard"}
 
 
 def run_table(jobs: dict) -> dict[str, tuple[str, ...]]:
@@ -2720,7 +2888,7 @@ def test_the_table_renders_every_scenario(jobs):
 
 @pytest.mark.parametrize("event, expected", [
     ("schedule", NIGHTLY_JOBS),
-    ("schedule, idle", NIGHTLY_JOBS - {"mutation-shard"}),
+    ("schedule, idle", NIGHTLY_JOBS - {"mutation-shard", "mutation-advisory-shard"}),
     ("workflow_dispatch", WHOLE_CODEBASE_JOBS),
 ])
 def test_a_whole_codebase_run_starts_only_mutation_and_the_extended_legs(jobs, event, expected):
@@ -2735,7 +2903,8 @@ def test_a_proven_push_still_runs_every_non_test_check(jobs):
     # PR run ran the extended legs, so `tests-extended` is never in this set.
     sim = simulate(jobs, SCENARIOS["push, proven skip=true"])
     skipped = {n for n, r in sim.items() if r == "skipped"}
-    assert skipped == {"tests", "mutation-shard", "patch-coverage", "idle-nightly"}
+    assert skipped == {"tests", "mutation-shard", "patch-coverage", "idle-nightly",
+                       "nightly-shadow-base", "mutation-advisory-shard"}
 
 
 def test_every_job_downstream_of_proven_names_a_status_function(jobs):
@@ -2824,10 +2993,103 @@ def test_the_shards_check_the_planner_result_now_that_they_say_not_cancelled(job
                                       ("cancelled", "", False)]:
         got = job_runs(jobs, "mutation-shard", {"mutation-plan": plan_result,
                                                 "proven": "skipped",
-                                                "idle-nightly": "skipped"},
+                                                "idle-nightly": "skipped",
+                                                "nightly-shadow-base": "skipped"},
                        {"mutation-plan": {"matrix": matrix}},
                        SCENARIOS["pull_request"])
         assert got is runs, (plan_result, matrix)
+
+
+ADVISORY_IF = ("${{ !cancelled() && github.event_name == 'schedule'"
+               " && needs.mutation-plan.result == 'success'"
+               " && needs.mutation-plan.outputs.advisory_matrix != ''"
+               " && needs.mutation-plan.outputs.advisory_matrix != '[]' }}")
+
+
+def test_the_advisory_legs_start_only_on_a_nightly_with_a_matrix(jobs):
+    assert jobs["mutation-advisory-shard"]["if"] == ADVISORY_IF
+    ancestors = {"mutation-plan": "success", "proven": "skipped",
+                 "idle-nightly": "success", "nightly-shadow-base": "success"}
+    for name, scenario in SCENARIOS.items():
+        for result, matrix, want in [("success", ONE_ADVISORY, True),
+                                     ("success", "[]", False),
+                                     ("success", "", False),
+                                     ("failure", ONE_ADVISORY, False),
+                                     ("cancelled", ONE_ADVISORY, False)]:
+            # A stray advisory matrix on any other event still starts nothing.
+            got = job_runs(jobs, "mutation-advisory-shard",
+                           ancestors | {"mutation-plan": result},
+                           {"mutation-plan": {"advisory_matrix": matrix}}, scenario)
+            assert got is (want and scenario["event"] == "schedule"), (name, result, matrix)
+
+
+def test_the_nightlys_extra_jobs_cannot_redden_it(jobs):
+    # The idle walk reads a nightly's conclusion beside its `mutation` job,
+    # and the conclusion is red if any job without continue-on-error fails.
+    # The base lookup and the advisory diff legs are evidence for a later PR,
+    # not part of tonight's verdict, so a failure in either must leave it
+    # alone. (Fact 3 drops them from the jobs it reads for the same reason:
+    # test_the_advisory_names_fact_3_drops_are_exactly_ci_ymls.)
+    sched = simulate(jobs, SCENARIOS["schedule"])
+    extra = {n for n, r in sched.items() if r != "skipped"} - (
+        WHOLE_CODEBASE_JOBS | {"idle-nightly"})
+    assert extra == {"nightly-shadow-base", "mutation-advisory-shard"}
+    for name in extra:
+        assert jobs[name].get("continue-on-error") is True, name
+    for name in WHOLE_CODEBASE_JOBS | {"idle-nightly"}:
+        assert "continue-on-error" not in jobs[name], name
+
+
+def _plan_module():
+    spec = importlib.util.spec_from_file_location("mutation_plan_for_proven_tree",
+                                                  ROOT / "scripts" / "mutation_plan.py")
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_the_advisory_names_fact_3_drops_are_exactly_ci_ymls(jobs):
+    # `_red_only_on_extended` drops a red job from the page only by name
+    # (`ADVISORY_JOB_NAMES`). That is sound only while those names are the
+    # whole-codebase run's continue-on-error jobs -- the ones whose red the
+    # run's conclusion ignores -- as GitHub renders them, and nothing else.
+    started = set()
+    for event in ("schedule", "workflow_dispatch"):
+        started |= {n for n, r in simulate(jobs, SCENARIOS[event]).items() if r != "skipped"}
+    lenient = {n for n in started if "continue-on-error" in jobs[n]}
+    assert lenient == {"nightly-shadow-base", "mutation-advisory-shard"}
+    for name in lenient:
+        assert jobs[name]["continue-on-error"] is True, name
+        # No `name:`, so the API names the job (or each leg) by its key.
+        assert "name" not in jobs[name], name
+    assert "strategy" not in jobs["nightly-shadow-base"]
+    assert pt.ADVISORY_JOB_NAMES.fullmatch("nightly-shadow-base")
+    assert jobs["mutation-advisory-shard"]["strategy"]["matrix"] == {
+        "include": "${{ fromJSON(needs.mutation-plan.outputs.advisory_matrix) }}"}
+    # Each leg as the API renders it -- the key, then the include entry's
+    # values in their order, as `mutation-shard (full, 6)` reads on nightly
+    # 41682296301's page -- from the planner's own matrix.
+    mp = _plan_module()
+    plan = {"gate_set": "full", "reasons": [], "advisory": ["diff"],
+            "sets": {"full": {"shards": [["a"], ["b"]]},
+                     "diff": {"shards": [["c"]] * 12}}}
+
+    def rendered(job_id, entry):
+        return "%s (%s)" % (job_id, ", ".join(str(v) for v in entry.values()))
+
+    legs = json.loads(json.dumps(mp.matrix(plan, advisory=True)))
+    assert len(legs) == 12
+    for entry in legs:
+        assert pt.ADVISORY_JOB_NAMES.fullmatch(rendered("mutation-advisory-shard", entry)), entry
+    for entry in mp.matrix(plan):
+        assert not pt.ADVISORY_JOB_NAMES.fullmatch(rendered("mutation-shard", entry)), entry
+    # Nothing else a whole-codebase run starts is ever dropped.
+    for name in started - lenient:
+        assert not pt.ADVISORY_JOB_NAMES.fullmatch(name), name
+    for leg in ("tests-extended (macos-latest, 3.13)", "tests-extended (windows-latest, 3.14)",
+                "mutation-shard (diff, 0)", "mutation-shard (full, 0)"):
+        assert not pt.ADVISORY_JOB_NAMES.fullmatch(leg), leg
 
 
 def test_the_interpreter_applies_the_implicit_success_to_grandparents():

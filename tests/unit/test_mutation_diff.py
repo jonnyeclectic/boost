@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import sys
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -34,6 +35,31 @@ def needs_mutmut():
     return pytest.importorskip("mutmut")
 
 
+#: mutmut's status names for the exit codes these tests write, as
+#: `status_by_exit_code` holds them (pinned against mutmut itself below). The
+#: comparison and the scoped verdicts only need the name of each code, so with
+#: this table they run in every `tests` cell -- which has no mutmut -- and not
+#: only in `mutation-plan`.
+_STATUS = {None: "not checked", 0: "survived", 1: "killed", 3: "killed", 5: "no tests",
+           33: "no tests", 34: "skipped", 36: "timeout", 37: "caught by type check"}
+
+
+@pytest.fixture
+def statuses(monkeypatch):
+    """`status_of` without mutmut, from `_STATUS`; anything else is suspicious."""
+    monkeypatch.setattr(md, "status_of", lambda code: _STATUS.get(code, "suspicious"))
+
+
+@pytest.mark.usefixtures("needs_mutmut")
+def test_the_status_table_is_mutmuts():
+    from mutmut.stats import status_by_exit_code
+
+    before = dict(status_by_exit_code)
+    for code in [*_STATUS, 99]:
+        assert md.status_of(code) == _STATUS.get(code, "suspicious"), code
+    assert dict(status_by_exit_code) == before
+
+
 def test_the_module_loads_without_mutmut():
     # Pinned where mutmut IS installed too, so the import can't creep back to
     # module level unnoticed: a `None` in sys.modules makes any `import
@@ -47,6 +73,8 @@ def test_the_module_loads_without_mutmut():
         "spec.loader.exec_module(m)\n"
         "assert m.passes(m.Verdict(killed=8, denominator=10))\n"
         "assert m.changed_functions('def a(): pass\\n', None) == set()\n"
+        "assert m.evidence_status(problems=False, disagree=0, compared=0, functions=0,"
+        " full_ok=True, diff_ok=True) == 'VACUOUS'\n"
     )
     proc = subprocess.run([sys.executable, "-c", code, str(_P)],
                           capture_output=True, text=True)
@@ -793,14 +821,18 @@ def test_compare_flags_a_flip_and_excludes_timeouts(tmp_path, capsys):
     assert f"{_A}__mutmut_3" in out  # the excluded timeout is listed too
 
 
-@pytest.mark.usefixtures("needs_mutmut")
-def test_compare_agreement_exits_0(tmp_path, capsys):
+@pytest.mark.usefixtures("statuses")
+def test_compare_agreement_over_one_mutant_is_vacuous(tmp_path, capsys):
+    # This exited 0 before, and 0 read as agreement: one mutant agreeing says
+    # nothing about whether the diff gate measures what the full gate does.
     plan = _diff_plan(tmp_path, [_n(_A, 1)], 1)
     _meta(tmp_path / "full", "mutation-full-shard-", 0, {f"{_A}__mutmut_1": 1})
     _meta(tmp_path / "diff", "mutation-diff-shard-", 0, {f"{_A}__mutmut_1": 1})
     assert md.main(["compare", "--plan", plan, "--full-source", str(tmp_path / "full"),
-                    "--diff-source", str(tmp_path / "diff")]) == 0
-    assert "agree 1, disagree 0, excluded-timeouts 0" in capsys.readouterr().out
+                    "--diff-source", str(tmp_path / "diff")]) == 3
+    out = capsys.readouterr().out
+    assert "agree 1, disagree 0, excluded-timeouts 0" in out
+    assert "shadow evidence: VACUOUS — compared 1 mutants over 1 functions" in out
 
 
 @pytest.mark.usefixtures("needs_mutmut")
@@ -1024,3 +1056,737 @@ def test_compare_counts_a_one_sided_timeout_as_disagreement(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "agree 1, disagree 1, excluded-timeouts 0" in out
     assert "full=absent diff=timeout" in out
+
+
+# -- shadow evidence: what one comparison counts for -------------------------
+
+_B = "boost_cli.core.m.x_b"
+_STATUS_ORDER = ["INCOMPLETE", "DISAGREE", "ALARM", "VACUOUS", "AGREE"]
+
+
+def _facts(status):
+    """The weakest facts that produce `status` on their own."""
+    base = {"problems": False, "disagree": 0, "compared": md.EVIDENCE_MIN_MUTANTS,
+            "functions": md.EVIDENCE_MIN_FUNCTIONS, "full_ok": True, "diff_ok": True}
+    return base | {"INCOMPLETE": {"problems": True}, "DISAGREE": {"disagree": 1},
+                   "ALARM": {"diff_ok": False}, "VACUOUS": {"compared": 0},
+                   "AGREE": {}}[status]
+
+
+def test_the_status_names_and_exit_codes():
+    assert set(md.STATUSES) == set(_STATUS_ORDER) == set(md.COMPARE_EXIT)
+    assert md.COMPARE_EXIT == {"AGREE": 0, "DISAGREE": 1, "ALARM": 1, "INCOMPLETE": 2,
+                               "VACUOUS": 3}
+    # 1 is an uncaught exception's exit, 2 argparse's: VACUOUS has its own.
+    assert md.COMPARE_EXIT["VACUOUS"] not in (0, 1, 2)
+
+
+@pytest.mark.parametrize("strong", _STATUS_ORDER)
+@pytest.mark.parametrize("weak", _STATUS_ORDER)
+def test_the_more_serious_status_wins(strong, weak):
+    # Every pair of statuses' facts at once: the earlier in the order wins.
+    a, b = _facts(strong), _facts(weak)
+    both = {"problems": a["problems"] or b["problems"],
+            "disagree": max(a["disagree"], b["disagree"]),
+            "compared": min(a["compared"], b["compared"]),
+            "functions": min(a["functions"], b["functions"]),
+            "full_ok": a["full_ok"] and b["full_ok"], "diff_ok": a["diff_ok"] and b["diff_ok"]}
+    want = min(strong, weak, key=_STATUS_ORDER.index)
+    assert md.evidence_status(**both) == want
+    assert md.evidence_status(**a) == strong
+
+
+@pytest.mark.parametrize("compared, functions, status", [
+    (199, 3, "VACUOUS"), (200, 3, "AGREE"), (200, 2, "VACUOUS"), (10_000, 2, "VACUOUS"),
+    (0, 0, "VACUOUS"), (201, 4, "AGREE"),
+])
+def test_the_vacuous_thresholds_are_inclusive(compared, functions, status):
+    assert (md.EVIDENCE_MIN_MUTANTS, md.EVIDENCE_MIN_FUNCTIONS) == (200, 3)
+    assert md.evidence_status(problems=False, disagree=0, compared=compared,
+                              functions=functions, full_ok=True, diff_ok=True) == status
+
+
+def test_an_alarm_is_either_direction_and_a_shared_fail_is_not_one():
+    kw = {"problems": False, "disagree": 0, "compared": 500, "functions": 9}
+    assert md.evidence_status(**kw, full_ok=False, diff_ok=True) == "ALARM"
+    assert md.evidence_status(**kw, full_ok=True, diff_ok=False) == "ALARM"
+    assert md.evidence_status(**kw, full_ok=False, diff_ok=False) == "AGREE"
+
+
+def test_compare_and_gate_share_their_thresholds(monkeypatch, tmp_path):
+    import argparse
+
+    got = {}
+    real = argparse.ArgumentParser.parse_args
+
+    def capture(self, args=None, namespace=None):
+        ns = real(self, args, namespace)
+        got[ns.cmd] = (ns.min, ns.small)
+        raise SystemExit(0)
+
+    monkeypatch.setattr(argparse.ArgumentParser, "parse_args", capture)
+    for argv in (["gate", "--plan", "p", "--source", "s", "--prefix", "x"],
+                 ["compare", "--plan", "p", "--full-source", "f", "--diff-source", "d"]):
+        with pytest.raises(SystemExit):
+            md.main(argv)
+    assert got == {"gate": (80.0, 10), "compare": (80.0, 10)}
+
+
+def _big(tmp_path, counts, *, full=None, diff=None, extra_full=None):
+    """A diff plan of `counts` mutants per function, all killed on both sides
+    bar the overrides, in one diff shard and one full shard (both m.py)."""
+    names = [n for q, c in counts.items() for n in _n(q, c)]
+    plan = _diff_plan(tmp_path, [names], len(names))
+    _meta(tmp_path / "full", "mutation-full-shard-", 0,
+          dict.fromkeys(names, 1) | (full or {}) | (extra_full or {}))
+    _meta(tmp_path / "diff", "mutation-diff-shard-", 0, dict.fromkeys(names, 1) | (diff or {}))
+    return plan
+
+
+def _compare(tmp_path, plan, *extra):
+    return md.main(["compare", "--plan", plan, "--full-source", str(tmp_path / "full"),
+                    "--diff-source", str(tmp_path / "diff"), *extra])
+
+
+def _evidence_line(out):
+    (line,) = [x for x in out.splitlines() if x.startswith("shadow evidence: ")]
+    return line
+
+
+def test_the_run_41387907117_report_is_vacuous_not_agreement(tmp_path, capsys):
+    # The one shadow report on record: a diff set with no shards beside a full
+    # shard, "0/0 killed (100.0%) over 0 functions", and compare exit 0. It
+    # now exits 3, and the shadow step reads 3 as a notice, not a green.
+    plan = _diff_plan(tmp_path, [], 0, functions=[])
+    _meta(tmp_path / "full", "mutation-full-shard-", 0, {f"{_A}__mutmut_1": 1})
+    (tmp_path / "diff").mkdir()
+    out_json = tmp_path / "e.json"
+    assert _compare(tmp_path, plan, "--json", str(out_json)) == 3
+    out = capsys.readouterr().out
+    assert out.splitlines()[0] == "agree 0, disagree 0, excluded-timeouts 0"
+    assert _evidence_line(out) == (
+        "shadow evidence: VACUOUS — compared 0 mutants over 0 functions (counts toward "
+        "the bar only at >= 200 over >= 3)")
+    assert json.loads(out_json.read_text(encoding="utf-8"))["status"] == "VACUOUS"
+
+
+@pytest.mark.usefixtures("statuses")
+def test_two_hundred_agreeing_over_three_functions_is_agree(tmp_path, capsys):
+    plan = _big(tmp_path, {_A: 70, _B: 70, _K: 60},
+                full={f"{_A}__mutmut_1": 0}, diff={f"{_A}__mutmut_1": 0})
+    assert _compare(tmp_path, plan) == 0
+    out = capsys.readouterr().out
+    assert "agree 200, disagree 0, excluded-timeouts 0" in out
+    assert ("scoped verdicts over 3 functions: full PASS (199/200), diff PASS (199/200)"
+            in out)
+    assert "ALARM" not in out
+    assert _evidence_line(out) == ("shadow evidence: AGREE — compared 200 mutants over 3 "
+                                   "functions (counts toward the bar)")
+
+
+@pytest.mark.usefixtures("statuses")
+@pytest.mark.parametrize("counts", [{_A: 100, _B: 100}, {_A: 70, _B: 70, _K: 59}],
+                         ids=["200-over-2", "199-over-3"])
+def test_short_of_either_threshold_is_vacuous(tmp_path, capsys, counts):
+    assert _compare(tmp_path, _big(tmp_path, counts)) == 3
+    assert "shadow evidence: VACUOUS" in _evidence_line(capsys.readouterr().out)
+
+
+@pytest.mark.usefixtures("statuses")
+def test_a_one_sided_timeout_that_flips_the_scoped_verdict_is_an_alarm(tmp_path, capsys):
+    # Every compared mutant agrees -- the timeout is excluded -- but under ten
+    # mutants every one must be killed, so the full run fails these functions
+    # where the diff run passes them. Bound, the diff gate would pass this.
+    plan = _big(tmp_path, {_A: 5}, full={f"{_A}__mutmut_5": 36})
+    assert _compare(tmp_path, plan) == 1
+    out = capsys.readouterr().out
+    assert "agree 4, disagree 0, excluded-timeouts 1" in out
+    assert "scoped verdicts over 1 functions: full FAIL (4/5), diff PASS (5/5)" in out
+    assert ("ALARM: over the diff scope the full run FAILS and the diff run PASSES — "
+            "bound, the diff gate would have passed what the full gate refuses on these "
+            "same functions") in out
+    assert "shadow evidence: ALARM" in _evidence_line(out)
+
+
+@pytest.mark.usefixtures("statuses")
+def test_the_mirror_alarm_names_the_other_direction(tmp_path, capsys):
+    plan = _big(tmp_path, {_A: 5}, diff={f"{_A}__mutmut_5": 36})
+    assert _compare(tmp_path, plan) == 1
+    out = capsys.readouterr().out
+    assert "full PASS (5/5), diff FAIL (4/5)" in out
+    assert ("ALARM: over the diff scope the full run PASSES and the diff run FAILS — "
+            "bound, the diff gate would have refused what the full gate passes") in out
+
+
+@pytest.mark.usefixtures("statuses")
+def test_a_survivor_outside_the_scope_is_not_an_alarm(tmp_path, capsys):
+    # The full shard holds the whole file; a survivor in a function the PR did
+    # not touch can fail the whole-codebase gate, but it is not the diff
+    # gate's business and must not read as the diff gate's miss.
+    plan = _big(tmp_path, {_A: 70, _B: 70, _K: 60},
+                extra_full={"boost_cli.core.m.x_c__mutmut_1": 0,
+                            "boost_cli.core.m.x_ab__mutmut_1": 0})
+    assert _compare(tmp_path, plan) == 0
+    out = capsys.readouterr().out
+    assert "full PASS (200/200), diff PASS (200/200)" in out
+    assert "x_c" not in out and "x_ab" not in out
+    assert "ALARM" not in out
+
+
+@pytest.mark.usefixtures("statuses")
+def test_a_disagreement_outranks_everything_but_a_missing_result(tmp_path, capsys):
+    plan = _big(tmp_path, {_A: 70, _B: 70, _K: 60}, full={f"{_A}__mutmut_1": 0})
+    assert _compare(tmp_path, plan) == 1
+    assert "shadow evidence: DISAGREE — compared 200 mutants" in _evidence_line(
+        capsys.readouterr().out)
+
+
+@pytest.mark.usefixtures("statuses")
+@pytest.mark.parametrize("shape", ["agree", "vacuous", "alarm", "disagree", "incomplete",
+                                   "malformed"])
+def test_the_json_says_what_the_report_says_on_every_exit(tmp_path, capsys, monkeypatch, shape):
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "schedule")
+    monkeypatch.setenv("GITHUB_SHA", "c" * 40)
+    monkeypatch.setenv("GITHUB_RUN_ID", "41900000001")
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
+    monkeypatch.setenv("SHADOW_HEAD_SHA", "d" * 40)
+    big = {_A: 70, _B: 70, _K: 60}
+    plan = {
+        "agree": lambda: _big(tmp_path, big),
+        "vacuous": lambda: _big(tmp_path, {_A: 3}),
+        "alarm": lambda: _big(tmp_path, {_A: 5}, full={f"{_A}__mutmut_5": 36}),
+        "disagree": lambda: _big(tmp_path, big, diff={f"{_A}__mutmut_2": 0}),
+        "incomplete": lambda: _diff_plan(tmp_path, [_n(_A, 1)], 1),
+        "malformed": lambda: _write_plan(tmp_path, {"sets": {"diff": {"shards": None}}}),
+    }[shape]()
+    out_json = tmp_path / "evidence.json"
+    rc = _compare(tmp_path, plan, "--json", str(out_json))
+    printed = _evidence_line(capsys.readouterr().out).split()[2]
+    rec = json.loads(out_json.read_text(encoding="utf-8"))
+    assert rec["status"] == printed == shape.upper().replace("MALFORMED", "INCOMPLETE")
+    assert rc == md.COMPARE_EXIT[rec["status"]]
+    assert md._evidence_problems(rec) == []
+    assert {k: rec[k] for k in ("schema", "event", "sha", "head_sha", "run_id",
+                                "run_attempt", "min_mutants", "min_functions")} == {
+        "schema": 2, "event": "schedule", "sha": "c" * 40, "head_sha": "d" * 40,
+        "run_id": "41900000001", "run_attempt": "1", "min_mutants": 200, "min_functions": 3}
+    # The scope is the digest of exactly the names compare scored; a plan it
+    # could not read scored none.
+    planned = json.loads(Path(plan).read_text(encoding="utf-8"))["sets"]["diff"]["shards"]
+    assert rec["scope"] == md.scope_digest(
+        [] if shape == "malformed" else [n for shard in planned for n in shard])
+    if shape == "agree":
+        assert {k: rec[k] for k in ("compared_mutants", "compared_functions", "agree",
+                                    "disagree", "excluded_timeouts", "full_scoped",
+                                    "diff_scoped")} == {
+            "compared_mutants": 200, "compared_functions": 3, "agree": 200, "disagree": 0,
+            "excluded_timeouts": 0, "full_scoped": "PASS", "diff_scoped": "PASS"}
+    if shape == "malformed":
+        assert (rec["full_scoped"], rec["diff_scoped"]) == (None, None)
+
+
+@pytest.mark.usefixtures("statuses")
+def test_a_nightly_shaped_plan_compares_and_records_its_base(tmp_path, capsys, monkeypatch):
+    # What the nightly's shadow step hands compare: both sets, the diff one
+    # marked advisory and carrying its base, the full one with every shard
+    # of the night (here two, one holding m.py and one holding nothing).
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "schedule")
+    monkeypatch.setenv("GITHUB_SHA", "c" * 40)
+    monkeypatch.setenv("SHADOW_HEAD_SHA", "c" * 40)
+    monkeypatch.setenv("GITHUB_RUN_ID", "41900000002")
+    path = Path(_big(tmp_path, {_A: 70, _B: 70, _K: 60}))
+    plan = json.loads(path.read_text(encoding="utf-8"))
+    plan["advisory"] = ["diff"]
+    plan["sets"]["diff"]["base"] = "b" * 40
+    plan["sets"]["full"] = {"shards": [["boost_cli.core.m.*"], ["boost_cli.core.n.*"]],
+                            "mutants": None}
+    path.write_text(json.dumps(plan), encoding="utf-8")
+    (tmp_path / "full" / "mutation-full-shard-1").mkdir()
+    out_json = tmp_path / "e.json"
+    assert _compare(tmp_path, str(path), "--json", str(out_json)) == 0
+    assert "shadow evidence: AGREE — compared 200 mutants over 3 functions" in (
+        capsys.readouterr().out)
+    rec = json.loads(out_json.read_text(encoding="utf-8"))
+    assert (rec["status"], rec["base"]) == ("AGREE", "b" * 40)
+    assert md._evidence_problems(rec) == []
+    assert md.qualifies(rec)
+
+
+@pytest.mark.usefixtures("statuses")
+def test_a_nightly_full_shard_missing_is_incomplete_not_agreement(tmp_path, capsys):
+    path = Path(_big(tmp_path, {_A: 70, _B: 70, _K: 60}))
+    plan = json.loads(path.read_text(encoding="utf-8"))
+    plan["sets"]["full"] = {"shards": [["boost_cli.core.m.*"], ["boost_cli.core.n.*"]]}
+    path.write_text(json.dumps(plan), encoding="utf-8")
+    assert _compare(tmp_path, str(path)) == 2
+    assert "shadow evidence: INCOMPLETE" in _evidence_line(capsys.readouterr().out)
+
+
+def test_the_json_records_the_plans_base_only_when_it_is_a_commit(tmp_path):
+    assert md._plan_base({"sets": {"diff": {"base": "d" * 40}}}) == "d" * 40
+    for plan in ({"sets": {"diff": {"base": "main"}}}, {"sets": {"diff": {}}}, {"sets": {}},
+                 [], {"sets": None}, {"sets": {"diff": []}}):
+        assert md._plan_base(plan) is None, plan
+
+
+# -- evidence: counting reports against the bar -------------------------------
+
+_REPO = 1304281190      # this repository's id, as the artifact listing gives it
+_T0 = datetime(2026, 11, 5, tzinfo=UTC)
+_SINCE = "2026-11-05T00:00:00Z"
+_NOW = _T0 + timedelta(days=20)
+
+
+def _iso(when):
+    return when.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+class _Shelf:
+    """Downloaded reports and the API listing that names them, as Step 6 saves both."""
+
+    def __init__(self, tmp_path, t0=_T0):
+        self.root = tmp_path / "evidence"
+        self.root.mkdir()
+        self.t0 = t0
+        self.artifacts = []
+
+    def add(self, *, branch="loop/topic", head=None, fork=False, expired=False,
+            created=None, kept=90, download=True, **over):
+        """One listed artifact plus (unless `download=False`) its report.
+
+        By default an AGREE over 400 mutants with its own scope, from a run
+        whose listing entry matches it in every field `evidence` checks.
+        """
+        n = len(self.artifacts) + 1
+        artifact_id, run_id = 13200000000 + n, 41900000000 + n
+        head = head or "%040x" % (0xA000 + n)
+        on_main = branch == md.DEFAULT_BRANCH
+        created = created or self.t0 + timedelta(hours=n)
+        self.artifacts.append({
+            "id": artifact_id, "name": md.EVIDENCE_ARTIFACT, "expired": expired,
+            "created_at": _iso(created), "expires_at": _iso(created + timedelta(days=kept)),
+            "workflow_run": {"id": run_id, "repository_id": _REPO,
+                             "head_repository_id": _REPO + 1 if fork else _REPO,
+                             "head_branch": branch, "head_sha": head}})
+        rec = {"schema": 2, "status": "AGREE", "compared_mutants": 400,
+               "compared_functions": 6, "agree": 400, "disagree": 0, "excluded_timeouts": 0,
+               "full_scoped": "PASS", "diff_scoped": "PASS", "min_mutants": 200,
+               "min_functions": 3, "base": None,
+               "event": "schedule" if on_main else "pull_request",
+               # A PR's GITHUB_SHA is its merge commit, new on every run.
+               "sha": head if on_main else "%040x" % (0xB000 + n), "head_sha": head,
+               "run_id": str(run_id), "run_attempt": "1",
+               "scope": md.scope_digest(["scope-%d" % n])} | over
+        if download:
+            self.write(artifact_id, json.dumps(rec))
+        return artifact_id, run_id
+
+    def write(self, artifact_id, body):
+        path = self.root / str(artifact_id) / md.EVIDENCE_FILE
+        path.parent.mkdir(exist_ok=True)
+        path.write_text(body, encoding="utf-8")
+
+    def pages(self, size=100, total=None):
+        """The listing as saved pages, inside the reports dir as Step 6 keeps them."""
+        paths = []
+        for i in range(0, max(len(self.artifacts), 1), size):
+            path = self.root / ("listing-%d.json" % (i // size + 1))
+            path.write_text(json.dumps({
+                "total_count": len(self.artifacts) if total is None else total,
+                "artifacts": self.artifacts[i:i + size]}), encoding="utf-8")
+            paths.append(path)
+        return paths
+
+    def argv(self, *extra, pages=None, since=_SINCE):
+        args = ["evidence", "--reports", str(self.root), "--since", since]
+        for p in self.pages() if pages is None else pages:
+            args += ["--listing", str(p)]
+        return args + list(extra)
+
+    def evidence(self, *extra, **kw):
+        return md.main(self.argv(*extra, **kw))
+
+
+@pytest.fixture
+def shelf(tmp_path, monkeypatch):
+    monkeypatch.setattr(md, "_now", lambda: _NOW)
+    return _Shelf(tmp_path)
+
+
+def _five(shelf, *, nightly=1):
+    for i in range(5):
+        shelf.add(branch=md.DEFAULT_BRANCH if i < nightly else "loop/topic-%d" % i)
+
+
+def _summary(out):
+    return out.splitlines()[-1]
+
+
+def test_five_distinct_comparisons_with_a_nightly_meet_the_bar(shelf, capsys):
+    _five(shelf)
+    assert shelf.evidence() == 0
+    out = capsys.readouterr().out
+    assert _summary(out) == (
+        "evidence: 5 of 5 AGREE reports from distinct comparisons (1 of 1 from schedule); "
+        "5 read, 0 unreadable or unknown, 0 DISAGREE or ALARM")
+    assert all(line.startswith("evidence: ") for line in out.splitlines())
+
+
+def test_one_pr_re_run_after_each_merge_to_main_counts_once(shelf, capsys):
+    # The review's case: strict up-to-date checks re-run an open train PR
+    # after every merge to main, each time on a new merge commit (GITHUB_SHA)
+    # and a new head. Four of those plus one nightly are two comparisons.
+    shelf.add(branch=md.DEFAULT_BRANCH)
+    for _ in range(4):
+        shelf.add(branch="loop/train")
+    assert shelf.evidence() == 3
+    out = capsys.readouterr().out
+    assert _summary(out).startswith(
+        "evidence: 2 of 5 AGREE reports from distinct comparisons (1 of 1 from schedule)")
+    assert out.count("the same branch as a report already counted -- counted once") == 3
+
+
+def test_the_same_scope_on_another_branch_counts_once(shelf, capsys):
+    _five(shelf)
+    shelf.add(branch="loop/again", scope=md.scope_digest(["scope-5"]))
+    assert shelf.evidence() == 0
+    out = capsys.readouterr().out
+    assert "5 of 5 AGREE" in _summary(out)
+    assert "the same scope as a report already counted" in out
+
+
+def test_a_nightly_is_kept_over_an_older_pr_sharing_its_scope(shelf, capsys):
+    shared = md.scope_digest(["the-one-pr's-functions"])
+    shelf.add(branch="loop/first", scope=shared)
+    shelf.add(branch=md.DEFAULT_BRANCH, scope=shared)
+    for i in range(3):
+        shelf.add(branch="loop/topic-%d" % i)
+    assert shelf.evidence() == 3
+    assert "4 of 5 AGREE reports from distinct comparisons (1 of 1 from schedule)" in (
+        _summary(capsys.readouterr().out))
+
+
+@pytest.mark.parametrize("status", ["AGREE", "DISAGREE"])
+@pytest.mark.parametrize("head_repo", ["fork", "deleted fork"])
+def test_a_forks_artifact_is_never_read(shelf, capsys, monkeypatch, status, head_repo):
+    # A fork's run uploads whatever JSON its own ci.yml writes: neither its
+    # AGREE nor its DISAGREE is evidence.
+    for i in range(4):
+        shelf.add(branch=md.DEFAULT_BRANCH if i == 0 else "loop/topic-%d" % i)
+    artifact_id, _ = shelf.add(branch="main", fork=True, status=status)
+    if head_repo == "deleted fork":
+        shelf.artifacts[-1]["workflow_run"]["head_repository_id"] = None
+        shelf.artifacts[-1]["workflow_run"]["head_branch"] = None
+    assert shelf.evidence() == 3
+    out = capsys.readouterr().out
+    assert "evidence: artifact %d (run " % artifact_id in out
+    assert "from another repository -- not read" in out
+    assert "4 of 5 AGREE" in _summary(out)
+
+
+@pytest.mark.parametrize("branch, over, why", [
+    ("loop/x", {"run_id": "1"}, "run_id 1, listed run"),
+    ("loop/x", {"head_sha": "e" * 40}, "head_sha eeeeeeeeeeee, listed"),
+    ("loop/x", {"event": "schedule"}, "says schedule, but its run is not on main's"),
+    ("main", {"sha": "e" * 40}, "says schedule, but its run is not on main's"),
+    ("main", {"event": "pull_request"}, "says pull_request, but its run is on main"),
+], ids=["run", "head", "schedule-on-a-branch", "schedule-off-its-commit", "pr-on-main"])
+def test_a_report_that_does_not_match_its_listed_run_is_unknown(shelf, capsys, branch,
+                                                                 over, why):
+    _five(shelf)
+    shelf.add(branch=branch, **over)
+    assert shelf.evidence() == 2
+    out = capsys.readouterr().out
+    assert "does not match its listed run (" in out and why in out
+    assert "5 of 5 AGREE" in _summary(out)
+
+
+def test_an_expired_report_in_the_window_is_unknown(shelf, capsys):
+    _five(shelf)
+    shelf.add(expired=True, download=False)
+    assert shelf.evidence() == 2
+    assert "expired before it was read -- it could have been a DISAGREE" in (
+        capsys.readouterr().out)
+
+
+def test_a_report_from_before_the_window_is_not_read(shelf, capsys):
+    # E.g. artifact 13127375493, which predates the JSON: listed, never read.
+    _five(shelf)
+    shelf.add(created=_T0 - timedelta(days=3), expired=True, download=False)
+    shelf.add(created=_T0 - timedelta(days=2), status="DISAGREE")
+    assert shelf.evidence() == 0
+    assert capsys.readouterr().out.count("from before --since -- not read") == 2
+
+
+def test_a_listed_report_never_downloaded_is_unknown(shelf, capsys):
+    _five(shelf)
+    artifact_id, _ = shelf.add(download=False)
+    assert shelf.evidence() == 2
+    assert "listed, but no %d/%s was downloaded" % (artifact_id, md.EVIDENCE_FILE) in (
+        capsys.readouterr().out)
+
+
+def test_a_report_the_listing_does_not_name_is_unknown(shelf, capsys):
+    _five(shelf)
+    shelf.write(99, "{}")
+    assert shelf.evidence() == 2
+    assert "evidence: 99/%s: not in the listing -- list again, or remove it" % (
+        md.EVIDENCE_FILE) in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("age_days, kept, rc", [(29, 30, 0), (30, 30, 2), (31, 30, 2),
+                                                 (89, 90, 0), (91, 90, 2)])
+def test_a_window_older_than_a_report_is_kept_is_unknown(shelf, capsys, age_days, kept, rc):
+    # A report from the window's start may have expired out of the listing
+    # unseen, and it could have been the DISAGREE that stops the plan.
+    since = _NOW - timedelta(days=age_days)
+    shelf.t0 = since
+    for i in range(5):
+        shelf.add(branch=md.DEFAULT_BRANCH if i == 0 else "loop/topic-%d" % i, kept=kept)
+    assert shelf.evidence(since=_iso(since)) == rc
+    out = capsys.readouterr().out
+    assert ("and a report is kept %.1f days" % kept in out) is (rc == 2)
+
+
+def test_the_shortest_retention_listed_decides_the_window(shelf, capsys):
+    _five(shelf)
+    shelf.add(kept=19)
+    assert shelf.evidence() == 2
+    assert "the window opened 20.0 days ago and a report is kept 19.0 days" in (
+        capsys.readouterr().out)
+
+
+def test_every_page_of_the_listing_is_read(shelf, capsys):
+    _five(shelf)
+    pages = shelf.pages(size=2)
+    assert len(pages) == 3
+    assert shelf.evidence(pages=pages) == 0
+    capsys.readouterr()
+    assert shelf.evidence(pages=pages[:2]) == 2
+    assert "evidence: listing: the pages list 4 of 5 artifacts: fetch every page" in (
+        capsys.readouterr().out)
+    assert shelf.evidence(pages=shelf.pages(total=6)) == 2
+    assert "list 5 of 6 artifacts" in capsys.readouterr().out
+
+
+def test_pages_from_two_listings_are_refused(shelf, capsys):
+    _five(shelf)
+    pages = shelf.pages(size=3)
+    page = json.loads(pages[0].read_text(encoding="utf-8")) | {"total_count": 4}
+    pages[0].write_text(json.dumps(page), encoding="utf-8")
+    assert shelf.evidence(pages=pages) == 2
+    assert "the pages disagree on total_count (4, 5): list them again" in (
+        capsys.readouterr().out)
+
+
+@pytest.mark.parametrize("change", [
+    lambda a: a.update(name="mutation-weights"),
+    lambda a: a.pop("workflow_run"),
+    lambda a: a["workflow_run"].update(id="41900000001"),
+    lambda a: a["workflow_run"].update(head_sha="main"),
+    lambda a: a["workflow_run"].update(head_branch=None),
+    lambda a: a.update(expired="no"),
+    lambda a: a.update(created_at="yesterday"),
+    lambda a: a.update(id=True),
+], ids=["name", "no-run", "run-id", "head-sha", "branch", "expired", "created", "id"])
+def test_a_listing_entry_not_in_the_apis_shape_is_refused(shelf, capsys, change):
+    _five(shelf)
+    change(shelf.artifacts[-1])
+    assert shelf.evidence() == 2
+    assert "evidence: listing: " in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("body", ["{", "[]", json.dumps({"artifacts": []}),
+                                  json.dumps({"total_count": "5", "artifacts": []})])
+def test_a_page_that_is_not_the_listing_is_refused(shelf, capsys, body):
+    _five(shelf)
+    page = shelf.root / "page.json"
+    page.write_text(body, encoding="utf-8")
+    assert shelf.evidence(pages=[*shelf.pages(), page]) == 2
+    assert "evidence: listing: %s: " % page in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("status, rc", [("AGREE", 3), ("DISAGREE", 1)])
+def test_the_probe_is_read_and_never_counted(shelf, capsys, status, rc):
+    for i in range(4):
+        shelf.add(branch=md.DEFAULT_BRANCH if i == 0 else "loop/topic-%d" % i)
+    _, probe = shelf.add(branch="probe/diff-gate-negative", status=status)
+    assert shelf.evidence("--probe-run", str(probe)) == rc
+    out = capsys.readouterr().out
+    assert "4 of 5 AGREE" in _summary(out)
+    assert ("the Step 7 probe -- never counted" in out) is (status == "AGREE")
+
+
+@pytest.mark.parametrize("status, rc", [("AGREE", 3), ("DISAGREE", 1)])
+def test_a_merge_queue_run_is_read_and_never_counted(shelf, capsys, status, rc):
+    for i in range(4):
+        shelf.add(branch=md.DEFAULT_BRANCH if i == 0 else "loop/topic-%d" % i)
+    shelf.add(branch="gh-readonly-queue/main/pr-1288-" + "f" * 40, status=status,
+              event="merge_group")
+    assert shelf.evidence() == rc
+    out = capsys.readouterr().out
+    assert "4 of 5 AGREE" in _summary(out)
+    assert ("merge_group run of merge queue -- a merge-queue run -- never counted" in out) is (
+        status == "AGREE")
+
+
+@pytest.mark.parametrize("over", [
+    {"status": "VACUOUS"}, {"status": "INCOMPLETE"},
+    # A stored AGREE under today's constants does not count: thresholds only rise.
+    {"compared_mutants": 199}, {"compared_functions": 2},
+    {"full_scoped": "FAIL"}, {"full_scoped": None, "diff_scoped": None},
+], ids=["vacuous", "incomplete", "199", "two-functions", "split-verdicts", "no-verdicts"])
+def test_a_report_that_does_not_meet_todays_bar_is_not_counted(shelf, capsys, over):
+    for i in range(4):
+        shelf.add(branch=md.DEFAULT_BRANCH if i == 0 else "loop/topic-%d" % i)
+    shelf.add(branch="loop/weak", **over)
+    assert shelf.evidence() == 3
+    out = capsys.readouterr().out
+    assert "evidence: 4 of 5 AGREE" in out
+    assert "does not count" in out
+
+
+@pytest.mark.parametrize("status", ["DISAGREE", "ALARM"])
+def test_a_disagreement_or_alarm_anywhere_stops_the_plan(shelf, capsys, status):
+    _five(shelf)
+    shelf.add(branch="loop/bad", status=status, compared_mutants=3)
+    junk, _ = shelf.add(branch="loop/junk")
+    shelf.write(junk, "{")
+    assert shelf.evidence() == 1
+    assert "1 DISAGREE or ALARM" in _summary(capsys.readouterr().out)
+
+
+@pytest.mark.parametrize("body", ["{", '"x"', "[]", json.dumps({"schema": True}),
+                                  json.dumps({"schema": 1}), "\udc80"])
+def test_an_unreadable_report_is_named_and_exits_2(shelf, capsys, body):
+    _five(shelf)
+    artifact_id, run_id = shelf.add(branch="loop/odd")
+    path = shelf.root / str(artifact_id) / md.EVIDENCE_FILE
+    if body == "\udc80":
+        path.write_bytes(b"\xff")
+    else:
+        path.write_text(body, encoding="utf-8")
+    assert shelf.evidence() == 2
+    assert "evidence: artifact %d (run %d): " % (artifact_id, run_id) in (
+        capsys.readouterr().out)
+
+
+@pytest.mark.parametrize("over", [{"sha": "main"}, {"sha": None}, {"head_sha": ""},
+                                  {"agree": True}, {"disagree": -1}, {"status": "agree"},
+                                  {"full_scoped": "pass"}, {"event": 7}, {"run_id": 7},
+                                  {"run_id": "١"}, {"run_id": ""}, {"scope": "x"},
+                                  {"scope": "A" * 64}, {"scope": None}])
+def test_every_field_is_checked_before_a_report_is_read(shelf, over):
+    artifact_id, _ = shelf.add(**over)
+    rec = json.loads((shelf.root / str(artifact_id) / md.EVIDENCE_FILE).read_text(
+        encoding="utf-8"))
+    assert md._evidence_problems(rec) != []
+
+
+def test_the_reports_the_shelf_writes_are_well_formed(shelf):
+    artifact_id, _ = shelf.add()
+    rec = json.loads((shelf.root / str(artifact_id) / md.EVIDENCE_FILE).read_text(
+        encoding="utf-8"))
+    assert md._evidence_problems(rec) == []
+
+
+def test_a_shortfall_or_no_nightly_exits_3(shelf, capsys):
+    _five(shelf, nightly=0)
+    assert shelf.evidence() == 3
+    assert "(0 of 1 from schedule)" in capsys.readouterr().out
+    assert shelf.evidence("--need-schedule", "0") == 0
+    assert shelf.evidence("--need", "6", "--need-schedule", "0") == 3
+
+
+def test_no_reports_no_directory_or_no_time(shelf, tmp_path, capsys):
+    assert shelf.evidence() == 3
+    assert md.main(["evidence", "--reports", str(tmp_path / "absent"), "--since", _SINCE,
+                    "--listing", str(shelf.pages()[0])]) == 2
+    assert shelf.evidence(since="last week") == 2
+    assert "evidence: --since last week is not an ISO 8601 time" in capsys.readouterr().out
+
+
+def test_the_listing_and_the_window_start_are_required(shelf):
+    for drop in ("--listing", "--since"):
+        argv = shelf.argv()
+        i = argv.index(drop)
+        with pytest.raises(SystemExit) as exc:
+            md.main(argv[:i] + argv[i + 2:])
+        assert exc.value.code == 2
+
+
+def test_a_naive_window_start_is_utc():
+    assert md._when("2026-11-05T00:00:00") == _T0
+    assert md._when("2026-11-05") == _T0
+    assert md._when(5) is None
+
+
+def test_a_hostile_report_or_branch_cannot_start_a_workflow_command(shelf, capsys):
+    shelf.add(event="x\n::error::pwned", status="VACUOUS")
+    shelf.add(branch="loop/x\n::error::branch")
+    shelf.evidence()
+    out = capsys.readouterr().out
+    assert all(line.startswith("evidence: ") for line in out.splitlines()), out
+    assert "%0A::error::pwned" in out
+    assert "%0A::error::branch" in out
+
+
+def test_the_scope_is_the_set_of_names_compared():
+    assert md.scope_digest(["b", "a", "a"]) == md.scope_digest(["a", "b"])
+    assert md.scope_digest(["a"]) != md.scope_digest(["a", "b"])
+    assert md._DIGEST.fullmatch(md.scope_digest([]))
+
+
+def test_evidence_runs_as_a_script(tmp_path):
+    now = datetime.now(UTC)
+    shelf = _Shelf(tmp_path, t0=now - timedelta(days=1))
+    _five(shelf)
+    proc = subprocess.run([sys.executable, str(_P),
+                           *shelf.argv(since=_iso(now - timedelta(days=2)))],
+                          capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+_PLAN_DOC = _P.parents[1] / "docs" / "superpowers" / "plans" / "2026-10-31-ci-speed.md"
+
+
+def test_the_plan_states_the_bar_the_code_applies():
+    # The plan is what a reviewer reads before binding the gate; a number
+    # changed in one place and not the other would be a bar nobody applies.
+    if not _PLAN_DOC.exists():
+        pytest.skip("docs/ not reachable (e.g. the mutants/ copy)")
+    text = _PLAN_DOC.read_text(encoding="utf-8")
+    for name in ("EVIDENCE_MIN_MUTANTS", "EVIDENCE_MIN_FUNCTIONS", "EVIDENCE_NEED",
+                 "EVIDENCE_NEED_SCHEDULE"):
+        assert "`%s = %d`" % (name, getattr(md, name)) in text, name
+    for status in ("AGREE", "VACUOUS", "ALARM"):
+        assert "**%s** (exit %d)" % (status, md.COMPARE_EXIT[status]) in text, status
+    assert "**DISAGREE** (exit %d) and **INCOMPLETE** (exit %d)" % (
+        md.COMPARE_EXIT["DISAGREE"], md.COMPARE_EXIT["INCOMPLETE"]) in text
+
+
+def test_task_8_keeps_the_comparison_the_nightly_shadow_needs():
+    # Once the diff gate binds, only a full nightly's plan carries both sets,
+    # and its advisory diff legs are compared in `mutation`'s shadow step. A
+    # checklist that said "remove compare step" would leave up to MAX_SHARDS
+    # legs a night that nothing compares, with nothing going red.
+    if not _PLAN_DOC.exists():
+        pytest.skip("docs/ not reachable (e.g. the mutants/ copy)")
+    text = _PLAN_DOC.read_text(encoding="utf-8")
+    task8 = text[text.index("### Task 8:"):text.index("### Task 9:")]
+    assert "remove compare step" not in task8
+    assert "Keep the `diff-gate shadow` step (`mutation_diff.py compare`)" in task8
+    assert ("still runs `mutation_diff.py compare` in the `diff-gate shadow` step guarded "
+            "on `shadow == 'true'`") in task8
+    assert "Keep `diff_plan`'s `shadow` parameter" in task8
+
+
+def test_the_plan_collects_evidence_the_way_the_cli_counts_it():
+    if not _PLAN_DOC.exists():
+        pytest.skip("docs/ not reachable (e.g. the mutants/ copy)")
+    text = _PLAN_DOC.read_text(encoding="utf-8")
+    assert "from distinct commits" not in text
+    assert "AGREE reports from distinct comparisons" in text
+    assert "evidence/<artifact id>/" in text
+    for flag in ("--listing", "--since", "--probe-run"):
+        assert flag in text, flag
