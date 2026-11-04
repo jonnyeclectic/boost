@@ -1217,13 +1217,22 @@ class TestScopeByEvent:
         assert env["EVENT"] == "${{ github.event_name }}"
         assert env["SKIP"] == "${{ needs.proven.outputs.skip }}"
         assert env["PR_RUN_ID"] == "${{ needs.proven.outputs.pr_run_id }}"
+        assert env["BASE_GREEN"] == "${{ needs.proven.outputs.base_mutation_green }}"
 
     def test_a_proven_push_collects_nothing(self, scope):
         # relevant=false is what skips the stats run, the planner tests and
         # the stats upload: the 15 minutes this push does not need.
-        outputs, calls = scope("push", SKIP="true", PR_RUN_ID="4242")
+        outputs, calls = scope("push", SKIP="true", PR_RUN_ID="4242", BASE_GREEN="true")
         assert outputs == {"relevant": "false", "proven": "true"}
         assert calls == []
+
+    @pytest.mark.parametrize("base_green", ["false", ""])
+    def test_a_proven_push_on_a_base_not_green_is_not_proven(self, scope, base_green):
+        # The PR run diffed against the same base, so on a red base its green
+        # is the base's red, inherited (#1285 -> #1287).
+        outputs, _ = scope("push", SKIP="true", PR_RUN_ID="4242", BASE_GREEN=base_green)
+        assert outputs.get("relevant") == "true"
+        assert "proven" not in outputs
 
     @pytest.mark.parametrize("skip", ["false", ""])
     def test_an_unproven_push_asks_the_diff(self, scope, skip):

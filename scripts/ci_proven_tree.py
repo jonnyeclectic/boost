@@ -76,9 +76,37 @@ shape gives ``true``. Concretely:
   redirect target, and nothing here should ever be sent anywhere but
   ``api.github.com``.
 
-CLI. ``ci_proven_tree.py --sha SHA`` reads ``GITHUB_REPOSITORY`` and
-``GITHUB_TOKEN``, appends ``skip=true|false`` and ``pr_run_id=<id or empty>`` to
-``$GITHUB_OUTPUT``, and appends the reason to ``$GITHUB_STEP_SUMMARY``. It
+A SECOND, INDEPENDENT QUESTION: was the base commit's mutation verdict green?
+A push that is not proven may still plan no mutation run, when the diff from
+``github.event.before`` touches nothing that can move the score -- and then
+``mutation`` reports green on the strength of the base alone. That is only
+sound if the base's own verdict was green. It was not checked: #1285 landed
+(push b5d9c4ec, ci run 41148140704) with lint and ``mutation`` red; the next
+push (46664146, run 41168736566) changed only ``.github/workflows/publish.yml``,
+so its plan was ``none``, ``mutation`` reported success, the run went green and
+publish.yml released the code #1285 had left red. ``--before SHA`` asks: the
+newest ``ci`` push run on ``main`` for that commit, its jobs (latest attempt,
+one page), and the one named exactly ``mutation``. Green only on
+``status == completed`` and ``conclusion == success`` -- and then only if the
+newest completed whole-codebase run on ``main`` (fact 3's, by the same
+``_last_whole`` query) concluded ``success`` too. The base's push run may
+itself have planned ``none`` and inherited; a red nightly is the full run that
+says the inherited verdict was wrong, and a push run's green must not hide it.
+Its age is not judged here: the question is whether a red result is being
+hidden, not whether a green one is recent. Everything else -- no base (empty,
+all-zero), no run, no such job, still running, any other conclusion, a red or
+missing nightly, more jobs or runs than one page holds, any API, HTTP, JSON or
+timeout error, a rate limit -- is not green. ci.yml holds a proven push to
+this verdict as well as a push its diff calls irrelevant: the PR run that
+proves a tree diffed against the same base, and planned ``none`` whenever its
+own diff was irrelevant. It is gathered and caught apart from the decision
+above: an error in either never changes the other's answer.
+
+CLI. ``ci_proven_tree.py --sha SHA [--before SHA]`` reads ``GITHUB_REPOSITORY``
+and ``GITHUB_TOKEN``, appends ``skip=true|false``, ``pr_run_id=<id or empty>``,
+``base_mutation_green=true|false`` and ``base_mutation=<word>`` (see
+``base_mutation``) to ``$GITHUB_OUTPUT``, and appends the reason to
+``$GITHUB_STEP_SUMMARY``. It
 **always exits 0**: a nonzero exit would fail the job rather than fall back to a
 full run, and the step's outputs are what the workflow reads. The reason can
 carry strings that came from the API, so it is flattened to one bounded line
@@ -92,7 +120,13 @@ The shapes this reads were checked against the live API for this repository:
 commit report the same one); a ``workflow_runs`` item carries ``id``, ``event``,
 ``head_sha``, ``status``, ``conclusion``, ``run_attempt`` and ``created_at``;
 ``actions/runs/{id}/artifacts?name=`` returns ``artifacts``, a list whose items
-carry ``name``, ``expired`` and ``workflow_run.id``.
+carry ``name``, ``expired`` and ``workflow_run.id``. The base lookup's two,
+on 2026-11-03 for the #1285 incident: ``actions/workflows/ci.yml/runs?branch=
+main&event=push&head_sha=b5d9c4ec...&per_page=100`` returned ``total_count`` 1
+and run 41148140704 (``event`` push, ``head_branch`` main), and
+``actions/runs/41148140704/jobs?filter=latest&per_page=100`` returned
+``total_count`` 45 with 45 ``jobs``, each carrying ``run_id``, ``name``,
+``status`` and ``conclusion`` -- ``mutation`` among them, completed, failure.
 """
 from __future__ import annotations
 
@@ -152,8 +186,28 @@ CLOCK_SKEW = timedelta(minutes=5)
 MAX_REASONS = 5
 MAX_REASON_CHARS = 500
 
+#: The ci.yml job whose verdict a push inherits from its base: the required
+#: check (.github/required-checks.txt). It sets no `name:`, so the jobs API
+#: names it by its key; tests/unit/test_ci_base_mutation.py pins both.
+MUTATION_JOB = "mutation"
+
+#: One page. Asked for explicitly, and a listing whose total_count says it
+#: holds more than came back is not read: the newest run, or the one job named
+#: `mutation`, could be on the page that was never fetched.
+PER_PAGE = 100
+
 _COMMIT = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?")      # sha-1 or sha-256
 _OBJECT = _COMMIT       # a tree id has a commit id's shape
+# `before` on the push that creates a ref: there is no base commit.
+_ZERO = re.compile(r"0{40}(?:0{24})?")
+# A status or conclusion from the API goes into $GITHUB_OUTPUT only if it is
+# a plain lower-case word (GitHub's are: in_progress, timed_out, ...).
+_WORD = re.compile(r"[a-z_]{1,32}")
+# Everything ``base_mutation`` may say: those, plus this module's hyphenated
+# own -- ``nightly-`` (8) before one of those (32) included. The hyphen is
+# what keeps the two apart: no API status or conclusion can pass for one of
+# this module's words (``missing-run``, ``no-base``, ...).
+_BASE_WORD = re.compile(r"[a-z_-]{1,40}")
 # owner/name, and neither half may be "." or "..": the value is spliced into a
 # URL path, and `../x` would match a bare character class.
 _REPO = re.compile(r"(?!\.{1,2}/)[A-Za-z0-9_.-]+/(?!\.{1,2}$)[A-Za-z0-9_.-]+")
@@ -538,6 +592,124 @@ def gather(api: Api, sha: str) -> tuple[str, list[Candidate], Nightly | None]:
 
 
 # --------------------------------------------------------------------------
+# the base commit's mutation verdict
+# --------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class BaseVerdict:
+    """Was ``mutation`` green on the base commit's push run, and in one word why.
+
+    ``word`` is written to ``$GITHUB_OUTPUT`` and spliced into the planner's
+    reason line, so it is either one of this module's own words or an API
+    status/conclusion that is a plain lower-case word (``_WORD``):
+
+    * ``success`` -- the only word that comes with ``green=True``;
+    * the job's ``conclusion`` when it completed otherwise (``failure``,
+      ``cancelled``, ``skipped``, ``timed_out``, ...), or its ``status`` when it
+      has not completed (``queued``, ``in_progress``, ``waiting``, ...);
+    * ``unknown`` -- a status or conclusion that is absent or not such a word;
+    * ``nightly-<conclusion>`` -- the job was green, but the newest completed
+      whole-codebase run on ``main`` concluded otherwise (``nightly-failure``,
+      ``nightly-cancelled``, ..., ``nightly-unknown``);
+    * ``no-nightly`` -- the job was green, and no whole-codebase run on
+      ``main`` has completed;
+    * ``no-base`` -- ``before`` is empty or all zeros (the push made the ref);
+    * ``invalid-base`` -- ``before`` is not a full lower-case commit id;
+    * ``missing-run`` -- no ``ci`` push run on ``main`` for that commit;
+    * ``missing-job`` -- that run's latest attempt has no ``mutation`` job;
+    * ``error`` -- anything raised: transport, HTTP status (a 403/429 rate
+      limit included), JSON, a listing of the wrong shape or longer than one
+      page, a run that contradicts the query, two ``mutation`` jobs, missing
+      credentials, a command line that does not parse.
+    """
+
+    green: bool
+    word: str
+
+
+def _word(value: Any) -> str:
+    return value if isinstance(value, str) and _WORD.fullmatch(value) else "unknown"
+
+
+def _page(listing: Any, key: str) -> list[dict[str, Any]]:
+    """``listing[key]`` when it is a list of objects and the whole of the answer.
+
+    A ``total_count`` larger than what came back means the item that matters
+    may be on a page never fetched; a missing or non-integer one means the
+    shape is not the one this was checked against. Both raise.
+    """
+    found = _dig(listing, key)
+    if not isinstance(found, list) or not all(isinstance(i, dict) for i in found):
+        raise ValueError("response has no %s list" % key)
+    total = _dig(listing, "total_count")
+    if not _is_int(total):
+        raise ValueError("a %s listing has no integer total_count" % key)
+    if total > len(found):
+        raise ValueError("a %s listing holds %d but returned %d: more than one page"
+                         % (key, total, len(found)))
+    return found
+
+
+def _unusable_base(before: Any) -> BaseVerdict | None:
+    """The verdict for a ``before`` no request should be made for, else None."""
+    if not isinstance(before, str) or not before or _ZERO.fullmatch(before):
+        return BaseVerdict(False, "no-base")
+    if not _COMMIT.fullmatch(before):
+        return BaseVerdict(False, "invalid-base")
+    return None
+
+
+def base_mutation(api: Api, before: str) -> BaseVerdict:
+    """The ``mutation`` job's verdict on the newest ``ci`` push run of ``before``.
+
+    Raises on any transport or shape problem, like ``gather``; ``main`` turns
+    that into ``error``. Only ``status == completed`` with ``conclusion ==
+    success`` is green, and then only beside a green newest whole-codebase
+    run, which is asked for last: a base that is red on its own says so first.
+    """
+    unusable = _unusable_base(before)
+    if unusable is not None:
+        return unusable
+    run = _newest(_page(api(
+        "actions/workflows/ci.yml/runs?branch=%s&event=push&head_sha=%s&per_page=%d"
+        % (MAIN, before, PER_PAGE)), "workflow_runs"))
+    if run is None:
+        return BaseVerdict(False, "missing-run")
+    # The filters are asked for, and checked: a run of another event, branch
+    # or commit says nothing about this base.
+    for key, want in (("event", "push"), ("head_branch", MAIN), ("head_sha", before)):
+        if run.get(key) != want:
+            raise ValueError("the base query returned a run whose %s is %r" % (key, run.get(key)))
+    run_id = run.get("id")
+    # _is_int's test, spelled out so the type checker sees an int below.
+    if not isinstance(run_id, int) or isinstance(run_id, bool):
+        raise ValueError("the base run has no integer id")
+    jobs = _page(api("actions/runs/%d/jobs?filter=latest&per_page=%d" % (run_id, PER_PAGE)),
+                 "jobs")
+    named = [j for j in jobs if j.get("name") == MUTATION_JOB]
+    if not named:
+        return BaseVerdict(False, "missing-job")
+    if len(named) > 1:
+        raise ValueError("the base run lists %d jobs named %s" % (len(named), MUTATION_JOB))
+    job = named[0]
+    owner = job.get("run_id")
+    if owner is not None and not (_is_int(owner) and owner == run_id):
+        raise ValueError("the base run's %s job says it belongs to run %r"
+                         % (MUTATION_JOB, owner))
+    status, conclusion = job.get("status"), job.get("conclusion")
+    if status != "completed":
+        return BaseVerdict(False, _word(status))
+    if conclusion != "success":
+        return BaseVerdict(False, _word(conclusion))
+    nightly = _last_whole(api)
+    if nightly is None:
+        return BaseVerdict(False, "no-nightly")
+    if nightly.conclusion != "success":
+        return BaseVerdict(False, "nightly-" + _word(nightly.conclusion))
+    return BaseVerdict(True, "success")
+
+
+# --------------------------------------------------------------------------
 # talking to GitHub
 # --------------------------------------------------------------------------
 
@@ -599,16 +771,55 @@ def _oneline(text: str) -> str:
     return flat if len(flat) <= MAX_REASON_CHARS else flat[:MAX_REASON_CHARS] + "..."
 
 
+def _parser() -> _Parser:
+    parser = _Parser(prog="ci_proven_tree.py", description="Decide whether a push to "
+                     "main may skip the full mutation run.")
+    parser.add_argument("--sha", required=True, help="the commit that landed on main")
+    parser.add_argument("--now", type=_instant, default=None,
+                        help="ISO-8601 instant to age the nightly against "
+                             "(tests only; default: the real clock)")
+    parser.add_argument("--before", default="",
+                        help="the push's base commit (github.event.before); its ci "
+                             "push run's `mutation` verdict is reported, never "
+                             "assumed. Empty or absent: not green")
+    return parser
+
+
+def _report(exc: Exception, token: str) -> None:
+    detail = _oneline(str(exc))
+    print("ci_proven_tree: %s: %s" % (type(exc).__name__,
+                                      detail.replace(token, "***") if token else detail),
+          file=sys.stderr)
+
+
+def _base_for(argv: list[str] | None, api: Api | None, env: Mapping[str, str]) -> BaseVerdict:
+    """``base_mutation`` for ``--before``, with every failure caught as ``error``.
+
+    Its own parse and its own catch, so nothing in the proven decision -- an
+    error, a bad ``--sha`` -- can reach this answer, and nothing here can
+    reach that one.
+    """
+    token = (env.get("GITHUB_TOKEN") or "").strip()
+    try:
+        before = _parser().parse_args(argv).before
+        unusable = _unusable_base(before)
+        if unusable is not None:        # answered without credentials or a request
+            return unusable
+        if api is None:
+            repo = (env.get("GITHUB_REPOSITORY") or "").strip()
+            if not token or not _REPO.fullmatch(repo):
+                return BaseVerdict(False, "error")
+            api = make_api(repo, token)
+        return base_mutation(api, before)
+    except Exception as exc:
+        _report(exc, token)
+        return BaseVerdict(False, "error")
+
+
 def _decide_for(argv: list[str] | None, api: Api | None, env: Mapping[str, str]) -> Decision:
     token = (env.get("GITHUB_TOKEN") or "").strip()
     try:
-        parser = _Parser(prog="ci_proven_tree.py", description="Decide whether a push to "
-                         "main may skip the full mutation run.")
-        parser.add_argument("--sha", required=True, help="the commit that landed on main")
-        parser.add_argument("--now", type=_instant, default=None,
-                            help="ISO-8601 instant to age the nightly against "
-                                 "(tests only; default: the real clock)")
-        args = parser.parse_args(argv)
+        args = _parser().parse_args(argv)
         if not _COMMIT.fullmatch(args.sha):
             return Decision(False, "--sha is not a full lower-case commit id")
         if api is None:
@@ -620,10 +831,7 @@ def _decide_for(argv: list[str] | None, api: Api | None, env: Mapping[str, str])
             api = make_api(repo, token)
         return decide(*gather(api, args.sha), now=args.now)
     except Exception as exc:
-        detail = _oneline(str(exc))
-        print("ci_proven_tree: %s: %s" % (type(exc).__name__,
-                                          detail.replace(token, "***") if token else detail),
-              file=sys.stderr)
+        _report(exc, token)
         return Decision(False, "error: %s" % type(exc).__name__)
 
 
@@ -645,18 +853,24 @@ def main(argv: list[str] | None = None, *, api: Api | None = None,
     """
     env = os.environ if env is None else env
     decision = _decide_for(argv, api, env)
+    base = _base_for(argv, api, env)
     skip = "true" if decision.skip else "false"
     run_id = "" if decision.pr_run_id is None else str(decision.pr_run_id)
     reason = _oneline(decision.reason)
-    print("ci_proven_tree: skip=%s pr_run_id=%s -- %s" % (skip, run_id, reason))
-    lines = "skip=%s\npr_run_id=%s\n" % (skip, run_id)
+    green = "true" if base.green is True else "false"
+    word = base.word if _BASE_WORD.fullmatch(base.word) else "unknown"
+    print("ci_proven_tree: skip=%s pr_run_id=%s base_mutation_green=%s base_mutation=%s -- %s"
+          % (skip, run_id, green, word, reason))
+    lines = "skip=%s\npr_run_id=%s\nbase_mutation_green=%s\nbase_mutation=%s\n" % (
+        skip, run_id, green, word)
     if env.get("GITHUB_OUTPUT"):
         _append(env["GITHUB_OUTPUT"], lines, "GITHUB_OUTPUT")
     else:
         print(lines, end="")
     if env.get("GITHUB_STEP_SUMMARY"):
         _append(env["GITHUB_STEP_SUMMARY"],
-                "### Proven-tree check\n\n- skip: `%s`\n- reason: %s\n" % (skip, reason),
+                "### Proven-tree check\n\n- skip: `%s`\n- reason: %s\n"
+                "- base commit's mutation: `%s` (green: `%s`)\n" % (skip, reason, word, green),
                 "GITHUB_STEP_SUMMARY")
     return 0
 
