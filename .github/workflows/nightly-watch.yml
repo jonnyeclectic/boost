@@ -1,0 +1,62 @@
+name: nightly-watch
+
+# Fails when ci's whole-codebase mutation run has stopped happening on main.
+#
+# ci.yml's `schedule` (and `workflow_dispatch`) is the only run that scores the
+# whole of boost_cli/core. A red one already opens a tracker: ci-failure-issue
+# watches `ci`. A missing one alarmed nobody, because an alert keyed on a run
+# finishing cannot fire for a run that never starts. scripts/ci_proven_tree.py
+# does stop the proven-tree skip once the newest whole-codebase run is over
+# 48 h old, which is the safe direction, but silently: every push just runs
+# the full gate, and nothing says the nightly is gone.
+#
+# So this asks GitHub the same question ci_proven_tree asks, on its own clock,
+# and fails past 36 h (scripts/nightly_watch.py says why that number). It is in
+# ci-failure-issue.yml's `workflows:` list, so a failure here opens the
+# "CI not green on main (nightly-watch)" tracker and the next green run here
+# closes it. A check that cannot reach the API fails too: an alarm that cannot
+# look must be loud.
+
+on:
+  schedule:
+    # Twice a day, off the hour and clear of ci's 09:30. Twice, not once: the
+    # 12 h between runs plus the 36 h threshold is ci_proven_tree's 48 h
+    # (before this cron's own start lag), and tests/unit/test_nightly_watch.py
+    # pins that sum.
+    - cron: "47 2,14 * * *"
+  # By hand, e.g. to confirm a tracker can close after a nightly is back.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Never cancel: a cancelled run concludes `cancelled`, which ci-failure-issue
+# reads as not green and would open a tracker for. Keyed on the run rather
+# than a constant, because `cancel-in-progress: false` still cancels an older
+# PENDING run when a third arrives in the same group (ci.yml's concurrency
+# comment). Overlap costs nothing here: the job only reads.
+concurrency:
+  group: nightly-watch-${{ github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  nightly-age:
+    runs-on: ubuntu-latest
+    # Two API requests with their own 15 s timeouts.
+    timeout-minutes: 5
+    permissions:
+      contents: read        # the checkout that carries the script
+      actions: read         # ci's schedule / workflow_dispatch runs
+    steps:
+      - name: harden runner (egress audit)
+        uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: ci's newest whole-codebase run on main is recent
+        # Stdlib only, so the runner's python3 is enough: no setup-python.
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 scripts/nightly_watch.py

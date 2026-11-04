@@ -930,12 +930,23 @@ def gh_env(tmp_path):
     return {"GITHUB_OUTPUT": str(out), "GITHUB_STEP_SUMMARY": str(summary)}
 
 
-def _outputs(env):
+OUTPUT_KEYS = ["skip", "pr_run_id", "base_mutation_green", "base_mutation"]
+
+
+def _all_outputs(env):
+    """Every output, after checking there are exactly the four, in order."""
     text = Path(env["GITHUB_OUTPUT"]).read_text(encoding="utf-8")
     pairs = dict(line.split("=", 1) for line in text.splitlines())
     assert text.endswith("\n")
-    assert len(text.splitlines()) == len(pairs) == 2
+    assert len(text.splitlines()) == len(pairs) == len(OUTPUT_KEYS)
+    assert list(pairs) == OUTPUT_KEYS
     return pairs
+
+
+def _outputs(env):
+    """The proven decision's two outputs (the base verdict's: _all_outputs)."""
+    pairs = _all_outputs(env)
+    return {"skip": pairs["skip"], "pr_run_id": pairs["pr_run_id"]}
 
 
 def _summary(env):
@@ -996,7 +1007,8 @@ def test_main_appends_to_the_output_file_instead_of_replacing_it(gh_env):
     pt.main(ARGV, api=FakeApi(green_routes()), env=gh_env)
     text = Path(gh_env["GITHUB_OUTPUT"]).read_text(encoding="utf-8")
     assert text.startswith("earlier=step\n")
-    assert text.endswith("skip=true\npr_run_id=7\n")
+    assert text.endswith("skip=true\npr_run_id=7\n"
+                         "base_mutation_green=false\nbase_mutation=no-base\n")
 
 
 def test_api_sourced_text_cannot_add_lines_to_the_outputs_the_log_or_the_summary(
@@ -1463,6 +1475,568 @@ def test_the_default_opener_refuses_redirects_so_the_token_stays_on_github():
 
 
 # --------------------------------------------------------------------------
+# --before: the base commit's own `mutation` verdict
+# --------------------------------------------------------------------------
+#
+# A push whose diff cannot move the score plans no mutation run and reports
+# `mutation` green on the base's verdict alone. #1285's push (b5d9c4ec, ci run
+# 41148140704) left `mutation` red; the next push changed only publish.yml,
+# planned `none`, went green and released. The lookup below is what
+# mutation-plan now asks before any push -- proven or not -- may plan `none`.
+# Only one shape is green (the base's `mutation` completed with success, and
+# the newest whole-codebase run on main concluded success), and nothing it
+# does may move the proven decision's `skip`, nor the other way round.
+
+BEFORE = "d" * 40           # the push's github.event.before
+BASE_RUN = 41148140704      # the incident's base run, as the API listed it
+
+
+def base_runs_path(before=BEFORE):
+    return ("actions/workflows/ci.yml/runs?branch=main&event=push&head_sha=%s"
+            "&per_page=100" % before)
+
+
+def base_jobs_path(run_id=BASE_RUN):
+    return "actions/runs/%d/jobs?filter=latest&per_page=100" % run_id
+
+
+def push_run(run_id=BASE_RUN, **kwargs):
+    kwargs.setdefault("head_sha", BEFORE)
+    return run(run_id, event="push", **kwargs)
+
+
+def job(name="mutation", *, status="completed", conclusion="success", run_id=BASE_RUN):
+    entry = {"id": 7000, "name": name, "status": status, "conclusion": conclusion}
+    if run_id is not None:
+        entry["run_id"] = run_id
+    return entry
+
+
+def job_list(*items, total=None):
+    return {"total_count": len(items) if total is None else total, "jobs": list(items)}
+
+
+def base_routes(**overrides):
+    """The base's push run, whose latest attempt has a green `mutation`, and
+    the green nightly that lets it stand -- the same one green_routes holds,
+    so merging the two changes nothing the proven decision reads."""
+    routes = {
+        base_runs_path(): runs(push_run()),
+        base_jobs_path(): job_list(job("mutation-plan"), job("mutation-shard (2)"), job()),
+        SCHEDULE: runs(run(100, event="schedule", head_sha=SHA)),
+        DISPATCH: runs(),
+    }
+    routes.update(overrides)
+    return routes
+
+
+BEFORE_ARGV = [*ARGV, "--before", BEFORE]
+
+
+def test_a_green_base_is_green_and_asks_exactly_its_endpoints():
+    # The base's run, its jobs, then the two whole-codebase queries -- last,
+    # because a base that is red on its own needs no nightly to say so.
+    api = FakeApi(base_routes())
+    assert pt.base_mutation(api, BEFORE) == pt.BaseVerdict(True, "success")
+    assert api.calls == [base_runs_path(), base_jobs_path(), SCHEDULE, DISPATCH]
+
+
+def test_the_incident_base_is_not_green():
+    # The listing #1285's run returned, in miniature: lint, shard 2 and the
+    # gate red. The planner must read "failure", not "a run exists".
+    api = FakeApi(base_routes(**{base_jobs_path(): job_list(
+        job("lint", conclusion="failure"),
+        job("mutation-shard (2)", conclusion="failure"),
+        job("mutation-shard (3)"),
+        job(conclusion="failure"))}))
+    assert pt.base_mutation(api, BEFORE) == pt.BaseVerdict(False, "failure")
+    assert api.calls == [base_runs_path(), base_jobs_path()]     # no nightly asked
+
+
+@pytest.mark.parametrize("before", ["", "0" * 40, "0" * 64, None])
+def test_no_base_commit_is_not_green_and_asks_nothing(before):
+    api = FakeApi({})
+    assert pt.base_mutation(api, before) == pt.BaseVerdict(False, "no-base")
+    assert api.calls == []
+
+
+@pytest.mark.parametrize("before", ["0" * 39, "a" * 39, "a" * 41, "A" * 40, "g" * 40,
+                                    "main", "../x", BEFORE + "\n", BEFORE + "&x=1"])
+def test_a_base_that_is_not_a_commit_id_is_not_green_and_asks_nothing(before):
+    api = FakeApi({})
+    assert pt.base_mutation(api, before) == pt.BaseVerdict(False, "invalid-base")
+    assert api.calls == []
+
+
+def test_a_sha256_base_is_asked_about():
+    long = "d" * 64
+    api = FakeApi(base_routes(**{base_runs_path(long): runs(push_run(head_sha=long))}))
+    assert pt.base_mutation(api, long) == pt.BaseVerdict(True, "success")
+
+
+def test_a_base_with_no_push_run_is_missing_run():
+    api = FakeApi(base_routes(**{base_runs_path(): runs()}))
+    assert pt.base_mutation(api, BEFORE) == pt.BaseVerdict(False, "missing-run")
+    assert api.calls == [base_runs_path()]
+
+
+@pytest.mark.parametrize("name", ["mutation-plan", "mutation-shard (0)", "Mutation",
+                                  "mutation ", " mutation", "mutation (1)", "", None])
+def test_a_run_without_a_job_named_exactly_mutation_is_missing_job(name):
+    api = FakeApi(base_routes(**{base_jobs_path(): job_list(job(name))}))
+    assert pt.base_mutation(api, BEFORE) == pt.BaseVerdict(False, "missing-job")
+
+
+def test_an_empty_job_listing_is_missing_job():
+    api = FakeApi(base_routes(**{base_jobs_path(): job_list()}))
+    assert pt.base_mutation(api, BEFORE) == pt.BaseVerdict(False, "missing-job")
+
+
+@pytest.mark.parametrize("status, word", [
+    ("queued", "queued"), ("in_progress", "in_progress"), ("waiting", "waiting"),
+    ("requested", "requested"), ("pending", "pending"),
+    # Not a plain lower-case word: never written out as given.
+    ("", "unknown"), (None, "unknown"), ("COMPLETED", "unknown"),
+    ("completed ", "unknown"), (1, "unknown"),
+    # Hyphenated: the shape of this module's own words, never an API's.
+    ("missing-run", "unknown"),
+    # A status that reads like a conclusion is still not `completed`: never
+    # green, whatever word it leaves behind.
+    ("success", "success"),
+])
+def test_a_mutation_job_that_has_not_completed_is_not_green(status, word):
+    # Even with a conclusion of success: a status that contradicts it is
+    # read as unfinished.
+    api = FakeApi(base_routes(**{base_jobs_path(): job_list(job(status=status))}))
+    assert pt.base_mutation(api, BEFORE) == pt.BaseVerdict(False, word)
+
+
+@pytest.mark.parametrize("conclusion, word", [
+    ("failure", "failure"), ("cancelled", "cancelled"), ("skipped", "skipped"),
+    ("timed_out", "timed_out"), ("neutral", "neutral"),
+    ("action_required", "action_required"), ("startup_failure", "startup_failure"),
+    ("stale", "stale"),
+    (None, "unknown"), ("", "unknown"), ("Success", "unknown"), ("SUCCESS", "unknown"),
+    ("success ", "unknown"), ("success\nbase_mutation_green=true", "unknown"),
+    (True, "unknown"), ("x" * 33, "unknown"),
+    ("missing-run", "unknown"), ("nightly-failure", "unknown"),
+])
+def test_only_the_exact_word_success_on_a_completed_job_is_green(conclusion, word):
+    api = FakeApi(base_routes(**{base_jobs_path(): job_list(job(conclusion=conclusion))}))
+    assert pt.base_mutation(api, BEFORE) == pt.BaseVerdict(False, word)
+
+
+def test_two_jobs_named_mutation_are_an_error_not_a_pick():
+    api = FakeApi(base_routes(**{base_jobs_path(): job_list(
+        job(conclusion="failure"), job())}))
+    with pytest.raises(ValueError, match="2 jobs named mutation"):
+        pt.base_mutation(api, BEFORE)
+
+
+@pytest.mark.parametrize("extra", [1, 100])
+@pytest.mark.parametrize("path", [base_runs_path(), base_jobs_path()])
+def test_a_listing_longer_than_the_page_that_came_back_is_an_error(path, extra):
+    # The newest run, or the one `mutation` job, could be on the page that
+    # was never fetched. One item short is already too short.
+    listing = (runs(push_run()) if path == base_runs_path() else job_list(job()))
+    listing["total_count"] = len(listing.get("workflow_runs") or listing["jobs"]) + extra
+    api = FakeApi(base_routes(**{path: listing}))
+    with pytest.raises(ValueError, match="more than one page"):
+        pt.base_mutation(api, BEFORE)
+
+
+@pytest.mark.parametrize("total", [None, "1", True, 1.0])
+def test_a_listing_without_an_integer_total_count_is_an_error(total):
+    listing = job_list(job())
+    if total is None:
+        del listing["total_count"]
+    else:
+        listing["total_count"] = total
+    api = FakeApi(base_routes(**{base_jobs_path(): listing}))
+    with pytest.raises(ValueError, match="total_count"):
+        pt.base_mutation(api, BEFORE)
+
+
+@pytest.mark.parametrize("path, answer", [
+    (base_runs_path(), {}),
+    (base_runs_path(), []),
+    (base_runs_path(), {"total_count": 0, "workflow_runs": None}),
+    (base_runs_path(), {"total_count": 1, "workflow_runs": ["x"]}),
+    (base_jobs_path(), {}),
+    (base_jobs_path(), "jobs"),
+    (base_jobs_path(), {"total_count": 0, "jobs": {}}),
+    (base_jobs_path(), {"total_count": 1, "jobs": [None]}),
+])
+def test_a_malformed_listing_is_an_error_not_an_empty_one(path, answer):
+    # "No run" and "no job" are answers with their own words; a body of the
+    # wrong shape is neither.
+    api = FakeApi(base_routes(**{path: answer}))
+    with pytest.raises(ValueError):
+        pt.base_mutation(api, BEFORE)
+
+
+@pytest.mark.parametrize("wrong", [
+    {"event": "pull_request"}, {"event": "schedule"}, {"event": None},
+    {"head_branch": "feature/x"}, {"head_branch": None},
+    {"head_sha": "c" * 40}, {"head_sha": None},
+])
+def test_a_base_run_the_query_should_not_have_returned_is_an_error(wrong):
+    found = {**push_run(), **wrong}
+    api = FakeApi(base_routes(**{base_runs_path(): runs(found)}))
+    with pytest.raises(ValueError, match="the base query returned a run"):
+        pt.base_mutation(api, BEFORE)
+    assert api.calls == [base_runs_path()]
+
+
+@pytest.mark.parametrize("ident", [None, "41148140704", True, 7.0])
+def test_a_base_run_without_an_integer_id_is_an_error(ident):
+    found = {**push_run(), "id": ident}
+    api = FakeApi(base_routes(**{base_runs_path(): runs(found)}))
+    with pytest.raises(ValueError, match="integer id"):
+        pt.base_mutation(api, BEFORE)
+
+
+@pytest.mark.parametrize("order", ["newer first", "older first"])
+def test_the_newest_base_run_is_read_by_timestamp_not_position(order):
+    older = push_run(1, created="2026-10-30T10:00:00Z")
+    newer = push_run(2, created="2026-10-31T10:00:00Z")
+    listing = runs(newer, older) if order == "newer first" else runs(older, newer)
+    api = FakeApi({base_runs_path(): listing,
+                   base_jobs_path(1): job_list(job(run_id=1)),
+                   base_jobs_path(2): job_list(job(conclusion="failure", run_id=2))})
+    assert pt.base_mutation(api, BEFORE) == pt.BaseVerdict(False, "failure")
+    assert api.calls == [base_runs_path(), base_jobs_path(2)]
+
+
+def test_a_mutation_job_that_names_no_run_is_read_the_listing_is_per_run():
+    api = FakeApi(base_routes(**{base_jobs_path(): job_list(job(run_id=None))}))
+    assert pt.base_mutation(api, BEFORE) == pt.BaseVerdict(True, "success")
+
+
+@pytest.mark.parametrize("owner", [1, BASE_RUN + 1, True, str(BASE_RUN)])
+def test_a_mutation_job_of_another_run_is_an_error(owner):
+    api = FakeApi(base_routes(**{base_jobs_path(): job_list(job(run_id=owner))}))
+    with pytest.raises(ValueError, match="belongs to run"):
+        pt.base_mutation(api, BEFORE)
+
+
+# --- the nightly behind a green base -------------------------------------
+#
+# A base's push run can be green without having run a mutant: it planned
+# `none` and inherited. The newest whole-codebase run is the full run that
+# says whether that was right, so a red one is not hidden behind the push.
+
+@pytest.mark.parametrize("conclusion, word", [
+    ("failure", "nightly-failure"), ("cancelled", "nightly-cancelled"),
+    ("timed_out", "nightly-timed_out"), ("startup_failure", "nightly-startup_failure"),
+    ("Success", "nightly-unknown"), ("success ", "nightly-unknown"),
+    ("x" * 33, "nightly-unknown"),
+])
+def test_a_green_base_under_a_red_nightly_is_not_green(conclusion, word):
+    api = FakeApi(base_routes(**{SCHEDULE: runs(run(100, event="schedule",
+                                                    conclusion=conclusion))}))
+    assert pt.base_mutation(api, BEFORE) == pt.BaseVerdict(False, word)
+
+
+@pytest.mark.parametrize("schedule, dispatch", [
+    (runs(), runs()),
+    # `status=completed` is asked for; a run that says otherwise is no result.
+    (runs(run(100, event="schedule", status="in_progress", conclusion=None)), runs()),
+])
+def test_a_green_base_with_no_completed_nightly_is_not_green(schedule, dispatch):
+    api = FakeApi(base_routes(**{SCHEDULE: schedule, DISPATCH: dispatch}))
+    assert pt.base_mutation(api, BEFORE) == pt.BaseVerdict(False, "no-nightly")
+
+
+@pytest.mark.parametrize("newer, green, word", [
+    ("workflow_dispatch", True, "success"),     # a dispatch cleared the red nightly
+    ("schedule", False, "nightly-failure"),     # the red one is the newest
+])
+def test_the_base_reads_the_newest_whole_codebase_run(newer, green, word):
+    red = run(100, event="schedule", conclusion="failure",
+              created="2026-10-30T10:00:00Z" if newer != "schedule" else "2026-10-31T08:00:00Z")
+    fixed = run(101, event="workflow_dispatch",
+                created="2026-10-31T08:00:00Z" if newer != "schedule" else "2026-10-30T10:00:00Z")
+    api = FakeApi(base_routes(**{SCHEDULE: runs(red), DISPATCH: runs(fixed)}))
+    assert pt.base_mutation(api, BEFORE) == pt.BaseVerdict(green, word)
+
+
+def test_the_nightly_behind_a_base_is_not_aged():
+    # Freshness is the proven decision's question. Here the question is only
+    # whether a red result is being hidden, and a month-old green one hides
+    # nothing.
+    api = FakeApi(base_routes(**{SCHEDULE: runs(run(100, event="schedule",
+                                                    created="2026-09-01T00:00:00Z"))}))
+    assert pt.base_mutation(api, BEFORE) == pt.BaseVerdict(True, "success")
+
+
+@pytest.mark.parametrize("path", [SCHEDULE, DISPATCH])
+def test_a_nightly_lookup_error_behind_a_green_base_raises(path):
+    api = FakeApi(base_routes(**{path: urllib.error.HTTPError("u", 403, "x", None, None)}))
+    with pytest.raises(urllib.error.HTTPError):
+        pt.base_mutation(api, BEFORE)
+
+
+def test_base_mutation_lets_api_errors_raise():
+    # Caught once, in main, as `error` -- never read here as "not green yet".
+    api = FakeApi(base_routes(**{base_jobs_path(): urllib.error.URLError("x")}))
+    with pytest.raises(urllib.error.URLError):
+        pt.base_mutation(api, BEFORE)
+
+
+# --- through main: the two outputs, and their independence from `skip` ----
+
+def test_main_writes_a_green_base_beside_an_unchanged_proven_verdict(gh_env):
+    api = FakeApi(green_routes(**base_routes()))
+    assert pt.main(BEFORE_ARGV, api=api, env=gh_env) == 0
+    assert _all_outputs(gh_env) == {"skip": "true", "pr_run_id": "7",
+                                    "base_mutation_green": "true",
+                                    "base_mutation": "success"}
+    assert "- base commit's mutation: `success` (green: `true`)\n" in _summary(gh_env)
+
+
+def test_main_writes_a_red_base_as_false_and_names_its_conclusion(gh_env):
+    api = FakeApi(green_routes(**base_routes(**{base_jobs_path(): job_list(
+        job(conclusion="failure"))})))
+    pt.main(BEFORE_ARGV, api=api, env=gh_env)
+    assert _all_outputs(gh_env) == {"skip": "true", "pr_run_id": "7",
+                                    "base_mutation_green": "false",
+                                    "base_mutation": "failure"}
+
+
+@pytest.mark.parametrize("path", [base_runs_path(), base_jobs_path()])
+@pytest.mark.parametrize("exc", [
+    urllib.error.HTTPError("u", 403, "rate limit exceeded", None, None),
+    urllib.error.HTTPError("u", 429, "Too Many Requests", None, None),
+    urllib.error.HTTPError("u", 404, "Not Found", None, None),
+    urllib.error.HTTPError("u", 500, "Server Error", None, None),
+    urllib.error.URLError("no route to host"),
+    TimeoutError("timed out"),
+    json.JSONDecodeError("Expecting value", "<html>", 0),
+    RuntimeError("anything at all"),
+])
+def test_a_base_lookup_error_is_not_green_and_leaves_skip_alone(gh_env, path, exc):
+    api = FakeApi(green_routes(**base_routes(**{path: exc})))
+    assert pt.main(BEFORE_ARGV, api=api, env=gh_env) == 0
+    assert _all_outputs(gh_env) == {"skip": "true", "pr_run_id": "7",
+                                    "base_mutation_green": "false",
+                                    "base_mutation": "error"}
+    assert "reason: tree " in _summary(gh_env)      # the proven reason, intact
+
+
+def test_an_unrouted_base_lookup_is_an_error_too(gh_env):
+    # green_routes holds no base paths: FakeApi raises on the first one.
+    pt.main(BEFORE_ARGV, api=FakeApi(green_routes()), env=gh_env)
+    assert _all_outputs(gh_env)["base_mutation"] == "error"
+    assert _outputs(gh_env) == {"skip": "true", "pr_run_id": "7"}
+
+
+@pytest.mark.parametrize("jobs_answer, green, word", [
+    (job_list(job()), "true", "success"),
+    (job_list(job(conclusion="failure")), "false", "failure"),
+])
+def test_a_proven_decision_error_does_not_move_the_base_verdict(
+        gh_env, jobs_answer, green, word):
+    # The proven lookup fails on its first request; the base is asked anyway
+    # and answers for itself, in both directions.
+    routes = green_routes(**base_routes(**{base_jobs_path(): jobs_answer}))
+    routes["git/commits/%s" % SHA] = urllib.error.HTTPError("u", 403, "x", None, None)
+    pt.main(BEFORE_ARGV, api=FakeApi(routes), env=gh_env)
+    assert _all_outputs(gh_env) == {"skip": "false", "pr_run_id": "",
+                                    "base_mutation_green": green, "base_mutation": word}
+    assert "reason: error: HTTPError\n" in _summary(gh_env)
+
+
+def test_the_incident_push_would_have_been_told_its_base_was_red(gh_env):
+    # 46664146: no PR into main proves it, and its base's `mutation` failed.
+    routes = green_routes(**base_routes(**{base_jobs_path(): job_list(
+        job("lint", conclusion="failure"), job(conclusion="failure"))}))
+    routes["commits/%s/pulls" % SHA] = []
+    pt.main(BEFORE_ARGV, api=FakeApi(routes), env=gh_env)
+    assert _all_outputs(gh_env) == {"skip": "false", "pr_run_id": "",
+                                    "base_mutation_green": "false",
+                                    "base_mutation": "failure"}
+
+
+def test_a_bad_sha_still_lets_the_base_answer(gh_env):
+    api = FakeApi(base_routes())
+    pt.main(["--sha", "main", "--before", BEFORE], api=api, env=gh_env)
+    assert _all_outputs(gh_env) == {"skip": "false", "pr_run_id": "",
+                                    "base_mutation_green": "true",
+                                    "base_mutation": "success"}
+    assert api.calls == [base_runs_path(), base_jobs_path(), SCHEDULE, DISPATCH]
+
+
+def test_a_red_nightly_behind_a_green_base_push_is_written_not_green(gh_env):
+    # The reviewer's sequence: the base's push run is green (it inherited, or
+    # flaked), the nightly on main since is red. Both answers refuse, each
+    # for its own reason.
+    api = FakeApi(green_routes(**base_routes(**{SCHEDULE: runs(run(
+        100, event="schedule", head_sha=SHA, conclusion="failure"))})))
+    pt.main(BEFORE_ARGV, api=api, env=gh_env)
+    assert _all_outputs(gh_env) == {"skip": "false", "pr_run_id": "",
+                                    "base_mutation_green": "false",
+                                    "base_mutation": "nightly-failure"}
+
+
+@pytest.mark.parametrize("path", [SCHEDULE, DISPATCH])
+def test_a_nightly_lookup_error_is_an_error_in_both_answers(gh_env, path):
+    # Both ask the same endpoint and each catches its own failure: neither
+    # answer reads the other's.
+    routes = green_routes(**base_routes())
+    routes[path] = urllib.error.HTTPError("u", 429, "Too Many Requests", None, None)
+    pt.main(BEFORE_ARGV, api=FakeApi(routes), env=gh_env)
+    assert _all_outputs(gh_env) == {"skip": "false", "pr_run_id": "",
+                                    "base_mutation_green": "false",
+                                    "base_mutation": "error"}
+
+
+def test_a_status_of_success_is_written_as_not_green(gh_env):
+    # Not a status GitHub sends, but the word it leaves is "success": only
+    # the verdict's own green may make the output green, never its word.
+    api = FakeApi(green_routes(**base_routes(**{base_jobs_path(): job_list(
+        job(status="success"))})))
+    pt.main(BEFORE_ARGV, api=api, env=gh_env)
+    assert _all_outputs(gh_env)["base_mutation"] == "success"
+    assert _all_outputs(gh_env)["base_mutation_green"] == "false"
+
+
+def test_the_longest_nightly_word_reaches_the_output_whole(gh_env):
+    # "nightly-" before a 32-letter conclusion: 40, everything base_mutation
+    # may say still fits the last guard.
+    api = FakeApi(green_routes(**base_routes(**{SCHEDULE: runs(run(
+        100, event="schedule", head_sha=SHA, conclusion="x" * 32))})))
+    pt.main(BEFORE_ARGV, api=api, env=gh_env)
+    assert _all_outputs(gh_env)["base_mutation"] == "nightly-" + "x" * 32
+
+
+@pytest.mark.parametrize("before, word", [("", "no-base"), ("0" * 40, "no-base"),
+                                          ("HEAD~1", "invalid-base")])
+def test_main_asks_nothing_about_an_unusable_base(gh_env, before, word):
+    api = FakeApi(green_routes())
+    pt.main([*ARGV, "--before", before], api=api, env=gh_env)
+    assert _all_outputs(gh_env) == {"skip": "true", "pr_run_id": "7",
+                                    "base_mutation_green": "false", "base_mutation": word}
+    assert not any("event=push" in c or "/jobs?" in c for c in api.calls)
+
+
+def test_without_before_the_base_is_not_green(gh_env):
+    # A workflow that forgets --before plans full: absence is never green.
+    pt.main(ARGV, api=FakeApi(green_routes()), env=gh_env)
+    assert _all_outputs(gh_env)["base_mutation_green"] == "false"
+    assert _all_outputs(gh_env)["base_mutation"] == "no-base"
+
+
+@pytest.mark.parametrize("argv", [
+    ["--sha", SHA, "--before"],                 # no value
+    ["--before", BEFORE],                       # no --sha
+    ["--sha", SHA, "--before", BEFORE, "--surprise"],
+])
+def test_a_bad_command_line_is_not_green_either(gh_env, argv):
+    api = FakeApi(base_routes())
+    assert pt.main(argv, api=api, env=gh_env) == 0
+    assert _all_outputs(gh_env) == {"skip": "false", "pr_run_id": "",
+                                    "base_mutation_green": "false",
+                                    "base_mutation": "error"}
+    assert api.calls == []
+
+
+@pytest.mark.parametrize("env_extra", [
+    {}, {"GITHUB_REPOSITORY": "o/r"}, {"GITHUB_TOKEN": "t"},
+    {"GITHUB_TOKEN": "t", "GITHUB_REPOSITORY": "../x"},
+])
+def test_missing_credentials_are_not_green_and_reach_no_network(gh_env, no_network,
+                                                                env_extra):
+    env = {**gh_env, **env_extra}
+    assert pt.main(BEFORE_ARGV, env=env) == 0
+    assert _all_outputs(env)["base_mutation_green"] == "false"
+    assert _all_outputs(env)["base_mutation"] == "error"
+
+
+def test_the_environment_wires_the_base_lookup_through_make_api(gh_env, monkeypatch):
+    seen = []
+    table = FakeApi(green_routes(**base_routes()))
+
+    class Opener:
+        def open(self, req, timeout=None):
+            seen.append((req.full_url, req.get_header("Authorization"), timeout))
+            path = req.full_url.removeprefix("https://api.github.com/repos/o/r/")
+            return io.BytesIO(json.dumps(table(path)).encode())
+
+    monkeypatch.setattr(pt, "_default_opener", Opener)
+    env = {**gh_env, "GITHUB_TOKEN": "s3cret", "GITHUB_REPOSITORY": "o/r"}
+    assert pt.main(BEFORE_ARGV, env=env) == 0
+    assert _all_outputs(env)["base_mutation_green"] == "true"
+    base = [s for s in seen if s[0].endswith((base_runs_path(), base_jobs_path()))]
+    assert [url for url, _, _ in base] == [
+        "https://api.github.com/repos/o/r/" + base_runs_path(),
+        "https://api.github.com/repos/o/r/" + base_jobs_path()]
+    assert {(auth, t) for _, auth, t in base} == {("Bearer s3cret", pt.TIMEOUT)}
+
+
+def test_the_token_never_reaches_the_log_from_the_base_lookup(gh_env, capsys, monkeypatch):
+    class Opener:
+        def open(self, req, timeout=None):
+            if "event=push" in req.full_url:
+                raise urllib.error.URLError("refused: Authorization: Bearer s3cret-token")
+            raise urllib.error.URLError("elsewhere")
+
+    monkeypatch.setattr(pt, "_default_opener", Opener)
+    env = {**gh_env, "GITHUB_TOKEN": "s3cret-token", "GITHUB_REPOSITORY": "o/r"}
+    pt.main(BEFORE_ARGV, env=env)
+    captured = capsys.readouterr()
+    assert "s3cret-token" not in captured.out + captured.err + _summary(env)
+    assert "refused: Authorization: Bearer ***" in captured.err
+
+
+def test_api_sourced_text_cannot_reach_the_outputs_through_the_base(gh_env, capsys):
+    hostile = "in_progress\nbase_mutation_green=true\n::error::injected"
+    api = FakeApi(green_routes(**base_routes(**{base_jobs_path(): job_list(
+        job(status=hostile))})))
+    assert pt.main(BEFORE_ARGV, api=api, env=gh_env) == 0
+    assert _all_outputs(gh_env)["base_mutation_green"] == "false"
+    assert _all_outputs(gh_env)["base_mutation"] == "unknown"
+    assert "injected" not in _summary(gh_env)
+    out = capsys.readouterr().out
+    assert len(out.strip().splitlines()) == 1
+    assert "base_mutation_green=false base_mutation=unknown" in out
+
+
+@pytest.mark.parametrize("word", ["", "x" * 41, "two words", "a\nb", "Success"])
+def test_main_writes_only_a_plain_word_whatever_a_verdict_holds(gh_env, monkeypatch, word):
+    # The last guard before $GITHUB_OUTPUT, should base_mutation ever grow a
+    # path that returns something it did not compute.
+    monkeypatch.setattr(pt, "_base_for", lambda *a: pt.BaseVerdict(True, word))
+    pt.main(ARGV, api=FakeApi(green_routes()), env=gh_env)
+    assert _all_outputs(gh_env)["base_mutation"] == "unknown"
+    assert _all_outputs(gh_env)["base_mutation_green"] == "true"
+
+
+@pytest.mark.parametrize("green", [False, None, 1, "true"])
+def test_only_a_verdict_whose_green_is_true_writes_true(gh_env, monkeypatch, green):
+    # The word "success" beside a verdict that is not green stays not green:
+    # base_mutation can return it (a job whose status reads "success"), and
+    # this output is the one the scope step gates on.
+    monkeypatch.setattr(pt, "_base_for", lambda *a: pt.BaseVerdict(green, "success"))
+    pt.main(ARGV, api=FakeApi(green_routes()), env=gh_env)
+    assert _all_outputs(gh_env)["base_mutation_green"] == "false"
+    assert _all_outputs(gh_env)["base_mutation"] == "success"
+
+
+def test_run_as_a_script_with_a_base_and_no_credentials_is_not_green(tmp_path):
+    out = tmp_path / "out"
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GITHUB_")}
+    env["GITHUB_OUTPUT"] = str(out)
+    proc = subprocess.run(
+        [sys.executable, "-I", str(SCRIPT), "--sha", SHA, "--before", BEFORE],
+        env=env, capture_output=True, text=True, timeout=60, check=False)
+    assert proc.returncode == 0, proc.stderr
+    assert out.read_text(encoding="utf-8") == ("skip=false\npr_run_id=\n"
+                                              "base_mutation_green=false\n"
+                                              "base_mutation=error\n")
+
+
+# --------------------------------------------------------------------------
 # the script as GitHub runs it
 # --------------------------------------------------------------------------
 
@@ -1476,7 +2050,9 @@ def test_run_as_a_script_with_no_credentials_exits_zero_with_skip_false(tmp_path
         [sys.executable, "-I", str(SCRIPT), "--sha", SHA],
         env=env, capture_output=True, text=True, timeout=60, check=False)
     assert proc.returncode == 0, proc.stderr
-    assert out.read_text(encoding="utf-8") == "skip=false\npr_run_id=\n"
+    assert out.read_text(encoding="utf-8") == ("skip=false\npr_run_id=\n"
+                                              "base_mutation_green=false\n"
+                                              "base_mutation=no-base\n")
 
 
 # ==========================================================================
@@ -2068,7 +2644,8 @@ def test_proven_runs_only_on_push_with_read_only_scopes(jobs):
     assert job["if"] == "github.event_name == 'push'"
     assert job["permissions"] == {"contents": "read", "actions": "read",
                                   "pull-requests": "read"}
-    assert set(job["outputs"]) == {"skip", "pr_run_id"}
+    assert set(job["outputs"]) == {"skip", "pr_run_id", "base_mutation_green",
+                                   "base_mutation"}
     assert "timeout-minutes" in job
 
 
@@ -2079,9 +2656,12 @@ def test_proven_runs_the_script_with_the_token_through_env(jobs):
     # --now is for tests; the workflow is judged against the real clock.
     assert "--now" not in step["run"]
     assert step["env"]["GITHUB_TOKEN"] == "${{ github.token }}"  # noqa: S105  (an expression, not a secret)
+    # The base is passed the same way: through env, never spliced into run:.
+    assert ' --before "$BEFORE"' in step["run"]
+    assert step["env"]["BEFORE"] == "${{ github.event.before }}"
     outputs = job["outputs"]
-    assert outputs["skip"] == "${{ steps.%s.outputs.skip }}" % step["id"]
-    assert outputs["pr_run_id"] == "${{ steps.%s.outputs.pr_run_id }}" % step["id"]
+    for key in ("skip", "pr_run_id", "base_mutation_green", "base_mutation"):
+        assert outputs[key] == "${{ steps.%s.outputs.%s }}" % (step["id"], key)
     # The script always exits 0; a step-level escape hatch would hide a crash.
     assert "continue-on-error" not in step
 

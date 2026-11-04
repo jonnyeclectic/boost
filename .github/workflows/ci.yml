@@ -16,8 +16,11 @@ on:
   # the whole of boost_cli/core is still scored against 80%: the mutation jobs
   # only, always the full 24-shard plan. 09:30 UTC is clear of the 04:00-08:00
   # weekly crons and the `shards` bursts. A red or missing nightly turns the
-  # proven-tree skip off (scripts/ci_proven_tree.py), and ci-failure-issue.yml
-  # already watches `ci`, so a red one opens the tracking issue.
+  # proven-tree skip off, and stops any push planning no mutation run on its
+  # base's verdict (scripts/ci_proven_tree.py), and ci-failure-issue.yml
+  # already watches `ci`, so a red one opens the tracking issue. A missing
+  # one opens one too: nightly-watch.yml fails when ci's newest completed
+  # schedule/dispatch run on main is more than 36 h old.
   # publish.yml ignores both events: it releases only from a `push` run.
   schedule:
     - cron: "30 9 * * *"
@@ -416,6 +419,21 @@ jobs:
   # so its outputs are the verdict -- and if the job fails anyway they are
   # empty, which every consumer below reads as "run everything".
   #
+  # It answers a second, independent question with the same token: was
+  # `mutation` green on the push run of the base commit (`--before`, from
+  # github.event.before)? `base_mutation_green` is "true" only when that job
+  # completed with success AND the newest completed whole-codebase run on
+  # main concluded success (a red nightly on the base is not hidden behind
+  # the base's own push run); no base, no run, no such job, still running,
+  # any other conclusion, a red or missing nightly, an API error or a rate
+  # limit is "false", and `base_mutation` says which in one word.
+  # `mutation-plan` reads it before letting any push -- proven or not -- plan
+  # `none` on its base's verdict: push b5d9c4ec (#1285, ci run 41148140704)
+  # left `mutation` red, the next push (46664146, run 41168736566) changed
+  # only publish.yml, planned `none`, reported `mutation` green, and
+  # publish.yml released #1285's code. An error in either lookup leaves the
+  # other's answer as it was.
+  #
   # Push only. On every other event this job is skipped, which is why the
   # jobs that need it say `!cancelled()` (see the note above `lint`).
   proven:
@@ -425,11 +443,13 @@ jobs:
     timeout-minutes: 5
     permissions:
       contents: read        # the checkout that carries the script
-      actions: read         # the PR head's ci runs, and the nightly's
+      actions: read         # the PR head's ci runs, the nightly's, the base's jobs
       pull-requests: read   # the PRs associated with this commit
     outputs:
       skip: ${{ steps.decide.outputs.skip }}
       pr_run_id: ${{ steps.decide.outputs.pr_run_id }}
+      base_mutation_green: ${{ steps.decide.outputs.base_mutation_green }}
+      base_mutation: ${{ steps.decide.outputs.base_mutation }}
     steps:
       - name: harden runner (egress audit)
         uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
@@ -444,7 +464,8 @@ jobs:
         # install, nothing between the push and the verdict `tests` waits on.
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: python3 scripts/ci_proven_tree.py --sha "$GITHUB_SHA"
+          BEFORE: ${{ github.event.before }}
+        run: python3 scripts/ci_proven_tree.py --sha "$GITHUB_SHA" --before "$BEFORE"
 
   tests:
     needs: proven
@@ -755,9 +776,24 @@ jobs:
   # and per-mutant results are compared against it in an advisory step, until
   # enough runs agree for the diff gate to bind.
   #
-  # By event: a push to main that `proven` vouches for plans `none` with the
-  # reason "proven by PR run <id>" and collects no stats, so no shard starts
-  # and `mutation` reports the planner's reason; any other push plans full. A
+  # By event: a push to main plans `none` in two cases only, and both need
+  # `proven` to have read the base commit's own `mutation` as green (that
+  # job on the base's push run completed with success, and the newest
+  # whole-codebase run on main concluded success). Either `proven` vouches
+  # for this tree -- the plan is `none` with the reason "proven by PR run
+  # <id>", no stats are collected, no shard starts and `mutation` reports the
+  # planner's reason -- or the diff from github.event.before cannot move the
+  # score, and the plan is `none` on the base's verdict. Any other push plans
+  # full. So every green `mutation` on a push either ran the full set and
+  # passed, or sits on a base whose own `mutation` was green; by induction
+  # along main, a red verdict is no longer laundered by a later push the diff
+  # calls irrelevant (#1285's was, by a publish.yml-only push), nor by one a
+  # PR run proves (that run diffed against the same base, and planned `none`
+  # whenever its own diff was irrelevant). A base still running, red,
+  # cancelled or unknown costs one full run; a red or missing nightly, one per
+  # push until a whole-codebase run is green again. This file is itself
+  # mutation-relevant: this change's own PR run plans the full set, and its
+  # push is either proven by that run on a green base or plans full. A
   # nightly or a dispatch plans full, always: with pushes able to skip, that
   # run is where the whole codebase is held to 80%, and with an unproven push
   # it is the only full run whose `mutation-weights` the refresh workflow takes.
@@ -814,17 +850,33 @@ jobs:
           EVENT: ${{ github.event_name }}
           SKIP: ${{ needs.proven.outputs.skip }}
           PR_RUN_ID: ${{ needs.proven.outputs.pr_run_id }}
+          BASE_GREEN: ${{ needs.proven.outputs.base_mutation_green }}
+          BASE_MUTATION: ${{ needs.proven.outputs.base_mutation }}
         run: |
           # A proven push: the PR run already tested this exact tree, and the
           # nightly holds the whole codebase to 80%. relevant=false is what
           # skips the stats run, the planner tests and the stats upload below.
           # Push only -- `proven` runs nowhere else, so a value seen on any
           # other event is not its verdict.
+          #
+          # And only onto a base whose own `mutation` was green. The PR run
+          # diffed against that base too, and planned `none` when its diff
+          # was irrelevant -- so on a red base its green `mutation` is the
+          # base's red, laundered. #1287's head (ec704475) had the merge
+          # commit's tree, and its PR run (41164311690, first attempt) was
+          # green with every mutation shard skipped; with a tested-tree
+          # artifact and a green nightly, both routine now, that push would
+          # have been proven and released #1285's red.
+          # A proven push on a base not green falls through to the diff and
+          # the widening below, like any other push.
           if [ "$EVENT" = push ] && [ "$SKIP" = true ]; then
-            echo "proven by PR run $PR_RUN_ID — nothing to collect"
-            echo "relevant=false" >> "$GITHUB_OUTPUT"
-            echo "proven=true" >> "$GITHUB_OUTPUT"
-            exit 0
+            if [ "$BASE_GREEN" = true ]; then
+              echo "proven by PR run $PR_RUN_ID — nothing to collect"
+              echo "relevant=false" >> "$GITHUB_OUTPUT"
+              echo "proven=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "proven by PR run $PR_RUN_ID, but the base's mutation is not green — not inheriting it"
           fi
           # The whole-codebase run is relevant by definition, whatever the
           # event payload happens to carry as a base.
@@ -854,6 +906,27 @@ jobs:
           sed 's/^/  /' changed.txt
           RELEVANT="$(python3 scripts/mutation_shards.py scope --changed changed.txt)"
           echo "mutation-relevant: $RELEVANT"
+          # "Irrelevant" means "the score is the base's", which on a push makes
+          # `mutation` green on the base's verdict alone -- sound only if that
+          # verdict was green. #1285's push left it red; the next push touched
+          # only publish.yml, planned `none`, and released. So a push the diff
+          # calls irrelevant is widened to full unless `proven` read the base's
+          # `mutation` as exactly "true" (empty -- `proven` failed -- widens
+          # too). It only ever turns false into true. Push only, like SKIP:
+          # `proven` runs nowhere else, so a value seen on another event is
+          # not its verdict, and an empty one there must not widen every
+          # docs-only pull request. A proven push reaches this only when its
+          # base was not green, and is held to it like any other.
+          if [ "$EVENT" = push ] && [ "$RELEVANT" = false ] && [ "$BASE_GREEN" != true ]; then
+            # Both go into $GITHUB_OUTPUT: keep only what a sha and a word hold.
+            SHORT="${BASE:0:7}"
+            SHORT="${SHORT//[^0-9a-f]/}"
+            WORD="${BASE_MUTATION//[^a-z_-]/}"
+            WIDENED="base ${SHORT:-?} mutation ${WORD:-unknown}; planning full"
+            echo "$WIDENED"
+            echo "widened_reason=$WIDENED" >> "$GITHUB_OUTPUT"
+            RELEVANT=true
+          fi
           echo "relevant=$RELEVANT" >> "$GITHUB_OUTPUT"
       # From here to the stats run, this job must match `mutation-shard`
       # step for step: Python, the install set, the git identity the fixture
@@ -935,6 +1008,9 @@ jobs:
           RELEVANT: ${{ steps.scope.outputs.relevant }}
           PROVEN: ${{ steps.scope.outputs.proven }}
           PR_RUN_ID: ${{ needs.proven.outputs.pr_run_id }}
+          # Set only when the scope step widened an irrelevant push because
+          # its base's `mutation` was not green; it names the base and why.
+          WIDENED: ${{ steps.scope.outputs.widened_reason }}
           EVENT: ${{ github.event_name }}
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
@@ -978,7 +1054,7 @@ jobs:
                 plan_full "whole-codebase run ($EVENT)"
                 ;;
               *)
-                plan_full "a mutation-relevant path changed, or there was no usable base commit"
+                plan_full "${WIDENED:-a mutation-relevant path changed, or there was no usable base commit}"
                 ;;
             esac
           fi
