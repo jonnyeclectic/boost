@@ -33,7 +33,10 @@ permissions:
   contents: read
 
 concurrency:
-  group: fuzz-${{ github.ref }}
+  # The label is in the key: `labeled` fires for EVERY label, so with the ref
+  # alone, adding any unrelated label to a PR started a run in this group that
+  # cancelled the 'check-fuzz' one and then skipped its own job.
+  group: fuzz-${{ github.ref }}-${{ github.event.label.name }}
   cancel-in-progress: true
 
 jobs:
