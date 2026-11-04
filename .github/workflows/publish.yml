@@ -109,7 +109,21 @@ jobs:
     needs: guard
     if: needs.guard.outputs.proceed == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # Above the preflight's own wait (--timeout-seconds below), so a wait that
+    # runs long fails inside the preflight, naming the gate it gave up on,
+    # rather than as a bare job timeout. It was 45 against a 3600 s wait,
+    # which killed the job first whenever the wait for the shipped tip's own
+    # ci passed 45 min (two merges close together, the later one's ci the
+    # slower) -- likelier now that every main push's ci, proven or not, lasts
+    # as long as its slowest `tests-extended` leg (cap 80). The budget,
+    # worked out rather than assumed: the 3600 s wait, plus at most one 15 s
+    # poll and one sweep of the four gates past its deadline (each GET up to
+    # 3 attempts at a 30 s urlopen timeout plus 1 + 2 s backoff: 4 x 93 =
+    # 372 s), plus the job's time outside the preflight step, measured at
+    # 55-77 s over eight releases between 2026-10-20 and 11-04 (77 s: run
+    # 39897213817): 4064 s, 67.7 min. tests/unit/test_workflow_timeouts.py
+    # holds the cap above it.
+    timeout-minutes: 75
     environment: pypi
     permissions:
       contents: write      # create the tag + GitHub Release

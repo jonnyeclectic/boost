@@ -32,7 +32,23 @@ on:
     # Daily, off the hour, clear of ci's 09:30 nightly and the 04:00-08:00
     # weekly crons.
     - cron: "17 12 * * *"
+  # By hand on a BRANCH, with `python` set to 3.13 or 3.14, it is how a fix
+  # for a failure only ci.yml's `tests-extended` legs see (macOS/Windows on
+  # 3.13/3.14, which no pull request runs) is tested before it merges. Here
+  # and not by dispatching ci.yml: a ci dispatch SKIPS lint and the other
+  # pull-request jobs, posts those skipped check runs onto the branch's head
+  # commit -- an open PR's head, as a rule -- and a skipped required check
+  # reads as passing. This workflow's checks (`compat (...)`, `canary (...)`)
+  # are required nowhere, so a dispatch here can only add information.
+  # tests/unit/test_ci_tests_extended.py pins that the choices cover every
+  # `tests-extended` interpreter and that the os lists match.
   workflow_dispatch:
+    inputs:
+      python:
+        description: "Interpreter for the macOS/Windows legs (3.13/3.14 = ci.yml's tests-extended)"
+        type: choice
+        options: ["3.15", "3.14", "3.13"]
+        default: "3.15"
 
 permissions:
   contents: read
@@ -64,7 +80,9 @@ jobs:
         os: [macos-latest, windows-latest]
         # 3.15: Homebrew's python3 since 2026-10-28, so what a new user's pipx
         # picks. ci.yml's tests matrix comment says why it needs no onnxruntime.
-        python: ["3.15"]
+        # A dispatch may pick another (the note on `workflow_dispatch:`); a
+        # push or the cron has no `inputs`, so they always run 3.15.
+        python: ["${{ inputs.python || '3.15' }}"]
     steps:
       # No harden-runner: it is Linux-only, and both legs here are not.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

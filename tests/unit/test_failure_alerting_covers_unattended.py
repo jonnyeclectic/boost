@@ -491,6 +491,19 @@ class TestTheIssueSaysWhichRunItWas:
         assert "No release was involved" in body
         assert "No release was cut" not in body
         assert "rerun the failed jobs on that run to publish" not in body
+        # ci_proven_tree looks past a red extended leg on the nightly and
+        # nothing else, so the note must not say that leg costs the
+        # proven-tree skip -- nor that only a red `mutation` does.
+        assert "Unless only `tests-extended` failed" in body
+        assert "If its `mutation` job is what failed" not in body
+        assert "a red `tests-extended` leg alone does not" in body
+        assert "While the newest whole-codebase run on main is not green" not in body
+        # The obvious cleanup of a red extended leg is the costly one on an
+        # idle night: a re-run is attempt 2, and a re-run idle nightly no
+        # longer counts for fact 3. Say so, and say what to do instead.
+        assert 'do not use "Re-run failed jobs" on this run' in body
+        assert "the re-run is attempt 2" in body
+        assert "Leave the run as it is" in body
 
     @pytest.mark.parametrize("tracking", [False, True])
     def test_a_dispatched_ci_failure_says_it_was_the_whole_codebase_run(
@@ -500,6 +513,8 @@ class TestTheIssueSaysWhichRunItWas:
         assert "started by hand" in body
         assert "No release was involved" in body
         assert "No release was cut" not in body
+        # A dispatch always plans full: re-running one costs fact 3 nothing.
+        assert "Re-run failed jobs" not in body
 
     def test_another_workflows_schedule_gets_no_release_note(self, tmp_path):
         body = self.posted(tmp_path, "schedule", name="fuzz")

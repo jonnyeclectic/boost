@@ -188,15 +188,26 @@ class TestWhichRunsCount:
     ], ids=["no-runs", "runs"])
     def test_it_asks_exactly_what_ci_proven_tree_asks(self, fake):
         # Same definition of "whole-codebase run", by construction: the watch
-        # goes through ci_proven_tree._newest_completed_whole -- the query
-        # _last_whole starts from -- so the requests are equal. A red newest
-        # run is where _last_whole stops too, so here it asks the same two.
+        # goes through ci_proven_tree._newest_completed_whole -- the one helper
+        # for "the newest completed whole-codebase run", which _last_whole
+        # starts from -- so the requests are equal.
         ours, theirs, last = fake(), fake(), fake()
         nw.main(api=ours, env={}, now=NOW)
         pt._newest_completed_whole(theirs)
-        pt._last_whole(last)
-        assert ours.paths == theirs.paths == last.paths
+        assert ours.paths == theirs.paths
         assert len(ours.paths) == 2
+
+        # _last_whole begins with the same two. With no run it stops there;
+        # with one it goes on to that run's jobs (its `mutation` verdict),
+        # which the watch never asks and FakeGitHub refuses.
+        if pt._newest_completed_whole(fake()) is not None:
+            with pytest.raises(AssertionError, match="unexpected request"):
+                pt._last_whole(last)
+            assert last.paths[:2] == ours.paths
+            assert urlsplit(last.paths[2]).path.endswith("/jobs")
+        else:
+            assert pt._last_whole(last) is None
+            assert last.paths == ours.paths
 
     def test_an_idle_nightly_counts_as_the_cron_having_fired(self, capsys):
         # A skip is a completed schedule run; the watch never asks what it
@@ -216,6 +227,16 @@ class TestWhichRunsCount:
         code, out = watch(api, capsys)
         assert code == 1
         assert "overdue" in out
+
+    def test_it_never_asks_for_the_runs_jobs(self, capsys):
+        # ci_proven_tree reads the newest run's `mutation` job; the age alarm
+        # judges only that a run happened, so a run whose `mutation` is red
+        # (or whose jobs cannot be listed) is still a run that happened.
+        api = FakeGitHub(run(9, "schedule", timedelta(hours=2), conclusion="failure"))
+        code, out = watch(api, capsys)
+        assert code == 0, out
+        assert "(schedule, concluded failure)" in out
+        assert all(urlsplit(p).path == RUNS_PATH for p in api.paths)
 
 
 class TestAnAlarmThatCannotLookIsLoud:

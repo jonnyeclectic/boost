@@ -29,22 +29,41 @@ only when all three facts hold:
    that built ``head + another branch``, whose head tree still equals the
    tree that lands. Fact 1 cannot see that; this name can;
 3. the newest completed whole-codebase run on ``main`` (``schedule`` or
-   ``workflow_dispatch``, whichever is newer) concluded ``success`` and was
-   created at most 48 hours before now. This is the backstop for what a
-   diff-scoped PR gate cannot see: a red nightly turns every push back into a
-   full run until it is green again, and so does a *missing* one. The age bound
-   is what makes "green" mean "recently": without it, a nightly that quietly
-   stopped (workflow disabled, schedules dropped) would keep authorising skips on
-   a months-old result. 48 hours tolerates one missed night and not two.
+   ``workflow_dispatch``, whichever is newer) was created at most 48 hours
+   before now, and its ``mutation`` job (latest attempt) concluded
+   ``success``. This is the backstop for what a diff-scoped PR gate cannot
+   see: a red nightly turns every push back into a full run until it is green
+   again, and so does a *missing* one. The age bound is what makes "green"
+   mean "recently": without it, a nightly that quietly stopped (workflow
+   disabled, schedules dropped) would keep authorising skips on a months-old
+   result. 48 hours tolerates one missed night and not two. The job, and
+   not the run's conclusion where only ``tests-extended`` legs are red,
+   because that run is also ci.yml's ``tests-extended`` (macOS and Windows
+   on 3.13/3.14): read as a whole, one red or timed-out extended leg would
+   put every later push on the full 24-shard mutation run and the full
+   ``tests`` matrix until someone reran it, and that buys nothing -- a
+   platform test failure says nothing about the mutation score, and every
+   push runs those legs again itself before it can release. That is the
+   only red looked past: a run red on any other job (a failed
+   ``idle-nightly``) beside a green ``mutation`` reads
+   ``red_beyond_extended``, as the run's conclusion read before.
+   ci-failure-issue.yml still alarms on the run's conclusion, so a red
+   extended leg on the nightly is reported all the same.
    An *idle* nightly (see below) counts, but never on its own word: a run
    carrying an ``inherited-tree-`` marker is green here only when the walk
    that let it skip, re-run from that run's own ``created_at``, still finds
-   the same real run green on the same commit and tree. Anything else reads
+   the same real run green on the same commit and tree -- and then, like any
+   other, only when its own ``mutation`` job is green too. Anything else reads
    as ``unproven_skip``, which every ``== "success"`` check already refuses.
    Not counting skips at all would have been the simpler rule and the wrong
    trade: a real run older than 48 h fails this fact, so from the second
    idle night on every proven push would pay the full run it exists to save
    -- and the skip is only ever taken over bytes a green real run scored.
+
+What ``skip=true`` lets a push skip is ``tests`` (the matrix the PR run ran),
+the mutation shards and the coverage collection. ``tests-extended`` never reads
+it: no pull request runs those legs, so no PR run can have proven them, and
+every push to ``main`` runs them before publish.yml can release.
 
 THE DIRECTION IS THE WHOLE POINT. A wrong "skip" ships code no mutation run has
 seen; a wrong "run" costs one mutation run. So every fact that is unknown,
@@ -97,10 +116,11 @@ publish.yml released the code #1285 had left red. ``--before SHA`` asks: the
 newest ``ci`` push run on ``main`` for that commit, its jobs (latest attempt,
 one page), and the one named exactly ``mutation``. Green only on
 ``status == completed`` and ``conclusion == success`` -- and then only if the
-newest completed whole-codebase run on ``main`` (fact 3's, by the same
-``_last_whole`` query) concluded ``success`` too. The base's push run may
-itself have planned ``none`` and inherited; a red nightly is the full run that
-says the inherited verdict was wrong, and a push run's green must not hide it.
+``mutation`` job of the newest completed whole-codebase run on ``main``
+(fact 3's, by the same ``_last_whole`` query) concluded ``success`` too. The
+base's push run may itself have planned ``none`` and inherited; a red nightly
+is the full run that says the inherited verdict was wrong, and a push run's
+green must not hide it.
 Its age is not judged here: the question is whether a red result is being
 hidden, not whether a green one is recent. Everything else -- no base (empty,
 all-zero), no run, no such job, still running, any other conclusion, a red or
@@ -128,6 +148,15 @@ on ``main`` that were created before it, newest first:
   ``mutation`` job completed with ``success``, and it was created less than
   ``MAX_INHERIT_AGE`` (7 days) before the run deciding -- the clock runs from R,
   never from the last skip.
+
+"Green" in both bullets is the run's own conclusion, and for R its ``mutation``
+job as well. That is stricter than fact 3, which looks past a red
+``tests-extended`` leg on the newest run (and nothing else) so that one cannot
+put every push on the full run. It is stricter on purpose: an idle night
+*replaces* a full mutation run, so a wrong yes reports green over bytes no run
+scored this week, while fact 3 only lets a push skip what its own PR run
+already proved. A night after a whole-codebase run with one red platform leg
+therefore plans full.
 
 Anything else the walk reaches stops it and plans full: a run still going, a
 red, cancelled or re-run one (red is never looked past, whatever lies behind
@@ -183,6 +212,15 @@ main&event=schedule&created=%3E%3D2026-10-27&per_page=100`` returned
 the ``workflow_dispatch`` twin 0; ``actions/runs/41682296301/artifacts?
 per_page=100`` returned ``total_count`` 27 with 27 ``artifacts``, each carrying
 ``name``, ``expired`` and ``workflow_run.id``.
+A whole-codebase run's jobs come from the same endpoint: on 2026-11-04,
+``actions/runs/41682296301/jobs?filter=latest&per_page=100`` (the 11-03
+nightly) returned ``total_count`` 36 with 36 ``jobs``, the skipped ones
+included, and one named ``mutation`` (completed, success, ``run_id``
+41682296301). A re-run keeps the jobs it did not re-run, so re-running one
+red ``tests-extended`` leg leaves the run's ``mutation`` listed: push run
+39729763526 (three attempts) listed 34 jobs under ``filter=latest``, every one
+with ``run_attempt`` 3, ``lint`` among them under a new job id but with its
+attempt-1 ``started_at`` (05:44:42Z on 10-22) -- carried over, not re-run.
 """
 from __future__ import annotations
 
@@ -209,7 +247,9 @@ API_VERSION = "2022-11-28"
 TIMEOUT = 15
 
 # The nightly and the manual dispatch are the two events that run the whole
-# codebase; whichever finished last is the current state of "everything".
+# codebase (the full mutation plan, and ci.yml's `tests-extended` legs);
+# whichever finished last is the current state of "everything", and its
+# `mutation` job is the verdict read from it (fact 3).
 WHOLE_CODEBASE_EVENTS = ("schedule", "workflow_dispatch")
 
 # The branch a push is being decided for. Used for the whole-codebase query and
@@ -273,6 +313,18 @@ MAX_INHERIT_AGE = timedelta(days=7)
 # plain word, so `decide` says "concluded unproven_skip" and `base_mutation`
 # "nightly-unproven_skip" with no change to either.
 UNPROVEN_SKIP = "unproven_skip"
+
+#: ci.yml's macOS/Windows 3.13/3.14 job. A matrix job with no `name:`, so the
+#: jobs API names each leg ``tests-extended (<os>, <python>)``. The one job
+#: whose red fact 3 looks past (see fact 3).
+EXTENDED_JOB = "tests-extended"
+
+# What `_last_whole` reports for a whole-codebase run whose `mutation` job
+# passed but whose own conclusion is red for a reason other than
+# `tests-extended` legs: another job (`idle-nightly`, say) is red, or no job
+# on the page is and the run is red anyway. A plain word, like UNPROVEN_SKIP,
+# so `base_mutation` says "nightly-red_beyond_extended".
+RED_BEYOND_EXTENDED = "red_beyond_extended"
 
 _RUN_ID = re.compile(r"[1-9][0-9]{0,19}")
 _TREE_PART = r"(?P<tree>[0-9a-f]{40}(?:[0-9a-f]{24})?)"
@@ -351,10 +403,15 @@ class Candidate:
 
 @dataclass(frozen=True)
 class Nightly:
-    """The newest completed whole-codebase run: how it ended, and when it began.
+    """The newest completed whole-codebase run: its mutation verdict, and when it began.
 
-    ``created_at`` is an aware datetime, or ``None`` when the run's own value was
-    missing, unparseable or had no timezone. ``decide`` never skips on ``None``.
+    ``conclusion`` is the run's ``mutation`` job's (its status when it has not
+    completed), not the run's own: see fact 3 for why a red ``tests-extended``
+    leg must not count. When ``mutation`` is green it can still be one of
+    ``_last_whole``'s own words, ``RED_BEYOND_EXTENDED`` or ``UNPROVEN_SKIP``.
+    ``created_at`` is the run's, an aware datetime, or
+    ``None`` when the run's own value was missing, unparseable or had no
+    timezone. ``decide`` never skips on ``None``.
     """
 
     conclusion: str | None
@@ -485,8 +542,13 @@ def decide(merge_tree: str, candidates: list[Candidate],
         conclusion, age_problem = last_whole, None
     if conclusion is None:
         reasons.append("no completed nightly or dispatch whole-codebase run on main yet")
+    elif conclusion == RED_BEYOND_EXTENDED:
+        reasons.append("the latest whole-codebase run on main concluded %s: its mutation "
+                       "job passed, but tests-extended legs are not all that was red"
+                       % conclusion)
     elif conclusion != "success":
-        reasons.append("the latest whole-codebase run on main concluded %s" % conclusion)
+        reasons.append("the mutation job of the latest whole-codebase run on main "
+                       "concluded %s" % conclusion)
     if age_problem is not None:
         reasons.append(age_problem)
 
@@ -494,7 +556,7 @@ def decide(merge_tree: str, candidates: list[Candidate],
         return Decision(
             True,
             "tree %s is PR head %s's tree: ci run %s succeeded on it, and the "
-            "latest whole-codebase run on main succeeded" % (
+            "latest whole-codebase run on main passed mutation" % (
                 merge_tree[:12], winner.head_sha[:12], winner.run_id),
             winner.run_id)
     return Decision(False, "; ".join(reasons), None)
@@ -614,8 +676,12 @@ def _newest_completed_whole(api: Api) -> dict[str, Any] | None:
 
     Two queries, ``per_page=1`` each, because GitHub's ``event`` filter takes one
     value. An exception from either propagates (see the module docstring); an
-    empty answer from one is simply "that event has not run". This is the
-    liveness half of ``_last_whole``, and all nightly_watch.py asks.
+    empty answer from one is simply "that event has not run". A newest run that
+    is not completed, or has no conclusion, is None too: not yet a result.
+    This is the one definition of "the newest completed whole-codebase run":
+    ``_last_whole`` (fact 3 and the base) starts from it, and nightly_watch.py
+    asks it and nothing else, so the alarm and the skip agree on which run is
+    the newest; only ``_last_whole`` goes on to read the run's verdict.
     """
     newest: dict[str, Any] | None = None
     for event in WHOLE_CODEBASE_EVENTS:
@@ -635,53 +701,97 @@ def _newest_completed_whole(api: Api) -> dict[str, Any] | None:
             raise ValueError("a branch=%s query returned a run on branch %r"
                              % (MAIN, found.get("head_branch")))
         newest = found if newest is None else max((newest, found), key=_run_key)
+    if newest is None:
+        return None
+    status = newest.get("status")
+    conclusion = newest.get("conclusion")
+    if (status is not None and status != "completed") or not isinstance(conclusion, str) or not conclusion:
+        return None
     return newest
 
 
-def _as_nightly(run: dict[str, Any] | None) -> Nightly | None:
-    """A run object as a ``Nightly``, or None when it has not finished."""
-    if run is None:
-        return None
-    status = run.get("status")
-    conclusion = run.get("conclusion")
-    if (status is not None and status != "completed") or not isinstance(conclusion, str) or not conclusion:
-        return None
-    return Nightly(conclusion, _parse_when(run.get("created_at")))
-
-
 def _last_whole(api: Api) -> Nightly | None:
-    """The newest completed whole-codebase run, as fact 3 and the base read it.
+    """The newest completed whole-codebase run's verdict, as fact 3 and the base read it.
 
-    A red run is returned as it is, with no further request. A green one is
-    asked what it was: a run marked only ``mutated-tree-`` (a real run), or
-    one with no marker at all, reads as before -- every whole-codebase run
-    before the idle nightly existed planned full, and after it a run that
-    reaches its plan uploads a marker or fails. A run carrying an
-    ``inherited-tree-`` marker (an idle nightly) is green only when it is that
-    run's one marker, on its first attempt, and ``_proven_skip`` re-derives
-    it; otherwise it concludes ``UNPROVEN_SKIP``. A re-run of a skip is the
-    case that makes "one marker" matter: its second attempt is not idle,
-    plans full and uploads a ``mutated-tree-`` beside the first attempt's
-    ``inherited-tree-``, and a listing cannot say which attempt left which.
-    "Not idle" holds for both kinds of re-run, by two different checks. Re-run
-    in full, ``idle-nightly`` runs again and ``idle`` refuses any attempt but
-    1. Re-run from a failed job, ``idle-nightly`` does not run again -- GitHub
-    reuses the outputs of jobs that succeeded in the attempt before -- so
-    ci.yml's scope step refuses that reused yes on ``GITHUB_RUN_ATTEMPT``.
+    The run is ``_newest_completed_whole``'s. Its verdict is its ``mutation``
+    job's (latest attempt), and the run's own conclusion counts only as far as
+    a ``tests-extended`` leg cannot explain it: the run is also ci.yml's
+    ``tests-extended``, and a red platform leg says nothing about the score
+    (fact 3). A completed whole-codebase run with no such job contradicts
+    ci.yml, where it runs on every event under ``always()``, and raises. A job
+    that has not completed is reported by its status.
+
+    A red ``mutation`` is returned as it is, with no further request: red is
+    never looked past, whatever the run was. A green one in a run that did
+    not conclude ``success`` is then held to the same page, still with no
+    further request: unless every job on it that is not green is a
+    ``tests-extended`` leg, and there is one, the run reads
+    ``RED_BEYOND_EXTENDED``. So fact 3 refuses whatever the run's conclusion
+    alone refused, except a red extended leg. On a schedule or dispatch run
+    the other jobs are ``idle-nightly``, ``mutation-plan``, the shards and
+    ``mutation``, and ``mutation`` already goes red on a red plan or shard,
+    so in practice this is a failed ``idle-nightly``. Its outputs are then
+    empty and the plan full, so the green ``mutation`` beside it is a real
+    measurement; it is refused anyway, because it is not the red fact 3 was
+    written to look past. Then the run is asked what it was: a run marked
+    only ``mutated-tree-`` (a real run), or one with
+    no marker at all, is green -- every whole-codebase run before the idle
+    nightly existed planned full, and after it a run that reaches its plan
+    uploads a marker or fails. A run carrying an ``inherited-tree-`` marker
+    (an idle nightly) is green only when it is that run's one marker, on its
+    first attempt (an integer 1: a JSON ``true`` or ``1.0`` is not), and
+    ``_proven_skip`` re-derives it; otherwise it concludes
+    ``UNPROVEN_SKIP``, whatever its ``mutation`` job said. So a skip is green
+    only when both hold, and the order of the two reads changes only which
+    not-green word is reported, never whether it is green. The re-derivation
+    reads the source run R as ``idle`` does -- R's run conclusion *and* its
+    ``mutation`` job -- which is stricter than this function's own read of
+    the newest run, on purpose (see ``_inherit``).
+
+    A re-run of a skip is the case that makes "one marker" matter: its second
+    attempt is not idle, plans full and uploads a ``mutated-tree-`` beside the
+    first attempt's ``inherited-tree-``, and a listing cannot say which attempt
+    left which. "Not idle" holds for both kinds of re-run, by two different
+    checks. Re-run in full, ``idle-nightly`` runs again and ``idle`` refuses
+    any attempt but 1. Re-run from a failed job, ``idle-nightly`` does not run
+    again -- GitHub reuses the outputs of jobs that succeeded in the attempt
+    before -- so ci.yml's scope step refuses that reused yes on
+    ``GITHUB_RUN_ATTEMPT``. The cost of that rule falls on the obvious cleanup
+    of an idle nightly red only on ``tests-extended``: "re-run failed jobs"
+    turns it green on attempt 2, which reads ``UNPROVEN_SKIP`` here, so every
+    push runs in full until the next nightly -- ci-failure-issue.yml's note
+    says to leave such a run alone.
     """
     newest = _newest_completed_whole(api)
-    nightly = _as_nightly(newest)
-    if newest is None or nightly is None or nightly.conclusion != "success":
-        return nightly
+    if newest is None:
+        return None
     ident = newest.get("id")
+    # _is_int's test, spelled out so the type checker sees an int below.
     if not isinstance(ident, int) or isinstance(ident, bool):
         raise ValueError("the newest whole-codebase run has no integer id")
+    created = _parse_when(newest.get("created_at"))
+    jobs = _jobs(api, ident)
+    job = _the_mutation_job(jobs, ident)
+    if job is None:
+        raise ValueError("whole-codebase run %d lists no %s job" % (ident, MUTATION_JOB))
+    # A job that has not completed inside a completed run is a contradiction;
+    # its status is what gets reported, and only `success` is green anyway.
+    verdict = job.get("conclusion") if job.get("status") == "completed" else job.get("status")
+    nightly = Nightly(_text(verdict) or "unknown", created)
+    if nightly.conclusion != "success":
+        return nightly
+    # The run's own red is looked past for `tests-extended` legs and nothing
+    # else -- read off the page just fetched, so at no extra request.
+    if newest.get("conclusion") != "success" and not _red_only_on_extended(jobs, ident):
+        return Nightly(RED_BEYOND_EXTENDED, created)
     markers = _markers(api, ident)
     if all(m.kind == "real" for m in markers):
         return nightly
-    if len(markers) != 1 or newest.get("run_attempt") != 1 \
+    # _is_int first, as `_inherit` checks it: a JSON `true` or `1.0` equals 1.
+    attempt = newest.get("run_attempt")
+    if len(markers) != 1 or not _is_int(attempt) or attempt != 1 \
             or not _proven_skip(api, newest, markers[0]):
-        return Nightly(UNPROVEN_SKIP, nightly.created_at)
+        return Nightly(UNPROVEN_SKIP, created)
     return nightly
 
 
@@ -799,13 +909,22 @@ def _whole_window(api: Api, since: datetime) -> tuple[list[dict[str, Any]], str]
     return sorted(found, key=_run_key, reverse=True), floor
 
 
-def _mutation_job(api: Api, run_id: int) -> dict[str, Any] | None:
-    """Run ``run_id``'s job named exactly ``mutation`` (latest attempt), or None.
-
-    One page; two such jobs, or one that names another run, raise.
-    """
-    jobs = _page(api("actions/runs/%d/jobs?filter=latest&per_page=%d" % (run_id, PER_PAGE)),
+def _jobs(api: Api, run_id: int) -> list[dict[str, Any]]:
+    """Run ``run_id``'s jobs, latest attempt: one page, or it raises (``_page``)."""
+    return _page(api("actions/runs/%d/jobs?filter=latest&per_page=%d" % (run_id, PER_PAGE)),
                  "jobs")
+
+
+def _mutation_job(api: Api, run_id: int) -> dict[str, Any] | None:
+    """Run ``run_id``'s job named exactly ``mutation`` (latest attempt), or None."""
+    return _the_mutation_job(_jobs(api, run_id), run_id)
+
+
+def _the_mutation_job(jobs: list[dict[str, Any]], run_id: int) -> dict[str, Any] | None:
+    """The job named exactly ``mutation`` in run ``run_id``'s listing, or None.
+
+    Two such jobs, or one that names another run, raise.
+    """
     named = [j for j in jobs if j.get("name") == MUTATION_JOB]
     if not named:
         return None
@@ -816,6 +935,28 @@ def _mutation_job(api: Api, run_id: int) -> dict[str, Any] | None:
     if owner is not None and not (_is_int(owner) and owner == run_id):
         raise ValueError("run %d's %s job says it belongs to run %r" % (run_id, MUTATION_JOB, owner))
     return job
+
+
+def _red_only_on_extended(jobs: list[dict[str, Any]], run_id: int) -> bool:
+    """Is every job of this listing that is not green a ``tests-extended`` leg -- and is there one?
+
+    Green is completed with ``success`` or ``skipped`` (a dispatch skips
+    ``idle-nightly``; a schedule or dispatch run skips every pull-request
+    job). True only when something is not green and all of it is an extended
+    leg: that is the one red fact 3 looks past, so a run red with nothing red
+    on its page is not explained by it. A not-green job that names another
+    run raises, as ``_the_mutation_job`` does.
+    """
+    red = [j for j in jobs
+           if j.get("status") != "completed" or j.get("conclusion") not in ("success", "skipped")]
+    for job in red:
+        owner = job.get("run_id")
+        if owner is not None and not (_is_int(owner) and owner == run_id):
+            raise ValueError("run %d's job listing holds another run's job" % run_id)
+    return bool(red) and all(
+        isinstance(name := job.get("name"), str)
+        and (name == EXTENDED_JOB or name.startswith(EXTENDED_JOB + " ("))
+        for job in red)
 
 
 def _inherit(api: Api, ref: dict[str, Any], sha: str, tree: str,
@@ -842,6 +983,16 @@ def _inherit(api: Api, ref: dict[str, Any], sha: str, tree: str,
         if status != "completed":
             return Inheritance(None, "%s is %s, so what it will say is unknown"
                                % (where, _word(status)))
+        # The run's own conclusion, deliberately -- for a skip passed over and
+        # for R alike, and on top of R's `mutation` job below. Fact 3
+        # (`_last_whole`) looks past a red `tests-extended` leg on the newest
+        # run, so that one does not put every push on the full run; this walk
+        # does not take that leniency. An idle night replaces
+        # a full mutation run, and being wrong here reports green over bytes
+        # no run scored this week -- on the way to a release. Fact 3 only lets
+        # a push skip what its own PR run already proved. So a whole-codebase
+        # run red for any reason, a platform leg included, sends the next
+        # nightly back to the full plan: one extra run, the cheap direction.
         if conclusion != "success":
             return Inheritance(None, "%s concluded %s, and a whole-codebase run that is "
                                "not green is never looked past" % (where, _word(conclusion)))
@@ -991,11 +1142,14 @@ class BaseVerdict:
       ``cancelled``, ``skipped``, ``timed_out``, ...), or its ``status`` when it
       has not completed (``queued``, ``in_progress``, ``waiting``, ...);
     * ``unknown`` -- a status or conclusion that is absent or not such a word;
-    * ``nightly-<conclusion>`` -- the job was green, but the newest completed
-      whole-codebase run on ``main`` concluded otherwise (``nightly-failure``,
-      ``nightly-cancelled``, ..., ``nightly-unknown``), or is an idle nightly
-      whose inheritance ``_last_whole`` could not re-derive
-      (``nightly-unproven_skip``);
+    * ``nightly-<conclusion>`` -- the job was green, but the ``mutation`` job
+      of the newest completed whole-codebase run on ``main`` concluded
+      otherwise (``nightly-failure``, ``nightly-cancelled``, ...,
+      ``nightly-unknown``), or that run is an idle nightly whose inheritance
+      ``_last_whole`` could not re-derive (``nightly-unproven_skip``), or
+      that run is red on a job other than a ``tests-extended`` leg
+      (``nightly-red_beyond_extended``); a red ``tests-extended`` leg in that
+      run is not one of these (fact 3);
     * ``no-nightly`` -- the job was green, and no whole-codebase run on
       ``main`` has completed;
     * ``no-base`` -- ``before`` is empty or all zeros (the push made the ref);
@@ -1004,8 +1158,9 @@ class BaseVerdict:
     * ``missing-job`` -- that run's latest attempt has no ``mutation`` job;
     * ``error`` -- anything raised: transport, HTTP status (a 403/429 rate
       limit included), JSON, a listing of the wrong shape or longer than one
-      page, a run that contradicts the query, two ``mutation`` jobs, missing
-      credentials, a command line that does not parse.
+      page, a run that contradicts the query, two ``mutation`` jobs, a
+      whole-codebase run with none, missing credentials, a command line that
+      does not parse.
     """
 
     green: bool
@@ -1049,8 +1204,9 @@ def base_mutation(api: Api, before: str) -> BaseVerdict:
 
     Raises on any transport or shape problem, like ``gather``; ``main`` turns
     that into ``error``. Only ``status == completed`` with ``conclusion ==
-    success`` is green, and then only beside a green newest whole-codebase
-    run, which is asked for last: a base that is red on its own says so first.
+    success`` is green, and then only beside a green ``mutation`` in the
+    newest whole-codebase run, which is asked for last: a base that is red on
+    its own says so first.
     """
     unusable = _unusable_base(before)
     if unusable is not None:

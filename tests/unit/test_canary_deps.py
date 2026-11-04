@@ -640,6 +640,7 @@ def _canary_targets(run: str) -> list[Path]:
 #: diff-cover, so there is no suite import for its venv to be missing.
 HARNESS_JOBS = {
     "ci.yml:tests",            # the required coverage gate (-r test-tools.txt)
+    "ci.yml:tests-extended",   # its twin: mac/win 3.13/3.14, main pushes only
     "compat.yml:canary",       # 3.14t free-threaded, explicit pip line
     "compat.yml:compat",       # macOS/Windows 3.15 (-r test-tools.txt)
     "ci.yml:onnx-inference",   # one file out of tests/unit, own venv, .[rag]
@@ -1441,7 +1442,7 @@ jobs:
                         elif arg.endswith(".txt"):
                             generated.add(f"{wf}:{job}")
         assert committed == {
-            "ci.yml:tests", "ci.yml:onnx-inference",
+            "ci.yml:tests", "ci.yml:tests-extended", "ci.yml:onnx-inference",
             "sonarcloud.yml:sonar-analyze", "ci.yml:mutation-plan",
             "compat.yml:compat",
         }

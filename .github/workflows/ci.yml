@@ -13,21 +13,47 @@ on:
   # The whole-codebase mutation run. A pull request's gate is moving to the
   # functions it changed, and a push to main whose tree a green PR run already
   # tested skips the suite and the shards (`proven` below), so this is where
-  # the whole of boost_cli/core is still scored against 80%: the mutation jobs
-  # only, and the full 24-shard plan unless the night is idle -- main still at
-  # the commit and tree of a green, full run created under 7 days before
+  # the whole of boost_cli/core is still scored against 80%: the mutation jobs,
+  # and the full 24-shard plan unless the night is idle -- main still at the
+  # commit and tree of a green, full run created under 7 days before
   # (`idle-nightly` below), in which case it plans none and says which run it
-  # inherits. A dispatch always plans full. 09:30 UTC is clear of the 04:00-08:00
-  # weekly crons and the `shards` bursts. A red or missing nightly turns the
-  # proven-tree skip off, and stops any push planning no mutation run on its
-  # base's verdict (scripts/ci_proven_tree.py), and ci-failure-issue.yml
-  # already watches `ci`, so a red one opens the tracking issue. A missing
-  # one opens one too: nightly-watch.yml fails when ci's newest completed
-  # schedule/dispatch run on main is more than 36 h old.
+  # inherits. A dispatch always plans full. Plus `tests-extended` (the macOS
+  # and Windows 3.13/3.14 legs no pull request runs), on every nightly, idle
+  # or not, so a runner image or interpreter that moves overnight is heard
+  # about on a day with no merge: an idle night inherits a mutation verdict,
+  # never a platform one. 09:30 UTC is clear of the 04:00-08:00 weekly crons
+  # and the `shards` bursts. A red `mutation` in the newest nightly, or a
+  # missing nightly, turns the proven-tree skip off and stops any push
+  # planning no mutation run on its base's verdict (scripts/ci_proven_tree.py,
+  # fact 3). It reads the `mutation` job, and looks past the run's conclusion
+  # only when `tests-extended` legs are all that is red: a red extended leg
+  # says nothing about the score, every push runs those legs itself before it
+  # can release, and read as the run it would put every push on the full
+  # mutation run until someone reran the leg. Do not rerun the leg on an idle
+  # night, though: "re-run failed jobs" makes the run attempt 2, an idle
+  # night counts for fact 3 only on attempt 1, so every push would then run
+  # in full until the next nightly. Leave it; the next green run closes the
+  # tracker. Any other red job (`idle-nightly`) still turns the skip off.
+  # ci-failure-issue.yml watches the run's conclusion, so a red one of
+  # either kind opens the tracking issue. A missing one opens one too:
+  # nightly-watch.yml fails when ci's newest completed schedule/dispatch run
+  # on main is more than 36 h old.
   # publish.yml ignores both events: it releases only from a `push` run.
   schedule:
     - cron: "30 9 * * *"
   # The same run by hand, e.g. to clear a red nightly without waiting a day.
+  # Dispatch it on main only. On a branch it SKIPS lint and every other
+  # pull-request job, and posts those skipped check runs onto the branch's
+  # head commit -- an open PR's head, as a rule -- where a skipped required
+  # check reads as passing (the note above `jobs:`). It would also pay for a
+  # whole-codebase mutation run: the two nightlies before `tests-extended`
+  # existed (runs 41512174636 and 41682296301) were 1806 and 1573 ubuntu
+  # job-minutes -- 24 shards, the planner and the gate -- over 2 h 44 min and
+  # 2 h 22 min. A branch dispatch's result is never read for main either way
+  # (ci_proven_tree.py and mutation-weights-refresh.yml require head_branch ==
+  # main). To test a fix for a failure only `tests-extended` sees, dispatch
+  # compat.yml on the branch with python 3.13 or 3.14: the same macOS and
+  # Windows legs, under check names nothing requires.
   workflow_dispatch:
 
 # Least-privilege default for any job that doesn't declare its own block. Every
@@ -78,14 +104,18 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # WHICH JOB RUNS ON WHICH EVENT. A nightly or a dispatch is the whole-codebase
-# mutation run and nothing else, so every job outside mutation-plan,
-# mutation-shard and mutation carries `github.event_name != 'schedule' &&
-# github.event_name != 'workflow_dispatch'`, or is pull_request-only already
-# -- except `idle-nightly`, which runs on `schedule` alone and only asks the
-# API whether tonight's plan may be none.
+# mutation run plus `tests-extended` and nothing else, so every job outside
+# mutation-plan, mutation-shard, mutation and tests-extended carries
+# `github.event_name != 'schedule' && github.event_name != 'workflow_dispatch'`,
+# or is pull_request-only already -- except `idle-nightly`, which runs on
+# `schedule` alone and only asks the API whether tonight's plan may be none.
+# `tests-extended` is the reverse: it never runs on a pull request or the
+# merge queue, and nothing about an idle night skips it.
 # On a push to main, `proven` decides whether the suite, the shards and the
 # coverage collection have already been done by the PR run; lint (with
-# zizmor), evals, install-smoke, bdd and onnx-inference run regardless.
+# zizmor), evals, install-smoke, bdd, onnx-inference and tests-extended run
+# regardless -- tests-extended because no PR run ever ran its legs, so there
+# is nothing for `proven` to vouch for.
 #
 # A job that needs `proven` says `!cancelled()`, never the implicit
 # `success()`: `proven` is SKIPPED on every pull request, a job whose need was
@@ -417,10 +447,11 @@ jobs:
   # that tree equality holds, the PR head's own first-attempt pull_request run
   # succeeded and carries a live `tested-tree-<this commit's tree>` artifact
   # (uploaded by `lint`: the run built exactly this tree, not the head merged
-  # into some other base), and the newest nightly on main is green and under
-  # 48 h old; any missing fact, API error or rate limit is `skip=false`. The
-  # artifact listing needs `actions: read`, which the job already holds for
-  # the runs. It always exits 0,
+  # into some other base), and the newest nightly on main has a green
+  # `mutation` job (an idle one only while its inheritance still holds) and
+  # is under 48 h old; any missing fact, API error or rate limit is
+  # `skip=false`. The artifact listing needs `actions: read`, which the job
+  # already holds for the runs. It always exits 0,
   # so its outputs are the verdict -- and if the job fails anyway they are
   # empty, which every consumer below reads as "run everything".
   #
@@ -428,8 +459,9 @@ jobs:
   # `mutation` green on the push run of the base commit (`--before`, from
   # github.event.before)? `base_mutation_green` is "true" only when that job
   # completed with success AND the newest completed whole-codebase run on
-  # main concluded success (a red nightly on the base is not hidden behind
-  # the base's own push run); no base, no run, no such job, still running,
+  # main passes the same reading fact 3 gives it (a red nightly on the base
+  # is not hidden behind the base's own push run); no base, no run, no such
+  # job, still running,
   # any other conclusion, a red or missing nightly, an API error or a rate
   # limit is "false", and `base_mutation` says which in one word.
   # `mutation-plan` reads it before letting any push -- proven or not -- plan
@@ -438,6 +470,9 @@ jobs:
   # only publish.yml, planned `none`, reported `mutation` green, and
   # publish.yml released #1285's code. An error in either lookup leaves the
   # other's answer as it was.
+  #
+  # `tests-extended` is deliberately not a consumer: no PR run ever ran its
+  # legs, so there is nothing for this verdict to vouch for there.
   #
   # Push only. On every other event this job is skipped, which is why the
   # jobs that need it say `!cancelled()` (see the note above `lint`).
@@ -448,7 +483,7 @@ jobs:
     timeout-minutes: 5
     permissions:
       contents: read        # the checkout that carries the script
-      actions: read         # the PR head's ci runs, the nightly's, the base's jobs
+      actions: read         # ci runs (PR head, nightly, base) and their jobs
       pull-requests: read   # the PRs associated with this commit
     outputs:
       skip: ${{ steps.decide.outputs.skip }}
@@ -492,10 +527,15 @@ jobs:
   # same reason the base's verdict is asked in `proven`. If this job fails
   # outright (not an answer: the runner, the checkout), its outputs are empty
   # and the plan is full, but the run concludes failure with `mutation` green
-  # -- so the next nightly reads a red run, plans full, and fact 3 turns the
-  # proven-push skip off until a whole-codebase run is green again. That is
-  # the conservative direction, and loud: ci-failure-issue.yml opens the
-  # tracker.
+  # -- so the next nightly reads a red run and plans full (the walk reads the
+  # run's conclusion, as well as its `mutation` job), and fact 3 turns the
+  # proven-push skip off until a newer whole-codebase run is green: it looks
+  # past a red run only when every red job is a `tests-extended` leg, and
+  # tells this failure from that one by the run's job listing. That `mutation`
+  # green is a real measurement -- nothing was inherited -- but it is not the
+  # red fact 3 was written to look past, and before `tests-extended` the run's
+  # conclusion alone refused it. ci-failure-issue.yml opens the tracker on
+  # the red run.
   #
   # Schedule only, on main (the only place a schedule runs; checked anyway).
   # First attempt only, too, but a "re-run failed jobs" does not run this job
@@ -534,7 +574,12 @@ jobs:
     needs: proven
     # Skipped only on an explicit `skip == 'true'`: a pull request (proven
     # skipped, output empty) and a push whose proven job failed (empty again)
-    # both test. Never on a nightly or a dispatch, which are mutation only.
+    # both test. Never on a nightly or a dispatch, which run the mutation jobs
+    # and `tests-extended` only.
+    #
+    # TWIN: `tests-extended` below runs these same steps (pinned equal by
+    # tests/unit/test_ci_tests_extended.py) on the macOS/Windows legs this
+    # matrix excludes. Change a step here and change it there.
     if: ${{ !cancelled() && github.event_name != 'schedule' && github.event_name != 'workflow_dispatch' && needs.proven.outputs.skip != 'true' }}
     runs-on: ${{ matrix.os }}
     # One cap for nine cells was one cap for three very different machines.
@@ -553,7 +598,7 @@ jobs:
     # `startsWith` rather than `== 'windows-latest'` because the condition and
     # the `os:` list below are otherwise related only by spelling: pin that
     # list to a dated label such as windows-2025 and the equality matches
-    # nothing, handing all nine cells 30 again without failing anything.
+    # nothing, handing every cell 30 again without failing anything.
     # 45 ran out too, at a 15k-test suite: on 2026-10-21 windows-3.12 took
     # 44.9 min to pass (run 39525721662) and was cancelled at 45.3 on main
     # (run 39539922832) with no test wedged, while 3.14 on the same commit
@@ -601,9 +646,37 @@ jobs:
         # cost every PR push ~2 slots (one of the five macOS ones) for a
         # signal that could block nothing; compat.yml runs them after a
         # merge and daily, alarmed.
+        #
+        # macOS and Windows on the floor (3.12) only. Their 3.13 and 3.14
+        # cells moved to `tests-extended`, which runs on every push to main
+        # (so publish.yml still waits for them before a release), nightly and
+        # on dispatch, but on no pull request. Of the 83 failing attempts of
+        # 2026-09-01..11-02, 71 also failed a cell this matrix still runs and
+        # 8 failed only in the four moved cells, 7 of those one macOS flake
+        # fixed on 09-29 (465b12de). The one 3.14-only bug (run 36575847074)
+        # failed ubuntu-3.14 as well, so a PR still hears about it.
+        # windows-3.12 stays because three real project-lock races failed
+        # only there (dc7bef5a, f0d3f104). The four cells cost each PR push
+        # ~73-78 slot-minutes and 4 job slots, 2 of them out of the five
+        # macOS ones. The price is release latency: a proven main push, which
+        # skips `tests`, now waits for the extended legs before publish.yml
+        # fires, ~25-28 min later at the median (tail ~50-60, bounded by
+        # their 80-minute cap).
+        # `exclude:`, not `include:`, because
+        # tests/unit/test_workflow_timeouts.py evaluates the timeout cap over
+        # the literal `os:` list.
+        # Coverage is measured in ubuntu-3.12, which is untouched.
         exclude:
           - os: macos-latest
+            python: "3.13"
+          - os: macos-latest
+            python: "3.14"
+          - os: macos-latest
             python: "3.15"
+          - os: windows-latest
+            python: "3.13"
+          - os: windows-latest
+            python: "3.14"
           - os: windows-latest
             python: "3.15"
     steps:
@@ -691,6 +764,147 @@ jobs:
         # instead of gating a diff against a half-run suite's report. The
         # 14 days are also how long a proven push on main can still read a
         # PR run's report for the badge (see `coverage-badge`).
+        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.12'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: coverage-report
+          path: |
+            coverage.xml
+            coverage.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: shell smoke suite (sandboxed)
+        run: bash tests/smoke.sh | tee /tmp/smoke.out
+      - name: job summary (coverage + counts)
+        if: always()
+        run: |
+          {
+            echo "### boost CI — ${{ matrix.os }} · py${{ matrix.python }}"
+            echo ""
+            if [ -f coverage.json ]; then
+              PCT=$("$VENV_BIN/python" -c "import json; print(round(json.load(open('coverage.json'))['totals']['percent_covered'],1))")
+              # The gate is READ, never restated: this line said 80% while
+              # pyproject.toml said 90, so a run at 90.4% read as comfortably
+              # clear when it was four tenths of a point from red. The summary
+              # is where the number is read without opening the log.
+              # `|| GATE='?'` because this step reports, it does not gate:
+              # the job runs `shell: bash`, so a failed command substitution
+              # in an assignment exits under `set -e` and reddens a green
+              # suite. The matrix job owns the actual threshold.
+              GATE=$("$VENV_BIN/python" -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['tool']['coverage']['report']['fail_under'])") || GATE='?'
+              echo "- **Coverage:** ${PCT}% (gate: ${GATE}%)"
+            fi
+            # 2>/dev/null because the file is absent in exactly the case this
+            # step exists for: the test step failed, so smoke never ran. `||
+            # true` already handles the status; this drops the misleading "No
+            # such file" that would otherwise sit in the log of a failed run.
+            SMOKE=$(grep -Eo '[0-9]+ passed, [0-9]+ failed' /tmp/smoke.out 2>/dev/null | tail -1 || true)
+            # `if`, not `[ -n "$SMOKE" ] && echo ...`: this is the last command
+            # of the group, the group is the last command of the step, and the
+            # step runs under `bash -eo pipefail`. With no smoke line the
+            # AND-list's status of 1 became the step's exit code — so a reporting
+            # step marked `if: always()` failed on its own, precisely in the case
+            # it exists for (an earlier step died before smoke.sh printed).
+            if [ -n "$SMOKE" ]; then
+              echo "- **Smoke suite:** ${SMOKE}"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # macOS and Windows on 3.13 and 3.14: the four `tests` cells a pull request
+  # no longer runs (the `exclude:` note in `tests` has the audit). On every
+  # push to main, so publish.yml, which releases only on a *successful* ci
+  # push run, waits for them; nightly, so a runner image or interpreter that
+  # moves is heard about on a day with no merge; and on a dispatch of main.
+  # A fix for a failure only these legs see is tested on its branch by
+  # dispatching compat.yml with python 3.13/3.14, not this workflow (the
+  # note on `workflow_dispatch:` above says why).
+  #
+  # Three things it must never have, each pinned by
+  # tests/unit/test_ci_tests_extended.py:
+  #   * `needs: proven`, or any read of its outputs. `proven` skips `tests`
+  #     because a green PR run already ran those cells on this tree. No PR
+  #     run ever ran these, so a proven push that skipped them would release
+  #     code no macOS or Windows 3.13/3.14 run had seen.
+  #   * `continue-on-error`. A red leg must fail the run: that is what holds
+  #     the release, and what ci-failure-issue.yml alarms on (it reads the
+  #     run's conclusion, not its jobs).
+  #   * a line in .github/required-checks.txt. It reports on no pull request,
+  #     so a required context naming it would wait forever.
+  #
+  # TWIN of `tests`: the step list is the same, compared as parsed YAML, so a
+  # step changed in one job and not the other fails the build; the comments
+  # on each step live in `tests`. Two steps are inert here by construction --
+  # harden-runner is Linux-only, and coverage is measured and published by
+  # ubuntu-3.12 alone -- and are kept so the comparison stays an equality.
+  # Duplicated rather than shared through a YAML anchor: no workflow in this
+  # repo uses one, and the equality test is what keeps the copies honest.
+  tests-extended:
+    if: github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ${{ matrix.os }}
+    # The macOS/Windows cap of `tests`, for the same measured reasons (its
+    # timeout comment); tests/unit/test_workflow_timeouts.py holds the two
+    # equal, cell for cell.
+    timeout-minutes: 80
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+        python: ["3.13", "3.14"]
+    steps:
+      - name: harden runner (egress audit)
+        if: runner.os == 'Linux'   # harden-runner is Linux-only
+        uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python }}
+      - name: git identity (fixture repos)
+        run: |
+          git config --global user.email ci@boost.test
+          git config --global user.name "Boost CI"
+      - name: venv bin dir (Windows uses Scripts/, not bin/)
+        run: echo "VENV_BIN=.venv/$( [ "$RUNNER_OS" = Windows ] && echo Scripts || echo bin )" >> "$GITHUB_ENV"
+      - name: install test deps
+        run: |
+          python -m venv .venv
+          # Hash-pinned (requirements/test-tools.txt, generated by
+          # scripts/lock_toolchain.py). Resolved universally from the >=3.12
+          # floor, so this ONE file covers every leg of this matrix. The
+          # dual markered pins that used to give 3.9 an older release of
+          # attrs/coverage/hypothesis/iniconfig/pytest/typing-extensions
+          # collapse to one pin each now that nothing below 3.12 resolves.
+          # hypothesis powers the property-based parser tests.
+          "$VENV_BIN/pip" -q install -r requirements/test-tools.txt
+          # [rag] extra so the opt-in dense backend is exercised (py3-none
+          # wheel; falls back to importorskip if a platform lacks it). Left
+          # unlocked and best-effort: it is an optional runtime extra, not part
+          # of the toolchain, and some matrix legs have no wheel for it.
+          "$VENV_BIN/pip" -q install sqlite-vec || true
+      - name: unit + functional (90% coverage gate, ubuntu-3.12 only)
+        env:
+          MEASURE_COVERAGE: ${{ matrix.os == 'ubuntu-latest' && matrix.python == '3.12' }}
+        run: |
+          set -o pipefail
+          rc=0
+          cov=()
+          if [ "$MEASURE_COVERAGE" = true ]; then
+            cov=(--cov=boost_cli --cov-report=term-missing --cov-report=json --cov-report=xml)
+          fi
+          "$VENV_BIN/pytest" tests/unit tests/functional -n auto "${cov[@]}" -q \
+            | tee /tmp/pytest.out || rc=$?
+          grep -E '^(FAILED|ERROR) ' /tmp/pytest.out | sed 's/^/::error::/' || true
+          exit "$rc"
+      - name: publish coverage report (for patch-coverage and the badge)
         if: matrix.os == 'ubuntu-latest' && matrix.python == '3.12'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -851,7 +1065,8 @@ jobs:
   # By event: a push to main plans `none` in two cases only, and both need
   # `proven` to have read the base commit's own `mutation` as green (that
   # job on the base's push run completed with success, and the newest
-  # whole-codebase run on main concluded success). Either `proven` vouches
+  # whole-codebase run on main has a green `mutation` -- fact 3's reading,
+  # an idle one only while its inheritance holds). Either `proven` vouches
   # for this tree -- the plan is `none` with the reason "proven by PR run
   # <id>", no stats are collected, no shard starts and `mutation` reports the
   # planner's reason -- or the diff from github.event.before cannot move the
@@ -2080,7 +2295,7 @@ jobs:
   # matching, mocked shutil.which) could rot across any number of merges.
   #
   # Its own job rather than a step inside `tests`: the suite is platform- and
-  # version-independent glue, so running it nine times across that matrix buys
+  # version-independent glue, so running it in every cell of that matrix buys
   # nothing, and a dedicated check name is what makes it requireable through the
   # documented .github/required-checks.txt path instead of quietly turning an
   # existing required check into the gate for a second suite.

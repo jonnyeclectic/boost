@@ -4,9 +4,9 @@ r"""Unit tests: every CI job declares a usable timeout-minutes.
 
 Without one a hung step — a stalled tap clone, a wedged smoke-test subprocess —
 burns GitHub's default job timeout instead of failing fast, and the bill lands
-hardest on the 3 OS x 3 Python `tests` matrix. This is a guard, not a
-one-time cleanup: the point is that a job added next month cannot quietly
-arrive without one.
+hardest on the macOS and Windows cells of `tests` and `tests-extended`. This is
+a guard, not a one-time cleanup: the point is that a job added next month
+cannot quietly arrive without one.
 
 The value is the other half, and it is the half that bit. `timeout-minutes`
 takes an expression, so `tests` now sets a per-OS cap; the bound check read
@@ -21,7 +21,7 @@ numbers to a regex and one cap to GitHub — so `job_timeouts` matches the two
 taught. And matching the source text of the condition proves nothing about
 which cells get which cap: `caps_by_os` evaluates it once per entry in the
 job's real `os:` list, so a condition that has stopped firing fails the test
-instead of silently giving all nine cells the default.
+instead of silently giving every cell the default.
 """
 from __future__ import annotations
 
@@ -183,7 +183,7 @@ def caps_by_os(body: str) -> dict[str, int]:
     This is the whole point of the helper. `matrix.os == 'windows-latest'`
     reads correctly and yet fires for nothing at all once the matrix moves to
     `windows-2025`, and every assertion that matches the source text still
-    passes while all nine cells quietly drop back to the default. Only
+    passes while every cell quietly drops back to the default. Only
     evaluating the condition against the list that produces the cells can tell
     those two apart.
     """
@@ -297,6 +297,21 @@ def test_the_parser_reads_the_matrix_expression():
     assert sorted(job_timeouts(body, "ci.yml / tests")) == [30, 80]
 
 
+def test_the_extended_legs_get_the_cap_their_os_gets_in_tests():
+    """`tests-extended` runs, on the same machines, cells `tests` used to run.
+
+    Its cap is a literal 80, where `tests` evaluates a per-OS expression, so
+    the two are related only by this test: raise the macOS/Windows cap in
+    `tests` after a measured overrun and the same suite on the same runners
+    keeps the old one here, and is cancelled on main where it would have
+    passed -- which holds the release.
+    """
+    extended = caps_by_os(dict(jobs_in(CI))["tests-extended"])
+    twin = caps_by_os(dict(jobs_in(CI))["tests"])
+    assert extended and not any(n.startswith("ubuntu") for n in extended), extended
+    assert extended == {name: twin.get(name) for name in extended}, (extended, twin)
+
+
 @pytest.mark.parametrize("value, expected", [
     ("30", [30]),
     ("${{ matrix.os == 'windows-2025' && 45 || 30 }}", [45, 30]),
@@ -360,3 +375,53 @@ def test_linux_keeps_the_tight_cap_and_the_others_get_the_wider_one():
     assert max(linux.values()) == 30, (
         "the Linux cells took 12.7-18.3 min on a 17.5k-test suite; 30 still "
         "leaves 1.6x headroom and does not need widening: %r" % caps)
+
+
+PUBLISH = WORKFLOWS / "publish.yml"
+PREFLIGHT = WORKFLOWS.parents[1] / "scripts" / "release_preflight.py"
+
+# release_preflight.py's worst case past its deadline, from its own source
+# (pinned below): one poll sleep, then one sweep of every gate, each GET up
+# to 3 attempts at a 30 s urlopen timeout with 1 + 2 s of backoff between.
+PREFLIGHT_POLL_S = 15
+PREFLIGHT_GET_WORST_S = 3 * 30 + 1 + 2
+# The release job's time outside the preflight step, measured: 55-77 s over
+# eight releases between 2026-10-20 and 11-04 (77 s: run 39897213817).
+RELEASE_REST_MEASURED_S = 77
+
+
+def test_the_preflight_worst_case_is_the_one_this_file_assumes():
+    source = PREFLIGHT.read_text(encoding="utf-8")
+    assert "def api_get(path: str, token: str, attempts: int = 3):" in source
+    assert "urlopen(req, timeout=30)" in source
+    assert "time.sleep(2 ** attempt)" in source
+    assert ('add_argument("--poll-seconds", type=float, default=%.1f)'
+            % PREFLIGHT_POLL_S) in source
+
+
+def test_the_release_job_outlives_its_preflight_wait():
+    """A wait that runs long must fail in the preflight, not as a job timeout.
+
+    The `release` job carried 45 minutes around a preflight told to wait 3600
+    seconds for the shipped tip's own ci, so the job was killed first, and
+    the red run ci-failure-issue.yml files carried a bare job timeout
+    instead of the preflight's own "still not conclusive" line naming the
+    gate it gave up on.
+    """
+    yaml = pytest.importorskip("yaml")
+    job = yaml.safe_load(PUBLISH.read_text(encoding="utf-8"))["jobs"]["release"]
+    steps = [s for s in job["steps"] if "release_preflight.py" in s.get("run", "")]
+    assert len(steps) == 1, steps
+    run = steps[0]["run"]
+    wait = re.findall(r"--timeout-seconds\s+(\d+)", run)
+    assert len(wait) == 1, run
+    assert "--poll-seconds" not in run, "the poll default is what this assumes"
+    gates = re.findall(r"--require\s+(\S+)", run)
+    assert gates, run
+    budget = (int(wait[0]) + PREFLIGHT_POLL_S + len(gates) * PREFLIGHT_GET_WORST_S
+              + RELEASE_REST_MEASURED_S)
+    cap = job["timeout-minutes"]
+    assert isinstance(cap, int), cap
+    assert cap * 60 > budget, (
+        "release: timeout-minutes %d is %d s, under the %d s the preflight may "
+        "wait plus the rest of the job" % (cap, cap * 60, budget))
