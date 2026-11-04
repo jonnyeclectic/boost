@@ -2398,7 +2398,6 @@ EXPECTED = {
     "mutation":       (R,  R,     R,      R,      R,      R,     R),
     "install-smoke":  (R,  R,     R,      R,      R,      S,     S),
     "patch-coverage": (R,  S,     S,      S,      S,      S,     S),
-    "canary":         (R,  S,     S,      S,      S,      S,     S),
     "bdd":            (R,  R,     R,      R,      R,      S,     S),
     "onnx-inference": (R,  R,     R,      R,      R,      S,     S),
 }
@@ -2455,7 +2454,7 @@ def test_a_proven_push_still_runs_every_non_test_check(jobs):
     # coverage collection are what the PR run already did.
     sim = simulate(jobs, SCENARIOS["push, proven skip=true"])
     skipped = {n for n, r in sim.items() if r == "skipped"}
-    assert skipped == {"tests", "mutation-shard", "patch-coverage", "canary"}
+    assert skipped == {"tests", "mutation-shard", "patch-coverage"}
 
 
 def test_every_job_downstream_of_proven_names_a_status_function(jobs):

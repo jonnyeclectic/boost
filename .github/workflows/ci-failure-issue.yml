@@ -38,13 +38,20 @@ on:
     # can report, since nothing completes. It fails when that run is overdue,
     # and so opens its own tracker here.
     workflows: ["adapter-conformance", "boost-langchain", "ci", "codeql",
-      "demo", "eval-corpus-refresh", "eval-explain", "eval-scale",
+      "compat", "demo", "eval-corpus-refresh", "eval-explain", "eval-scale",
       "eval-stats", "floors", "fuzz", "html-validate", "licenses",
       "lighthouse", "links", "lock-refresh", "markdownlint",
       "mutation-weights-refresh", "nightly-watch", "package-metadata",
       "pip-audit", "post-deploy", "prose-lint", "release", "sbom",
       "scorecard", "shards", "sonarcloud", "theme-lint", "visual"]
     types: [completed]
+    # Only runs whose head branch is main start this workflow. Without the
+    # filter every completed run of the workflows above, PR runs included,
+    # started a run here whose jobs then skipped: 35 of this workflow's 59
+    # runs on 2026-11-02, a skipped entry in the run list for nearly every PR
+    # check. A skipped job takes no runner, so this saves noise, not minutes.
+    # The job guards below stay, since a fork's branch can be called main too.
+    branches: [main]
 
 # Nothing at the workflow level: `issues: write` granted here reaches every job,
 # and zizmor's excessive-permissions audit is right that a second job made that

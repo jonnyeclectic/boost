@@ -62,8 +62,10 @@ def matrix_job(job_id: str, matrix: str, extra: str = "") -> str:
             "      matrix:\n%s" % (job_id, extra, matrix))
 
 
-# The real shape of ci.yml's `tests` job: 3 OSes x 4 Pythons, and the 3.15
-# cells advisory through job-level continue-on-error.
+# ci.yml's `tests` job as it stood when the gate learned matrices: 3 OSes x 4
+# Pythons, the 3.15 cells advisory through job-level continue-on-error. Kept as
+# a fixture: the macOS/Windows 3.15 cells have since moved to compat.yml, and
+# these tests are about expansion, not about today's ci.yml.
 TESTS_JOB = matrix_job(
     "tests",
     "        os: [ubuntu-latest, macos-latest, windows-latest]\n"
