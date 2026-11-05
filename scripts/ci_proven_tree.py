@@ -46,7 +46,12 @@ only when all three facts hold:
    push runs those legs again itself before it can release. That is the
    only red looked past: a run red on any other job (a failed
    ``idle-nightly``) beside a green ``mutation`` reads
-   ``red_beyond_extended``, as the run's conclusion read before.
+   ``red_beyond_extended``, as the run's conclusion read before. The
+   nightly diff shadow's two jobs (``nightly-shadow-base`` and the
+   ``mutation-advisory-shard`` legs) are dropped from the page first: they
+   are job-level ``continue-on-error``, so a red one never made the run red
+   and never decides a verdict; it neither explains a red run nor refuses
+   one.
    ci-failure-issue.yml still alarms on the run's conclusion, so a red
    extended leg on the nightly is reported all the same.
    An *idle* nightly (see below) counts, but never on its own word: a run
@@ -319,10 +324,26 @@ UNPROVEN_SKIP = "unproven_skip"
 #: whose red fact 3 looks past (see fact 3).
 EXTENDED_JOB = "tests-extended"
 
+#: ci.yml's two jobs of the nightly diff shadow, as the jobs API names them:
+#: ``nightly-shadow-base`` (no matrix) and each ``mutation-advisory-shard``
+#: leg, a matrix job with no `name:` over ``{"set": "diff", "index": N}``
+#: entries, so ``mutation-advisory-shard (diff, N)`` -- the shape
+#: ``mutation-shard (full, 6)`` has on nightly 41682296301's page. Both
+#: carry job-level ``continue-on-error: true``: a red one leaves the run's
+#: conclusion alone and is evidence, never a verdict, so
+#: ``_red_only_on_extended`` drops them before it reads the page -- once
+#: completed with a conclusion; one that is not stays red. Matched
+#: whole, never by a looser prefix: a name this misses stays in the red set,
+#: and the run reads ``RED_BEYOND_EXTENDED`` -- the full-run direction.
+#: tests/unit/test_ci_proven_tree.py ties both to ci.yml.
+ADVISORY_JOB_NAMES = re.compile(
+    r"nightly-shadow-base|mutation-advisory-shard \(diff, (?:0|[1-9][0-9]*)\)")
+
 # What `_last_whole` reports for a whole-codebase run whose `mutation` job
 # passed but whose own conclusion is red for a reason other than
 # `tests-extended` legs: another job (`idle-nightly`, say) is red, or no job
-# on the page is and the run is red anyway. A plain word, like UNPROVEN_SKIP,
+# on the page is (the diff shadow's advisory jobs aside) and the run is red
+# anyway. A plain word, like UNPROVEN_SKIP,
 # so `base_mutation` says "nightly-red_beyond_extended".
 RED_BEYOND_EXTENDED = "red_beyond_extended"
 
@@ -729,8 +750,11 @@ def _last_whole(api: Api) -> Nightly | None:
     ``RED_BEYOND_EXTENDED``. So fact 3 refuses whatever the run's conclusion
     alone refused, except a red extended leg. On a schedule or dispatch run
     the other jobs are ``idle-nightly``, ``mutation-plan``, the shards and
-    ``mutation``, and ``mutation`` already goes red on a red plan or shard,
-    so in practice this is a failed ``idle-nightly``. Its outputs are then
+    ``mutation`` (on a schedule run also the diff shadow's
+    ``nightly-shadow-base`` and ``mutation-advisory-shard`` legs, which are
+    continue-on-error and dropped from the page before it is read:
+    ``ADVISORY_JOB_NAMES``). ``mutation`` already goes red on a red plan or
+    shard, so in practice this is a failed ``idle-nightly``. Its outputs are then
     empty and the plan full, so the green ``mutation`` beside it is a real
     measurement; it is refused anyway, because it is not the red fact 3 was
     written to look past. Then the run is asked what it was: a run marked
@@ -937,15 +961,32 @@ def _the_mutation_job(jobs: list[dict[str, Any]], run_id: int) -> dict[str, Any]
     return job
 
 
+def _a_finished_advisory_job(job: dict[str, Any]) -> bool:
+    """Is ``job`` one of the diff shadow's advisory jobs, completed with a conclusion?"""
+    name = job.get("name")
+    conclusion = job.get("conclusion")
+    return (job.get("status") == "completed"
+            and isinstance(conclusion, str) and conclusion != ""
+            and isinstance(name, str) and ADVISORY_JOB_NAMES.fullmatch(name) is not None)
+
+
 def _red_only_on_extended(jobs: list[dict[str, Any]], run_id: int) -> bool:
     """Is every job of this listing that is not green a ``tests-extended`` leg -- and is there one?
 
     Green is completed with ``success`` or ``skipped`` (a dispatch skips
     ``idle-nightly``; a schedule or dispatch run skips every pull-request
-    job). True only when something is not green and all of it is an extended
-    leg: that is the one red fact 3 looks past, so a run red with nothing red
-    on its page is not explained by it. A not-green job that names another
-    run raises, as ``_the_mutation_job`` does.
+    job). The diff shadow's advisory jobs (``ADVISORY_JOB_NAMES``) are
+    dropped from the not-green set first: they are job-level
+    ``continue-on-error``, so one can be red on the page of a run its red
+    did not make red, and it decides nothing. True only when something else
+    is not green and all of that is an extended leg: that is the one red
+    fact 3 looks past, so a run red with nothing red on its page, or nothing
+    but advisory jobs, is not explained by it. Only an advisory job that
+    completed with a conclusion is dropped: one still running, or with no
+    conclusion, inside a completed run is the contradiction ``mutation`` is
+    refused for, so it stays in the not-green set and the run reads
+    ``RED_BEYOND_EXTENDED``. A not-green job that names another run raises,
+    advisory or not, as ``_the_mutation_job`` does.
     """
     red = [j for j in jobs
            if j.get("status") != "completed" or j.get("conclusion") not in ("success", "skipped")]
@@ -953,6 +994,7 @@ def _red_only_on_extended(jobs: list[dict[str, Any]], run_id: int) -> bool:
         owner = job.get("run_id")
         if owner is not None and not (_is_int(owner) and owner == run_id):
             raise ValueError("run %d's job listing holds another run's job" % run_id)
+    red = [j for j in red if not _a_finished_advisory_job(j)]
     return bool(red) and all(
         isinstance(name := job.get("name"), str)
         and (name == EXTENDED_JOB or name.startswith(EXTENDED_JOB + " ("))
@@ -1091,6 +1133,103 @@ def idle(api: Api, sha: str, run_id: int, run_attempt: int, now: datetime) -> Id
                 "re-measured, until %s" % (sha[:12], tree[:12], got.reason,
                                            _iso(created + MAX_INHERIT_AGE)),
                 got.source["id"], tree, created)
+
+
+# --------------------------------------------------------------------------
+# the nightly diff shadow: what tonight's diff set is diffed from
+# --------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class ShadowBase:
+    """The commit a full nightly's advisory diff set is diffed from, or None.
+
+    ``base`` is a commit id the walk checked, ``source_run`` the real run it
+    is the ``head_sha`` of. With ``base=None`` the nightly plans full only.
+    """
+
+    base: str | None
+    reason: str
+    source_run: int | None = None
+
+
+def shadow_base(api: Api, sha: str, run_id: int, run_attempt: int,
+                now: datetime) -> ShadowBase:
+    """The ``head_sha`` of the newest green real whole-codebase run before tonight.
+
+    The scope a full nightly shadows (docs/superpowers/plans/2026-10-31-ci-speed.md,
+    Task 7 Step 6) is everything merged since main was last proven whole: the
+    diff the nightly backstop stands behind once the diff gate binds (spec
+    option B). It is its own walk rather than a reuse of ``_inherit``, whose
+    every stop is a "not idle" answer this question does not share:
+
+    * a run that is not a completed green first attempt is LOOKED PAST, where
+      ``_inherit`` stops on it. A base is not an inheritance: an older one only
+      widens the diff, and after a red night the wider scope is the most
+      useful evidence there is;
+    * a skip (``inherited-tree-``) is looked past toward the real run it
+      names, and so is a real run whose own ``mutation`` job is not green;
+    * a green run with no marker or several, or a marker not plainly live,
+      stops it with no base: what that run was is unknown;
+    * the newest green real run being of ``sha`` itself is "nothing to
+      shadow" -- tonight's diff would be empty.
+
+    The window is ``_whole_window``'s, so the oldest base a shadow can diff
+    from is ``MAX_INHERIT_AGE`` plus a day back; past that it plans full only.
+    Tonight must be listed once, as a ``schedule`` run of ``sha`` created no
+    later than the clock allows, exactly as ``idle`` checks it. Raises on any
+    transport or shape problem (ci_idle_nightly.py turns that into ``error:
+    <type>``); every reason is built from integers and this module's helpers,
+    never from API text. A re-run is answered with no request.
+    """
+    if run_attempt != 1:
+        return ShadowBase(None, "this run is attempt %d, and a re-run plans full only"
+                          % run_attempt)
+    runs, floor = _whole_window(api, now)
+    mine = [r for r in runs if r["id"] == run_id]
+    if len(mine) != 1:
+        raise ValueError("run %d is listed %d times in the window" % (run_id, len(mine)))
+    me = mine[0]
+    if me.get("event") != "schedule" or me.get("head_sha") != sha:
+        raise ValueError("run %d is not a schedule run of this commit" % run_id)
+    ref_key = _run_key(me)
+    if ref_key[0] - now > CLOCK_SKEW:
+        raise ValueError("run %d's created_at is ahead of this clock" % run_id)
+    passed = 0
+    for run in runs:
+        ident = run["id"]
+        if ident == run_id or _run_key(run) >= ref_key:
+            continue
+        where = "run %d (%s)" % (ident, _word(run.get("event")))
+        attempt = run.get("run_attempt")
+        if (run.get("status") != "completed" or run.get("conclusion") != "success"
+                or not _is_int(attempt) or attempt != 1):
+            passed += 1
+            continue
+        markers = _markers(api, ident)
+        if len(markers) != 1:
+            return ShadowBase(None, "%s carries %d markers, so what it was is unknown"
+                              % (where, len(markers)))
+        marker = markers[0]
+        if marker.expired is not False:
+            return ShadowBase(None, "%s's marker has expired" % where)
+        if marker.kind == "skip":
+            passed += 1
+            continue
+        job = _mutation_job(api, ident)
+        if job is None or job.get("status") != "completed" or job.get("conclusion") != "success":
+            passed += 1
+            continue
+        head = run.get("head_sha")
+        if not isinstance(head, str) or not _COMMIT.fullmatch(head):
+            return ShadowBase(None, "%s ran no commit id" % where)
+        if head == sha:
+            return ShadowBase(None, "%s, the newest green real whole-codebase run, is of "
+                              "this same commit %s: nothing to shadow" % (where, sha[:12]))
+        return ShadowBase(head, "diff shadow against %s, created %s, commit %s; %d runs "
+                          "looked past" % (where, _iso(_run_key(run)[0]), head[:12], passed),
+                          ident)
+    return ShadowBase(None, "no green real whole-codebase run of ci.yml on main created "
+                      "since %s" % floor)
 
 
 def gather(api: Api, sha: str) -> tuple[str, list[Candidate], Nightly | None]:

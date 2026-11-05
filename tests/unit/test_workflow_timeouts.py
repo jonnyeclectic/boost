@@ -77,8 +77,14 @@ GITHUB_CEILING = 360
 # mutate step, which fires first, and the tail is 71% of 190.
 # `tests/unit/test_mutation_shard_count.py` fails the build if the pack ever
 # needs more than 80% of the step's cap, and if that cap is not under this one.
+#
+# `ci.yml` / `mutation-advisory-shard` is the same job: a full nightly's
+# advisory diff legs, run with `mutation-shard`'s steps (pinned equal in
+# tests/unit/test_mutation_plan.py) and so its caps, job and mutate step
+# alike, because a diff shard can hold the same unsplittable function.
 JUSTIFIED_LONGER = {("shards.yml", "build"): 330,
-                    ("ci.yml", "mutation-shard"): 200}
+                    ("ci.yml", "mutation-shard"): 200,
+                    ("ci.yml", "mutation-advisory-shard"): 200}
 
 CI = WORKFLOWS / "ci.yml"
 

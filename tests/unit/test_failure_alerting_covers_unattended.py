@@ -498,6 +498,10 @@ class TestTheIssueSaysWhichRunItWas:
         assert "If its `mutation` job is what failed" not in body
         assert "a red `tests-extended` leg alone does not" in body
         assert "While the newest whole-codebase run on main is not green" not in body
+        # Nor does a red job of the nightly's diff shadow: continue-on-error,
+        # and dropped by fact 3, so it may sit beside a red extended leg.
+        assert ("Unless only `tests-extended` failed (a red `nightly-shadow-base` "
+                "or `mutation-advisory-shard` job does not count") in body
         # The obvious cleanup of a red extended leg is the costly one on an
         # idle night: a re-run is attempt 2, and a re-run idle nightly no
         # longer counts for fact 3. Say so, and say what to do instead.
@@ -515,6 +519,9 @@ class TestTheIssueSaysWhichRunItWas:
         assert "No release was cut" not in body
         # A dispatch always plans full: re-running one costs fact 3 nothing.
         assert "Re-run failed jobs" not in body
+        # Nor does a dispatch run the nightly's diff shadow.
+        assert "Unless only `tests-extended` failed," in body
+        assert "mutation-advisory-shard" not in body
 
     def test_another_workflows_schedule_gets_no_release_note(self, tmp_path):
         body = self.posted(tmp_path, "schedule", name="fuzz")

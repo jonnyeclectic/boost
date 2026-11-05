@@ -1235,7 +1235,7 @@ def test_the_idle_step_passes_only_the_token_and_expands_nothing_in_run(jobs):
 
 def test_the_planner_waits_for_it_and_its_token_does_not_grow(jobs):
     plan = jobs["mutation-plan"]
-    assert plan["needs"] == ["proven", "idle-nightly"]
+    assert plan["needs"] == ["proven", "idle-nightly", "nightly-shadow-base"]
     assert plan["permissions"] == {"contents": "read"}
     assert plan["if"] == "${{ !cancelled() }}"
 
@@ -1346,6 +1346,7 @@ def test_the_markers_are_uploaded_from_the_written_plan_before_any_shard(jobs):
         assert steps.index(step) > plan_at
     # The shards wait on the whole planner job, so every marker is up first.
     assert jobs["mutation-shard"]["needs"] == "mutation-plan"
+    assert jobs["mutation-advisory-shard"]["needs"] == "mutation-plan"
 
 
 def test_no_download_in_the_gate_picks_up_a_marker(jobs):
@@ -1356,3 +1357,333 @@ def test_no_download_in_the_gate_picks_up_a_marker(jobs):
             continue
         pattern = step["with"].get("pattern") or step["with"].get("name")
         assert not any(fnmatch.fnmatchcase(n, pattern) for n in names), pattern
+
+
+# --------------------------------------------------------------------------
+# the nightly diff-shadow base (C4): which commit tonight's advisory diff
+# set is diffed from
+# --------------------------------------------------------------------------
+
+LAST = "c" * 40         # a commit merged between MOVED and SHA
+
+
+def base_of(api, **kw):
+    kw.setdefault("attempt", 1)
+    kw.setdefault("now", NOW)
+    return pt.shadow_base(api, kw.get("sha", SHA), kw.get("run_id", TONIGHT),
+                          kw["attempt"], kw["now"])
+
+
+def shadow_night(*older):
+    """Tonight on SHA; by default R, real and green, a day back on MOVED."""
+    return GitHub(tonight(), *(older or (real(R, before(days=1), sha=MOVED),)))
+
+
+def test_the_base_is_the_newest_green_real_runs_commit():
+    api = shadow_night()
+    got = base_of(api)
+    assert got == pt.ShadowBase(MOVED, got.reason, R)
+    assert got.reason == ("diff shadow against run %d (schedule), created "
+                          "2026-11-09T17:14:31Z, commit %s; 0 runs looked past"
+                          % (R, MOVED[:12]))
+    # No commit-tree request: the base is a commit, not a tree.
+    assert api.calls == [window_path("schedule"), window_path("workflow_dispatch"),
+                         artifacts_path(R), jobs_path(R)]
+
+
+def test_a_skip_is_looked_past_to_the_real_run_behind_it():
+    api = shadow_night(skip(101, before(hours=3), R, sha=MOVED),
+                       real(R, before(days=1), sha=MOVED))
+    got = base_of(api)
+    assert (got.base, got.source_run) == (MOVED, R)
+    assert got.reason.endswith("; 1 runs looked past")
+    assert jobs_path(101) not in api.calls
+
+
+@pytest.mark.parametrize("newer, asked", [
+    ({"conclusion": "failure"}, False),
+    ({"conclusion": "cancelled"}, False),
+    ({"status": "in_progress", "conclusion": None}, False),
+    ({"attempt": 2}, False),
+    ({"attempt": "1"}, False),
+    ({"jobs": [mutation_job(101, conclusion="failure")]}, True),
+    ({"jobs": [mutation_job(101, status="in_progress", conclusion=None)]}, True),
+    ({"jobs": []}, True),
+], ids=["red", "cancelled", "running", "rerun", "string-attempt", "mutation-red",
+        "mutation-running", "no-mutation-job"])
+def test_a_run_that_is_not_a_green_first_attempt_is_looked_past(newer, asked):
+    # Unlike the idle walk, which stops here: an older base only widens the
+    # diff, and after a red night the wider scope is the evidence wanted.
+    api = shadow_night(real(101, before(hours=3), sha=LAST, **newer),
+                       real(R, before(days=1), sha=MOVED))
+    got = base_of(api)
+    assert (got.base, got.source_run) == (MOVED, R)
+    assert got.reason.endswith("; 1 runs looked past")
+    assert (artifacts_path(101) in api.calls) is asked
+
+
+def test_a_real_run_red_only_on_an_extended_leg_is_looked_past_for_the_base():
+    # Fact 3 reads this run green: its `mutation` passed and only a platform
+    # leg is red. The base keeps the idle walk's stricter reading -- the
+    # run's own conclusion as well as its `mutation` job -- so the run is
+    # looked past, with no request about it, toward an older base.
+    red = real(101, before(hours=3), sha=LAST, conclusion="failure",
+               jobs=_red_extended_jobs(101))
+    assert fact3(red)[0].conclusion == "success"
+    api = shadow_night(red, real(R, before(days=1), sha=MOVED))
+    got = base_of(api)
+    assert (got.base, got.source_run) == (MOVED, R)
+    assert got.reason.endswith("; 1 runs looked past")
+    assert artifacts_path(101) not in api.calls and jobs_path(101) not in api.calls
+
+
+@pytest.mark.parametrize("name", ["mutation-advisory-shard (diff, 0)", "nightly-shadow-base"])
+def test_a_red_advisory_job_on_a_green_run_does_not_move_the_base(name):
+    # The diff shadow's jobs are continue-on-error: the run stayed green, and
+    # what the base reads -- the run's conclusion and its `mutation` job --
+    # never looks at them.
+    jobs = [mutation_job(R), mutation_job(R, conclusion="failure", name=name)]
+    got = base_of(shadow_night(real(R, before(days=1), sha=MOVED, jobs=jobs)))
+    assert (got.base, got.source_run) == (MOVED, R)
+
+
+def test_a_dispatch_is_a_base_like_a_nightly():
+    got = base_of(shadow_night(real(R, before(days=1), sha=MOVED, event="workflow_dispatch")))
+    assert got.base == MOVED
+    assert got.reason.startswith("diff shadow against run %d (workflow_dispatch)" % R)
+
+
+def test_the_same_commit_is_nothing_to_shadow():
+    got = base_of(shadow_night(real(R, before(days=1), sha=SHA)))
+    assert got == pt.ShadowBase(None, "run %d (schedule), the newest green real "
+                                "whole-codebase run, is of this same commit %s: nothing "
+                                "to shadow" % (R, SHA[:12]))
+
+
+@pytest.mark.parametrize("markers, word", [
+    ([], " carries 0 markers, so what it was is unknown"),
+    ([mutated(R), inherited(R, 77)], " carries 2 markers, so what it was is unknown"),
+    ([{**mutated(R), "expired": True}], "'s marker has expired"),
+    ([{**mutated(R), "expired": None}], "'s marker has expired"),
+    ([{**mutated(R), "expired": "false"}], "'s marker has expired"),
+])
+def test_a_green_run_that_does_not_say_what_it_was_gives_no_base(markers, word):
+    # Not looked past: it may have been the very run whose commit is the base.
+    api = shadow_night(wrun(R, before(days=1), sha=LAST, markers=markers),
+                       real(50, before(days=2), sha=MOVED))
+    got = base_of(api)
+    assert got.base is None and got.source_run is None
+    assert got.reason == "run %d (schedule)%s" % (R, word)
+    assert artifacts_path(50) not in api.calls
+
+
+def test_an_empty_window_names_its_floor():
+    got = base_of(GitHub(tonight()))
+    assert got == pt.ShadowBase(None, "no green real whole-codebase run of ci.yml on "
+                                "main created since %s" % FLOOR)
+
+
+def test_a_window_of_red_runs_and_skips_gives_no_base():
+    api = shadow_night(real(101, before(hours=3), conclusion="failure"),
+                       skip(100, before(days=1), 77))
+    assert base_of(api).base is None
+
+
+def test_a_rerun_asks_nothing():
+    api = shadow_night()
+    got = base_of(api, attempt=2)
+    assert got == pt.ShadowBase(None, "this run is attempt 2, and a re-run plans full only")
+    assert api.calls == []
+
+
+@pytest.mark.parametrize("me", [
+    None, "twice", {"event": "workflow_dispatch"}, {"sha": MOVED},
+    {"created": NOW + timedelta(minutes=6)},
+], ids=["missing", "twice", "not-schedule", "other-commit", "ahead-of-clock"])
+def test_tonight_must_be_listed_once_as_this_schedule_run(me):
+    older = real(R, before(days=1), sha=MOVED)
+    if me is None:
+        api = GitHub(older)
+    elif me == "twice":
+        api = GitHub(tonight(), tonight(), older)
+    else:
+        api = GitHub(tonight(**me), older)
+    with pytest.raises(ValueError):
+        base_of(api)
+
+
+def test_tonight_a_minute_ahead_of_the_clock_is_just_skew():
+    api = GitHub(tonight(created=NOW + timedelta(minutes=1)),
+                 real(R, before(days=1), sha=MOVED))
+    assert base_of(api).base == MOVED
+
+
+@pytest.mark.parametrize("head", ["main", None, MOVED.upper(), MOVED[:12],
+                                  "evil\n::error::pwned"])
+def test_a_base_run_with_no_commit_id_gives_no_base_and_never_echoes_it(head):
+    got = base_of(shadow_night(real(R, before(days=1), sha=head)))
+    assert got == pt.ShadowBase(None, "run %d (schedule) ran no commit id" % R)
+
+
+def test_a_run_created_after_tonight_has_no_bearing():
+    api = shadow_night(real(TONIGHT + 1, T0 + timedelta(seconds=30), sha=LAST),
+                       real(R, before(days=1), sha=MOVED))
+    assert base_of(api).base == MOVED
+    assert artifacts_path(TONIGHT + 1) not in api.calls
+
+
+def test_a_sha256_base_is_a_base():
+    long = "d" * 64
+    assert base_of(shadow_night(real(R, before(days=1), sha=long))).base == long
+
+
+# -- the CLI's --shadow-base --------------------------------------------------
+
+SHADOW_ARGV = ["--shadow-base", *ARGV]
+
+
+def shadow_outputs(env) -> dict:
+    lines = Path(env["GITHUB_OUTPUT"]).read_text(encoding="utf-8").splitlines()
+    pairs = dict(line.split("=", 1) for line in lines)
+    assert len(pairs) == len(lines) == 3, lines
+    assert set(pairs) == {"shadow_base", "shadow_base_run", "shadow_reason"}
+    return pairs
+
+
+def test_shadow_base_writes_three_outputs_and_a_summary(env, capsys):
+    assert cli.main(SHADOW_ARGV, api=shadow_night(), env=env) == 0
+    got = shadow_outputs(env)
+    assert (got["shadow_base"], got["shadow_base_run"]) == (MOVED, str(R))
+    assert got["shadow_reason"].startswith("diff shadow against run %d (schedule)" % R)
+    summary = Path(env["GITHUB_STEP_SUMMARY"]).read_text(encoding="utf-8")
+    assert summary.startswith("### Nightly diff-shadow base\n\n- base: `%s`\n- reason: "
+                              "diff shadow against" % MOVED)
+    assert capsys.readouterr().out.startswith(
+        "ci_idle_nightly: shadow_base=%s shadow_base_run=%d -- diff shadow" % (MOVED, R))
+
+
+def test_no_base_writes_empty_outputs_with_the_reason(env):
+    cli.main(SHADOW_ARGV, api=shadow_night(real(R, before(days=1), sha=SHA)), env=env)
+    got = shadow_outputs(env)
+    assert (got["shadow_base"], got["shadow_base_run"]) == ("", "")
+    assert got["shadow_reason"].endswith("nothing to shadow")
+    assert "- base: `none`" in Path(env["GITHUB_STEP_SUMMARY"]).read_text(encoding="utf-8")
+
+
+def test_shadow_base_without_github_output_goes_to_stdout(capsys):
+    env = {"GITHUB_EVENT_NAME": "schedule", "GITHUB_REF": "refs/heads/main"}
+    assert cli.main(SHADOW_ARGV, api=shadow_night(), env=env) == 0
+    assert "\nshadow_base=%s\nshadow_base_run=%d\nshadow_reason=diff shadow" % (MOVED, R) \
+        in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("exc", [
+    urllib.error.HTTPError("https://api.github.com/x", 403, "rate limit", None, None),
+    urllib.error.URLError("no route"), TimeoutError("timed out"),
+    json.JSONDecodeError("bad", "x", 0), ValueError("odd shape"), KeyError("x"),
+], ids=["403", "url", "timeout", "json", "shape", "key"])
+@pytest.mark.parametrize("position", range(4))
+def test_an_error_at_any_request_is_no_base(env, exc, position):
+    model = shadow_night()
+
+    def api(path):
+        if len(model.calls) == position:
+            model.calls.append(path)
+            raise exc
+        return model(path)
+
+    assert cli.main(SHADOW_ARGV, api=api, env=env) == 0
+    assert shadow_outputs(env) == {"shadow_base": "", "shadow_base_run": "",
+                                   "shadow_reason": "error: %s" % type(exc).__name__}
+
+
+@pytest.mark.parametrize("over, argv", [
+    ({"GITHUB_EVENT_NAME": "workflow_dispatch"}, None),
+    ({"GITHUB_EVENT_NAME": "push"}, None),
+    ({"GITHUB_REF": "refs/heads/feature"}, None),
+    ({}, ["--sha", "main"]), ({}, ["--run-id", "0"]), ({}, ["--now", "yesterday"]),
+    ({}, ["--run-attempt", "2"]),
+], ids=["dispatch", "push", "branch", "sha", "run-id", "now", "rerun"])
+def test_anything_but_a_first_schedule_attempt_on_main_asks_nothing(env, over, argv):
+    args = list(SHADOW_ARGV)
+    if argv:
+        args[args.index(argv[0]) + 1] = argv[1]
+    api = shadow_night()
+    assert cli.main(args, api=api, env={**env, **over}) == 0
+    assert shadow_outputs(env)["shadow_base"] == ""
+    assert api.calls == []
+
+
+def test_a_base_that_does_not_check_out_is_written_empty(env, monkeypatch):
+    for bad in (pt.ShadowBase(MOVED.upper(), "x", R), pt.ShadowBase("main", "x", R),
+                pt.ShadowBase(SHA, "x", R), pt.ShadowBase(MOVED, "x", None),
+                pt.ShadowBase(MOVED, "x", 0), pt.ShadowBase(MOVED, "x", True),
+                pt.ShadowBase(MOVED, "x", -1)):
+        Path(env["GITHUB_OUTPUT"]).write_text("", encoding="utf-8")
+        monkeypatch.setattr(pt, "shadow_base", lambda *a, got=bad, **k: got)
+        cli.main(SHADOW_ARGV, api=shadow_night(), env=env)
+        assert shadow_outputs(env) == {"shadow_base": "", "shadow_base_run": "",
+                                       "shadow_reason": cli.UNSOUND_SHADOW}, bad
+
+
+def test_the_idle_outputs_are_untouched_by_the_flag(env):
+    # Without --shadow-base the CLI is the idle check, byte for byte.
+    cli.main(ARGV, api=idle_night(), env=env)
+    assert set(outputs(env)) == {"idle", "source_run", "source_tree", "reason"}
+
+
+def test_shadow_base_never_logs_the_token(env, monkeypatch, capsys):
+    def make_api(repo, token):
+        def api(path):
+            raise ValueError("leaked %s" % token)
+        return api
+
+    monkeypatch.setattr(pt, "make_api", make_api)
+    cli.main(SHADOW_ARGV, env={**env, "GITHUB_TOKEN": "s3cret", "GITHUB_REPOSITORY": "o/b"})
+    captured = capsys.readouterr()
+    assert "s3cret" not in captured.out + captured.err
+    assert shadow_outputs(env)["shadow_reason"] == "error: ValueError"
+
+
+def test_shadow_base_as_a_script_with_no_credentials_exits_zero_with_no_base(tmp_path):
+    out = tmp_path / "out"
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GITHUB_")}
+    env.update(GITHUB_OUTPUT=str(out), GITHUB_EVENT_NAME="schedule",
+               GITHUB_REF="refs/heads/main")
+    proc = subprocess.run([sys.executable, str(SCRIPT), *SHADOW_ARGV], env=env, cwd=tmp_path,
+                          capture_output=True, text=True, timeout=60, check=False)
+    assert proc.returncode == 0, proc.stderr
+    assert out.read_text(encoding="utf-8").splitlines() == [
+        "shadow_base=", "shadow_base_run=", "shadow_reason=GITHUB_TOKEN is not set"]
+
+
+# -- ci.yml: the nightly-shadow-base job ---------------------------------------
+
+def test_the_shadow_base_job_is_read_only_and_cannot_redden_the_nightly(jobs):
+    job = jobs["nightly-shadow-base"]
+    assert job["if"] == "github.event_name == 'schedule' && github.ref == 'refs/heads/main'"
+    assert job["continue-on-error"] is True
+    assert "needs" not in job
+    assert job["permissions"] == {"contents": "read", "actions": "read"}
+    assert job["timeout-minutes"] <= 5
+    assert job["steps"][0]["uses"].startswith("step-security/harden-runner@")
+    assert job["steps"][0] == jobs["idle-nightly"]["steps"][0]
+    checkout = job["steps"][1]
+    assert checkout == jobs["idle-nightly"]["steps"][1]
+    assert checkout["with"]["persist-credentials"] is False
+    step = _step(job, "shadow")
+    assert step["env"] == {"GITHUB_TOKEN": "${{ github.token }}"}
+    assert step["run"] == ('python3 scripts/ci_idle_nightly.py --shadow-base --sha '
+                           '"$GITHUB_SHA" --run-id "$GITHUB_RUN_ID" --run-attempt '
+                           '"$GITHUB_RUN_ATTEMPT"')
+    assert job["outputs"] == {key: "${{ steps.shadow.outputs.%s }}" % key
+                              for key in ("shadow_base", "shadow_base_run", "shadow_reason")}
+
+
+def test_the_plan_step_reads_the_base_through_env(jobs):
+    write = _step(jobs["mutation-plan"], "plan")
+    assert {k: write["env"][k] for k in ("SHADOW_BASE", "SHADOW_BASE_RUN", "SHADOW_REASON")} \
+        == {"SHADOW_BASE": "${{ needs.nightly-shadow-base.outputs.shadow_base }}",
+            "SHADOW_BASE_RUN": "${{ needs.nightly-shadow-base.outputs.shadow_base_run }}",
+            "SHADOW_REASON": "${{ needs.nightly-shadow-base.outputs.shadow_reason }}"}
+    assert "GITHUB_RUN_ATTEMPT" not in write["env"]

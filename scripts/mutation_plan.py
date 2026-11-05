@@ -40,6 +40,15 @@ mutmut records no callers for it, so the diff scope cannot be known.
 ``matrix`` and ``patterns`` are generic over set names on purpose, so a new set
 needs a planner change and nothing else.
 
+A plan may also carry ``"advisory": ["diff"]`` -- sets that run but can never
+decide ``mutation``. Only ``nightly`` writes it: a full nightly also runs the
+diff set since the newest green real whole-codebase run, as evidence for
+binding the diff gate, in its own continue-on-error job so a failed diff leg
+cannot turn the nightly red. ``matrix`` lists the other sets and ``matrix
+--advisory`` those; an advisory list that names the gate set, a set the plan
+does not have, or is not a list of names is refused, so the gate set can never
+be made advisory.
+
 Usage
 -----
   mutation_plan.py full --shards 24 --out PLAN      # every mutant, committed pack
@@ -48,7 +57,9 @@ Usage
                                                     # the diff base, on stdout
   mutation_plan.py diff --base SHA --head SHA --stats mutants/mutmut-stats.json \
                         [--shadow] --out PLAN       # the PR's functions, or full
-  mutation_plan.py matrix --plan PLAN               # [{"set":..,"index":..}, ...]
+  mutation_plan.py nightly --base B --head H --stats S --reason R [--base-run ID] \
+                           --shards 24 --out PLAN   # full, plus the advisory diff shadow
+  mutation_plan.py matrix --plan PLAN [--advisory]  # [{"set":..,"index":..}, ...]
   mutation_plan.py patterns --plan PLAN --set S --index I --out FILE
                                                     # one shard's argv, NUL-separated
 """
@@ -57,6 +68,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -298,6 +310,14 @@ def diff_plan(root: Path, base: str, head: str, stats: Path, *,
                "%d shards" % (total, len(counts), len(shard_names)))
     else:
         why = "diff scope: no boost_cli/core function changed"
+    # A shadow of nothing is a report of nothing: the only shadow report on
+    # record (run 41387907117, artifact 13127375493) is one of these, 0/0
+    # over 0 functions, and it read exactly like agreement. Gate on the full
+    # run alone instead. Without --shadow the empty diff plan stays: it is the
+    # "core changed, no function body did" answer the binding gate needs.
+    if shadow and not total:
+        return full_plan(root, shards, [why, "shadow: the diff scope is empty, "
+                                             "nothing to compare; full only"])
     plan: dict[str, Any] = {
         "gate_set": "diff",
         "reasons": [why],
@@ -305,7 +325,11 @@ def diff_plan(root: Path, base: str, head: str, stats: Path, *,
                           "functions": scope,
                           # Per-function, so the gate can tell one function's
                           # shortfall from another's surplus.
-                          "counts": {q: counts[q] for q in sorted(counts)}}},
+                          "counts": {q: counts[q] for q in sorted(counts)},
+                          # Provenance only: which commit the scope was
+                          # diffed from, so a shadow report can say so.
+                          # validate_plan reads none of it.
+                          "base": base}},
     }
     if shadow:
         plan["sets"]["full"] = full_plan(root, shards, [])["sets"]["full"]
@@ -320,16 +344,89 @@ def none_plan(reason: str) -> dict[str, Any]:
     return {"gate_set": None, "reasons": [reason], "sets": {}}
 
 
-def matrix(plan: dict[str, Any]) -> list[dict[str, Any]]:
+_COMMIT = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?")
+_RUN_ID = re.compile(r"[1-9][0-9]{0,19}")
+
+
+def nightly_plan(root: Path, base: str, head: str, stats: Path, *, reason: str,
+                 base_run: str | None = None, shards: int = FULL_SHARDS) -> dict[str, Any]:
+    """Tonight's full plan, plus the diff set since ``base`` as an advisory shadow.
+
+    ``base`` is the commit of the newest green real whole-codebase run before
+    tonight (ci_proven_tree.shadow_base). The full set is exactly
+    ``full_plan``'s and still gates; the diff set is marked ``advisory``, so
+    ``matrix`` hands it to a continue-on-error job and it cannot change the
+    verdict. Every reason the shadow cannot be built -- a malformed or equal
+    commit, a base that is not an ancestor of ``head`` (or git cannot say),
+    a diff planner that raises or plans anything but the two sets gated on
+    full (a full-run trigger since the base, a scope that does not pack, an
+    empty scope) -- returns the full plan alone, saying why. Nothing here
+    raises past ``full_plan``.
+    """
+    def alone(why: str) -> dict[str, Any]:
+        return full_plan(root, shards, [reason, "no nightly shadow: " + why])
+
+    if not (isinstance(base, str) and _COMMIT.fullmatch(base)
+            and isinstance(head, str) and _COMMIT.fullmatch(head)):
+        return alone("the base or head is not a full commit id")
+    if base == head:
+        return alone("the base is tonight's own commit, so there is nothing to shadow")
+    try:
+        rc = subprocess.run(["git", "merge-base", "--is-ancestor", base, head], cwd=root,
+                            check=False, capture_output=True).returncode
+    except OSError as exc:
+        return alone("git could not be run (%s)" % type(exc).__name__)
+    if rc != 0:
+        return alone("%s is not an ancestor of %s (git said %d)" % (base[:12], head[:12], rc))
+    try:
+        got = diff_plan(root, base, head, stats, shadow=True, shards=shards)
+    except Exception as exc:    # any failure is "no shadow", never "no plan"
+        return alone("the diff planner failed (%s)" % type(exc).__name__)
+    if set(got.get("sets") or {}) != {"full", "diff"} or got.get("gate_set") != "full":
+        return alone("the diff since %s plans no shadow: %s"
+                     % (base[:12], "; ".join(got.get("reasons") or [])))
+    run = base_run if isinstance(base_run, str) and _RUN_ID.fullmatch(base_run) else "?"
+    got["reasons"] = [reason, "nightly shadow against %s (run %s): %s"
+                      % (base[:12], run, "; ".join(got["reasons"]))]
+    got["advisory"] = ["diff"]
+    return got
+
+
+def advisory_sets(plan: dict[str, Any]) -> list[str]:
+    """The plan's advisory set names, checked; ``[]`` when it names none.
+
+    Raises ValueError for anything that could take the verdict away from the
+    gate set: a list that names it, names a set the plan does not carry, is
+    not a list of distinct strings.
+    """
+    advisory = plan.get("advisory", [])
+    if (not isinstance(advisory, list) or not all(isinstance(a, str) for a in advisory)
+            or len(set(advisory)) != len(advisory)):
+        raise ValueError("`advisory` is %r, not a list of distinct set names" % (advisory,))
+    for name in advisory:
+        if name not in plan["sets"]:
+            raise ValueError("advisory set %r is not in the plan" % name)
+        if name == plan.get("gate_set"):
+            raise ValueError("the gate set %r cannot be advisory" % name)
+    return advisory
+
+
+def matrix(plan: dict[str, Any], *, advisory: bool = False) -> list[dict[str, Any]]:
     """One matrix entry per shard of every set, in the plan's order.
 
     An empty shard is still listed. Dropping it here would make its patterns
     nobody's job, and the gate's fail-closed merge is the only thing that
     would notice — 40 minutes later, naming an artifact rather than the plan.
     Listing it instead makes that shard's own ``patterns`` call fail at once.
+
+    By default the sets that may decide the gate; with ``advisory`` the ones
+    ``advisory_sets`` names instead. A plan with no ``advisory`` key -- every
+    pull request's -- lists every set by default, as it always has.
     """
+    shadow = set(advisory_sets(plan))
     return [{"set": name, "index": i}
             for name, spec in plan["sets"].items()
+            if (name in shadow) == advisory
             for i in range(len(spec["shards"]))]
 
 
@@ -383,8 +480,21 @@ def main(argv: list[str]) -> int:
     b.add_argument("--head-sha", required=True, help="the event's head SHA")
     b.add_argument("--root", default=str(ROOT), help="repo root (default: this checkout)")
 
+    ni = sub.add_parser("nightly", help="the full plan, plus an advisory diff shadow")
+    ni.add_argument("--base", required=True,
+                    help="commit of the newest green real whole-codebase run")
+    ni.add_argument("--base-run", default="", help="that run's id, for the reason only")
+    ni.add_argument("--head", required=True, help="tonight's commit")
+    ni.add_argument("--stats", required=True, help="mutants/mutmut-stats.json")
+    ni.add_argument("--reason", required=True, help="why tonight is a full run")
+    ni.add_argument("--shards", type=int, default=FULL_SHARDS)
+    ni.add_argument("--root", default=str(ROOT), help="repo root (default: this checkout)")
+    ni.add_argument("--out", required=True)
+
     m = sub.add_parser("matrix", help="print the shard matrix as compact JSON")
     m.add_argument("--plan", required=True)
+    m.add_argument("--advisory", action="store_true",
+                   help="the advisory sets' shards instead of the gating ones")
 
     p = sub.add_parser("patterns",
                        help="write one shard's `mutmut run` arguments to --out, NUL-separated")
@@ -426,10 +536,24 @@ def main(argv: list[str]) -> int:
         print("mutation_plan base: %s -- %s" % (base, why), file=sys.stderr)
         print(base)
         return 0
+    if args.cmd == "nightly":
+        if args.shards < 1:
+            ap.error("--shards must be at least 1")
+        _write(args.out, nightly_plan(Path(args.root), args.base, args.head,
+                                      Path(args.stats), reason=args.reason,
+                                      base_run=args.base_run, shards=args.shards))
+        return 0
     if args.cmd == "matrix":
         # One line, no spaces: it is written to $GITHUB_OUTPUT as `matrix=...`
         # and read back with fromJSON, and a newline would end the value.
-        print(json.dumps(matrix(_read(args.plan)), separators=(",", ":")))
+        try:
+            entries = matrix(_read(args.plan), advisory=args.advisory)
+        except ValueError as exc:
+            # Exit 1 fails the planner, so `mutation` is red: a plan that
+            # would make its gate set advisory is never run.
+            print("mutation_plan matrix: %s" % exc, file=sys.stderr)
+            return 1
+        print(json.dumps(entries, separators=(",", ":")))
         return 0
 
     # patterns. Every entry written here becomes one argument to `mutmut run`,

@@ -181,6 +181,47 @@ def test_matrix_keeps_an_empty_shard(tmp_path):
         {"set": "full", "index": 0}, {"set": "full", "index": 1}]
 
 
+def _advisory_plan(tmp_path, advisory, gate_set="full"):
+    path = tmp_path / "plan.json"
+    path.write_text(json.dumps({"gate_set": gate_set, "reasons": ["test"], "advisory": advisory,
+                                "sets": {"full": {"shards": [["a*"], ["b*"]]},
+                                         "diff": {"shards": [["c"]]}}}), encoding="utf-8")
+    return str(path)
+
+
+def test_an_advisory_set_leaves_the_gating_matrix_for_its_own(tmp_path):
+    plan = _advisory_plan(tmp_path, ["diff"])
+    assert json.loads(run_cli("matrix", "--plan", plan)) == [
+        {"set": "full", "index": 0}, {"set": "full", "index": 1}]
+    assert json.loads(run_cli("matrix", "--plan", plan, "--advisory")) == [
+        {"set": "diff", "index": 0}]
+    assert run_cli("matrix", "--plan", plan, "--advisory").count("\n") == 1
+
+
+def test_a_plan_with_no_advisory_key_lists_every_set_and_no_advisory(tmp_path):
+    # Every pull request's shadow plan: both sets in the one gating matrix.
+    plan = write_plan(tmp_path, {"full": {"shards": [["a*"]]}, "diff": {"shards": [["c"]]}})
+    assert {e["set"] for e in json.loads(run_cli("matrix", "--plan", plan))} == {"full",
+                                                                                "diff"}
+    assert run_cli("matrix", "--plan", plan, "--advisory") == "[]\n"
+    assert run_cli("matrix", "--plan", _advisory_plan(tmp_path, []), "--advisory") == "[]\n"
+
+
+@pytest.mark.parametrize("advisory", [["full"], ["absent"], "diff", ["diff", "diff"], [1],
+                                      None], ids=["gate-set", "unknown", "not-a-list",
+                                                  "duplicate", "not-a-name", "null"])
+@pytest.mark.parametrize("flag", [[], ["--advisory"]])
+def test_an_advisory_list_that_could_take_the_verdict_is_refused(tmp_path, capsys,
+                                                                 advisory, flag):
+    # Both matrices refuse: the gating one too, so the planner fails and the
+    # gate goes red rather than scoring a plan whose verdict moved.
+    plan = _advisory_plan(tmp_path, advisory)
+    assert mp.main(["matrix", "--plan", plan, *flag]) == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.startswith("mutation_plan matrix: ")
+
+
 def test_patterns_writes_one_shard_nul_separated(tmp_path):
     # One entry per argument, each ended by a NUL: a name holding a space or
     # a newline (its module part is a file name a PR chose) stays one entry.
@@ -531,6 +572,188 @@ def test_diff_plan_records_per_function_counts(tmp_path, git_repo):
     assert all(n > 0 for n in diff["counts"].values())
 
 
+# --------------------------------------------------------------------------
+# nightly: tonight's full plan plus an advisory diff shadow (C4)
+# --------------------------------------------------------------------------
+
+_WHY = "whole-codebase run (schedule) — not idle"
+
+
+def nightly(tmp_path, repo: GitRepo, base: str, head: str, **kw) -> dict:
+    kw.setdefault("shards", 2)
+    kw.setdefault("reason", _WHY)
+    return mp.nightly_plan(repo.root, base, head, repo.stats, **kw)
+
+
+def _alone(plan: dict, repo: GitRepo, why: str) -> None:
+    assert plan == mp.full_plan(repo.root, 2, [_WHY, "no nightly shadow: " + why])
+    assert "advisory" not in plan
+
+
+@pytest.mark.parametrize("which", ["base", "head"])
+@pytest.mark.parametrize("bad", ["main", "", None, "A" * 40, "a" * 39, "a" * 41])
+def test_a_nightly_with_no_commit_id_plans_full_alone(tmp_path, git_repo, which, bad):
+    head = git_repo.head({"README.md": "x\n"})
+    args = {"base": git_repo.base, "head": head} | {which: bad}
+    _alone(nightly(tmp_path, git_repo, args["base"], args["head"]), git_repo,
+           "the base or head is not a full commit id")
+
+
+def test_a_nightly_whose_base_is_its_own_commit_plans_full_alone(tmp_path, git_repo):
+    _alone(nightly(tmp_path, git_repo, git_repo.base, git_repo.base), git_repo,
+           "the base is tonight's own commit, so there is nothing to shadow")
+
+
+def test_a_base_that_is_not_an_ancestor_plans_full_alone(tmp_path, git_repo):
+    # A force-pushed main, or a base from another history: the diff since it
+    # is not what was merged since main was last proven.
+    head = git_repo.head({"README.md": "x\n"})
+    _alone(nightly(tmp_path, git_repo, head, git_repo.base), git_repo,
+           "%s is not an ancestor of %s (git said 1)" % (head[:12], git_repo.base[:12]))
+
+
+def test_an_unknown_base_plans_full_alone(tmp_path, git_repo):
+    head = git_repo.head({"README.md": "x\n"})
+    plan = nightly(tmp_path, git_repo, "f" * 40, head)
+    _alone(plan, git_repo, "%s is not an ancestor of %s (git said 128)" % ("f" * 12, head[:12]))
+
+
+def test_git_that_cannot_run_plans_full_alone(tmp_path, git_repo, monkeypatch):
+    head = git_repo.head({"README.md": "x\n"})
+    real = subprocess.run
+
+    def run(argv, *a, **k):
+        if argv[:2] == ["git", "merge-base"]:
+            raise FileNotFoundError("git")
+        return real(argv, *a, **k)
+
+    monkeypatch.setattr(mp.subprocess, "run", run)
+    _alone(nightly(tmp_path, git_repo, git_repo.base, head), git_repo,
+           "git could not be run (FileNotFoundError)")
+
+
+@pytest.mark.parametrize("exc", [ImportError("mutmut"), subprocess.CalledProcessError(1, "git"),
+                                 KeyError("x"), ValueError("odd")])
+def test_a_diff_planner_that_raises_plans_full_alone(tmp_path, git_repo, monkeypatch, exc):
+    head = git_repo.head({"README.md": "x\n"})
+
+    def boom(*a, **k):
+        raise exc
+
+    monkeypatch.setattr(mp, "diff_plan", boom)
+    _alone(nightly(tmp_path, git_repo, git_repo.base, head), git_repo,
+           "the diff planner failed (%s)" % type(exc).__name__)
+
+
+@pytest.mark.parametrize("got", [
+    {"gate_set": "full", "reasons": ["r"], "sets": {"full": {"shards": [["x"]]}}},
+    {"gate_set": "diff", "reasons": ["r"], "sets": {"full": {"shards": []},
+                                                    "diff": {"shards": []}}},
+    {"gate_set": "diff", "reasons": ["r"], "sets": {"diff": {"shards": [["x"]]}}},
+    {"reasons": ["r"]},
+], ids=["full-only", "gated-on-diff", "diff-only", "no-sets"])
+def test_a_diff_plan_that_is_not_a_shadow_plans_full_alone(tmp_path, git_repo, monkeypatch,
+                                                            got):
+    head = git_repo.head({"README.md": "x\n"})
+    monkeypatch.setattr(mp, "diff_plan", lambda *a, **k: got)
+    _alone(nightly(tmp_path, git_repo, git_repo.base, head), git_repo,
+           "the diff since %s plans no shadow: r" % git_repo.base[:12])
+
+
+def test_a_full_run_trigger_since_the_base_plans_full_alone(tmp_path, git_repo):
+    # No mutmut needed: the trigger answers before any mutant is counted.
+    head = git_repo.head({"scripts/mutation_new.py": "x = 1\n"})
+    _alone(nightly(tmp_path, git_repo, git_repo.base, head), git_repo,
+           "the diff since %s plans no shadow: scripts/mutation_new.py changed"
+           % git_repo.base[:12])
+
+
+def test_a_nightly_shadow_marks_the_diff_set_advisory(tmp_path, git_repo, monkeypatch):
+    head = git_repo.head({"README.md": "x\n"})
+    seen = {}
+    shadow = {"gate_set": "full", "reasons": ["diff scope: 3 mutants", "shadow: gating"],
+              "sets": {"diff": {"shards": [["n1"]], "base": git_repo.base},
+                       "full": {"shards": [["f"]]}}}
+
+    def diff_plan(root, base, head_, stats, **kw):
+        seen.update(root=root, base=base, head=head_, stats=stats, **kw)
+        return json.loads(json.dumps(shadow))
+
+    monkeypatch.setattr(mp, "diff_plan", diff_plan)
+    plan = nightly(tmp_path, git_repo, git_repo.base, head, base_run="41682296301")
+    assert seen == {"root": git_repo.root, "base": git_repo.base, "head": head,
+                    "stats": git_repo.stats, "shadow": True, "shards": 2}
+    assert plan["advisory"] == ["diff"]
+    assert plan["gate_set"] == "full"
+    assert plan["sets"] == shadow["sets"]
+    assert plan["reasons"] == [_WHY, "nightly shadow against %s (run 41682296301): diff "
+                               "scope: 3 mutants; shadow: gating" % git_repo.base[:12]]
+    assert mp.advisory_sets(plan) == ["diff"]
+    assert mp.matrix(plan) == [{"set": "full", "index": 0}]
+    assert mp.matrix(plan, advisory=True) == [{"set": "diff", "index": 0}]
+
+
+@pytest.mark.parametrize("run", [None, "", "0", "-1", "41x", "1" * 21, "\n7"])
+def test_a_base_run_that_is_not_a_run_id_is_never_echoed(tmp_path, git_repo, monkeypatch, run):
+    head = git_repo.head({"README.md": "x\n"})
+    monkeypatch.setattr(mp, "diff_plan", lambda *a, **k: {
+        "gate_set": "full", "reasons": ["d"],
+        "sets": {"diff": {"shards": [["n"]]}, "full": {"shards": [["f"]]}}})
+    plan = nightly(tmp_path, git_repo, git_repo.base, head, base_run=run)
+    assert plan["reasons"][1] == "nightly shadow against %s (run ?): d" % git_repo.base[:12]
+
+
+@pytest.mark.usefixtures("needs_mutmut")
+def test_a_real_change_since_the_base_plans_both_sets(tmp_path, git_repo):
+    head = git_repo.head({"boost_cli/core/m.py": _M_BASE.replace("+ 1", "+ 2")})
+    plan = nightly(tmp_path, git_repo, git_repo.base, head, base_run="41682296301")
+    assert plan["gate_set"] == "full"
+    assert plan["advisory"] == ["diff"]
+    assert set(plan["sets"]) == {"full", "diff"}
+    # The gating set is exactly what tonight would have run without a shadow.
+    assert plan["sets"]["full"] == mp.full_plan(git_repo.root, 2, [])["sets"]["full"]
+    assert plan["sets"]["diff"]["shards"]
+    assert plan["sets"]["diff"]["base"] == git_repo.base
+    assert plan["reasons"][0] == _WHY
+    assert plan["reasons"][1].startswith("nightly shadow against %s (run 41682296301): "
+                                         "diff scope: " % git_repo.base[:12])
+
+
+@pytest.mark.usefixtures("needs_mutmut")
+def test_an_empty_shadow_scope_plans_full_alone(tmp_path, git_repo):
+    # Core changed, no function body did: the PR shadow plans full alone now
+    # too, rather than a 0/0 report that reads like agreement.
+    head = git_repo.head({"README.md": "docs\n"})
+    plan = plan_diff(tmp_path, git_repo, head, "--shadow")
+    assert set(plan["sets"]) == {"full"} and plan["gate_set"] == "full"
+    assert plan["reasons"][-1] == "shadow: the diff scope is empty, nothing to compare; full only"
+    _alone(nightly(tmp_path, git_repo, git_repo.base, head), git_repo,
+           "the diff since %s plans no shadow: %s" % (git_repo.base[:12],
+                                                      "; ".join(plan["reasons"])))
+
+
+@pytest.mark.usefixtures("needs_mutmut")
+def test_nightly_runs_as_a_script(tmp_path, git_repo):
+    head = git_repo.head({"boost_cli/core/m.py": _M_BASE.replace("+ 1", "+ 2")})
+    out = tmp_path / "plan.json"
+    subprocess.run([sys.executable, str(ROOT / "scripts" / "mutation_plan.py"),
+                    "nightly", "--base", git_repo.base, "--base-run", "7", "--head", head,
+                    "--stats", str(git_repo.stats), "--root", str(git_repo.root),
+                    "--reason", _WHY, "--shards", "2", "--out", str(out)],
+                   check=True, capture_output=True)
+    assert json.loads(out.read_text(encoding="utf-8"))["advisory"] == ["diff"]
+
+
+def test_nightly_from_the_command_line_falls_back_without_mutmut_where_it_must(
+        tmp_path, git_repo):
+    out = tmp_path / "plan.json"
+    assert mp.main(["nightly", "--base", git_repo.base, "--head", git_repo.base,
+                    "--stats", str(git_repo.stats), "--root", str(git_repo.root),
+                    "--reason", _WHY, "--shards", "2", "--out", str(out)]) == 0
+    _alone(json.loads(out.read_text(encoding="utf-8")), git_repo,
+           "the base is tonight's own commit, so there is nothing to shadow")
+
+
 def _shard_results(tmp_path: Path, spec: dict, survivor: str | None = None) -> Path:
     """What the diff shards would upload for ``spec``: one ``m.py.meta`` per
     shard at the artifact's root (the upload root is ``mutants/boost_cli/core``),
@@ -778,7 +1001,8 @@ def _run_text(job: dict) -> str:
 
 def test_the_gate_always_runs(jobs):
     assert jobs["mutation"]["if"] == "always()"
-    assert set(jobs["mutation"]["needs"]) == {"mutation-plan", "mutation-shard"}
+    assert set(jobs["mutation"]["needs"]) == {"mutation-plan", "mutation-shard",
+                                              "mutation-advisory-shard"}
 
 
 def test_the_gate_fails_when_the_planner_did_not_succeed(jobs):
@@ -855,6 +1079,35 @@ def test_the_planner_and_shards_share_one_environment(jobs):
     plan, shard = jobs["mutation-plan"], jobs["mutation-shard"]
     assert python(plan) == python(shard) != []
     assert installs(plan) == installs(shard) != []
+    advisory = jobs["mutation-advisory-shard"]
+    assert python(advisory) == python(shard)
+    assert installs(advisory) == installs(shard)
+
+
+ADVISORY_SHARD_IF = (
+    "${{ !cancelled() && github.event_name == 'schedule'"
+    " && needs.mutation-plan.result == 'success'"
+    " && needs.mutation-plan.outputs.advisory_matrix != ''"
+    " && needs.mutation-plan.outputs.advisory_matrix != '[]' }}")
+
+
+def test_the_advisory_legs_are_the_shard_legs_verbatim_and_cannot_redden(jobs):
+    # The same steps, so a diff leg tonight mutates exactly as a PR's does and
+    # uploads under the same `mutation-diff-shard-<i>` name the gate's
+    # download and the comparison read; only the matrix and the leniency differ.
+    advisory, shard = jobs["mutation-advisory-shard"], jobs["mutation-shard"]
+    assert advisory["steps"] == shard["steps"]
+    for key in ("runs-on", "timeout-minutes", "permissions"):
+        assert advisory[key] == shard[key], key
+    assert advisory["strategy"]["fail-fast"] is shard["strategy"]["fail-fast"] is False
+    assert advisory["strategy"]["matrix"] == {
+        "include": "${{ fromJSON(needs.mutation-plan.outputs.advisory_matrix) }}"}
+    assert advisory["continue-on-error"] is True
+    assert "continue-on-error" not in shard
+    assert advisory["needs"] == "mutation-plan"
+    assert advisory["if"] == ADVISORY_SHARD_IF
+    assert jobs["mutation-plan"]["outputs"]["advisory_matrix"] == (
+        "${{ steps.plan.outputs.advisory_matrix }}")
 
 
 def _stats_mutant(jobs) -> str:
@@ -914,7 +1167,7 @@ needs_bash = pytest.mark.skipif(
     sys.platform == "win32" or not shutil.which("bash") or not shutil.which("jq"),
     reason="runs a workflow step's bash, which needs bash and jq (ubuntu runners have both)")
 
-MUTATION_JOBS = ("mutation-plan", "mutation-shard", "mutation")
+MUTATION_JOBS = ("mutation-plan", "mutation-shard", "mutation-advisory-shard", "mutation")
 
 
 def _step(job: dict, *, name: str | None = None, step_id: str | None = None,
@@ -1053,6 +1306,11 @@ def test_the_planner_exports_whether_the_plan_is_shadow(jobs):
     assert jobs["mutation-plan"]["outputs"]["shadow"] == "${{ steps.plan.outputs.shadow }}"
 
 
+#: The nightly planner's command, as the stub logs it. Not " nightly ": every
+#: full fallback's reason says "no nightly shadow".
+_NIGHTLY = "scripts/mutation_plan.py nightly "
+
+
 @needs_bash
 class TestPlannerByEvent:
     """Run the `write the plan` step's bash with python and git stubbed."""
@@ -1070,8 +1328,15 @@ echo "$0 $*" >> "$CALLS"
 out=""; prev=""
 for a in "$@"; do [ "$prev" = "--out" ] && out="$a"; prev="$a"; done
 case " $* " in
+  *" --advisory "*) echo "${ADVISORY_OUT:-[]}"; exit 0 ;;
   *" matrix "*) echo '[{"set":"full","index":0}]'; exit 0 ;;
   *"mutation_plan.py base "*) [ -n "$BASE_FAIL" ] && exit 1; echo forkpoint0; exit 0 ;;
+  *"mutation_plan.py nightly "*)
+    [ -n "$NIGHTLY_FAIL" ] && exit 1
+    plan='{"gate_set":"full","reasons":["w","nightly shadow against bbbbbbbbbbbb"],"advisory":["diff"],"sets":{"diff":{"shards":[["d"]]},"full":{"shards":[["a"]]}}}'
+    [ -n "$NIGHTLY_OVERRIDE" ] && plan="$NIGHTLY_OVERRIDE"
+    [ -n "$out" ] && echo "$plan" > "$out"
+    exit 0 ;;
   *" --shadow "*) plan='{"gate_set":"full","reasons":[],"sets":{"diff":{"shards":[]},"full":{"shards":[["a"]]}}}' ;;
   *" none "*) plan='{"gate_set":null,"reasons":["n"],"sets":{}}' ;;
   *) plan='{"gate_set":"full","reasons":[],"sets":{"full":{"shards":[["a"]]}}}' ;;
@@ -1096,7 +1361,8 @@ exit 0
             out.write_text("", encoding="utf-8")
             env = {"PATH": "%s%s%s" % (bin_dir, os.pathsep, os.environ["PATH"]),
                    "CALLS": str(calls), "GITHUB_OUTPUT": str(out),
-                   "GITHUB_SHA": "mergecommit0", "EVENT": event, "RELEVANT": relevant,
+                   "GITHUB_SHA": "mergecommit0", "GITHUB_RUN_ATTEMPT": "1",
+                   "EVENT": event, "RELEVANT": relevant,
                    "BASE_SHA": "basetip0" if event != "push" else "",
                    "HEAD_SHA": "prhead0" if event != "push" else ""}
             env.update(extra)
@@ -1105,10 +1371,11 @@ exit 0
             log = calls.read_text(encoding="utf-8").splitlines()
             calls.unlink()
             plans = [line for line in log if "--out mutation-plan.json" in line]
-            assert len(plans) == 1, log
+            # One plan, or a nightly's attempt and then the full fallback.
+            assert len(plans) == 1 or (len(plans) == 2 and _NIGHTLY in plans[0]), log
             # The helper owns every git question; the step asks none itself.
             assert not any(line.startswith("git ") for line in log), log
-            return plans[0], log, _outputs(out)
+            return plans[-1], log, _outputs(out)
         return run
 
     @pytest.mark.parametrize("event", ["pull_request", "merge_group"])
@@ -1230,6 +1497,102 @@ exit 0
         assert len(outputs["reason"]) == 500
         out = (tmp_path / "github_output").read_text(encoding="utf-8")
         assert sum(line.startswith("gate_set=") for line in out.splitlines()) == 1
+
+    # -- the full nightly's diff shadow (C4) --------------------------------
+
+    BASE: ClassVar[str] = "b" * 40
+    WHY: ClassVar[str] = "whole-codebase run (schedule) — idle-nightly gave no answer"
+    ADVISORY: ClassVar[str] = '[{"set":"diff","index":0}]'
+
+    def _shadow(self, **extra):
+        return {"SHADOW_BASE": self.BASE, "SHADOW_BASE_RUN": "41682296301",
+                "SHADOW_REASON": "diff shadow against run 41682296301 (schedule)"} | extra
+
+    def test_a_full_nightly_with_a_base_plans_its_shadow(self, planner):
+        plan, log, outputs = planner("schedule", **self._shadow(ADVISORY_OUT=self.ADVISORY))
+        assert plan.startswith(".venv/bin/python scripts/mutation_plan.py nightly "), plan
+        assert (" nightly --shards 24 --base %s --base-run 41682296301 --head mergecommit0 "
+                "--stats mutants/mutmut-stats.json --reason %s --out mutation-plan.json"
+                % (self.BASE, self.WHY)) in plan
+        assert any(line.endswith("matrix --plan mutation-plan.json --advisory") for line in log)
+        assert outputs["advisory_matrix"] == self.ADVISORY
+        assert outputs["matrix"] == '[{"set":"full","index":0}]'
+        assert (outputs["gate_set"], outputs["shadow"]) == ("full", "true")
+        assert outputs["reason"] == "w; nightly shadow against bbbbbbbbbbbb"
+
+    def test_a_rerun_plans_full_without_a_shadow(self, planner):
+        plan, log, outputs = planner("schedule", GITHUB_RUN_ATTEMPT="2", **self._shadow())
+        assert ("scripts/mutation_plan.py full --shards 24 --reason %s; no nightly shadow: a "
+                "re-run plans full only --out" % self.WHY) in plan
+        assert not any(_NIGHTLY in line for line in log)
+        assert (outputs["shadow"], outputs["advisory_matrix"]) == ("false", "[]")
+
+    @pytest.mark.parametrize("base", ["", "main", "B" * 40, "b" * 39, "b" * 41, "b" * 63,
+                                      "b" * 40 + " x", "-x"])
+    def test_no_usable_base_plans_full_and_says_why(self, planner, base):
+        plan, log, outputs = planner("schedule", **self._shadow(
+            SHADOW_BASE=base, SHADOW_REASON="no green real whole-codebase run since x"))
+        assert ("--reason %s; no nightly shadow: no green real whole-codebase run since x "
+                "--out" % self.WHY) in plan
+        assert not any(_NIGHTLY in line for line in log)
+        assert outputs["gate_set"] == "full"
+
+    def test_no_base_and_no_reason_still_says_so(self, planner):
+        plan, _, _ = planner("schedule", SHADOW_BASE="")
+        assert "no nightly shadow: nightly-shadow-base named no base --out" in plan
+
+    def test_a_sha256_base_is_planned(self, planner):
+        plan, _, _ = planner("schedule", **self._shadow(SHADOW_BASE="c" * 64))
+        assert " nightly --shards 24 --base %s " % ("c" * 64) in plan
+
+    def test_a_nightly_planner_that_fails_falls_back_to_full(self, planner):
+        plan, log, outputs = planner("schedule", NIGHTLY_FAIL="1", **self._shadow())
+        assert any(" nightly --shards 24 " in line for line in log)
+        assert ("scripts/mutation_plan.py full --shards 24 --reason %s; no nightly shadow: "
+                "the nightly planner did not write a full-gated plan --out" % self.WHY) in plan
+        assert outputs["gate_set"] == "full"
+
+    @pytest.mark.parametrize("written", [
+        '{"gate_set":"diff","reasons":[],"advisory":["full"],"sets":{"diff":{"shards":[["d"]]},"full":{"shards":[["a"]]}}}',
+        '{"gate_set":"full","reasons":[],"advisory":["diff"],"sets":{"diff":{"shards":[["d"]]},"full":{"shards":[]}}}',
+        '{"gate_set":"full","reasons":[],"advisory":["full"],"sets":{"diff":{"shards":[["d"]]},"full":{"shards":[["a"]]}}}',
+        '{"gate_set":"full","reasons":[],"advisory":["diff","x"],"sets":{"diff":{"shards":[["d"]]},"full":{"shards":[["a"]]}}}',
+        '{"gate_set":null,"reasons":[],"sets":{}}',
+        "not json",
+    ], ids=["gated-on-diff", "no-full-shards", "full-advisory", "unknown-advisory", "none",
+            "not-json"])
+    def test_a_plan_the_belt_does_not_recognise_falls_back_to_full(self, planner, written):
+        plan, _, outputs = planner("schedule", NIGHTLY_OVERRIDE=written, **self._shadow())
+        assert "no nightly shadow: the nightly planner did not write a full-gated plan" in plan
+        assert outputs["gate_set"] == "full"
+
+    def test_a_full_alone_answer_from_the_nightly_planner_is_kept(self, planner):
+        # nightly_plan's own fallbacks (not an ancestor, an empty scope, ...)
+        # are full plans with no advisory key, and say why themselves.
+        alone = ('{"gate_set":"full","reasons":["w","no nightly shadow: x"],'
+                 '"sets":{"full":{"shards":[["a"]]}}}')
+        plan, _, outputs = planner("schedule", NIGHTLY_OVERRIDE=alone, **self._shadow())
+        assert " nightly --shards 24 " in plan
+        assert outputs["reason"] == "w; no nightly shadow: x"
+        assert outputs["shadow"] == "false"
+
+    def test_a_dispatch_never_shadows(self, planner):
+        plan, log, outputs = planner("workflow_dispatch", **self._shadow())
+        assert "--reason whole-codebase run (workflow_dispatch) --out" in plan
+        assert not any(_NIGHTLY in line for line in log)
+        assert (outputs["shadow"], outputs["gate_set"]) == ("false", "full")
+
+    def test_an_idle_night_never_shadows(self, planner):
+        plan, log, outputs = planner("schedule", relevant="false", IDLE="true", **self._shadow())
+        assert " none " in plan
+        assert not any(_NIGHTLY in line for line in log)
+        assert outputs["gate_set"] == ""
+
+    @pytest.mark.parametrize("idle", ["mismatch", "rerun"])
+    def test_an_idle_refusal_never_shadows(self, planner, idle):
+        plan, log, _ = planner("schedule", IDLE=idle, **self._shadow())
+        assert "scripts/mutation_plan.py full --shards 24 " in plan
+        assert not any(_NIGHTLY in line for line in log)
 
 
 @needs_bash
@@ -1393,6 +1756,47 @@ def test_the_gate_is_conclusive_for_every_upstream_outcome(
         assert "::error::" in proc.stdout
 
 
+NIGHTLY_ADVISORY = '[{"set":"diff","index":0},{"set":"diff","index":1}]'
+
+
+@needs_bash
+@pytest.mark.parametrize("event, advisory, advisory_matrix, gate_set, shadow, rc", [
+    # a full nightly with its shadow: the advisory legs' result is not read
+    ("schedule", "success", NIGHTLY_ADVISORY, "full", "true", 0),
+    ("schedule", "failure", NIGHTLY_ADVISORY, "full", "true", 0),
+    ("schedule", "cancelled", NIGHTLY_ADVISORY, "full", "true", 0),
+    ("schedule", "skipped", "[]", "full", "false", 0),
+    ("schedule", "skipped", "", "full", "false", 0),
+    ("pull_request", "skipped", "[]", "full", "true", 0),
+    # advisory legs anywhere else are a plan this workflow never writes
+    ("pull_request", "success", NIGHTLY_ADVISORY, "full", "true", 1),
+    ("merge_group", "success", NIGHTLY_ADVISORY, "full", "true", 1),
+    ("workflow_dispatch", "success", NIGHTLY_ADVISORY, "full", "true", 1),
+    ("push", "success", NIGHTLY_ADVISORY, "full", "true", 1),
+    ("schedule", "success", NIGHTLY_ADVISORY, "full", "false", 1),
+    ("schedule", "success", NIGHTLY_ADVISORY, "diff", "true", 1),
+    # the gate set's own work can never be advisory
+    ("schedule", "success", '[{"set":"full","index":0}]', "full", "true", 1),
+    ("schedule", "success", '[{"set":"diff","index":0},{"set":"full","index":3}]',
+     "full", "true", 1),
+])
+def test_advisory_legs_are_legal_only_as_a_full_nightlys_shadow(
+        jobs, tmp_path, event, advisory, advisory_matrix, gate_set, shadow, rc):
+    step = _step(jobs["mutation"], name="upstream jobs must be conclusive")
+    assert step["env"]["ADVISORY_MATRIX"] == "${{ needs.mutation-plan.outputs.advisory_matrix }}"
+    assert step["env"]["EVENT"] == "${{ github.event_name }}"
+    assert step["env"]["ADVISORY"] == "${{ needs.mutation-advisory-shard.result }}"
+    proc = _bash(step, tmp_path, {"PLAN": "success", "SHARDS": "success", "MATRIX": FULL2,
+                                  "GATE_SET": gate_set, "SHADOW": shadow, "EVENT": event,
+                                  "ADVISORY": advisory, "ADVISORY_MATRIX": advisory_matrix})
+    assert proc.returncode == rc, proc.stdout + proc.stderr
+    assert ("::error::" in proc.stdout) is bool(rc)
+    # Echoed for the log, never judged: a red diff leg is evidence, not a verdict.
+    reads = [line for line in step["run"].splitlines()
+             if "$ADVISORY" in line.replace("$ADVISORY_MATRIX", "")]
+    assert reads == [step["run"].splitlines()[0]]
+
+
 def test_full_and_diff_results_download_to_separate_dirs(jobs):
     job = jobs["mutation"]
     downloads = _downloads(job)
@@ -1452,7 +1856,19 @@ def test_the_shadow_report_is_summarised_and_uploaded(jobs):
     assert "Diff-gate shadow" in run
     assert '>> "$GITHUB_STEP_SUMMARY"' in run
     report = _uploads(job)["mutation-shadow-report"]
-    assert report["with"]["path"] == "mutation-shadow-report.md"
+    assert report["with"]["path"].split() == ["mutation-shadow-report.md",
+                                              "mutation-shadow-evidence.json"]
+    # The evidence is collected across weeks (plan Task 7 Step 6), and this
+    # artifact is the only record of a DISAGREE: kept the longest a public
+    # repository allows, so an early stop does not expire before it is read.
+    assert int(report["with"]["retention-days"]) == 90
+    assert "--json mutation-shadow-evidence.json" in run
+    # The report names the run's head as the artifact listing does -- the PR
+    # head on a pull request, not GITHUB_SHA's merge commit -- so `evidence`
+    # can match it to its listed run.
+    assert _step(job, step_id="shadow")["env"]["SHADOW_HEAD_SHA"] == (
+        "${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha"
+        " || github.sha }}")
     assert report["if"] == "needs.mutation-plan.outputs.shadow == 'true'"
     assert "continue-on-error" not in report
     # After the shadow step, before the merge: a red full gate is exactly the
@@ -1471,6 +1887,10 @@ def test_the_shadow_report_is_summarised_and_uploaded(jobs):
     (0, 2, 1),   # an incomplete comparison
     (2, 2, 1),   # unrun diff results
     (2, 0, 1),
+    (0, 3, 0),   # VACUOUS: too few mutants to count, which is not an error
+    (1, 3, 0),
+    (2, 3, 1),   # ... but unrun diff results still are
+    (0, 4, 1),   # an exit compare never gives: it crashed
 ])
 def test_the_shadow_step_fails_visibly_on_disagreement(
         jobs, tmp_path, gate_rc, compare_rc, rc):
@@ -1502,6 +1922,9 @@ exit 99
     # verdict in the job summary a reader would take for the binding one.
     assert "### Mutation (diff scope): STUB" in report
     assert summary.read_text(encoding="utf-8") == report
+    vacuous = "::notice::diff-gate shadow: VACUOUS — this report does not count toward the bar"
+    assert (vacuous in proc.stdout) is (compare_rc == 3)
+    assert ("::error::diff-gate shadow:" in proc.stdout) is bool(rc)
 
 
 @needs_bash
@@ -1556,6 +1979,64 @@ def test_a_flat_download_of_several_planned_shards_stays_red(jobs, tmp_path):
     proc = _bash(step, tmp_path, {"MATRIX": SHADOW3})
     assert proc.returncode == 1, proc.stdout + proc.stderr
     assert not (root / "full" / "mutation-full-shard-0").exists()
+
+
+@needs_bash
+@pytest.mark.parametrize("present, rc, warned", [
+    (["full/mutation-full-shard-0", "full/mutation-full-shard-1",
+      "diff/mutation-diff-shard-0", "diff/mutation-diff-shard-1"], 0, []),
+    # A missing advisory leg is a warning: the comparison says INCOMPLETE.
+    (["full/mutation-full-shard-0", "full/mutation-full-shard-1",
+      "diff/mutation-diff-shard-0"], 0, ["diff 1"]),
+    (["full/mutation-full-shard-0", "full/mutation-full-shard-1"], 0, ["diff 0", "diff 1"]),
+    # A missing full leg is still the gate's hole.
+    (["full/mutation-full-shard-0", "diff/mutation-diff-shard-0",
+      "diff/mutation-diff-shard-1"], 1, []),
+])
+def test_a_nightlys_advisory_legs_are_checked_but_never_gate(jobs, tmp_path, present, rc,
+                                                             warned):
+    job = jobs["mutation"]
+    step = _step(job, name="every planned shard uploaded results")
+    assert step["env"]["ADVISORY_MATRIX"] == (
+        "${{ needs.mutation-plan.outputs.advisory_matrix }}")
+    root = Path(_downloads(job)["mutation-full-shard-*"]["with"]["path"]).parent
+    for rel in present:
+        (tmp_path / root / rel).mkdir(parents=True)
+    proc = _bash(step, tmp_path, {"MATRIX": FULL2, "ADVISORY_MATRIX": NIGHTLY_ADVISORY})
+    assert proc.returncode == rc, proc.stdout + proc.stderr
+    got = [line for line in proc.stdout.splitlines() if line.startswith("::warning::")]
+    assert got == ["::warning::no results from advisory %s shard %s — the shadow "
+                   "comparison will say INCOMPLETE" % tuple(w.split()) for w in warned]
+
+
+@needs_bash
+def test_a_lone_advisory_leg_downloaded_flat_is_put_back(jobs, tmp_path):
+    job = jobs["mutation"]
+    step = _step(job, name="every planned shard uploaded results")
+    root = tmp_path / Path(_downloads(job)["mutation-full-shard-*"]["with"]["path"]).parent
+    for i in range(2):
+        (root / "full" / ("mutation-full-shard-%d" % i)).mkdir(parents=True)
+    (root / "diff").mkdir()
+    (root / "diff" / "m.py.meta").write_text("{}", encoding="utf-8")
+    proc = _bash(step, tmp_path, {"MATRIX": FULL2,
+                                  "ADVISORY_MATRIX": '[{"set":"diff","index":0}]'})
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert (root / "diff" / "mutation-diff-shard-0" / "m.py.meta").is_file()
+    assert "::warning::" not in proc.stdout
+
+
+@needs_bash
+@pytest.mark.parametrize("advisory", ["", "[]"])
+def test_a_plan_with_no_advisory_legs_checks_as_before(jobs, tmp_path, advisory):
+    job = jobs["mutation"]
+    step = _step(job, name="every planned shard uploaded results")
+    root = tmp_path / Path(_downloads(job)["mutation-full-shard-*"]["with"]["path"]).parent
+    for rel in ("full/mutation-full-shard-0", "full/mutation-full-shard-1",
+                "diff/mutation-diff-shard-0"):
+        (root / rel).mkdir(parents=True)
+    proc = _bash(step, tmp_path, {"MATRIX": SHADOW3, "ADVISORY_MATRIX": advisory})
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "::warning::" not in proc.stdout
 
 
 def test_the_planner_runs_the_mutmut_backed_tests(jobs):

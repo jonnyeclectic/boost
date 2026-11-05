@@ -106,12 +106,29 @@ def test_every_shards_flag_in_the_workflows_matches(path):
         % (path.name, sorted(set(found)), ms.SHARDS))
 
 
+#: A job's key line in ci.yml: two spaces in, a bare `name:` and nothing
+#: after it. `on:`'s events and `permissions:`'s scopes sit at the same depth,
+#: but the events all come before `jobs:` and the scopes carry a value.
+_JOB_KEY = re.compile(r"^  ([A-Za-z0-9_-]+):[ \t]*$", re.M)
+
+
 def _shard_job(text: str | None = None) -> str:
-    """`mutation-shard`'s block of ci.yml, not some other job's."""
+    """`mutation-shard`'s block of ci.yml, not some other job's.
+
+    From its key line to the next job's key line, whichever job that is. It
+    used to end at `mutation:`, the job after it then; `mutation-advisory-
+    shard`, a full nightly's advisory diff legs, now sits between the two
+    with the same mutate step (pinned equal in test_mutation_plan.py), and a
+    block running on to `mutation:` would hold two `mutmut run` steps. Two
+    `mutation-shard:` keys, or none, fail rather than pick one.
+    """
     body = _ci() if text is None else text
-    start = body.index("  mutation-shard:")
-    end = body.index("\n  mutation:", start)
-    return body[start:end]
+    keys = list(_JOB_KEY.finditer(body))
+    at = [i for i, m in enumerate(keys) if m.group(1) == "mutation-shard"]
+    assert len(at) == 1, "expected one `mutation-shard:` job, found %d" % len(at)
+    i = at[0]
+    end = keys[i + 1].start() if i + 1 < len(keys) else len(body)
+    return body[keys[i].start():end]
 
 
 def job_timeout_minutes(text: str | None = None) -> int:
@@ -125,11 +142,13 @@ def step_timeout_minutes(text: str | None = None) -> int:
     """The `timeout-minutes` of the step that runs `mutmut run`.
 
     Found by what the step runs, not by its name, and only on a line that
-    runs it: the comments in that step say "`mutmut run`" too.
+    runs it: the comments in that step say "`mutmut run`" too. A one-line
+    `run: ... mutmut run` counts as well as a block, so a second mutate step
+    written either way makes two and fails rather than going unseen.
     """
     steps = re.split(r"^      - ", _shard_job(text), flags=re.M)[1:]
     mutate = [s for s in steps
-              if re.search(r"^\s+[^#\s]\S*mutmut run\b", s, re.M)]
+              if re.search(r"^\s*(?:run:\s+)?[^#\s]\S*mutmut run\b", s, re.M)]
     assert len(mutate) == 1, (
         "expected one mutation-shard step that runs `mutmut run`, found %d"
         % len(mutate))
@@ -170,12 +189,11 @@ def check_step_fires_first(text: str | None = None) -> None:
                                          OUTSIDE_THE_STEP_MAX_MIN))
 
 
-def _synthetic_ci(job: int, step: int) -> str:
+def _shard_block(name: str, job: int, step: int) -> str:
     # A step before the mutate step carries its own cap, so a reader that
     # takes the first step-level number reads the wrong one.
     return (
-        "jobs:\n"
-        "  mutation-shard:\n"
+        "  %s:\n"
         "    runs-on: ubuntu-latest\n"
         "    timeout-minutes: %d\n"
         "    steps:\n"
@@ -189,9 +207,22 @@ def _synthetic_ci(job: int, step: int) -> str:
         "          .venv/bin/mutmut run -- \"${MUTMUT_ARGS[@]}\"\n"
         "      - name: upload shard results\n"
         "        run: true\n"
-        "  mutation:\n"
-        "    timeout-minutes: 20\n"
-    ) % (job, step)
+    ) % (name, job, step)
+
+
+def _synthetic_ci(job: int, step: int, twin: tuple[int, int] | None = None) -> str:
+    """ci.yml's shape: `mutation-shard`, optionally its advisory twin, `mutation`.
+
+    ``twin`` is the (job, step) caps of a `mutation-advisory-shard` placed
+    where ci.yml places it, between `mutation-shard` and `mutation`, with the
+    same `mutmut run` step.
+    """
+    return ("jobs:\n" + _shard_block("mutation-shard", job, step)
+            + ("" if twin is None else
+               "  # The diff legs of a full nightly's shadow.\n"
+               + _shard_block("mutation-advisory-shard", *twin))
+            + "  mutation:\n"
+            "    timeout-minutes: 20\n")
 
 
 class TestWhichCapFires:
@@ -218,6 +249,77 @@ class TestWhichCapFires:
     def test_the_committed_check_scores_the_step(self):
         assert timeout_minutes() == step_timeout_minutes()
         assert timeout_minutes() != job_timeout_minutes()
+
+    # The advisory twin. A full nightly's diff legs run in
+    # `mutation-advisory-shard` with `mutation-shard`'s steps, placed between
+    # it and `mutation`. The checks above read `mutation-shard` and only it.
+
+    @pytest.mark.parametrize("twin", [(200, 190), (300, 290), (160, 145)],
+                             ids=["same-caps", "higher-caps", "lower-caps"])
+    def test_an_advisory_twin_after_the_shard_job_is_not_read(self, twin):
+        # Its caps never stand in for the shard job's, whichever way they
+        # differ, and its identical step is not a second mutate step.
+        text = _synthetic_ci(200, 190, twin=twin)
+        assert job_timeout_minutes(text) == 200
+        assert step_timeout_minutes(text) == 190
+        assert timeout_minutes(text) == 190
+        check_step_fires_first(text)
+        assert "mutation-advisory-shard" not in _shard_job(text)
+
+    def test_the_committed_twin_sits_outside_the_block_read(self):
+        # The case above, on the real file: the twin exists, after the shard
+        # job, and the block the caps are read from stops before it.
+        body = _ci()
+        assert body.index("\n  mutation-shard:\n") < body.index(
+            "\n  mutation-advisory-shard:\n") < body.index("\n  mutation:\n")
+        assert "\n  mutation-advisory-shard:" not in _shard_job()
+
+    @pytest.mark.parametrize("claim", [
+        "it is the one the headroom check in tests/unit/test_mutation_shard_count.py scores",
+        "see the block above the job's cap",
+    ])
+    def test_only_the_shard_jobs_step_claims_to_be_scored(self, claim):
+        # The twin's steps are `mutation-shard`'s verbatim, but comments are
+        # not steps: a copy of "this is the cap the headroom check scores" on
+        # the twin's step, or of the pointer to the measurements above the
+        # job's cap, sends whoever tunes the twin to a check that never reads
+        # it and a block that holds no such numbers. Comment text is joined
+        # per job block, so a claim wrapped over two lines still counts.
+        body = _ci()
+        keys = list(_JOB_KEY.finditer(body))
+        found = []
+        for i, key in enumerate(keys):
+            end = keys[i + 1].start() if i + 1 < len(keys) else len(body)
+            said = " ".join(m.group(1) for m in re.finditer(
+                r"^[ \t]*#[ \t]?(.*)$", body[key.start():end], re.M))
+            found += [key.group(1)] * " ".join(said.split()).count(claim)
+        assert found == ["mutation-shard"]
+
+    @pytest.mark.parametrize("second", [
+        "      - name: mutate again\n"
+        "        timeout-minutes: 100\n"
+        "        run: |\n"
+        "          .venv/bin/mutmut run\n",
+        "      - name: mutate again\n"
+        "        timeout-minutes: 100\n"
+        "        run: .venv/bin/mutmut run\n",
+        "      - run: .venv/bin/mutmut run\n"
+        "        timeout-minutes: 100\n",
+    ], ids=["block", "one-line", "unnamed"])
+    def test_two_mutate_steps_in_the_shard_job_still_fail_closed(self, second):
+        # Scoping the block must not turn "which step?" into a guess.
+        text = _synthetic_ci(200, 190).replace(
+            "      - name: upload shard results\n",
+            second + "      - name: upload shard results\n", 1)
+        with pytest.raises(AssertionError, match="found 2"):
+            step_timeout_minutes(text)
+
+    @pytest.mark.parametrize("count", [0, 2])
+    def test_a_shard_job_missing_or_doubled_fails_closed(self, count):
+        one = _shard_block("mutation-shard", 200, 190)
+        text = "jobs:\n" + one * count + "  mutation:\n    timeout-minutes: 20\n"
+        with pytest.raises(AssertionError, match="found %d" % count):
+            _shard_job(text)
 
 
 class TestHeadroom:

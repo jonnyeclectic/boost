@@ -161,7 +161,12 @@ jobs:
             // (scripts/ci_proven_tree.py, fact 3). A red extended leg alone
             // does not -- every push runs those legs itself -- so the note
             // names both halves rather than reading as a mutation failure, and
-            // says which one costs the skip.
+            // says which one costs the skip. Nor does a red job of a nightly's
+            // diff shadow (`nightly-shadow-base`, `mutation-advisory-shard`):
+            // both are job-level continue-on-error, so neither makes the run
+            // red or opens this issue, and fact 3 drops them before it reads
+            // the page. They can still be red beside a red extended leg, so a
+            // nightly's note says they do not count.
             //
             // And, on a nightly, what NOT to do about a red extended leg. An
             // idle nightly (it planned no mutation run and inherited an
@@ -180,6 +185,10 @@ jobs:
                 'hand (`workflow_dispatch`)' + extended,
             };
             const which = run.name === 'ci' ? wholeCodebase[run.event] : undefined;
+            const advisory = run.event === 'schedule'
+              ? ' (a red `nightly-shadow-base` or `mutation-advisory-shard` ' +
+                'job does not count: both are advisory)'
+              : '';
             const noRerun = run.event === 'schedule'
               ? ' If only `tests-extended` failed, do not use "Re-run failed ' +
                 'jobs" on this run: the re-run is attempt 2, and a nightly ' +
@@ -193,7 +202,7 @@ jobs:
             const noRelease = which
               ? `\n\nThis was ${which}. **No release was involved** — ` +
                 '`publish.yml` releases only from a `push` run. Unless only ' +
-                '`tests-extended` failed, every push to main runs the full ' +
+                '`tests-extended` failed' + advisory + ', every push to main runs the full ' +
                 'gate instead of skipping as proven until a newer ' +
                 'whole-codebase run on main passes; a red `tests-extended` ' +
                 'leg alone does not, since every push to main runs those legs ' +
