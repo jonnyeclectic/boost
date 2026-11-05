@@ -71,11 +71,14 @@ GITHUB_CEILING = 360
 # 2026-10-22 it is `store._copy_skill`, imputed at 12.3M ms, so
 # (52.4 mutating + 10.0 fixed) x 1.91 = 119.2, 99% of 120. At twenty-four
 # shards `mutation_shards.py plan --explain` puts that at 75% of 160. Main
-# run 39729763526 lost shard 7 at 120 on three attempts, and
-# `tests/unit/test_mutation_shard_count.py` already fails the build if the
-# pack ever needs more than 80% of this number.
+# run 39729763526 lost shard 7 at 120 on three attempts. On 2026-11-04 the
+# weights from nightly 41682296301 put the floor shard (store.install alone)
+# at a 134.4-minute tail. The cap went to 200 for the job and 190 for its
+# mutate step, which fires first, and the tail is 71% of 190.
+# `tests/unit/test_mutation_shard_count.py` fails the build if the pack ever
+# needs more than 80% of the step's cap, and if that cap is not under this one.
 JUSTIFIED_LONGER = {("shards.yml", "build"): 330,
-                    ("ci.yml", "mutation-shard"): 160}
+                    ("ci.yml", "mutation-shard"): 200}
 
 CI = WORKFLOWS / "ci.yml"
 

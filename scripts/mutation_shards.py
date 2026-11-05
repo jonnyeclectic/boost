@@ -89,8 +89,10 @@ Ratios, and the one question they cannot answer
 Everything above is scale-free: the packer needs only that one unit is twice
 another, so the weights can be in any unit that is consistent with itself, and
 they are in summed per-mutant milliseconds. That was fine until it was asked a
-question in a different unit. ``ci.yml`` caps each shard at ``timeout-minutes``;
-a cancelled shard fails the aggregate ``mutation`` job; a ``ci`` run that is
+question in a different unit. ``ci.yml`` caps each shard at ``timeout-minutes``,
+twice: on the job, and lower on the step that runs ``mutmut run``, which is
+nearly the whole job, so the step's cap is the one a slow shard reaches. A
+cancelled shard fails the aggregate ``mutation`` job; a ``ci`` run that is
 *cancelled* rather than *failed* does not satisfy ``publish.yml``'s
 ``conclusion == 'success'``; so a merge to main stops shipping, quietly. That
 happened on the merge of #1015, with ``plan --explain`` reporting ``7391040``
@@ -229,6 +231,20 @@ RUNNER_EFFICIENCY = 0.98
 #: and the clean and forced-fail runs, about 1.7. Why stats grew back toward
 #: the 6.9 it reached with the planner tests in it has not been measured. The
 #: ci.yml block above ``timeout-minutes`` has the rest of that re-pack.
+#:
+#: **Kept at 10.0 on 2026-11-04, though the median fell, because the floor
+#: shard pays more.** Over 168 successful full-shard jobs of seven runs
+#: (2026-11-02..04, listed in ci.yml) the preamble's median was 4.80 min. It
+#: depends on what the shard holds. The 154 jobs whose shard held a
+#: whole-file unit paid a median 4.54 (2.30-12.16). The 14 whose shard held
+#: only per-function units paid 11.30 (7.68-12.00). Nearly all of the
+#: difference is in mutmut's ``Running clean tests``, a median 7.88 min
+#: against 1.72. Why that run is longer for such a shard has not been
+#: measured. On the 2026-11-03 weights the floor shard is ``store.install``
+#: alone, one of those, so 10.0 is 1.3 min under what that shard pays. At
+#: 11.3 its tail would be 136.9 min, 72% of the mutate step's 190 against
+#: 71% at 10.0, so the verdict does not move. Lowering this to the overall
+#: median would score the floor shard 6.5 min short of its own preamble.
 FIXED_MINUTES = 10.0
 
 #: How much worse the *worst* run of a shard is than that shard's median.
@@ -300,9 +316,10 @@ FIXED_MINUTES = 10.0
 #: over, and the margin is currently doing real work.
 TAIL_MULTIPLIER = 1.91
 
-#: Fraction of ``timeout-minutes`` the predicted tail may reach before
-#: ``plan --timeout-minutes`` calls the pack unsafe. 0.80 leaves the slowest
-#: shard a fifth of the cap in hand; the pack that was cancelled scored 0.97.
+#: Fraction of the mutate step's ``timeout-minutes`` the predicted tail may
+#: reach before ``plan --timeout-minutes`` calls the pack unsafe. 0.80 leaves
+#: the slowest shard a fifth of the cap in hand; the pack that was cancelled
+#: scored 0.97.
 HEADROOM = 0.80
 
 #: "No override is in force", which is a different state from "the override is
@@ -809,8 +826,9 @@ def unmeasured_share(unit: Unit, recorded: dict[str, int], total: int) -> int:
     used to get a share of 1 -- one millisecond out of ``store.py``'s 53
     million. So a PR that adds functions to a split file put every one of them
     in whichever shard was lightest by a hair: 23 of them all landed in shard
-    9 of run 41251356192, which then ran 4,289 mutants against main's 3,828 and
-    hit its 145-minute timeout on both attempts with six left. Priced by size
+    9 of run 41251356192, which then ran 4,289 mutants against main's 3,828:
+    its first attempt lost its runner at 143.2 minutes, and its second hit the
+    145-minute step timeout (job 124732016551). Priced by size
     at the file's own measured rate, they spread like any other unit until the
     next measured run records them.
     """
@@ -955,7 +973,8 @@ def headroom_report(loads: list[int], cap: int) -> tuple[bool, list[str]]:
     budget = cap * HEADROOM
     safe = tail <= budget
     lines = [
-        "timeout     : %d min (ci.yml), budget %.1f min at %.0f%% headroom"
+        "timeout     : %d min (ci.yml's mutate step), budget %.1f min at"
+        " %.0f%% headroom"
         % (cap, budget, HEADROOM * 100),
         "slowest tail: %.1f min  (%.1f min median = %.1f fixed + %.1f"
         " mutating, x %.2f slow-runner)"
@@ -1673,7 +1692,9 @@ def main() -> int:
     p.add_argument("--index", type=int)
     p.add_argument("--explain", action="store_true", help="print the whole split instead")
     p.add_argument("--timeout-minutes", type=int,
-                   help="ci.yml's per-shard ceiling; with --explain, exit 1 "
+                   help="ci.yml's per-shard ceiling: the mutate step's "
+                        "timeout-minutes, which fires before the job's; "
+                        "with --explain, exit 1 "
                         "when the slowest shard's predicted tail reaches it "
                         "(requires --explain — the --index path's stdout is "
                         "captured into mutmut's argv and must stay patterns)")
