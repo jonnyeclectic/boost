@@ -515,6 +515,33 @@ def _mark_whole_runs(routes):
     return routes
 
 
+def jobs_path(run_id):
+    """A run's jobs, latest attempt: the base's push run and a nightly alike."""
+    return "actions/runs/%d/jobs?filter=latest&per_page=100" % run_id
+
+
+def with_whole_jobs(routes):
+    """Give each whole-codebase run a jobs listing whose `mutation` ended as
+    the run did, unless the test routed that listing itself.
+
+    The nightly's verdict is read off its `mutation` job first (fact 3), so
+    this keeps a test written as "a red nightly" about a red nightly. A test
+    about the two disagreeing routes the listing itself.
+    """
+    for path in (SCHEDULE, DISPATCH):
+        listing = routes.get(path)
+        found = listing.get("workflow_runs") if isinstance(listing, dict) else None
+        for item in found if isinstance(found, list) else ():
+            ident = item.get("id") if isinstance(item, dict) else None
+            if isinstance(ident, int) and not isinstance(ident, bool):
+                routes.setdefault(jobs_path(ident), {"total_count": 2, "jobs": [
+                    {"id": 8000, "name": "mutation-plan", "status": "completed",
+                     "conclusion": "success", "run_id": ident},
+                    {"id": 8001, "name": "mutation", "status": "completed",
+                     "conclusion": item.get("conclusion"), "run_id": ident}]})
+    return routes
+
+
 def green_routes(**overrides):
     """A push that is fully proven: one PR, equal trees, green run, green nightly.
 
@@ -540,7 +567,7 @@ def green_routes(**overrides):
             if isinstance(ident, int) and not isinstance(ident, bool):
                 routes.setdefault(artifacts_path(ident),
                                   artifacts(artifact(run_id=ident)))
-    return _mark_whole_runs(routes)
+    return _mark_whole_runs(with_whole_jobs(routes))
 
 
 # --------------------------------------------------------------------------
@@ -569,8 +596,9 @@ def test_gather_asks_the_documented_endpoints_and_nothing_else():
         artifacts_path(7),
         SCHEDULE,
         DISPATCH,
-        # A green newest whole-codebase run is asked what it was: a real run
-        # here, so nothing more.
+        # The newest whole-codebase run's `mutation` job (its verdict), then,
+        # that being green, what the run was: a real run here, so nothing more.
+        jobs_path(100),
         whole_artifacts_path(100),
     ])
 
@@ -1519,7 +1547,7 @@ def test_the_default_opener_refuses_redirects_so_the_token_stays_on_github():
 # planned `none`, went green and released. The lookup below is what
 # mutation-plan now asks before any push -- proven or not -- may plan `none`.
 # Only one shape is green (the base's `mutation` completed with success, and
-# the newest whole-codebase run on main concluded success), and nothing it
+# the newest whole-codebase run on main has a green `mutation`), and nothing it
 # does may move the proven decision's `skip`, nor the other way round.
 
 BEFORE = "d" * 40           # the push's github.event.before
@@ -1532,7 +1560,7 @@ def base_runs_path(before=BEFORE):
 
 
 def base_jobs_path(run_id=BASE_RUN):
-    return "actions/runs/%d/jobs?filter=latest&per_page=100" % run_id
+    return jobs_path(run_id)
 
 
 def push_run(run_id=BASE_RUN, **kwargs):
@@ -1562,7 +1590,7 @@ def base_routes(**overrides):
         DISPATCH: runs(),
     }
     routes.update(overrides)
-    return _mark_whole_runs(routes)
+    return _mark_whole_runs(with_whole_jobs(routes))
 
 
 BEFORE_ARGV = [*ARGV, "--before", BEFORE]
@@ -1570,12 +1598,13 @@ BEFORE_ARGV = [*ARGV, "--before", BEFORE]
 
 def test_a_green_base_is_green_and_asks_exactly_its_endpoints():
     # The base's run, its jobs, then the two whole-codebase queries -- last,
-    # because a base that is red on its own needs no nightly to say so -- and
-    # the green nightly's marker (a real run: nothing more).
+    # because a base that is red on its own needs no nightly to say so -- then
+    # the nightly's `mutation` job and, that being green, its marker (a real
+    # run: nothing more).
     api = FakeApi(base_routes())
     assert pt.base_mutation(api, BEFORE) == pt.BaseVerdict(True, "success")
     assert api.calls == [base_runs_path(), base_jobs_path(), SCHEDULE, DISPATCH,
-                         whole_artifacts_path(100)]
+                         jobs_path(100), whole_artifacts_path(100)]
 
 
 def test_the_incident_base_is_not_green():
@@ -1821,6 +1850,195 @@ def test_base_mutation_lets_api_errors_raise():
         pt.base_mutation(api, BEFORE)
 
 
+# --- the nightly is judged by its `mutation` job, not by the run ----------
+#
+# A whole-codebase run is the mutation jobs plus `tests-extended`. Read as a
+# whole, one red or timed-out extended leg on the nightly put every later push
+# on the full 24-shard run and the full `tests` matrix until someone reran the
+# leg, for nothing: the push runs those legs itself before it can release, and
+# a platform failure says nothing about the score. ci-failure-issue.yml still
+# alarms on the run, so the red leg is reported regardless. That leg is the
+# only red looked past: a run red on any other job stays red.
+
+EXTENDED_RED = "tests-extended (windows-latest, 3.14)"
+
+
+def nightly_jobs(mutation="success", *, run_id=100, extended="failure", **kwargs):
+    """The nightly's jobs: the planner, one extended leg, and `mutation`."""
+    return job_list(job("mutation-plan", run_id=run_id),
+                    job(EXTENDED_RED, conclusion=extended, run_id=run_id),
+                    job(conclusion=mutation, run_id=run_id, **kwargs))
+
+
+def red_run_nightly(**overrides):
+    """A nightly whose run is red only because an extended leg failed."""
+    return {SCHEDULE: runs(run(100, event="schedule", head_sha=SHA,
+                               conclusion="failure")),
+            jobs_path(100): nightly_jobs(), **overrides}
+
+
+def test_a_red_extended_leg_beside_a_green_mutation_is_a_green_nightly():
+    api = FakeApi(green_routes(**red_run_nightly()))
+    merge_tree, cands, last = pt.gather(api, SHA)
+    assert last == pt.Nightly("success", datetime(2026, 10, 30, 10, tzinfo=UTC))
+    assert pt.decide(merge_tree, cands, last, now=NOW) == pt.Decision(True, ANY, 7)
+    assert pt.base_mutation(FakeApi(base_routes(**red_run_nightly())), BEFORE) \
+        == pt.BaseVerdict(True, "success")
+
+
+def test_main_a_red_extended_leg_on_the_nightly_neither_unproves_nor_widens(gh_env):
+    # The reviewer's sequence: mutation green, a windows leg red, so the run
+    # concluded failure. Neither answer may read that as a red nightly.
+    api = FakeApi(green_routes(**base_routes(**red_run_nightly())))
+    assert pt.main(BEFORE_ARGV, api=api, env=gh_env) == 0
+    assert _all_outputs(gh_env) == {"skip": "true", "pr_run_id": "7",
+                                    "base_mutation_green": "true",
+                                    "base_mutation": "success"}
+    assert "passed mutation" in _summary(gh_env)
+
+
+@pytest.mark.parametrize("listing", [
+    job_list(job("idle-nightly", conclusion="failure", run_id=100),
+             job("mutation-plan", run_id=100), job(run_id=100)),
+    job_list(job("idle-nightly", conclusion="cancelled", run_id=100),
+             job(EXTENDED_RED, run_id=100), job(run_id=100)),
+    job_list(job("idle-nightly", status="in_progress", conclusion=None, run_id=100),
+             job(run_id=100)),
+    job_list(job("tests-extended-shadow", run_id=100), job(run_id=100)),
+    job_list(job("mutation-plan", run_id=100), job(run_id=100)),
+], ids=["idle-nightly-red", "idle-nightly-and-extended-red", "idle-nightly-running",
+        "a-name-that-only-starts-like-it", "nothing-red-on-the-page"])
+def test_a_red_run_is_looked_past_for_extended_legs_and_nothing_else(listing, gh_env):
+    # The run concluded failure and `mutation` passed. Before tests-extended
+    # the run's conclusion was the verdict, and it refused every one of these;
+    # so does fact 3, and the base with it.
+    routes = red_run_nightly(**{jobs_path(100): listing})
+    _, cands, last = pt.gather(FakeApi(green_routes(**routes)), SHA)
+    assert last.conclusion == pt.RED_BEYOND_EXTENDED
+    decision = pt.decide(TREE, cands, last, now=NOW)
+    assert decision.skip is False
+    assert "tests-extended legs are not all that was red" in decision.reason
+    assert pt.base_mutation(FakeApi(base_routes(**routes)), BEFORE) \
+        == pt.BaseVerdict(False, "nightly-" + pt.RED_BEYOND_EXTENDED)
+    pt.main(BEFORE_ARGV, api=FakeApi(green_routes(**base_routes(**routes))), env=gh_env)
+    assert _all_outputs(gh_env) == {"skip": "false", "pr_run_id": "",
+                                    "base_mutation_green": "false",
+                                    "base_mutation": "nightly-red_beyond_extended"}
+
+
+def test_a_dispatch_red_only_on_an_extended_leg_skips_idle_nightly_and_stays_green():
+    # A dispatch lists `idle-nightly` as skipped: skipped is not red.
+    routes = {SCHEDULE: runs(), DISPATCH: runs(run(100, event="workflow_dispatch",
+                                                   head_sha=SHA, conclusion="failure")),
+              jobs_path(100): job_list(job("idle-nightly", conclusion="skipped", run_id=100),
+                                       job(EXTENDED_RED, run_id=100,
+                                           conclusion="timed_out"),
+                                       job(run_id=100))}
+    merge_tree, cands, last = pt.gather(FakeApi(green_routes(**routes)), SHA)
+    assert last.conclusion == "success"
+    assert pt.decide(merge_tree, cands, last, now=NOW).skip is True
+    assert pt.base_mutation(FakeApi(base_routes(**routes)), BEFORE) \
+        == pt.BaseVerdict(True, "success")
+
+
+@pytest.mark.parametrize("conclusion", ["failure", "cancelled", "skipped", "timed_out",
+                                        "neutral", "Success", "", None])
+def test_a_green_run_whose_mutation_job_is_not_green_is_a_red_nightly(conclusion):
+    # The run's own `success` is not what is read: a `mutation` that did not
+    # pass (a continue-on-error added one day, say) refuses both answers.
+    routes = {SCHEDULE: runs(run(100, event="schedule", head_sha=SHA)),
+              jobs_path(100): nightly_jobs(conclusion, extended="success")}
+    _, cands, last = pt.gather(FakeApi(green_routes(**routes)), SHA)
+    assert last.conclusion != "success"
+    decision = pt.decide(TREE, cands, last, now=NOW)
+    assert decision.skip is False
+    assert "mutation job of the latest whole-codebase run" in decision.reason
+    verdict = pt.base_mutation(FakeApi(base_routes(**routes)), BEFORE)
+    assert verdict.green is False
+    assert verdict.word.startswith("nightly-")
+
+
+def test_a_red_mutation_job_names_its_conclusion():
+    routes = red_run_nightly(**{jobs_path(100): nightly_jobs("failure")})
+    _, cands, last = pt.gather(FakeApi(green_routes(**routes)), SHA)
+    assert last.conclusion == "failure"
+    assert "mutation job of the latest whole-codebase run on main concluded failure" \
+        in pt.decide(TREE, cands, last, now=NOW).reason
+    assert pt.base_mutation(FakeApi(base_routes(**routes)), BEFORE) \
+        == pt.BaseVerdict(False, "nightly-failure")
+
+
+@pytest.mark.parametrize("status", ["in_progress", "queued", "waiting", None])
+def test_a_mutation_job_that_has_not_completed_is_not_a_green_nightly(status):
+    # A completed run cannot hold one; if the listing says so anyway, the
+    # status is what is reported, and only `success` is green.
+    routes = red_run_nightly(**{jobs_path(100): nightly_jobs("success", status=status)})
+    last = pt.gather(FakeApi(green_routes(**routes)), SHA)[2]
+    assert last.conclusion == (status or "unknown")
+    assert pt.base_mutation(FakeApi(base_routes(**routes)), BEFORE).green is False
+
+
+def test_only_the_newest_whole_codebase_run_has_its_jobs_listed():
+    api = FakeApi(green_routes(**{
+        SCHEDULE: runs(run(100, event="schedule", conclusion="failure",
+                           created="2026-10-30T09:30:00Z")),
+        DISPATCH: runs(run(101, event="workflow_dispatch",
+                           created="2026-10-31T08:00:00Z"))}))
+    assert pt.gather(api, SHA)[2].conclusion == "success"
+    assert [c for c in api.calls if "/jobs?" in c] == [jobs_path(101)]
+
+
+def test_a_whole_codebase_run_that_is_not_completed_has_no_jobs_listed():
+    api = FakeApi(green_routes(**{SCHEDULE: runs(run(
+        100, event="schedule", status="in_progress", conclusion=None))}))
+    assert pt.gather(api, SHA)[2] is None
+    assert not any("/jobs?" in c for c in api.calls)
+
+
+@pytest.mark.parametrize("listing, match", [
+    (job_list(job("mutation-plan", run_id=100), job(EXTENDED_RED, run_id=100)),
+     "lists no mutation job"),
+    (job_list(), "lists no mutation job"),
+    (job_list(job(run_id=100), job(run_id=100)), "2 jobs named mutation"),
+    (job_list(job(run_id=101)), "belongs to run"),
+    (job_list(job(run_id="100")), "belongs to run"),
+    (job_list(job(run_id=100), total=101), "more than one page"),
+    (job_list(job(run_id=100), total=None) | {"total_count": "1"}, "total_count"),
+    ({"jobs": "mutation"}, "no jobs list"),
+])
+def test_a_nightly_jobs_listing_that_cannot_be_read_is_an_error(listing, match):
+    # A completed whole-codebase run with no `mutation` contradicts ci.yml,
+    # where it runs on every event under always(): unknown, so a full run.
+    routes = red_run_nightly(**{jobs_path(100): listing})
+    with pytest.raises(ValueError, match=match):
+        pt.gather(FakeApi(green_routes(**routes)), SHA)
+    with pytest.raises(ValueError, match=match):
+        pt.base_mutation(FakeApi(base_routes(**routes)), BEFORE)
+
+
+def test_main_a_nightly_without_a_mutation_job_is_an_error_in_both_answers(gh_env):
+    routes = red_run_nightly(**{jobs_path(100): job_list(job("mutation-plan", run_id=100))})
+    pt.main(BEFORE_ARGV, api=FakeApi(green_routes(**base_routes(**routes))), env=gh_env)
+    assert _all_outputs(gh_env) == {"skip": "false", "pr_run_id": "",
+                                    "base_mutation_green": "false",
+                                    "base_mutation": "error"}
+    assert "error: ValueError" in _summary(gh_env)
+
+
+@pytest.mark.parametrize("ident", [None, "100", True, 1.0])
+def test_a_whole_codebase_run_without_an_integer_id_is_an_error(ident):
+    lone = run(100, event="schedule")
+    lone["id"] = ident
+    with pytest.raises(ValueError, match="integer id"):
+        pt.gather(FakeApi(green_routes(**{SCHEDULE: runs(lone)})), SHA)
+
+
+def test_a_nightly_jobs_lookup_error_raises():
+    routes = red_run_nightly(**{jobs_path(100): urllib.error.URLError("x")})
+    with pytest.raises(urllib.error.URLError):
+        pt.gather(FakeApi(green_routes(**routes)), SHA)
+
+
 # --- through main: the two outputs, and their independence from `skip` ----
 
 def test_main_writes_a_green_base_beside_an_unchanged_proven_verdict(gh_env):
@@ -1902,7 +2120,7 @@ def test_a_bad_sha_still_lets_the_base_answer(gh_env):
                                     "base_mutation_green": "true",
                                     "base_mutation": "success"}
     assert api.calls == [base_runs_path(), base_jobs_path(), SCHEDULE, DISPATCH,
-                         whole_artifacts_path(100)]
+                         jobs_path(100), whole_artifacts_path(100)]
 
 
 def test_a_red_nightly_behind_a_green_base_push_is_written_not_green(gh_env):
@@ -1955,7 +2173,10 @@ def test_main_asks_nothing_about_an_unusable_base(gh_env, before, word):
     pt.main([*ARGV, "--before", before], api=api, env=gh_env)
     assert _all_outputs(gh_env) == {"skip": "true", "pr_run_id": "7",
                                     "base_mutation_green": "false", "base_mutation": word}
-    assert not any("event=push" in c or "/jobs?" in c for c in api.calls)
+    # No base run is looked up; the one jobs listing is the proven decision's
+    # own read of the nightly's `mutation`.
+    assert not any("event=push" in c for c in api.calls)
+    assert [c for c in api.calls if "/jobs?" in c] == [jobs_path(100)]
 
 
 def test_without_before_the_base_is_not_green(gh_env):
@@ -2440,6 +2661,7 @@ EXPECTED = {
     "lint":           (R,  R,     R,      R,      R,      S,     S,    S),
     "evals":          (R,  R,     R,      R,      R,      S,     S,    S),
     "tests":          (R,  R,     S,      R,      R,      S,     S,    S),
+    "tests-extended": (S,  S,     R,      R,      R,      R,     R,    R),
     "coverage-badge": (S,  S,     R,      R,      R,      S,     S,    S),
     "mutation-plan":  (R,  R,     R,      R,      R,      R,     R,    R),
     "mutation-shard": (R,  R,     S,      R,      R,      R,     S,    R),
@@ -2450,11 +2672,13 @@ EXPECTED = {
     "onnx-inference": (R,  R,     R,      R,      R,      S,     S,    S),
 }
 
-#: The only jobs a nightly or a dispatch may start: the whole-codebase run,
-#: and on a nightly the API question that may make it idle. Nothing else is
-#: what makes a whole-codebase run's conclusion its mutation verdict, which
-#: the idle walk reads (alongside the `mutation` job itself).
-WHOLE_CODEBASE_JOBS = {"mutation-plan", "mutation-shard", "mutation"}
+#: The only jobs a nightly or a dispatch may start: the whole-codebase
+#: mutation run, and the macOS/Windows 3.13/3.14 legs no pull request runs;
+#: on a nightly also the API question that may make it idle. An idle night
+#: drops the shards and nothing else -- `tests-extended` runs on it as on any
+#: other night, because what is inherited is the mutation verdict, not the
+#: platform legs.
+WHOLE_CODEBASE_JOBS = {"mutation-plan", "mutation-shard", "mutation", "tests-extended"}
 NIGHTLY_JOBS = WHOLE_CODEBASE_JOBS | {"idle-nightly"}
 
 
@@ -2499,15 +2723,16 @@ def test_the_table_renders_every_scenario(jobs):
     ("schedule, idle", NIGHTLY_JOBS - {"mutation-shard"}),
     ("workflow_dispatch", WHOLE_CODEBASE_JOBS),
 ])
-def test_a_whole_codebase_run_starts_only_the_mutation_jobs(jobs, event, expected):
+def test_a_whole_codebase_run_starts_only_mutation_and_the_extended_legs(jobs, event, expected):
     ran = {n for n, r in simulate(jobs, SCENARIOS[event]).items() if r != "skipped"}
     assert ran == expected, sorted(ran ^ expected)
 
 
 def test_a_proven_push_still_runs_every_non_test_check(jobs):
-    # The spec keeps lint (with zizmor), the eval harness, install-smoke, bdd
-    # and onnx-inference on a proven push; only the suite, the shards and the
-    # coverage collection are what the PR run already did.
+    # The spec keeps lint (with zizmor), the eval harness, install-smoke, bdd,
+    # onnx-inference and tests-extended on a proven push; only the suite, the
+    # shards and the coverage collection are what the PR run already did. No
+    # PR run ran the extended legs, so `tests-extended` is never in this set.
     sim = simulate(jobs, SCENARIOS["push, proven skip=true"])
     skipped = {n for n, r in sim.items() if r == "skipped"}
     assert skipped == {"tests", "mutation-shard", "patch-coverage", "idle-nightly"}
@@ -2564,6 +2789,25 @@ def test_the_suite_condition_case_by_case(jobs, event, skip, proven_result, runs
     scenario = {"event": event, "ref": "refs/heads/main"}
     got = job_runs(jobs, "tests", {"proven": proven_result},
                    {"proven": {"skip": skip}}, scenario)
+    assert got is runs
+
+
+@pytest.mark.parametrize("event, ref, runs", [
+    ("push", "refs/heads/main", True),
+    ("schedule", "refs/heads/main", True),
+    ("workflow_dispatch", "refs/heads/main", True),
+    # The condition does not look at the ref: a branch dispatch would run
+    # them too, though compat.yml's dispatch is the supported way to test a
+    # fix only these legs can see (ci.yml's note on `workflow_dispatch:`).
+    ("workflow_dispatch", "refs/heads/loop/fix-windows", True),
+    ("pull_request", "refs/pull/7/merge", False),
+    ("merge_group", "refs/heads/gh-readonly-queue/main/pr-7-abc", False),
+])
+def test_the_extended_legs_run_on_every_event_but_a_pull_request(jobs, event, ref, runs):
+    # No ancestor results or outputs are given: the job needs nothing, and
+    # `job_runs` fails on any `needs.*` its condition reads, so this also
+    # pins that no verdict of `proven` can reach it.
+    got = job_runs(jobs, "tests-extended", {}, {}, {"event": event, "ref": ref})
     assert got is runs
 
 
@@ -2773,10 +3017,11 @@ def test_a_whole_codebase_run_writes_the_one_marker_its_plan_says(jobs, event, g
 
 
 def test_no_new_job_expands_an_expression_inside_run(jobs):
-    for name in ("proven", "idle-nightly", "coverage-badge", "tests"):
+    for name in ("proven", "idle-nightly", "coverage-badge", "tests", "tests-extended"):
         for step in jobs[name]["steps"]:
             run = step.get("run", "")
-            if name == "tests" and step.get("name", "").startswith("job summary"):
+            if (name in ("tests", "tests-extended")
+                    and step.get("name", "").startswith("job summary")):
                 continue   # predates this change; matrix values only
             assert "${{" not in run, (name, step.get("name"))
 
@@ -3084,17 +3329,31 @@ def test_the_refresh_follows_every_full_run_on_main(event):
     assert _refresh_accepts(event=event)
 
 
+@pytest.mark.parametrize("event", ["push", "schedule", "workflow_dispatch"])
+@pytest.mark.parametrize("conclusion", ["failure", "cancelled", "timed_out"])
+def test_the_refresh_follows_a_run_red_outside_the_gate(event, conclusion):
+    # The upload sits after the 80% gate, so whether a run measured anything
+    # is the artifact's to say. A nightly whose `mutation` passed and uploaded
+    # concludes failure when one `tests-extended` leg fails, and a push can be
+    # red on lint beside a green full run; the download decides, and treats
+    # "no artifact" as ordinary.
+    assert _refresh_accepts(event=event, conclusion=conclusion)
+
+
 @pytest.mark.parametrize("kwargs", [
     {"event": "pull_request"},             # a fork PR from a branch named main
     {"event": "merge_group"},
     {"repo": "fork/boost"},
-    {"conclusion": "failure"},
-    {"conclusion": "cancelled"},
+    {"event": "pull_request", "conclusion": "failure"},
     {"event": "workflow_dispatch", "branch": "feature"},  # dispatched elsewhere
     {"event": "schedule", "branch": "release"},
 ])
 def test_the_refresh_refuses_anything_else(kwargs):
     assert not _refresh_accepts(**kwargs)
+
+
+def test_the_refresh_guard_does_not_read_the_conclusion():
+    assert "conclusion" not in _refresh_if()
 
 
 def test_the_refresh_can_still_be_run_by_hand():
@@ -3192,6 +3451,17 @@ def test_the_manual_path_skips_runs_that_uploaded_no_weights(pick_run):
     assert [c for c in calls if c.startswith("gh api ")] == [
         "gh api repos/o/boost/actions/runs/%d/artifacts?name=mutation-weights -q %s"
         % (n, "[.artifacts[] | select(.expired | not)] | length") for n in (30, 20, 10)]
+
+
+@needs_jq
+def test_the_manual_path_lists_completed_runs_not_only_green_ones(pick_run):
+    # The same reason as the guard's: a run red outside the gate (a red
+    # extended leg on the nightly) can hold the newest measurement.
+    _, calls, _ = pick_run([{"databaseId": 10, "event": "schedule"}],
+                           {10: _artifacts(False)})
+    listing = [c for c in calls if c.startswith("gh run list ")]
+    assert len(listing) == 1
+    assert " --status completed " in listing[0]
 
 
 @needs_jq

@@ -12,13 +12,15 @@ watches ``ci`` and opens a tracker. A *missing* one was silent:
 run is more than 48 h old, which is the safe direction, and tells nobody. Every
 push then runs the full gate, and nothing says why or that the nightly is gone.
 
-This script is that alarm. It asks GitHub for exactly what ``ci_proven_tree``
-asks first -- the newest completed ``schedule`` / ``workflow_dispatch`` run of
-``ci.yml`` on ``main``, through that script's own ``_newest_completed_whole``,
-the query ``_last_whole`` starts from, so the two cannot drift onto different
-definitions -- and exits 1 when there is none or it was created more than
-``MAX_AGE`` ago. Its conclusion is printed but not judged: a red one has its
-own alarm.
+This script is that alarm. It asks GitHub for exactly the run
+``ci_proven_tree`` ages -- the newest completed ``schedule`` /
+``workflow_dispatch`` run of ``ci.yml`` on ``main``, through that script's own
+``_newest_completed_whole``, the query ``_last_whole`` starts from, so the two
+cannot drift onto different definitions -- and exits 1 when there is none or
+it was created more than ``MAX_AGE`` ago. The run's conclusion is printed but
+not judged: a red one has its own alarm. (``ci_proven_tree`` goes on to read
+that run's ``mutation`` job, and for a green one its marker; this asks
+neither, so it makes no third request.)
 
 An idle nightly (one that planned no mutation run because main had not moved
 since a green real run, ``ci_proven_tree.idle``) is a completed ``schedule``
@@ -97,20 +99,21 @@ PREFIX = "nightly_watch"
 
 
 def _newest_whole(api: Api) -> tuple[Any, dict[str, Any] | None]:
-    """The newest completed whole-codebase run as a ``Nightly``, plus its run object.
+    """The run ``ci_proven_tree._newest_completed_whole`` chose, as a ``Nightly``, plus the run.
 
-    Both from ``ci_proven_tree._newest_completed_whole`` -- the same two
-    ``per_page=1`` requests ``_last_whole`` begins with, and nothing else. The
-    run object is only for naming the run in the log. Not ``_last_whole``
-    itself: for a green run that goes on to read the run's marker, and for an
-    idle nightly the whole window -- a question about the skip's provenance,
-    not about whether the cron fired.
+    Both from that one helper -- the same two ``per_page=1`` requests
+    ``_last_whole`` begins with, and nothing else. The ``Nightly`` carries the
+    run's own conclusion (for the log; it is not judged) and its creation
+    time, parsed as ``ci_proven_tree`` parses it; the run object is only for
+    naming the run in the log. Not ``_last_whole`` itself: that goes on to
+    read the run's ``mutation`` job, for a green one its marker, and for an
+    idle nightly the whole window -- questions about the verdict and the
+    skip's provenance, not about whether the cron fired.
     """
     run = pt._newest_completed_whole(api)
-    nightly = pt._as_nightly(run)
-    if nightly is None:
+    if run is None:
         return None, None
-    return nightly, run
+    return pt.Nightly(pt._text(run.get("conclusion")), pt._parse_when(run.get("created_at"))), run
 
 
 def judge(nightly: Any, run: dict[str, Any] | None, now: datetime) -> tuple[bool, str]:

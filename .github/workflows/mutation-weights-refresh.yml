@@ -62,11 +62,18 @@ jobs:
   # required checks on the name alone, and scripts/check_required_checks.py
   # fails the build on the ambiguity.
   rebalance:
-    # A red `ci` run has nothing to offer: the "refresh balance hints" step runs
-    # after the gate passes, so a failed run uploaded no artifact and the
-    # download below would be the only thing that noticed.
+    # No condition on the run's conclusion: whether the run measured anything
+    # is the `mutation-weights` artifact's to say, and the download below
+    # already treats its absence as the ordinary case. The "refresh balance
+    # hints" upload sits after `mutation_gate.py --min 80` in the `mutation`
+    # job, so a red *gate* uploads nothing -- but a run can be red outside it.
+    # A push's lint or tests can fail beside a green full mutation run, and a
+    # nightly or dispatch is also ci.yml's `tests-extended`, whose one red
+    # leg fails the run after `mutation` passed and uploaded. Requiring
+    # `success` threw those measurements away, and with a 7-day retention the
+    # next fully green whole-codebase run may come after they expire.
     #
-    # The other two conditions are the fork guard publish.yml and sbom.yml both
+    # The conditions below are the fork guard publish.yml and sbom.yml both
     # carry, and for the same reason: `branches: [main]` above filters on the
     # TRIGGERING run's head_branch, not on the event type and not on the
     # repository. ci.yml runs `on: pull_request`, so a fork PR opened from a
@@ -94,8 +101,7 @@ jobs:
     # must not be packed into main's.
     if: >-
       github.event_name == 'workflow_dispatch' ||
-      (github.event.workflow_run.conclusion == 'success' &&
-       (github.event.workflow_run.event == 'push' ||
+      ((github.event.workflow_run.event == 'push' ||
         github.event.workflow_run.event == 'schedule' ||
         github.event.workflow_run.event == 'workflow_dispatch') &&
        github.event.workflow_run.head_branch == 'main' &&
@@ -128,7 +134,9 @@ jobs:
         # one now: most pushes are proven by their PR run and upload no
         # weights, so it asks each candidate's artifacts instead of guessing
         # which event carries them, and takes the newest that holds an
-        # unexpired `mutation-weights`. Only the three events the workflow_run
+        # unexpired `mutation-weights`. Completed, not only green: as on the
+        # workflow_run path (the guard's comment), a run red outside the gate
+        # can hold a measurement. Only the three events the workflow_run
         # guard accepts -- `--branch main` also matches a fork PR raised from a
         # branch called main. Finding none leaves the id empty, and the
         # download below waits for one.
@@ -141,7 +149,7 @@ jobs:
           id="$TRIGGERING"
           if [ -z "$id" ]; then
             candidates="$(gh run list --repo "$REPO" --workflow ci.yml --branch main \
-                    --status success --limit 30 --json databaseId,event \
+                    --status completed --limit 30 --json databaseId,event \
                     -q '.[] | select(.event == "push" or .event == "schedule" or .event == "workflow_dispatch") | .databaseId')"
             for candidate in $candidates; do
               held="$(gh api "repos/$REPO/actions/runs/$candidate/artifacts?name=mutation-weights" \
@@ -153,7 +161,7 @@ jobs:
           if [ -n "$id" ]; then
             echo "measuring run $id"
           else
-            echo "no green ci run on main holds an unexpired mutation-weights artifact"
+            echo "no completed ci run on main holds an unexpired mutation-weights artifact"
           fi
       - name: download the measured hints
         id: fetch
@@ -161,8 +169,11 @@ jobs:
         # `continue-on-error`, because "that run did not reach the mutation
         # gate" is the ordinary case, not a fault: ci.yml skips the whole gate
         # when nothing mutable changed, and runs no shards on a push whose tree
-        # a green PR run already tested, and then there is no artifact to
-        # take. Failing the job there would alert on most merges.
+        # a green PR run already tested, nor on an idle nightly (it plans
+        # none, and runs only `tests-extended` beside it, so it may also be
+        # red), and then there is no artifact to take; nor when the gate itself
+        # failed, which the job's `if:` no longer filters out. Failing the job
+        # there would alert on most merges.
         continue-on-error: true
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -177,7 +188,7 @@ jobs:
         run: |
           if [ -z "$RUN_ID" ]; then
             {
-              echo "No green \`ci\` run on main among the newest thirty holds an"
+              echo "No completed \`ci\` run on main among the newest thirty holds an"
               echo "unexpired \`mutation-weights\` artifact; run the whole-codebase"
               echo "mutation run (dispatch ci.yml on main) and try again."
             } >> "$GITHUB_STEP_SUMMARY"
@@ -187,7 +198,8 @@ jobs:
             echo "Run \`$RUN_ID\` published no \`mutation-weights\` artifact —"
             echo "it ran no full mutation run (nothing mutable changed, a push"
             echo "proven by its PR run, or an idle nightly that inherited the"
-            echo "last real one), or the artifact has passed its 7-day retention."
+            echo "last real one), its mutation gate failed, or the artifact has"
+            echo "passed its 7-day retention."
           } >> "$GITHUB_STEP_SUMMARY"
       - name: is the committed plan far enough behind to be worth a PR
         id: drift

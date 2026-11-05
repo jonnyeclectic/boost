@@ -616,10 +616,12 @@ def _good_candidate():
 
 
 def test_a_real_newest_run_reads_as_before_with_one_more_request():
+    # Fact 3 reads the newest run's `mutation` job (its verdict); a green one
+    # is then asked what the run was -- the one more request.
     nightly, api = fact3(real(R, W_AT))
     assert nightly == pt.Nightly("success", W_AT)
     assert api.calls == [liveness_path("schedule"), liveness_path("workflow_dispatch"),
-                         artifacts_path(R)]
+                         jobs_path(R), artifacts_path(R)]
 
 
 def test_an_unmarked_newest_run_reads_as_before():
@@ -630,9 +632,13 @@ def test_an_unmarked_newest_run_reads_as_before():
 
 
 def test_a_red_newest_run_is_returned_without_asking_what_it_was():
-    nightly, api = fact3(skip(R, W_AT, 5, conclusion="failure"))
+    # Red is the newest run's `mutation` job (fact 3), and it is never looked
+    # past: no marker, no window, whatever the run says it was.
+    nightly, api = fact3(skip(R, W_AT, 5, conclusion="failure",
+                              jobs=[mutation_job(R, conclusion="failure")]))
     assert nightly == pt.Nightly("failure", W_AT)
-    assert len(api.calls) == 2
+    assert api.calls == [liveness_path("schedule"), liveness_path("workflow_dispatch"),
+                         jobs_path(R)]
 
 
 def test_a_verified_skip_counts_for_fact_3():
@@ -774,6 +780,229 @@ def test_a_green_base_under_an_unproven_skip_is_written_not_green(tmp_path):
     assert "base_mutation_green=false" in lines
     assert "base_mutation=nightly-unproven_skip" in lines
     assert "skip=false" in lines
+
+
+# --------------------------------------------------------------------------
+# fact 3 reads the `mutation` job; the idle walk reads the run as well
+# --------------------------------------------------------------------------
+#
+# A whole-codebase run is also ci.yml's `tests-extended`, so it can conclude
+# failure on one platform leg with `mutation` green. Fact 3 (and the base
+# check, through the same `_last_whole`) reads the `mutation` job, and looks
+# past the run's own red only when `tests-extended` legs are all that is red,
+# so that leg does not put every push on the full run -- and nothing the
+# run's conclusion alone refused (a failed `idle-nightly`, say) becomes a
+# skip. The idle walk keeps reading the run's own conclusion as well: a
+# night that would inherit from such a run plans full instead. A skip is
+# green for fact 3 only when it re-derives AND its own `mutation` job is green.
+
+EXTENDED = "tests-extended (windows-latest, 3.14)"
+
+
+def extended_job(run_id, conclusion="failure"):
+    return mutation_job(run_id, conclusion=conclusion, name=EXTENDED)
+
+
+def _red_extended_jobs(run_id):
+    """A run whose `mutation` passed and one `tests-extended` leg failed."""
+    return [mutation_job(run_id), extended_job(run_id)]
+
+
+def idle_nightly_job(run_id, conclusion="failure"):
+    return mutation_job(run_id, conclusion=conclusion, name="idle-nightly")
+
+
+def _base_routes():
+    """The base commit's push run, its `mutation` green: only the nightly can say no."""
+    return {
+        ("actions/workflows/ci.yml/runs?branch=main&event=push&head_sha=%s&per_page=100"
+         % BEFORE): {"total_count": 1, "workflow_runs": [
+             {"id": BASE_RUN, "event": "push", "head_branch": "main", "head_sha": BEFORE,
+              "created_at": "2026-11-10T20:00:00Z"}]},
+        jobs_path(BASE_RUN): {"total_count": 1, "jobs": [mutation_job(BASE_RUN)]},
+    }
+
+
+#: (runs, the conclusion fact 3 reads). Built fresh per call: GitHub keeps
+#: the dicts it is given.
+COMBINATIONS = {
+    # (a) a re-derived idle skip whose `mutation` job is green: green.
+    "a: skip re-derives, mutation green": (
+        lambda: [w_skip(), real(R, W_AT - timedelta(days=3))], "success"),
+    # (a) and the idle night itself red only on a platform leg: still green.
+    "a: skip re-derives, mutation green, its extended leg red": (
+        lambda: [w_skip(conclusion="failure", jobs=_red_extended_jobs(TONIGHT)),
+                 real(R, W_AT - timedelta(days=3))], "success"),
+    # (b) a real run red only because a `tests-extended` leg failed.
+    "b: real run, mutation green, extended leg red": (
+        lambda: [real(R, W_AT, conclusion="failure", jobs=_red_extended_jobs(R))],
+        "success"),
+    # (c) a skip that does not re-derive (it names run 77; the walk finds R).
+    "c: skip does not re-derive, mutation green": (
+        lambda: [w_skip(source=77), real(R, W_AT - timedelta(days=1))],
+        pt.UNPROVEN_SKIP),
+    # (c) a red `mutation` is returned before the skip is asked about at all.
+    "c: skip does not re-derive, mutation red": (
+        lambda: [w_skip(source=77, jobs=[mutation_job(TONIGHT, conclusion="failure")]),
+                 real(R, W_AT - timedelta(days=1))], "failure"),
+    # (c) the re-derivation is the idle walk, which reads R's run conclusion:
+    # a skip whose source was red only on a platform leg does not re-derive.
+    "c: skip's source red only on an extended leg": (
+        lambda: [w_skip(), real(R, W_AT - timedelta(days=1), conclusion="failure",
+                                jobs=_red_extended_jobs(R))], pt.UNPROVEN_SKIP),
+    # (b) a dispatch skips `idle-nightly`, and skipped is not red: the
+    # extended leg is still all that is red. Cancelled legs are red legs.
+    "b: dispatch, idle-nightly skipped, extended leg red": (
+        lambda: [real(R, W_AT, event="workflow_dispatch", conclusion="failure",
+                      jobs=[*_red_extended_jobs(R), idle_nightly_job(R, "skipped")])],
+        "success"),
+    "b: run cancelled on extended legs alone": (
+        lambda: [real(R, W_AT, conclusion="cancelled",
+                      jobs=[mutation_job(R), extended_job(R, "cancelled")])], "success"),
+    # (rule 1) any other red is never looked past: the run's own conclusion
+    # refused these, so fact 3 still does, whatever `mutation` said.
+    "e: real run, mutation green, idle-nightly red": (
+        lambda: [real(R, W_AT, conclusion="failure",
+                      jobs=[mutation_job(R), idle_nightly_job(R)])],
+        pt.RED_BEYOND_EXTENDED),
+    "e: real run, mutation green, idle-nightly and an extended leg red": (
+        lambda: [real(R, W_AT, conclusion="failure",
+                      jobs=[*_red_extended_jobs(R), idle_nightly_job(R)])],
+        pt.RED_BEYOND_EXTENDED),
+    "e: real run red with nothing red on its page": (
+        lambda: [real(R, W_AT, conclusion="failure")], pt.RED_BEYOND_EXTENDED),
+    "e: re-derivable skip, mutation green, idle-nightly red": (
+        lambda: [w_skip(conclusion="failure",
+                        jobs=[mutation_job(TONIGHT), idle_nightly_job(TONIGHT)]),
+                 real(R, W_AT - timedelta(days=3))], pt.RED_BEYOND_EXTENDED),
+}
+
+
+@pytest.mark.parametrize("name", list(COMBINATIONS))
+def test_fact_3_reads_the_mutation_job_and_still_re_derives_a_skip(name):
+    build, word = COMBINATIONS[name]
+    nightly, _ = fact3(*build())
+    assert nightly == pt.Nightly(word, W_AT)
+    decision = pt.decide("T", [_good_candidate()], nightly, now=CHECK)
+    assert decision.skip is (word == "success"), decision.reason
+    if word != "success":
+        assert "concluded %s" % word in decision.reason
+
+
+@pytest.mark.parametrize("name", list(COMBINATIONS))
+def test_base_mutation_agrees_with_fact_3_on_every_combination(name):
+    # (d) One reading of the newest whole-codebase run, through one function:
+    # the base is green exactly when fact 3 is, and says why when it is not.
+    build, _ = COMBINATIONS[name]
+    nightly, _ = fact3(*build())
+    verdict = pt.base_mutation(GitHub(*build(), routes=_base_routes()), BEFORE)
+    assert verdict.green is (nightly.conclusion == "success")
+    assert verdict.word == ("success" if verdict.green else "nightly-" + nightly.conclusion)
+
+
+def test_a_run_red_beyond_its_extended_legs_is_refused_off_the_jobs_page_alone():
+    # The run's conclusion is checked against the page `mutation` came from:
+    # no artifact listing, no window, no extra request of any kind.
+    nightly, api = fact3(real(R, W_AT, conclusion="failure",
+                              jobs=[mutation_job(R), idle_nightly_job(R)]))
+    assert nightly == pt.Nightly(pt.RED_BEYOND_EXTENDED, W_AT)
+    assert api.calls == [liveness_path("schedule"), liveness_path("workflow_dispatch"),
+                         jobs_path(R)]
+    decision = pt.decide("T", [_good_candidate()], nightly, now=CHECK)
+    assert decision.skip is False
+    assert "tests-extended legs are not all that was red" in decision.reason
+
+
+def test_a_red_job_of_another_run_on_the_page_is_an_error():
+    w = real(R, W_AT, conclusion="failure", jobs=[mutation_job(R), extended_job(R + 1)])
+    with pytest.raises(ValueError, match="another run's job"):
+        fact3(w)
+    with pytest.raises(ValueError, match="another run's job"):
+        pt.base_mutation(GitHub(w, routes=_base_routes()), BEFORE)
+
+
+@pytest.mark.parametrize("attempt", [True, 1.0, "1", None])
+def test_a_skip_whose_attempt_is_not_the_integer_one_is_unproven(attempt):
+    # A JSON `true` and `1.0` both equal 1; neither is a first attempt.
+    nightly, api = fact3(w_skip(attempt=attempt), real(R, W_AT - timedelta(days=1)))
+    assert nightly == pt.Nightly(pt.UNPROVEN_SKIP, W_AT)
+    assert not any("created=" in c for c in api.calls)
+    verdict = pt.base_mutation(GitHub(w_skip(attempt=attempt),
+                                      real(R, W_AT - timedelta(days=1)),
+                                      routes=_base_routes()), BEFORE)
+    assert verdict == pt.BaseVerdict(False, "nightly-" + pt.UNPROVEN_SKIP)
+
+
+def test_rerunning_a_red_extended_leg_on_an_idle_night_unproves_the_skip():
+    # Why ci-failure-issue.yml says to leave such a run alone: "re-run failed
+    # jobs" re-runs only the extended leg, so the run keeps its one
+    # inherited-tree- marker and turns green -- on attempt 2, which no skip
+    # may be read on. Red, it counted; re-run green, it does not.
+    def runs(**kw):
+        return [w_skip(**kw), real(R, W_AT - timedelta(days=3))]
+
+    red = runs(conclusion="failure", jobs=_red_extended_jobs(TONIGHT))
+    assert fact3(*red)[0] == pt.Nightly("success", W_AT)
+    rerun = {"attempt": 2, "jobs": [mutation_job(TONIGHT), extended_job(TONIGHT, "success")]}
+    nightly, _ = fact3(*runs(**rerun))
+    assert nightly == pt.Nightly(pt.UNPROVEN_SKIP, W_AT)
+    assert pt.decide("T", [_good_candidate()], nightly, now=CHECK).skip is False
+    assert pt.base_mutation(GitHub(*runs(**rerun), routes=_base_routes()), BEFORE) \
+        == pt.BaseVerdict(False, "nightly-" + pt.UNPROVEN_SKIP)
+
+
+def test_main_writes_the_same_answer_for_both_on_a_red_extended_leg(tmp_path):
+    # (d) through main: a PR-proven push whose newest nightly is a re-derived
+    # skip, red only on a platform leg, skips and keeps its base green.
+    out = tmp_path / "out"
+    head = "c" * 40
+    routes = {
+        **_base_routes(),
+        "commits/%s/pulls" % SHA: [{"number": 1, "head": {"sha": head},
+                                    "base": {"ref": "main"}}],
+        "actions/workflows/ci.yml/runs?head_sha=%s&event=pull_request" % head: {
+            "total_count": 1, "workflow_runs": [
+                {"id": 7, "event": "pull_request", "head_branch": "feature/x",
+                 "head_sha": head, "status": "completed", "conclusion": "success",
+                 "run_attempt": 1, "created_at": iso(CHECK - timedelta(hours=1))}]},
+        "actions/runs/7/artifacts?name=%s%s" % (pt.TESTED_TREE_ARTIFACT, TREE): {
+            "total_count": 1, "artifacts": [
+                {"id": 907, "name": pt.TESTED_TREE_ARTIFACT + TREE, "expired": False,
+                 "workflow_run": {"id": 7}}]},
+    }
+    api = GitHub(w_skip(conclusion="failure", jobs=_red_extended_jobs(TONIGHT)),
+                 real(R, W_AT - timedelta(days=3)), routes=routes,
+                 trees={SHA: TREE, head: TREE, MOVED: OTHER_TREE})
+    argv = ["--sha", SHA, "--now", CHECK.isoformat(), "--before", BEFORE]
+    assert pt.main(argv, api=api, env={"GITHUB_OUTPUT": str(out)}) == 0
+    lines = out.read_text(encoding="utf-8").splitlines()
+    assert "skip=true" in lines, lines
+    assert "base_mutation_green=true" in lines
+    assert "base_mutation=success" in lines
+
+
+def test_the_next_night_plans_full_after_a_real_run_red_only_on_an_extended_leg():
+    # (b), the other half: fact 3 is green on that run (above), but the idle
+    # walk reads its run conclusion and will not inherit from it.
+    got = ask(idle_night(real(R, before(days=1), conclusion="failure",
+                              jobs=_red_extended_jobs(R))))
+    assert got.idle is False
+    assert "run %d (schedule) concluded failure" % R in got.reason
+    assert "never looked past" in got.reason
+    # The same run green on every leg is inherited: the platform leg is what
+    # turned it.
+    green = ask(idle_night(real(R, before(days=1),
+                                jobs=[mutation_job(R), extended_job(R, "success")])))
+    assert (green.idle, green.source_run) == (True, R)
+
+
+def test_an_idle_night_never_inherits_past_a_skip_red_only_on_an_extended_leg():
+    # A skip the walk passes over is held to its run conclusion too.
+    got = ask(idle_night(skip(101, before(days=1), R, conclusion="failure",
+                              jobs=_red_extended_jobs(101)),
+                         real(R, before(days=2))))
+    assert got.idle is False
+    assert "run 101 (schedule) concluded failure" in got.reason
 
 
 # --------------------------------------------------------------------------

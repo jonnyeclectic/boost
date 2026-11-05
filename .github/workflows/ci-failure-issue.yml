@@ -152,22 +152,52 @@ jobs:
             // nothing was published" — the second needs a rerun, not a fix.
             //
             // Unless the run was not a push. `ci` on a schedule or by hand is
-            // the whole-codebase mutation run, which publish.yml never releases
-            // from, so "rerun it to publish" would send the reader to rerun a
-            // run that cannot publish. What it does block is the proven-tree
-            // skip: until the newest whole-codebase run on main is green, every
-            // push runs the full gate.
+            // the whole-codebase mutation run plus `tests-extended` (macOS and
+            // Windows on 3.13/3.14), which publish.yml never releases from, so
+            // "rerun it to publish" would send the reader to rerun a run that
+            // cannot publish. A red `mutation`, or any red job but an extended
+            // leg, blocks the proven-tree skip: until a newer whole-codebase
+            // run on main is green, every push runs the full gate
+            // (scripts/ci_proven_tree.py, fact 3). A red extended leg alone
+            // does not -- every push runs those legs itself -- so the note
+            // names both halves rather than reading as a mutation failure, and
+            // says which one costs the skip.
+            //
+            // And, on a nightly, what NOT to do about a red extended leg. An
+            // idle nightly (it planned no mutation run and inherited an
+            // earlier one's verdict) counts for fact 3 only on its first
+            // attempt, so "re-run failed jobs" -- the obvious cleanup, and the
+            // one that closes this issue -- turns the skip off for every push
+            // until the next nightly. Left alone, the next green `ci` run on
+            // main closes this issue anyway. A dispatch is always a full run,
+            // and a re-run of one costs fact 3 nothing, so it gets no warning.
+            const extended = ', with the macOS/Windows 3.13 and 3.14 tests ' +
+              '(`tests-extended`)';
             const wholeCodebase = {
-              schedule: 'the nightly whole-codebase mutation run (`schedule`)',
+              schedule: 'the nightly whole-codebase mutation run (`schedule`)' +
+                extended,
               workflow_dispatch: 'the whole-codebase mutation run, started by ' +
-                'hand (`workflow_dispatch`)',
+                'hand (`workflow_dispatch`)' + extended,
             };
             const which = run.name === 'ci' ? wholeCodebase[run.event] : undefined;
+            const noRerun = run.event === 'schedule'
+              ? ' If only `tests-extended` failed, do not use "Re-run failed ' +
+                'jobs" on this run: the re-run is attempt 2, and a nightly ' +
+                'that inherited its mutation verdict (an idle night) counts ' +
+                'for the proven-tree skip only on attempt 1. If this night was ' +
+                'idle, every push to main would then run in full until the ' +
+                'next nightly. Leave the run as it is: the next green `ci` ' +
+                'run on main closes this issue, ' +
+                'and a fix is tested by dispatching `compat.yml` on its branch.'
+              : '';
             const noRelease = which
               ? `\n\nThis was ${which}. **No release was involved** — ` +
-                '`publish.yml` releases only from a `push` run. While the ' +
-                'newest whole-codebase run on main is not green, every push ' +
-                'to main runs the full gate instead of skipping as proven.'
+                '`publish.yml` releases only from a `push` run. Unless only ' +
+                '`tests-extended` failed, every push to main runs the full ' +
+                'gate instead of skipping as proven until a newer ' +
+                'whole-codebase run on main passes; a red `tests-extended` ' +
+                'leg alone does not, since every push to main runs those legs ' +
+                'itself.' + noRerun
               : run.name === 'ci'
               ? '\n\n**No release was cut for this commit** — `publish.yml` ' +
                 'ships only on a `success` conclusion. Once this is green ' +
