@@ -181,14 +181,41 @@ class TestWhichRunsCount:
         assert code == 1
         assert "run 1 (schedule" in out
 
-    def test_it_asks_exactly_what_ci_proven_tree_asks(self):
+    @pytest.mark.parametrize("fake", [
+        lambda: FakeGitHub(),
+        lambda: FakeGitHub(run(1, "schedule", timedelta(hours=3), conclusion="failure"),
+                           run(2, "workflow_dispatch", timedelta(hours=50))),
+    ], ids=["no-runs", "runs"])
+    def test_it_asks_exactly_what_ci_proven_tree_asks(self, fake):
         # Same definition of "whole-codebase run", by construction: the watch
-        # goes through ci_proven_tree._last_whole, so the requests are equal.
-        ours, theirs = FakeGitHub(), FakeGitHub()
+        # goes through ci_proven_tree._newest_completed_whole -- the query
+        # _last_whole starts from -- so the requests are equal. A red newest
+        # run is where _last_whole stops too, so here it asks the same two.
+        ours, theirs, last = fake(), fake(), fake()
         nw.main(api=ours, env={}, now=NOW)
-        pt._last_whole(theirs)
-        assert ours.paths == theirs.paths
+        pt._newest_completed_whole(theirs)
+        pt._last_whole(last)
+        assert ours.paths == theirs.paths == last.paths
         assert len(ours.paths) == 2
+
+    def test_an_idle_nightly_counts_as_the_cron_having_fired(self, capsys):
+        # A skip is a completed schedule run; the watch never asks what it
+        # was. FakeGitHub refuses every path but the runs listing, so an
+        # artifact or window request would fail this test loudly.
+        api = FakeGitHub(run(41682296301, "schedule", timedelta(hours=12)),
+                         run(41512174636, "schedule", timedelta(hours=34)))
+        code, out = watch(api, capsys)
+        assert code == 0, out
+        assert "run 41682296301 (schedule, concluded success)" in out
+        assert len(api.paths) == 2
+
+    def test_a_missing_nightly_still_alarms_whatever_skipped_before_it(self, capsys):
+        # The newest run being a skip 37 h ago is no excuse: no run since
+        # means the cron did not fire, and an idle night still makes a run.
+        api = FakeGitHub(run(9, "schedule", timedelta(hours=37)))
+        code, out = watch(api, capsys)
+        assert code == 1
+        assert "overdue" in out
 
 
 class TestAnAlarmThatCannotLookIsLoud:

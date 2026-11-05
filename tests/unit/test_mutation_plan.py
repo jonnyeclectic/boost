@@ -27,6 +27,7 @@ import stat
 import subprocess
 import sys
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 
@@ -830,7 +831,11 @@ def test_the_planner_uploads_plan_and_stats(jobs):
     uploads = {s["with"]["name"]: s["with"]
                for s in jobs["mutation-plan"]["steps"]
                if s.get("uses", "").startswith("actions/upload-artifact")}
-    assert set(uploads) == {"mutation-plan", "mutation-stats"}
+    # Plus the whole-codebase markers (tested in test_ci_idle_nightly.py).
+    assert set(uploads) == {"mutation-plan", "mutation-stats",
+                            "mutated-tree-${{ steps.tree.outputs.tree }}",
+                            "inherited-tree-${{ steps.tree.outputs.tree }}"
+                            "-from-${{ steps.scope.outputs.source_run }}"}
     for spec in uploads.values():
         assert spec["if-no-files-found"] == "error"
 
@@ -1169,6 +1174,46 @@ exit 0
         assert "whole-codebase run (%s)" % event in plan
         assert outputs["gate_set"] == "full"
 
+    def test_an_idle_nightly_plans_nothing_and_names_what_it_inherits(self, planner):
+        why = ("idle nightly: main is still aaaaaaaaaaaa, tree eeeeeeeeeeee; inherits "
+               "run 41682296301 (schedule), created 2026-11-03T17:14:31Z")
+        plan, log, outputs = planner("schedule", relevant="false", IDLE="true",
+                                     IDLE_REASON=why)
+        assert plan.split(" none ", 1)[1].startswith("--reason %s --out" % why)
+        assert outputs["gate_set"] == ""
+        assert not any(".venv/bin/python" in line for line in log)
+
+    def test_an_idle_nightly_without_a_reason_still_says_it_is_one(self, planner):
+        plan, _, _ = planner("schedule", relevant="false", IDLE="true")
+        assert plan.split(" none ", 1)[1].startswith("--reason idle nightly: ")
+
+    @pytest.mark.parametrize("extra, said", [
+        ({"IDLE_REASON": "not idle: run 7 (schedule) concluded failure"},
+         "whole-codebase run (schedule) — not idle: run 7 (schedule) concluded failure"),
+        ({}, "whole-codebase run (schedule) — idle-nightly gave no answer"),
+        ({"IDLE": "mismatch", "IDLE_REASON": "idle nightly: inherits run 7"},
+         "whole-codebase run (schedule) — idle-nightly vouched for another run or tree"),
+        # A re-run's reused yes: never the yes itself as the reason for full.
+        ({"IDLE": "rerun", "IDLE_REASON": "idle nightly: inherits run 7"},
+         "whole-codebase run (schedule) — a re-run: idle-nightly's yes is an earlier "
+         "attempt's, and only a first attempt may inherit --out"),
+    ], ids=["not-idle", "no-answer", "mismatch", "rerun"])
+    def test_a_nightly_that_is_not_idle_plans_full_and_says_why(self, planner, extra, said):
+        plan, _, outputs = planner("schedule", **extra)
+        assert "python3 scripts/mutation_plan.py full --shards 24 --reason %s" % said in plan
+        assert outputs["gate_set"] == "full"
+
+    def test_a_dispatch_ignores_a_stray_idle_verdict(self, planner):
+        plan, _, outputs = planner("workflow_dispatch", IDLE="true",
+                                   IDLE_REASON="idle nightly: inherits run 7")
+        assert "--reason whole-codebase run (workflow_dispatch) --out" in plan
+        assert outputs["gate_set"] == "full"
+
+    def test_an_irrelevant_push_ignores_a_stray_idle_verdict(self, planner):
+        plan, _, _ = planner("push", relevant="false", IDLE="true",
+                             IDLE_REASON="idle nightly: inherits run 7")
+        assert plan.split(" none ", 1)[1].startswith("--reason no change under boost_cli/")
+
     def test_the_plan_reason_is_one_line_for_the_gate_summary(self, planner):
         _, _, outputs = planner("push", relevant="false")
         assert outputs["reason"] == "n"
@@ -1203,9 +1248,12 @@ class TestScopeByEvent:
             out = tmp_path / "github_output"
             out.write_text("", encoding="utf-8")
             calls.write_text("", encoding="utf-8")
+            # GITHUB_RUN_ATTEMPT is a runner default, not in the step's env:
+            # every run has one, and a first attempt is the ordinary case.
             env = {"PATH": "%s%s%s" % (bin_dir, os.pathsep, os.environ["PATH"]),
                    "CALLS": str(calls), "GITHUB_OUTPUT": str(out), "EVENT": event,
-                   "BASE": "base0" if event != "schedule" else "", "HEAD": "head0"}
+                   "BASE": "base0" if event != "schedule" else "", "HEAD": "head0",
+                   "GITHUB_RUN_ATTEMPT": "1"}
             env.update(extra)
             proc = _bash(step, tmp_path, env)
             assert proc.returncode == 0, proc.stdout + proc.stderr
@@ -1246,6 +1294,53 @@ class TestScopeByEvent:
         outputs, _ = scope(event, SKIP="true", PR_RUN_ID="1")
         assert "proven" not in outputs
         assert outputs["relevant"] == "true"
+
+    IDLE_OK: ClassVar[dict[str, str]] = {
+        "IDLE": "true", "IDLE_RUN": "41682296301", "IDLE_TREE": "e" * 40, "TREE": "e" * 40}
+
+    def test_an_idle_nightly_collects_nothing_and_passes_its_source_on(self, scope):
+        outputs, calls = scope("schedule", **self.IDLE_OK)
+        assert outputs == {"relevant": "false", "idle": "true",
+                           "source_run": "41682296301"}
+        assert calls == []
+
+    @pytest.mark.parametrize("idle", ["false", "", "TRUE", "true ", "1", "yes"])
+    def test_only_an_exact_true_makes_a_nightly_idle(self, scope, idle):
+        outputs, _ = scope("schedule", **{**self.IDLE_OK, "IDLE": idle})
+        assert outputs == {"relevant": "true"}
+
+    @pytest.mark.parametrize("bad", [
+        {"IDLE_TREE": "f" * 40}, {"TREE": ""}, {"IDLE_TREE": ""},
+        {"IDLE_RUN": ""}, {"IDLE_RUN": "0"}, {"IDLE_RUN": "12a"},
+        {"IDLE_RUN": "1" * 21}, {"IDLE_RUN": "7 8"}, {"IDLE_RUN": "-7"},
+    ], ids=lambda d: "%s=%r" % next(iter(d.items())))
+    def test_an_idle_verdict_for_another_run_or_tree_is_the_full_gate(self, scope, bad):
+        outputs, _ = scope("schedule", **{**self.IDLE_OK, **bad})
+        assert outputs == {"relevant": "true", "idle": "mismatch"}
+
+    @pytest.mark.parametrize("attempt", ["2", "3", "", "01"])
+    def test_a_yes_reused_by_a_re_run_is_the_full_gate(self, scope, attempt):
+        # "Re-run failed jobs" (and "re-run this job") re-runs mutation-plan
+        # but not idle-nightly, whose outputs from the attempt before are
+        # reused -- so attempt 2 would read attempt 1's yes, and plan none on
+        # it, with no request ever made for attempt 2. Only a first attempt
+        # may inherit, here as in ci_proven_tree.idle; anything that is not
+        # exactly "1" is the full gate.
+        outputs, calls = scope("schedule", **{**self.IDLE_OK, "GITHUB_RUN_ATTEMPT": attempt})
+        assert outputs == {"relevant": "true", "idle": "rerun"}
+        assert calls == []
+
+    def test_a_dispatch_is_never_idle(self, scope):
+        # `idle-nightly` never runs on one, so a value seen here is not its.
+        outputs, _ = scope("workflow_dispatch", **self.IDLE_OK)
+        assert outputs == {"relevant": "true"}
+
+    @pytest.mark.parametrize("event", ["push", "pull_request", "merge_group"])
+    def test_an_idle_verdict_means_nothing_off_a_nightly(self, scope, event):
+        outputs, calls = scope(event, **self.IDLE_OK)
+        assert "idle" not in outputs
+        assert outputs["relevant"] == "true"
+        assert any("mutation_shards.py scope" in c for c in calls), calls
 
     @pytest.mark.parametrize("event", ["schedule", "workflow_dispatch"])
     def test_a_whole_codebase_run_is_always_relevant(self, scope, event):

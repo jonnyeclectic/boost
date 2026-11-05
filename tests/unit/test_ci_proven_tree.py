@@ -483,6 +483,38 @@ SCHEDULE = whole_path("schedule")
 DISPATCH = whole_path("workflow_dispatch")
 
 
+def whole_artifacts_path(run_id):
+    """A whole-codebase run's whole artifact listing, where its marker is."""
+    return "actions/runs/%d/artifacts?per_page=100" % run_id
+
+
+def marker(kind="real", tree=TREE, *, run_id=100, source=None, expired=False):
+    """One whole-codebase run's marker entry, as the API spells it."""
+    if kind == "real":
+        name = pt.MUTATED_TREE_ARTIFACT + tree
+    else:
+        name = "%s%s-from-%d" % (pt.INHERITED_TREE_ARTIFACT, tree, source)
+    return {"id": 5000 + run_id, "name": name, "expired": expired,
+            "workflow_run": {"id": run_id, "head_sha": SHA}}
+
+
+def _mark_whole_runs(routes):
+    """Give every whole-codebase run a fixture lists a real-run marker.
+
+    Unless a test routed that run's artifacts itself: a test about something
+    else keeps meaning "the newest whole-codebase run was a real, full one".
+    """
+    for path in (SCHEDULE, DISPATCH):
+        listing = routes.get(path)
+        found = listing.get("workflow_runs") if isinstance(listing, dict) else None
+        for item in found if isinstance(found, list) else ():
+            ident = item.get("id") if isinstance(item, dict) else None
+            if isinstance(ident, int) and not isinstance(ident, bool):
+                routes.setdefault(whole_artifacts_path(ident),
+                                  artifacts(marker(run_id=ident)))
+    return routes
+
+
 def green_routes(**overrides):
     """A push that is fully proven: one PR, equal trees, green run, green nightly.
 
@@ -508,7 +540,7 @@ def green_routes(**overrides):
             if isinstance(ident, int) and not isinstance(ident, bool):
                 routes.setdefault(artifacts_path(ident),
                                   artifacts(artifact(run_id=ident)))
-    return routes
+    return _mark_whole_runs(routes)
 
 
 # --------------------------------------------------------------------------
@@ -537,6 +569,9 @@ def test_gather_asks_the_documented_endpoints_and_nothing_else():
         artifacts_path(7),
         SCHEDULE,
         DISPATCH,
+        # A green newest whole-codebase run is asked what it was: a real run
+        # here, so nothing more.
+        whole_artifacts_path(100),
     ])
 
 
@@ -1527,7 +1562,7 @@ def base_routes(**overrides):
         DISPATCH: runs(),
     }
     routes.update(overrides)
-    return routes
+    return _mark_whole_runs(routes)
 
 
 BEFORE_ARGV = [*ARGV, "--before", BEFORE]
@@ -1535,10 +1570,12 @@ BEFORE_ARGV = [*ARGV, "--before", BEFORE]
 
 def test_a_green_base_is_green_and_asks_exactly_its_endpoints():
     # The base's run, its jobs, then the two whole-codebase queries -- last,
-    # because a base that is red on its own needs no nightly to say so.
+    # because a base that is red on its own needs no nightly to say so -- and
+    # the green nightly's marker (a real run: nothing more).
     api = FakeApi(base_routes())
     assert pt.base_mutation(api, BEFORE) == pt.BaseVerdict(True, "success")
-    assert api.calls == [base_runs_path(), base_jobs_path(), SCHEDULE, DISPATCH]
+    assert api.calls == [base_runs_path(), base_jobs_path(), SCHEDULE, DISPATCH,
+                         whole_artifacts_path(100)]
 
 
 def test_the_incident_base_is_not_green():
@@ -1864,7 +1901,8 @@ def test_a_bad_sha_still_lets_the_base_answer(gh_env):
     assert _all_outputs(gh_env) == {"skip": "false", "pr_run_id": "",
                                     "base_mutation_green": "true",
                                     "base_mutation": "success"}
-    assert api.calls == [base_runs_path(), base_jobs_path(), SCHEDULE, DISPATCH]
+    assert api.calls == [base_runs_path(), base_jobs_path(), SCHEDULE, DISPATCH,
+                         whole_artifacts_path(100)]
 
 
 def test_a_red_nightly_behind_a_green_base_push_is_written_not_green(gh_env):
@@ -2299,9 +2337,10 @@ def _topological(jobs: dict) -> list[str]:
     return order
 
 
-#: The seven situations the plan cares about, in the column order of the
+#: The eight situations the plan cares about, in the column order of the
 #: table below. `proven` is (result, skip output, pr_run_id output) for the
-#: pushes; on every other event the job's own `if:` decides it never runs.
+#: pushes, and `idle` (result, idle output) for the nightlies; on every other
+#: event each job's own `if:` decides it never runs.
 SCENARIOS = {
     "pull_request": {"event": "pull_request", "ref": "refs/pull/7/merge"},
     "merge_group": {"event": "merge_group",
@@ -2312,13 +2351,17 @@ SCENARIOS = {
                                 "proven": ("success", "false", "")},
     "push, proven job failed": {"event": "push", "ref": "refs/heads/main",
                                 "proven": ("failure", "", "")},
-    "schedule": {"event": "schedule", "ref": "refs/heads/main"},
+    "schedule": {"event": "schedule", "ref": "refs/heads/main",
+                 "idle": ("success", "false")},
+    "schedule, idle": {"event": "schedule", "ref": "refs/heads/main",
+                       "idle": ("success", "true")},
     "workflow_dispatch": {"event": "workflow_dispatch", "ref": "refs/heads/main"},
 }
 
 #: What each job's outputs are when it runs. The planner's matrix is a model
-#: of its `write the plan` step -- empty exactly when `proven` said skip -- and
-#: that step's bash is run against the same inputs in test_mutation_plan.py.
+#: of its `write the plan` step -- empty exactly when `proven` said skip or
+#: `idle-nightly` said idle -- and that step's bash is run against the same
+#: inputs in test_mutation_plan.py.
 ONE_SHARD = '[{"set":"full","index":0}]'
 
 
@@ -2328,9 +2371,13 @@ def _outcome(name: str, scenario: dict) -> tuple[str, dict]:
         if result != "success":
             return result, {}       # a failed job's outputs are empty
         return result, {"skip": skip, "pr_run_id": run_id}
+    if name == "idle-nightly":
+        result, idle = scenario["idle"]
+        return result, ({"idle": idle} if result == "success" else {})
     if name == "mutation-plan":
         proven = scenario.get("proven", ("", "", ""))
-        matrix = "[]" if proven[1] == "true" else ONE_SHARD
+        idle = scenario.get("idle", ("", ""))
+        matrix = "[]" if proven[1] == "true" or idle[1] == "true" else ONE_SHARD
         return "success", {"matrix": matrix, "gate_set": "" if matrix == "[]" else "full",
                            "shadow": "false"}
     return "success", {}
@@ -2387,23 +2434,28 @@ def simulate(jobs: dict, scenario: dict) -> dict[str, str]:
 #: A new job fails test_every_job_has_a_row until someone decides its row.
 R, S = "runs", "skipped"
 EXPECTED = {
-    #                  PR  queue  skip=T  skip=F  failed  sched  dispatch
-    "proven":         (S,  S,     R,      R,      R,      S,     S),
-    "lint":           (R,  R,     R,      R,      R,      S,     S),
-    "evals":          (R,  R,     R,      R,      R,      S,     S),
-    "tests":          (R,  R,     S,      R,      R,      S,     S),
-    "coverage-badge": (S,  S,     R,      R,      R,      S,     S),
-    "mutation-plan":  (R,  R,     R,      R,      R,      R,     R),
-    "mutation-shard": (R,  R,     S,      R,      R,      R,     R),
-    "mutation":       (R,  R,     R,      R,      R,      R,     R),
-    "install-smoke":  (R,  R,     R,      R,      R,      S,     S),
-    "patch-coverage": (R,  S,     S,      S,      S,      S,     S),
-    "bdd":            (R,  R,     R,      R,      R,      S,     S),
-    "onnx-inference": (R,  R,     R,      R,      R,      S,     S),
+    #                  PR  queue  skip=T  skip=F  failed  sched  idle  dispatch
+    "proven":         (S,  S,     R,      R,      R,      S,     S,    S),
+    "idle-nightly":   (S,  S,     S,      S,      S,      R,     R,    S),
+    "lint":           (R,  R,     R,      R,      R,      S,     S,    S),
+    "evals":          (R,  R,     R,      R,      R,      S,     S,    S),
+    "tests":          (R,  R,     S,      R,      R,      S,     S,    S),
+    "coverage-badge": (S,  S,     R,      R,      R,      S,     S,    S),
+    "mutation-plan":  (R,  R,     R,      R,      R,      R,     R,    R),
+    "mutation-shard": (R,  R,     S,      R,      R,      R,     S,    R),
+    "mutation":       (R,  R,     R,      R,      R,      R,     R,    R),
+    "install-smoke":  (R,  R,     R,      R,      R,      S,     S,    S),
+    "patch-coverage": (R,  S,     S,      S,      S,      S,     S,    S),
+    "bdd":            (R,  R,     R,      R,      R,      S,     S,    S),
+    "onnx-inference": (R,  R,     R,      R,      R,      S,     S,    S),
 }
 
-#: The only jobs a nightly or a dispatch may start: the whole-codebase run.
+#: The only jobs a nightly or a dispatch may start: the whole-codebase run,
+#: and on a nightly the API question that may make it idle. Nothing else is
+#: what makes a whole-codebase run's conclusion its mutation verdict, which
+#: the idle walk reads (alongside the `mutation` job itself).
 WHOLE_CODEBASE_JOBS = {"mutation-plan", "mutation-shard", "mutation"}
+NIGHTLY_JOBS = WHOLE_CODEBASE_JOBS | {"idle-nightly"}
 
 
 def run_table(jobs: dict) -> dict[str, tuple[str, ...]]:
@@ -2442,10 +2494,14 @@ def test_the_table_renders_every_scenario(jobs):
     assert text.count("\n") == len(jobs) + 1
 
 
-@pytest.mark.parametrize("event", ["schedule", "workflow_dispatch"])
-def test_a_whole_codebase_run_starts_only_the_mutation_jobs(jobs, event):
+@pytest.mark.parametrize("event, expected", [
+    ("schedule", NIGHTLY_JOBS),
+    ("schedule, idle", NIGHTLY_JOBS - {"mutation-shard"}),
+    ("workflow_dispatch", WHOLE_CODEBASE_JOBS),
+])
+def test_a_whole_codebase_run_starts_only_the_mutation_jobs(jobs, event, expected):
     ran = {n for n, r in simulate(jobs, SCENARIOS[event]).items() if r != "skipped"}
-    assert ran == WHOLE_CODEBASE_JOBS, sorted(ran ^ WHOLE_CODEBASE_JOBS)
+    assert ran == expected, sorted(ran ^ expected)
 
 
 def test_a_proven_push_still_runs_every_non_test_check(jobs):
@@ -2454,7 +2510,7 @@ def test_a_proven_push_still_runs_every_non_test_check(jobs):
     # coverage collection are what the PR run already did.
     sim = simulate(jobs, SCENARIOS["push, proven skip=true"])
     skipped = {n for n, r in sim.items() if r == "skipped"}
-    assert skipped == {"tests", "mutation-shard", "patch-coverage"}
+    assert skipped == {"tests", "mutation-shard", "patch-coverage", "idle-nightly"}
 
 
 def test_every_job_downstream_of_proven_names_a_status_function(jobs):
@@ -2523,7 +2579,8 @@ def test_the_shards_check_the_planner_result_now_that_they_say_not_cancelled(job
                                       ("failure", "", False),
                                       ("cancelled", "", False)]:
         got = job_runs(jobs, "mutation-shard", {"mutation-plan": plan_result,
-                                                "proven": "skipped"},
+                                                "proven": "skipped",
+                                                "idle-nightly": "skipped"},
                        {"mutation-plan": {"matrix": matrix}},
                        SCENARIOS["pull_request"])
         assert got is runs, (plan_result, matrix)
@@ -2665,8 +2722,58 @@ def test_proven_runs_the_script_with_the_token_through_env(jobs):
     assert "continue-on-error" not in step
 
 
+def test_the_idle_check_runs_on_a_schedule_on_main_and_nowhere_else(jobs):
+    # test_ci_idle_nightly.py pins the job's shape; its `if:` is evaluated
+    # here, beside the interpreter, for every event and ref.
+    cond = jobs["idle-nightly"]["if"]
+    for event in ("schedule", "workflow_dispatch", "push", "pull_request", "merge_group"):
+        for ref in ("refs/heads/main", "refs/heads/feature", "refs/pull/7/merge"):
+            got = evaluate(cond, {"github.event_name": event, "github.ref": ref}.get)
+            assert _truthy(got) is (event == "schedule" and ref == "refs/heads/main"), (
+                event, ref)
+
+
+def test_the_tree_is_recorded_for_whole_codebase_runs_only(jobs):
+    step = [s for s in jobs["mutation-plan"]["steps"] if s.get("id") == "tree"]
+    assert len(step) == 1
+    for event in ("schedule", "workflow_dispatch", "push", "pull_request", "merge_group"):
+        got = evaluate(step[0]["if"], {"github.event_name": event}.get)
+        assert _truthy(got) is (event in pt.WHOLE_CODEBASE_EVENTS), event
+
+
+def _marker_ifs(jobs) -> tuple[str, str]:
+    """The `if:` of the real-run marker upload and of the skip marker's."""
+    found = {}
+    for step in jobs["mutation-plan"]["steps"]:
+        name = (step.get("with") or {}).get("name", "")
+        if step.get("uses", "").startswith("actions/upload-artifact@"):
+            for prefix in (pt.MUTATED_TREE_ARTIFACT, pt.INHERITED_TREE_ARTIFACT):
+                if name.startswith(prefix):
+                    found[prefix] = step["if"]
+    return found[pt.MUTATED_TREE_ARTIFACT], found[pt.INHERITED_TREE_ARTIFACT]
+
+
+@pytest.mark.parametrize("event", ["schedule", "workflow_dispatch", "push", "pull_request",
+                                   "merge_group"])
+@pytest.mark.parametrize("gate_set", ["full", ""])
+@pytest.mark.parametrize("idle", ["true", "mismatch", ""])
+def test_a_whole_codebase_run_writes_the_one_marker_its_plan_says(jobs, event, gate_set, idle):
+    # Keyed on the plan's own gate set, never re-derived: "real" exactly when
+    # a whole-codebase run gates on the full set (a PR's or a push's is full
+    # too, and must not mark), "skip" exactly when an idle nightly planned
+    # none, and never both.
+    context = {"github.event_name": event, "steps.plan.outputs.gate_set": gate_set,
+               "steps.scope.outputs.idle": idle}
+    real_if, skip_if = _marker_ifs(jobs)
+    real_up = _truthy(evaluate(real_if, context.get))
+    skip_up = _truthy(evaluate(skip_if, context.get))
+    assert real_up is (event in pt.WHOLE_CODEBASE_EVENTS and gate_set == "full")
+    assert skip_up is (event == "schedule" and idle == "true" and gate_set == "")
+    assert not (real_up and skip_up)
+
+
 def test_no_new_job_expands_an_expression_inside_run(jobs):
-    for name in ("proven", "coverage-badge", "tests"):
+    for name in ("proven", "idle-nightly", "coverage-badge", "tests"):
         for step in jobs[name]["steps"]:
             run = step.get("run", "")
             if name == "tests" and step.get("name", "").startswith("job summary"):

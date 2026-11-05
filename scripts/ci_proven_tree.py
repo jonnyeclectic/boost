@@ -36,6 +36,15 @@ only when all three facts hold:
    is what makes "green" mean "recently": without it, a nightly that quietly
    stopped (workflow disabled, schedules dropped) would keep authorising skips on
    a months-old result. 48 hours tolerates one missed night and not two.
+   An *idle* nightly (see below) counts, but never on its own word: a run
+   carrying an ``inherited-tree-`` marker is green here only when the walk
+   that let it skip, re-run from that run's own ``created_at``, still finds
+   the same real run green on the same commit and tree. Anything else reads
+   as ``unproven_skip``, which every ``== "success"`` check already refuses.
+   Not counting skips at all would have been the simpler rule and the wrong
+   trade: a real run older than 48 h fails this fact, so from the second
+   idle night on every proven push would pay the full run it exists to save
+   -- and the skip is only ever taken over bytes a green real run scored.
 
 THE DIRECTION IS THE WHOLE POINT. A wrong "skip" ships code no mutation run has
 seen; a wrong "run" costs one mutation run. So every fact that is unknown,
@@ -102,6 +111,47 @@ proves a tree diffed against the same base, and planned ``none`` whenever its
 own diff was irrelevant. It is gathered and caught apart from the decision
 above: an error in either never changes the other's answer.
 
+A THIRD QUESTION: MAY TONIGHT'S NIGHTLY INHERIT THE LAST REAL ONE? (``idle``,
+run by scripts/ci_idle_nightly.py in ci.yml's ``idle-nightly`` job.) On
+2026-11-02 run 41512174636 mutated ``b294d51c`` in full and passed; on
+2026-11-03 run 41682296301 mutated the same commit again, all 24 shards,
+because nothing had merged in between. ``idle`` lets a ``schedule`` run plan
+``none`` instead, and only when, walking the whole-codebase runs of ``ci.yml``
+on ``main`` that were created before it, newest first:
+
+* every run passed over is a completed, first-attempt, green *skip* of this
+  same commit and tree that names the run found below as its source -- a skip
+  is walked past, never inherited from, so the clock cannot restart on one;
+* the first run that is not a skip is the newest *real* run R, and R is
+  completed, first-attempt, green, of this same commit (so any push since, proven
+  or not, makes the next nightly full), its marker names this same tree, its
+  ``mutation`` job completed with ``success``, and it was created less than
+  ``MAX_INHERIT_AGE`` (7 days) before the run deciding -- the clock runs from R,
+  never from the last skip.
+
+Anything else the walk reaches stops it and plans full: a run still going, a
+red, cancelled or re-run one (red is never looked past, whatever lies behind
+it), a run with no marker or two, an expired or malformed one, a window with no
+real run. "Reaches" is the limit, and it is deliberate. The walk judges runs in
+``created_at`` order, newest first, and ends at R; a whole-codebase run created
+before R is never read, even one still going tonight or one that went red after
+R went green. ``ci-<event>-<sha>`` puts a dispatch and a nightly of one commit
+in different concurrency groups, so the two can overlap. R scored these same
+bytes in full and green, so such a run is a second measurement that disagrees,
+not code nothing has seen. It is also the order fact 3 reads
+(``_newest_completed_whole``). And refusing on it would let a *later* re-run of
+an older run unprove, through ``_proven_skip``, a skip that held when it was
+taken. A marker is how a run says what it was. mutation-plan uploads
+``mutated-tree-<tree>`` when its plan's gate set is ``full`` and
+``inherited-tree-<tree>-from-<R's id>`` when it planned an idle ``none``, both
+before any shard starts and so before the outcome is known: a red real run is
+marked exactly like a green one, and is found, read, and refused. Only
+``schedule`` may skip; a ``workflow_dispatch`` always plans full, and is the
+lever for clearing a red nightly. Every failure to answer -- an HTTP error, a
+listing longer than its page, an undated run, a run of another branch or event,
+this run missing from the listing -- is ``idle=false`` with ``error: <type>``,
+the same discipline as the decision above.
+
 CLI. ``ci_proven_tree.py --sha SHA [--before SHA]`` reads ``GITHUB_REPOSITORY``
 and ``GITHUB_TOKEN``, appends ``skip=true|false``, ``pr_run_id=<id or empty>``,
 ``base_mutation_green=true|false`` and ``base_mutation=<word>`` (see
@@ -127,6 +177,12 @@ and run 41148140704 (``event`` push, ``head_branch`` main), and
 ``actions/runs/41148140704/jobs?filter=latest&per_page=100`` returned
 ``total_count`` 45 with 45 ``jobs``, each carrying ``run_id``, ``name``,
 ``status`` and ``conclusion`` -- ``mutation`` among them, completed, failure.
+The idle walk's two, on 2026-11-04: ``actions/workflows/ci.yml/runs?branch=
+main&event=schedule&created=%3E%3D2026-10-27&per_page=100`` returned
+``total_count`` 2 (41682296301 and 41512174636, both ``head_branch`` main) and
+the ``workflow_dispatch`` twin 0; ``actions/runs/41682296301/artifacts?
+per_page=100`` returned ``total_count`` 27 with 27 ``artifacts``, each carrying
+``name``, ``expired`` and ``workflow_run.id``.
 """
 from __future__ import annotations
 
@@ -195,6 +251,34 @@ MUTATION_JOB = "mutation"
 #: holds more than came back is not read: the newest run, or the one job named
 #: `mutation`, could be on the page that was never fetched.
 PER_PAGE = 100
+
+# What a whole-codebase run says it was, in an artifact name (contents cannot
+# be read without following a redirect, which make_api refuses). ci.yml's
+# mutation-plan spells the same prefixes; the tests of those steps read them
+# from here. `mutated-tree-<tree>`: the plan's gate set was `full`.
+# `inherited-tree-<tree>-from-<run id>`: an idle nightly planned `none` on the
+# strength of that run. Neither starts with the other or with TESTED_TREE_ARTIFACT.
+MUTATED_TREE_ARTIFACT = "mutated-tree-"
+INHERITED_TREE_ARTIFACT = "inherited-tree-"
+
+# How long a real whole-codebase run's verdict may be inherited, measured from
+# its created_at to the created_at of the run deciding. "Less than": a run
+# exactly 7 days older is not inherited. The age bound is drift outside the
+# tree -- the runner image, setup-python's "3.14" patch release, the unpinned
+# `pip install sqlite-vec || true` -- which a byte-identical tree cannot
+# rule out, so a week of it is the most a skip may lean on.
+MAX_INHERIT_AGE = timedelta(days=7)
+
+# What `_last_whole` reports for a skip whose inheritance no longer holds. A
+# plain word, so `decide` says "concluded unproven_skip" and `base_mutation`
+# "nightly-unproven_skip" with no change to either.
+UNPROVEN_SKIP = "unproven_skip"
+
+_RUN_ID = re.compile(r"[1-9][0-9]{0,19}")
+_TREE_PART = r"(?P<tree>[0-9a-f]{40}(?:[0-9a-f]{24})?)"
+_MUTATED_NAME = re.compile(re.escape(MUTATED_TREE_ARTIFACT) + _TREE_PART)
+_INHERITED_NAME = re.compile(re.escape(INHERITED_TREE_ARTIFACT) + _TREE_PART
+                             + r"-from-(?P<source>[1-9][0-9]{0,19})")
 
 _COMMIT = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?")      # sha-1 or sha-256
 _OBJECT = _COMMIT       # a tree id has a commit id's shape
@@ -525,12 +609,13 @@ def _candidate(api: Api, head: str, merge_tree: str) -> Candidate:
         artifacts=() if run_id is None else _artifacts(api, run_id, merge_tree))
 
 
-def _last_whole(api: Api) -> Nightly | None:
-    """The newest completed ``schedule``/``workflow_dispatch`` run, or None.
+def _newest_completed_whole(api: Api) -> dict[str, Any] | None:
+    """The newest completed ``schedule``/``workflow_dispatch`` run object, or None.
 
     Two queries, ``per_page=1`` each, because GitHub's ``event`` filter takes one
     value. An exception from either propagates (see the module docstring); an
-    empty answer from one is simply "that event has not run".
+    empty answer from one is simply "that event has not run". This is the
+    liveness half of ``_last_whole``, and all nightly_watch.py asks.
     """
     newest: dict[str, Any] | None = None
     for event in WHOLE_CODEBASE_EVENTS:
@@ -550,13 +635,311 @@ def _last_whole(api: Api) -> Nightly | None:
             raise ValueError("a branch=%s query returned a run on branch %r"
                              % (MAIN, found.get("head_branch")))
         newest = found if newest is None else max((newest, found), key=_run_key)
-    if newest is None:
+    return newest
+
+
+def _as_nightly(run: dict[str, Any] | None) -> Nightly | None:
+    """A run object as a ``Nightly``, or None when it has not finished."""
+    if run is None:
         return None
-    status = newest.get("status")
-    conclusion = newest.get("conclusion")
+    status = run.get("status")
+    conclusion = run.get("conclusion")
     if (status is not None and status != "completed") or not isinstance(conclusion, str) or not conclusion:
         return None
-    return Nightly(conclusion, _parse_when(newest.get("created_at")))
+    return Nightly(conclusion, _parse_when(run.get("created_at")))
+
+
+def _last_whole(api: Api) -> Nightly | None:
+    """The newest completed whole-codebase run, as fact 3 and the base read it.
+
+    A red run is returned as it is, with no further request. A green one is
+    asked what it was: a run marked only ``mutated-tree-`` (a real run), or
+    one with no marker at all, reads as before -- every whole-codebase run
+    before the idle nightly existed planned full, and after it a run that
+    reaches its plan uploads a marker or fails. A run carrying an
+    ``inherited-tree-`` marker (an idle nightly) is green only when it is that
+    run's one marker, on its first attempt, and ``_proven_skip`` re-derives
+    it; otherwise it concludes ``UNPROVEN_SKIP``. A re-run of a skip is the
+    case that makes "one marker" matter: its second attempt is not idle,
+    plans full and uploads a ``mutated-tree-`` beside the first attempt's
+    ``inherited-tree-``, and a listing cannot say which attempt left which.
+    "Not idle" holds for both kinds of re-run, by two different checks. Re-run
+    in full, ``idle-nightly`` runs again and ``idle`` refuses any attempt but
+    1. Re-run from a failed job, ``idle-nightly`` does not run again -- GitHub
+    reuses the outputs of jobs that succeeded in the attempt before -- so
+    ci.yml's scope step refuses that reused yes on ``GITHUB_RUN_ATTEMPT``.
+    """
+    newest = _newest_completed_whole(api)
+    nightly = _as_nightly(newest)
+    if newest is None or nightly is None or nightly.conclusion != "success":
+        return nightly
+    ident = newest.get("id")
+    if not isinstance(ident, int) or isinstance(ident, bool):
+        raise ValueError("the newest whole-codebase run has no integer id")
+    markers = _markers(api, ident)
+    if all(m.kind == "real" for m in markers):
+        return nightly
+    if len(markers) != 1 or newest.get("run_attempt") != 1 \
+            or not _proven_skip(api, newest, markers[0]):
+        return Nightly(UNPROVEN_SKIP, nightly.created_at)
+    return nightly
+
+
+# --------------------------------------------------------------------------
+# an idle nightly: what it inherits, and from whom
+# --------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class Marker:
+    """What one whole-codebase run's artifact listing says the run was.
+
+    ``kind`` is ``"real"`` (``mutated-tree-<tree>``) or ``"skip"``
+    (``inherited-tree-<tree>-from-<source>``); ``source`` is the real run a
+    skip named, None for a real run. ``expired`` is the entry's own flag, or
+    None when it is absent or not a boolean -- which the walk does not read as
+    live.
+    """
+
+    kind: str
+    tree: str
+    source: int | None
+    expired: bool | None
+
+
+@dataclass(frozen=True)
+class Inheritance:
+    """The walk's answer: the real run inherited (None: none may be), and why."""
+
+    source: dict[str, Any] | None
+    reason: str
+
+
+@dataclass(frozen=True)
+class Idle:
+    """May this nightly plan ``none``? And if so, which real run it leans on.
+
+    ``source_*`` are filled only with ``idle=True``, and only from values the
+    walk checked: an integer id, an object id, an aware instant.
+    """
+
+    idle: bool
+    reason: str
+    source_run: int | None = None
+    source_tree: str = ""
+    source_created: datetime | None = None
+
+
+def _iso(when: datetime) -> str:
+    return when.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _short(sha: Any) -> str:
+    """The first 12 characters of an object id, or ``?`` for anything else."""
+    return sha[:12] if isinstance(sha, str) and _OBJECT.fullmatch(sha) else "?"
+
+
+def _markers(api: Api, run_id: int) -> list[Marker]:
+    """Every marker run ``run_id``'s artifact listing holds, unjudged.
+
+    The whole listing, one page: the name carries the tree, which is the thing
+    being asked, so the server's ``name`` filter cannot be used. A marker of
+    another run, or a name with a marker's prefix that does not parse, raises:
+    the listing is not the shape this was checked against. How many markers
+    is the caller's question -- a run that says two things says nothing, and
+    each caller turns that into its own safe answer.
+    """
+    listing = api("actions/runs/%d/artifacts?per_page=%d" % (run_id, PER_PAGE))
+    found: list[Marker] = []
+    for item in _page(listing, "artifacts"):
+        name = item.get("name")
+        if not isinstance(name, str) or not name.startswith(
+                (MUTATED_TREE_ARTIFACT, INHERITED_TREE_ARTIFACT)):
+            continue
+        owner = _dig(item, "workflow_run", "id")
+        if owner is not None and not (_is_int(owner) and owner == run_id):
+            raise ValueError("run %d's artifact listing holds another run's marker" % run_id)
+        expired = item.get("expired")
+        expired = expired if isinstance(expired, bool) else None
+        real, skip = _MUTATED_NAME.fullmatch(name), _INHERITED_NAME.fullmatch(name)
+        if real is not None:
+            found.append(Marker("real", real["tree"], None, expired))
+        elif skip is not None:
+            found.append(Marker("skip", skip["tree"], int(skip["source"]), expired))
+        else:
+            raise ValueError("run %d carries a malformed marker" % run_id)
+    return found
+
+
+def _whole_window(api: Api, since: datetime) -> tuple[list[dict[str, Any]], str]:
+    """Every whole-codebase run of ci.yml on main created since a floor, newest first.
+
+    The floor is a UTC date a day before ``since - MAX_INHERIT_AGE``, so any
+    run the walk may inherit from is inside it. No ``status`` filter: a run
+    still in progress between R and the run deciding must be seen, because it
+    stops the walk (one created before R is listed too, and never reached). Each run must
+    say the event and branch it was asked for and carry an integer id and a
+    usable ``created_at`` -- anything else raises, as ``_last_whole`` does.
+    Returns the runs and the floor, which the reasons name.
+    """
+    floor = (since - MAX_INHERIT_AGE - timedelta(days=1)).astimezone(UTC).date().isoformat()
+    found: list[dict[str, Any]] = []
+    for event in WHOLE_CODEBASE_EVENTS:
+        listing = api("actions/workflows/ci.yml/runs?branch=%s&event=%s"
+                      "&created=%%3E%%3D%s&per_page=%d" % (MAIN, event, floor, PER_PAGE))
+        for item in _page(listing, "workflow_runs"):
+            if item.get("event") != event:
+                raise ValueError("a %r window query returned a %r run" % (event, item.get("event")))
+            if item.get("head_branch") != MAIN:
+                raise ValueError("a branch=%s window query returned a run on branch %r"
+                                 % (MAIN, item.get("head_branch")))
+            if not _is_int(item.get("id")):
+                raise ValueError("a whole-codebase run in the window has no integer id")
+            _run_key(item)      # raises on a run with no usable created_at
+            found.append(item)
+    return sorted(found, key=_run_key, reverse=True), floor
+
+
+def _mutation_job(api: Api, run_id: int) -> dict[str, Any] | None:
+    """Run ``run_id``'s job named exactly ``mutation`` (latest attempt), or None.
+
+    One page; two such jobs, or one that names another run, raise.
+    """
+    jobs = _page(api("actions/runs/%d/jobs?filter=latest&per_page=%d" % (run_id, PER_PAGE)),
+                 "jobs")
+    named = [j for j in jobs if j.get("name") == MUTATION_JOB]
+    if not named:
+        return None
+    if len(named) > 1:
+        raise ValueError("run %d lists %d jobs named %s" % (run_id, len(named), MUTATION_JOB))
+    job = named[0]
+    owner = job.get("run_id")
+    if owner is not None and not (_is_int(owner) and owner == run_id):
+        raise ValueError("run %d's %s job says it belongs to run %r" % (run_id, MUTATION_JOB, owner))
+    return job
+
+
+def _inherit(api: Api, ref: dict[str, Any], sha: str, tree: str,
+             runs: list[dict[str, Any]], floor: str) -> Inheritance:
+    """The walk (module docstring): may ``ref``, a run of ``sha`` over ``tree``, inherit?
+
+    ``ref`` is the run deciding -- tonight's nightly, or a skip being re-checked
+    for fact 3 -- and ``runs`` is ``_whole_window``'s listing, newest first.
+    ``ref`` itself and every run created after it are left out *before*
+    anything else is judged: the nightly asking is in the listing, in progress,
+    and a dispatch started after it has no bearing on what it may inherit.
+    Every reason is built from integers, ``_word``, ``_short``, ``_iso`` and
+    ``_days`` output, never from a string the API returned.
+    """
+    ref_key = _run_key(ref)
+    ref_id = ref.get("id")
+    skips: list[tuple[int, int | None]] = []
+    for run in runs:
+        ident = run["id"]
+        if ident == ref_id or _run_key(run) >= ref_key:
+            continue
+        where = "run %d (%s)" % (ident, _word(run.get("event")))
+        status, conclusion = run.get("status"), run.get("conclusion")
+        if status != "completed":
+            return Inheritance(None, "%s is %s, so what it will say is unknown"
+                               % (where, _word(status)))
+        if conclusion != "success":
+            return Inheritance(None, "%s concluded %s, and a whole-codebase run that is "
+                               "not green is never looked past" % (where, _word(conclusion)))
+        attempt = run.get("run_attempt")
+        if attempt != 1 or not _is_int(attempt):
+            return Inheritance(None, "%s is attempt %s, and only a first attempt counts"
+                               % (where, attempt if _is_int(attempt) else "unknown"))
+        if run.get("head_sha") != sha:
+            return Inheritance(None, "%s ran commit %s, not %s: main has moved since"
+                               % (where, _short(run.get("head_sha")), sha[:12]))
+        markers = _markers(api, ident)
+        if not markers:
+            return Inheritance(None, "%s carries no %s or %s marker"
+                               % (where, MUTATED_TREE_ARTIFACT, INHERITED_TREE_ARTIFACT))
+        if len(markers) > 1:
+            return Inheritance(None, "%s carries %d markers, so what it was is ambiguous"
+                               % (where, len(markers)))
+        marker = markers[0]
+        if marker.expired is not False:
+            return Inheritance(None, "%s's marker has expired" % where)
+        if marker.tree != tree:
+            return Inheritance(None, "%s recorded tree %s, not %s"
+                               % (where, marker.tree[:12], tree[:12]))
+        if marker.kind == "skip":
+            skips.append((ident, marker.source))
+            continue
+        # The newest real run. Its age first: an old run needs no more requests.
+        age = ref_key[0] - _run_key(run)[0]
+        if age >= MAX_INHERIT_AGE:
+            return Inheritance(None, "%s, the newest real whole-codebase run, was created "
+                               "%s days before this one; a real run is inherited for "
+                               "less than %d" % (where, _days(age), MAX_INHERIT_AGE.days))
+        job = _mutation_job(api, ident)
+        if job is None:
+            return Inheritance(None, "%s has no %s job" % (where, MUTATION_JOB))
+        if job.get("status") != "completed" or job.get("conclusion") != "success":
+            return Inheritance(None, "%s's %s job is %s/%s" % (
+                where, MUTATION_JOB, _word(job.get("status")), _word(job.get("conclusion"))))
+        for skip_id, source in skips:
+            if source != ident:
+                return Inheritance(None, "run %d inherited from run %s, not from %s"
+                                   % (skip_id, source if _is_int(source) else "?", where))
+        return Inheritance(run, "inherits %s, created %s, which mutated tree %s in full with "
+                           "%s green, %s days earlier" % (
+                               where, _iso(_run_key(run)[0]), tree[:12], MUTATION_JOB,
+                               _days(age)))
+    return Inheritance(None, "no real whole-codebase run of ci.yml on main created since %s"
+                       % floor)
+
+
+def _proven_skip(api: Api, run: dict[str, Any], marker: Marker) -> bool:
+    """Does the skip ``run`` still inherit what its marker says it did?
+
+    Re-run from the skip's own ``created_at``, so R is aged as the skip aged
+    it (fact 3 then judges the skip's own 48 h); and the real run found must
+    be the one the marker names. Anything unknown is False.
+    """
+    created = _parse_when(run.get("created_at"))
+    sha = run.get("head_sha")
+    if created is None or not isinstance(sha, str) or not _COMMIT.fullmatch(sha):
+        return False
+    runs, floor = _whole_window(api, created)
+    got = _inherit(api, run, sha, marker.tree, runs, floor)
+    return got.source is not None and got.source.get("id") == marker.source
+
+
+def idle(api: Api, sha: str, run_id: int, run_attempt: int, now: datetime) -> Idle:
+    """May the ``schedule`` run ``run_id`` of ``sha`` plan no mutation run?
+
+    Raises on any transport or shape problem; ci_idle_nightly.py turns that
+    into ``error: <type>``. A re-run is answered with no request: it was
+    started because something about the first attempt was in doubt.
+    """
+    if run_attempt != 1:
+        return Idle(False, "this run is attempt %d, and a re-run plans the full set"
+                    % run_attempt)
+    tree = _tree_sha(api("git/commits/%s" % sha), "this commit")
+    if not _OBJECT.fullmatch(tree):
+        raise ValueError("this commit's tree.sha is not an object id")
+    runs, floor = _whole_window(api, now)
+    mine = [r for r in runs if r["id"] == run_id]
+    if len(mine) != 1:
+        raise ValueError("run %d is listed %d times in the window" % (run_id, len(mine)))
+    me = mine[0]
+    # The run asking must be the one this step runs in: a schedule run of
+    # this commit. The window already checked its branch.
+    if me.get("event") != "schedule" or me.get("head_sha") != sha:
+        raise ValueError("run %d is not a schedule run of this commit" % run_id)
+    if _run_key(me)[0] - now > CLOCK_SKEW:
+        raise ValueError("run %d's created_at is ahead of this clock" % run_id)
+    got = _inherit(api, me, sha, tree, runs, floor)
+    if got.source is None:
+        return Idle(False, "not idle: " + got.reason)
+    created = _run_key(got.source)[0]
+    return Idle(True, "idle nightly: main is still %s, tree %s; %s; inherited, not "
+                "re-measured, until %s" % (sha[:12], tree[:12], got.reason,
+                                           _iso(created + MAX_INHERIT_AGE)),
+                got.source["id"], tree, created)
 
 
 def gather(api: Api, sha: str) -> tuple[str, list[Candidate], Nightly | None]:
@@ -610,7 +993,9 @@ class BaseVerdict:
     * ``unknown`` -- a status or conclusion that is absent or not such a word;
     * ``nightly-<conclusion>`` -- the job was green, but the newest completed
       whole-codebase run on ``main`` concluded otherwise (``nightly-failure``,
-      ``nightly-cancelled``, ..., ``nightly-unknown``);
+      ``nightly-cancelled``, ..., ``nightly-unknown``), or is an idle nightly
+      whose inheritance ``_last_whole`` could not re-derive
+      (``nightly-unproven_skip``);
     * ``no-nightly`` -- the job was green, and no whole-codebase run on
       ``main`` has completed;
     * ``no-base`` -- ``before`` is empty or all zeros (the push made the ref);
@@ -684,18 +1069,9 @@ def base_mutation(api: Api, before: str) -> BaseVerdict:
     # _is_int's test, spelled out so the type checker sees an int below.
     if not isinstance(run_id, int) or isinstance(run_id, bool):
         raise ValueError("the base run has no integer id")
-    jobs = _page(api("actions/runs/%d/jobs?filter=latest&per_page=%d" % (run_id, PER_PAGE)),
-                 "jobs")
-    named = [j for j in jobs if j.get("name") == MUTATION_JOB]
-    if not named:
+    job = _mutation_job(api, run_id)
+    if job is None:
         return BaseVerdict(False, "missing-job")
-    if len(named) > 1:
-        raise ValueError("the base run lists %d jobs named %s" % (len(named), MUTATION_JOB))
-    job = named[0]
-    owner = job.get("run_id")
-    if owner is not None and not (_is_int(owner) and owner == run_id):
-        raise ValueError("the base run's %s job says it belongs to run %r"
-                         % (MUTATION_JOB, owner))
     status, conclusion = job.get("status"), job.get("conclusion")
     if status != "completed":
         return BaseVerdict(False, _word(status))

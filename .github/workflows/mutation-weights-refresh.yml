@@ -82,10 +82,13 @@ jobs:
     # Why three events and not `push` alone. ci.yml's `mutation-weights`
     # upload comes only from a full whole-codebase run, and a push to main
     # whose tree a green PR run already tested now skips the shards (its plan
-    # is `none`), so most pushes carry no weights at all. The nightly
-    # (`schedule`) and a hand-started ci run (`workflow_dispatch`) always plan
-    # the full run, and without them the weights would refresh only on the
-    # rare unproven push. `head_branch == 'main'` is stated again even though
+    # is `none`), so most pushes carry no weights at all. A hand-started ci
+    # run (`workflow_dispatch`) always plans the full run, and the nightly
+    # (`schedule`) does too unless it is idle -- main still at the commit and
+    # tree of a green full run under 7 days old, which it inherits and
+    # uploads no weights for (the `mutated-tree-` marker is how to tell a
+    # real run from such a skip). Without them the weights would refresh only
+    # on the rare unproven push. `head_branch == 'main'` is stated again even though
     # `branches: [main]` above already filters on it, because a ci dispatch
     # may name any branch, and weights measured on a feature branch's tree
     # must not be packed into main's.
@@ -182,9 +185,9 @@ jobs:
           fi
           {
             echo "Run \`$RUN_ID\` published no \`mutation-weights\` artifact —"
-            echo "it ran no full mutation run (nothing mutable changed, or a"
-            echo "push proven by its PR run), or the artifact has passed its"
-            echo "7-day retention."
+            echo "it ran no full mutation run (nothing mutable changed, a push"
+            echo "proven by its PR run, or an idle nightly that inherited the"
+            echo "last real one), or the artifact has passed its 7-day retention."
           } >> "$GITHUB_STEP_SUMMARY"
       - name: is the committed plan far enough behind to be worth a PR
         id: drift
