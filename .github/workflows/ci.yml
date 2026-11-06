@@ -143,7 +143,7 @@ jobs:
       contents: read
     steps:
       - name: harden runner (egress audit)
-        uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
+        uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
         with:
           # audit: record egress, never block — the runtime signal that
           # catches a compromised action exfiltrating a token, paired with
@@ -437,7 +437,7 @@ jobs:
       contents: read
     steps:
       - name: harden runner (egress audit)
-        uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
+        uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
         with:
           egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -502,7 +502,7 @@ jobs:
       base_mutation: ${{ steps.decide.outputs.base_mutation }}
     steps:
       - name: harden runner (egress audit)
-        uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
+        uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
         with:
           egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -567,7 +567,7 @@ jobs:
       reason: ${{ steps.idle.outputs.reason }}
     steps:
       - name: harden runner (egress audit)
-        uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
+        uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
         with:
           egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -624,7 +624,7 @@ jobs:
       shadow_reason: ${{ steps.shadow.outputs.shadow_reason }}
     steps:
       - name: harden runner (egress audit)
-        uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
+        uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
         with:
           egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -749,7 +749,7 @@ jobs:
     steps:
       - name: harden runner (egress audit)
         if: runner.os == 'Linux'   # harden-runner is Linux-only
-        uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
+        uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
         with:
           # audit: record egress, never block — the runtime signal that
           # catches a compromised action exfiltrating a token, paired with
@@ -925,7 +925,7 @@ jobs:
     steps:
       - name: harden runner (egress audit)
         if: runner.os == 'Linux'   # harden-runner is Linux-only
-        uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
+        uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
         with:
           egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1051,7 +1051,7 @@ jobs:
       actions: read     # download coverage-report from the proving PR run
     steps:
       - name: harden runner (egress audit)
-        uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
+        uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
         with:
           egress-policy: audit
       - name: which run measured this tree
@@ -1208,7 +1208,7 @@ jobs:
       advisory_matrix: ${{ steps.plan.outputs.advisory_matrix }}
     steps:
       - name: harden runner (egress audit)
-        uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
+        uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
         with:
           egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -2159,7 +2159,7 @@ jobs:
       contents: read
     steps:
       - name: harden runner (egress audit)
-        uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
+        uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
         with:
           egress-policy: audit
       - name: upstream jobs must be conclusive
@@ -2468,7 +2468,7 @@ jobs:
       contents: read
     steps:
       - name: harden runner (egress audit)
-        uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
+        uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
         with:
           # audit: record egress, never block — the runtime signal that
           # catches a compromised action exfiltrating a token, paired with
@@ -2532,7 +2532,7 @@ jobs:
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
     steps:
       - name: harden runner (egress audit)
-        uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
+        uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
         with:
           # audit: record egress, never block — the runtime signal that
           # catches a compromised action exfiltrating a token, paired with
@@ -2622,7 +2622,7 @@ jobs:
       contents: read
     steps:
       - name: harden runner (egress audit)
-        uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
+        uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
         with:
           # audit: record egress, never block — the runtime signal that
           # catches a compromised action exfiltrating a token, paired with
@@ -2673,7 +2673,7 @@ jobs:
       contents: read
     steps:
       - name: harden runner (egress audit)
-        uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
+        uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2.22.2
         with:
           egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
