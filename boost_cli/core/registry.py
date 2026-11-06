@@ -256,7 +256,10 @@ def _file_url_path(spec: str) -> Path | None:
     Only an empty or `localhost` host is this machine; `file://otherhost/…`
     stays a URL for git to judge.
     """
-    u = urllib.parse.urlparse(spec)
+    try:
+        u = urllib.parse.urlparse(spec)
+    except ValueError:      # "Invalid IPv6 URL": an unbalanced `[` in the host
+        return None
     if u.scheme.lower() != "file" or u.netloc.lower() not in ("", "localhost"):
         return None
     return Path(urllib.request.url2pathname(u.path))
@@ -356,6 +359,61 @@ def get(name: str) -> Tap:
                     else "list taps with `boost taps`")
 
 
+def named(name: str) -> Tap | None:
+    """The configured tap whose *whole* name is ``name``, else None.
+
+    Narrower than :func:`get` on purpose: only the full name and, failing
+    that, its case-folded spelling count — never the bare repo tail or
+    ``safe_name``. The caller is `boost install`, where a NAME that is not a
+    tap must stay a skill name; `install superpowers` meaning "every skill
+    obra ships" because a repo happens to be called that would be a surprise
+    no prompt should have to catch. It resolves on its own rather than
+    handing off to :func:`get`, whose tail tier comes before the case-folded
+    one: with a local tap ``Skills`` and ``acme/skills`` both configured,
+    ``get("skills")`` answers ``acme/skills``. Two taps that differ only by
+    case and match neither exactly are an error, as they are for ``get``.
+    """
+    taps = list_taps()
+    hits = ([t for t in taps if t.name == name]
+            or [t for t in taps if name_key(t.name) == name_key(name)])
+    if len(hits) > 1:
+        raise BoostError(
+            "%r is ambiguous — it matches %d taps: %s"
+            % (name, len(hits), ", ".join(sorted(t.name for t in hits))),
+            hint="use the full owner/repo name")
+    return hits[0] if hits else None
+
+
+def url_for(entry: dict) -> str | None:
+    """The repository an installed or catalogued item comes from, or None.
+
+    In order: the ``tap_url`` a lock row recorded at install (what was
+    actually installed, even after an untap — :func:`source_changed` trusts
+    it the same way), then the configured tap's URL (a catalog row, or a lock
+    row written before the field, unless the name was tapped again since),
+    then a URL import's ``source_url``. A path import has none: its
+    ``source_dir`` is a directory, not a source.
+    Only an exact tap name is looked up — the entry's ``tap`` is already the
+    configured spelling, and :func:`get`'s looser tiers could answer with
+    another tap's URL.
+    """
+    recorded = str(entry.get("tap_url") or "")
+    if recorded:
+        return recorded
+    tap = str(entry.get("tap") or "")
+    if tap == "local" and "source_url" in entry:
+        # An import, whatever is configured: `local` is also a legal tap name
+        # (`boost tap ~/c/local`), and that tap's path is not this row's source.
+        return str(entry.get("source_url") or "") or None
+    for t in list_taps():
+        # A row written before `tap_url` existed, under a name tapped again
+        # since, came from the earlier repository — `boost outdated` calls
+        # that "source changed", so its URL must not be the new one's.
+        if tap and t.name == tap and t.url and not retapped_since(entry, t):
+            return t.url
+    return str(entry.get("source_url") or "") or None
+
+
 def same_source(a: str, b: str) -> bool:
     """True when two tap URLs name the same repository.
 
@@ -446,6 +504,38 @@ def _source_key(url: str) -> str:
     return host + "/" + path
 
 
+def tapped_source_keys() -> set[str]:
+    """:func:`_source_key` of every configured tap's URL.
+
+    What "already tapped" means to a caller holding a GitHub ``owner/repo``
+    (see :func:`untapped_repos`): the URL, not the tap's name, because a
+    local tap named ``skills`` is not ``anthropics/skills``.
+    """
+    return {_source_key(t.url) for t in list_taps() if t.url}
+
+
+def untapped_repos(rows: list[dict]) -> tuple[list[dict], int]:
+    """``rows`` (each carrying a GitHub ``repo``) minus repos already tapped.
+
+    `boost discover` and the MCP `boost_discover_github` tool both promise
+    repositories nobody here has tapped, and both listed tapped ones: the
+    discovery index is a snapshot from before the tap, and the live search
+    never asked. Matched through :func:`_source_key`, so `Anthropics/Skills`
+    from GitHub and a tap of `https://github.com/anthropics/skills.git` are
+    one repository. Returns ``(kept, dropped_repo_count)``.
+    """
+    tapped = tapped_source_keys()
+    kept: list[dict] = []
+    dropped: set[str] = set()
+    for row in rows:
+        key = _source_key("https://github.com/%s" % row.get("repo", ""))
+        if key in tapped:
+            dropped.add(key)
+        else:
+            kept.append(row)
+    return kept, len(dropped)
+
+
 def name_key(name: str) -> str:
     """The form of a tap name that decides whether two taps are one.
 
@@ -472,7 +562,8 @@ def already_tapped(name: str, held: str) -> str:
 def _taken(name: str, url: str, existing: str) -> BoostError:
     """The error for `name` already belonging to a different repository."""
     return BoostError(
-        "tap name %s is already used by %s" % (name, existing),
+        "tap name %s is already used by %s"
+        % (name, existing or "a config.json row with no url"),
         # Both halves backticked: the hint folds to the pane, and only a
         # backtick span is atomic — a quoted path with a space split at it.
         hint="`boost untap %s`, then `boost tap %s` to tap it in its place"
@@ -690,7 +781,7 @@ def add(spec: str, curated: bool = False, at: str | None = None) -> Tap:
         raise BoostError("%r is not a full commit SHA" % at,
                          hint="pin with the 40-character hash a manifest names")
     tap = Tap(name=name, url=url, curated=curated)
-    paths.ensure_dirs()
+    paths.require_dirs()
     _clear_path(tap.path)
     gitutil.clone_shallow(url, tap.path)
     if at:
@@ -785,16 +876,31 @@ def _append_rows(cfg: dict, rows: list[dict]) -> bool:
     happens before the clone, outside any lock, so two processes tapping
     one name both pass it — re-checking here keeps the second from adding
     the same tap twice.
+
+    Only a row the reader uses holds a name (:func:`config.tap_row_issue`).
+    A malformed row of the same name — ``"url": 123`` — is one boost already
+    warned it skips, so the new row takes its place: counting it as taken
+    printed "tapped" over a config that still listed no usable tap.
     """
     taps = cfg.setdefault("taps", [])
-    have = {name_key(str(t.get("name"))) for t in taps
-            if isinstance(t, dict) and t.get("name")}
+    have = {name_key(t["name"]) for t in taps
+            if config.tap_row_issue(t) is None}
     added = False
     for row in rows:
-        if name_key(row["name"]) not in have:
+        key = name_key(row["name"])
+        if key in have:
+            continue
+        stale = [i for i, t in enumerate(taps)
+                 if isinstance(t, dict) and isinstance(t.get("name"), str)
+                 and name_key(t["name"]) == key]
+        if stale:
+            taps[stale[0]] = row
+            for i in reversed(stale[1:]):
+                del taps[i]
+        else:
             taps.append(row)
-            have.add(name_key(row["name"]))
-            added = True
+        have.add(key)
+        added = True
     return added
 
 
@@ -1151,7 +1257,7 @@ def add_many(specs: list[str], curated: bool = False,
     if not specs:
         return []
     config.refuse_unreadable()      # before any clone, as in `add`
-    paths.ensure_dirs()
+    paths.require_dirs()
     pins = pins or {}
     results: list[dict] = []
     todo: list[str] = []

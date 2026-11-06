@@ -601,6 +601,46 @@ def resolve_exe(argv: list[str]) -> list[str]:
     return [found, *argv[1:]] if found else argv.copy()
 
 
+# A history id's stamp and optional same-second serial, read off the END of
+# the filename so a prefix (``gemini-project-``, ``snap-``) cannot match:
+# ``lock-20261024T060813Z-2.json``, ``user-20261024T060813Z.json``,
+# ``snap-20261024-060839-10.tar.gz``.
+_HISTORY_ID = re.compile(
+    r"(\d{8})[T-]?(\d{6})Z?(?:-(\d+))?(?:\.json|\.tar\.gz)$")
+
+
+def history_key(path: Path) -> tuple:
+    """Sort key putting history files in creation order, oldest first.
+
+    Every history writer (lock history, ``snapshot save``, settings history)
+    names a file by a second-resolution stamp and gives a same-second
+    successor a ``-2``, ``-3``, ... suffix, so the name itself carries the
+    order: ``(stamp, serial)``, the bare base being serial 1. The key used to
+    be ``(mtime, name)``, which is wrong exactly where the suffix exists: on a
+    filesystem with 1-second mtimes (or after a copy that reset them)
+    same-second entries tie, and by name ``X-2.json`` sorts *before*
+    ``X.json`` (``-`` is 0x2D, ``.`` 0x2E) and ``X-10`` before ``X-2``. Lists
+    then showed the older state as newest and prune deleted the newer one.
+
+    A name that carries no stamp sorts before every one that does, in the old
+    ``(mtime, name)`` order among themselves; mtime and name also break a tie
+    between equal ids (two prefixes sharing one stamp).
+    """
+    try:
+        mtime = path.stat().st_mtime_ns
+    except OSError:
+        mtime = 0       # vanished since the glob: order it, don't crash
+    m = _HISTORY_ID.search(path.name)
+    if m is None:
+        return ("", 0, mtime, path.name)
+    return (m.group(1) + m.group(2), int(m.group(3) or 1), mtime, path.name)
+
+
+def sorted_history(files, *, newest_first: bool = False) -> list[Path]:
+    """``files`` in creation order (see :func:`history_key`)."""
+    return sorted(files, key=history_key, reverse=newest_first)
+
+
 def now_iso() -> str:
     """Return UTC now as ``'2026-07-16T01:00:00Z'`` (what ``rel_time`` parses)."""
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")

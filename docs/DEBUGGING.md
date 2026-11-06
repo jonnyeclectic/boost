@@ -317,7 +317,7 @@ Everything that changes boost's runtime behaviour, in one place:
 | `BOOST_NO_LOG` | `=1` → don't write the diagnostic log file |
 | `BOOST_NO_AI` | `=1` → disable all AI calls (offline / deterministic) |
 | `BOOST_NO_NET` | `=1` → skip the PyPI version check in `self-update` (air-gapped) |
-| `BOOST_ASSUME_YES` | `=1` → auto-confirm prompts (also `--yes`/`-y`) |
+| `BOOST_ASSUME_YES` | `=1` → answer yes to every confirm, including `install`'s offer to register skill-declared MCP servers machine-wide. A command's own `-y` answers only that command's prompt, never the MCP offer |
 | `NO_COLOR` / `CLICOLOR_FORCE` | force color off / on |
 
 The on/off switches (`BOOST_DEBUG`, `BOOST_NO_LOG`, `BOOST_NO_AI`,

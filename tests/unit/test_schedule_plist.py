@@ -20,6 +20,7 @@ from boost_cli.commands.configuration import (
     _plist_body,
     _plist_interval_seconds,
     _read_plist,
+    _schedule_env,
 )
 
 _WRAP = "<?xml version=\"1.0\"?><plist><dict>%s</dict></plist>"
@@ -100,6 +101,20 @@ class TestPlistBody:
         assert _plist_interval_seconds(_plist_body(shim, 86400)) == 86400
 
 
+    def test_carries_the_relocated_store_only_when_set(self, monkeypatch,
+                                                       tmp_path):
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.delenv("BOOST_HOME", raising=False)
+        monkeypatch.delenv("BOOST_AGENTS_STORE", raising=False)
+        assert _schedule_env() == {"BOOST_HOME": str(tmp_path / ".boost"),
+                                   "HOME": str(tmp_path)}
+        monkeypatch.setenv("BOOST_AGENTS_STORE", "~/alt-store")
+        data = plistlib.loads(_plist_body(Path("/x/boost"), 60).encode("utf-8"))
+        assert data["EnvironmentVariables"] == {
+            "BOOST_HOME": str(tmp_path / ".boost"), "HOME": str(tmp_path),
+            "BOOST_AGENTS_STORE": str(tmp_path / "alt-store")}
+
+
 # The expected lines spell POSIX paths and shell quoting; cron is a POSIX
 # backend, and on Windows str(Path("/x")) is a backslashed path that
 # shlex.quote then wraps.
@@ -114,6 +129,15 @@ class TestCronEntry:
         assert _cron_entry("0 6 * * *", Path("/opt/boost")) == (
             "0 6 * * * BOOST_HOME=%s/b' HOME=%s' /opt/boost update >> "
             "%s/b/logs/schedule.log' 2>&1 # boost-sync" % (q, q, q))
+
+    def test_store_rides_along_quoted(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("HOME", "/h")
+        monkeypatch.setenv("BOOST_HOME", "/h/.boost")
+        monkeypatch.setenv("BOOST_AGENTS_STORE", "/h/my store")
+        assert _cron_entry("0 6 * * *", Path("/x/boost")) == (
+            "0 6 * * * BOOST_HOME=/h/.boost HOME=/h "
+            "BOOST_AGENTS_STORE='/h/my store' /x/boost update >> "
+            "/h/.boost/logs/schedule.log 2>&1 # boost-sync")
 
     def test_plain_paths_are_unquoted(self, monkeypatch, tmp_path):
         monkeypatch.setenv("HOME", "/h")
