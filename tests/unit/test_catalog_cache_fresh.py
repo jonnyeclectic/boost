@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 
-from boost_cli.core import catalog, gitutil, registry, util
+from boost_cli.core import catalog, config, gitutil, registry, util
 
 
 def _tap(boost, tapped):
@@ -90,6 +90,22 @@ def test_a_star_changed_since_the_scan_is_not_fresh(boost, tapped):
     tap.cache_file.write_text(json.dumps(data), encoding="utf-8")
     catalog._ENTRY_CACHE.clear()
     assert catalog.cache_is_fresh(tap) is True
+
+
+def test_a_category_moved_since_the_scan_is_not_fresh(boost, tapped,
+                                                      monkeypatch):
+    # Entries inherit the tap's curated category at scan time, so `update`
+    # and `heal` must rescan a tap recategorised in registries.json — at the
+    # same commit and format, or the move never reaches a tapped machine.
+    tap = _tap(boost, tapped)
+    _rewrite(tap, tap_category="backend")
+    assert catalog.cache_is_fresh(tap) is False
+    monkeypatch.setattr(config, "registry_categories",
+                        lambda: {tap.name: "backend"})
+    catalog._ENTRY_CACHE.clear()
+    assert catalog.cache_is_fresh(tap) is True
+    _rewrite(tap, tap_category="general")
+    assert catalog.cache_is_fresh(tap) is False
 
 
 def test_an_empty_cache_at_head_is_fresh(boost, tapped):
