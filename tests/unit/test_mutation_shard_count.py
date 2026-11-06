@@ -536,7 +536,41 @@ class TestPlanCliContract:
 #: the pack the PR actually ran, every shard that finished was predicted to
 #: within 5 min. RUNNER_EFFICIENCY stands. TAIL_MULTIPLIER is not re-fitted:
 #: the outliers in those runs were lost runners, not the model.
-FITTED_TOTAL_MS = 278_027_516
+#:
+#: **Re-anchored 2026-11-06 from 278,027,516 to 373,498,046.** This is
+#: drift, and more of it is cost per mutant than new mutants: 46,088 ->
+#: 51,235 mutants (1.11x, one new file, profiles.py) and 6.03 -> 7.29 s each
+#: (1.21x). All of the new mutants came with the 2026-11-04 refresh
+#: (bbd90ac4, 334,761,078, 20.4% off and so inside the bound). This one is
+#: re-timing alone. It comes from the 24 shard artifacts of main's nightly
+#: 42075897128 (head e2cabfd5), whose boost_cli/core is byte-identical to
+#: b294d51c's, so the per-file mutant counts match exactly and only the
+#: time moved: 6.53 -> 7.29 s per mutant (1.12x; per file 0.62-2.05x,
+#: median 1.11). The tests changed between the two commits, so how much of
+#: that is a larger covering suite and how much is the runner is not
+#: measured. b294d51c's own two nightlies, with nothing changed, measured
+#: 384,316,009 (41512174636) and 334,761,078 (41682296301). Re-fitted from
+#: the job API as this test prescribes: over all 24 jobs, each job's own
+#: mutant time / 4 matches its `Running mutation testing` phase at a median
+#: 0.973 (0.933-0.992), so RUNNER_EFFICIENCY stands. The pack is not
+#: predicted to within 5 min this time, and the model is not why. The run
+#: was packed on bbd90ac4's weights at a flat 69.8-70.4 min a shard, and the
+#: jobs took 45.9-100.0, because each shard's re-timed work came in at
+#: 0.65-1.60x what those weights gave it. TAIL_MULTIPLIER is not re-fitted.
+#: Every run at twenty-four since harden-runner left this job (b02f0075)
+#: was measured from the job API: the seven ci.yml lists, this one, and ten
+#: more from 41861286489 to 42182488422. Over those eighteen the worst job
+#: ran 1.27-1.80x its run's median, under the 1.91 committed but closer
+#: than the eight alone showed (1.30-1.69). The worst is main's 41939504662,
+#: 122.0 min against a 67.8 median. Of the 432 first-attempt jobs, 431
+#: succeeded: shard 22 of 41893440023 lost its runner at 57 min and passed
+#: on its rerun, which is what is counted. 42170982098 was cancelled by hand
+#: at 11 min and is not counted. Runs at twenty-four from before b02f0075
+#: still had harden-runner in the job and are left out; this file leaves
+#: lost runners out of tail fits, and 41251356192, for one, lost eight of
+#: its 48 jobs that way. That is eighteen samples a shard against the 28 it
+#: was fitted over.
+FITTED_TOTAL_MS = 373_498_046
 
 #: What the *planner* totals over the same committed file, which is larger, and
 #: the two are not interchangeable. `load_durations` sums the 63 files with a
