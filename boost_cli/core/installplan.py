@@ -449,7 +449,7 @@ def expand_tap(tap: registry.Tap, *, force: bool = False,
         kind = str(e.get("kind") or "skill")
         by_kind.setdefault(kind, {}).setdefault(str(e["name"]), []).append(e)
     held = _skill_lock(scope, base)
-    counted = dict(held)
+    counted = held.copy()
     entries: list[dict] = []
     installed: list[str] = []
     skipped: list[tuple[str, str]] = []
@@ -551,7 +551,7 @@ def weigh(entries: list[dict], *, checked: Iterable[dict] = (),
     """
     keep_keys = {_item_key(e) for e in keep}
     checked_keys = {_item_key(e) for e in checked}
-    counted = dict(_skill_lock(scope, base))
+    counted = _skill_lock(scope, base).copy()
     owner = _owners(entries, keep_keys)
     for e in entries:
         if _item_key(e) in keep_keys and _is_skill(e):
