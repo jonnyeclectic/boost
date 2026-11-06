@@ -536,7 +536,32 @@ class TestPlanCliContract:
 #: the pack the PR actually ran, every shard that finished was predicted to
 #: within 5 min. RUNNER_EFFICIENCY stands. TAIL_MULTIPLIER is not re-fitted:
 #: the outliers in those runs were lost runners, not the model.
-FITTED_TOTAL_MS = 278_027_516
+#:
+#: **Re-anchored 2026-11-06 from 278,027,516 to 373,498,046.** This is
+#: drift, and more of it is cost per mutant than new mutants: 46,088 ->
+#: 51,235 mutants (1.11x, one new file, profiles.py) and 6.03 -> 7.29 s each
+#: (1.21x). All of the new mutants came with the 2026-11-04 refresh
+#: (bbd90ac4, 334,761,078, 20.4% off and so inside the bound). This one is
+#: re-timing alone. It comes from the 24 shard artifacts of main's nightly
+#: 42075897128 (head e2cabfd5), whose boost_cli/core is byte-identical to
+#: b294d51c's, so the per-file mutant counts match exactly and only the
+#: time moved: 6.53 -> 7.29 s per mutant (1.12x; per file 0.62-2.05x,
+#: median 1.11). The tests changed between the two commits, so how much of
+#: that is a larger covering suite and how much is the runner is not
+#: measured. b294d51c's own two nightlies, with nothing changed, measured
+#: 384,316,009 (41512174636) and 334,761,078 (41682296301). Re-fitted from
+#: the job API as this test prescribes: over all 24 jobs, each job's own
+#: mutant time / 4 matches its `Running mutation testing` phase at a median
+#: 0.973 (0.933-0.992), so RUNNER_EFFICIENCY stands. The pack is not
+#: predicted to within 5 min this time, and the model is not why. The run
+#: was packed on bbd90ac4's weights at a flat 69.8-70.4 min a shard, and the
+#: jobs took 45.9-100.0, because each shard's re-timed work came in at
+#: 0.65-1.60x what those weights gave it. TAIL_MULTIPLIER is not re-fitted:
+#: over the eight runs at twenty-four (this one and the seven ci.yml lists,
+#: 192 of 192 jobs succeeded) the worst job ran 1.30-1.69x its run's median,
+#: under the 1.91 committed. That is eight samples a shard against the 28
+#: it was fitted over, and every refresh re-packs, so no shard repeats.
+FITTED_TOTAL_MS = 373_498_046
 
 #: What the *planner* totals over the same committed file, which is larger, and
 #: the two are not interchangeable. `load_durations` sums the 63 files with a
