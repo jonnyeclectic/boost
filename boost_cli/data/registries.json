@@ -1674,7 +1674,7 @@
       "est_items": 26,
       "confidence": "high",
       "list_only": false,
-      "curated": false
+      "curated": true
     },
     {
       "name": "finsilabs/awesome-ecommerce-skills",
@@ -2346,7 +2346,7 @@
       "est_items": 177,
       "confidence": "high",
       "list_only": false,
-      "curated": false
+      "curated": true
     },
     {
       "name": "karanb192/awesome-claude-skills",

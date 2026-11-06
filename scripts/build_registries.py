@@ -107,6 +107,7 @@ CURATED = frozenset({
     # default taps (config.DEFAULT_TAPS) that are in the catalogue
     "anthropics/skills", "obra/superpowers", "trailofbits/skills",
     "PatrickJS/awesome-cursorrules", "qdhenry/Claude-Command-Suite",
+    "expo/skills", "K-Dense-AI/scientific-agent-skills",
     # official vendor registries
     "anthropics/claude-code", "anthropics/claude-plugins-official",
     "anthropics/financial-services", "anthropics/knowledge-work-plugins",
