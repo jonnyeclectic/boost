@@ -15,11 +15,24 @@ Supports the subset actually used by skill files:
 """
 from __future__ import annotations
 
+import re
 from contextlib import suppress
+
+BOM = "\ufeff"
 
 
 def split(text: str) -> tuple[str, str]:
-    """Return (frontmatter_block, body). Frontmatter block may be ""."""
+    """Return (frontmatter_block, body). Frontmatter block may be "".
+
+    A leading UTF-8 byte-order mark is dropped first. Windows editors
+    (Notepad among them) write one, and left in place it hides the opening
+    ``---`` from the check below, so a file with a valid fence read as having
+    no frontmatter at all: its description became ``\\ufeff---`` and its
+    version 0.0.0. Stripping it here, rather than in each reader, keeps
+    ``catalog`` and ``rag`` assembling the same body, so the content digest
+    stays in parity (tests/unit/test_content_identity.py).
+    """
+    text = text.removeprefix(BOM)
     if not text.startswith("---"):
         return "", text
     lines = text.splitlines()
@@ -48,6 +61,7 @@ def unclosed(text: str) -> bool:
     `---`) is legitimately frontmatter-less, but one that opens and never
     closes is broken and should say so once, not by omission three times over.
     """
+    text = text.removeprefix(BOM)
     if not text.startswith("---"):
         return False
     lines = text.splitlines()
@@ -71,19 +85,24 @@ def _dump_escape(s: str) -> str:
     return "".join(out)
 
 
+#: One escape `_dump_escape` writes: a backslash and the character it guards.
+_DUMP_ESCAPE = re.compile(r'\\([n"\\])')
+
+
 def _dump_unescape(s: str) -> str:
-    """Inverse of `_dump_escape`, applied to a double-quoted scalar's inside."""
-    out = []
-    i, n = 0, len(s)
-    while i < n:
-        ch = s[i]
-        if ch == "\\" and i + 1 < n and s[i + 1] in ("n", '"', "\\"):
-            out.append("\n" if s[i + 1] == "n" else s[i + 1])
-            i += 2
-            continue
-        out.append(ch)
-        i += 1
-    return "".join(out)
+    """Inverse of `_dump_escape`, applied to a double-quoted scalar's inside.
+
+    A regex rather than a hand-stepped ``while i < n`` scan, because of what a
+    mutant of the scan did: ``i += 1`` mutated to ``i = 1`` re-appends one
+    character forever. Measured locally it grew 2.3 GB -> 5.0 GB in 6 s,
+    against a wall-clock timeout of ~70 s for the 62 tests that reach it
+    (mutmut bounds time, never memory) -- enough to exhaust a 16 GB runner,
+    which matches how `mutation-shard (5)` died with "The runner has received a
+    shutdown signal" on #1189. ``re.sub`` walks left to right, consuming each
+    escape pair whole: the same reading, with no counter to mutate.
+    """
+    return _DUMP_ESCAPE.sub(
+        lambda m: "\n" if m.group(1) == "n" else m.group(1), s)
 
 
 _BLOCK_SCALAR_TOKENS = frozenset({"|", "|-", "|+", ">", ">-", ">+"})
@@ -193,12 +212,88 @@ def _split_commas(s: str):
     return parts
 
 
+def _value(v: str):
+    """A `key: value` line's value: flow list, block-scalar opener or scalar.
+
+    Returns ``_BLOCK`` for a ``|``/``>`` opener, whose content the caller
+    collects (or skips) from the indented lines that follow.
+    """
+    v = v.strip()
+    # strip trailing comments on unquoted scalars
+    if v and not v.startswith(("'", '"', "[")) and " #" in v:
+        v = v.split(" #", 1)[0].strip()
+    if v.startswith("[") and v.endswith("]"):
+        return _flow_list(v)
+    if v in _BLOCK_SCALAR_TOKENS:
+        return _BLOCK
+    return _scalar(v)
+
+
+_BLOCK = object()
+
+
+def _fold_join(parts: list[str], strip: bool) -> str:
+    """One folded scalar from its head and continuation lines.
+
+    Called once per folded key, when the key closes. Rebuilding the string at
+    every continuation line (``prev + " " + line``) made a 160,000-line
+    description cost 12.8 s to tap and ~40 s per ``boost info``: quadratic in
+    the file. ``.strip()`` only ever trims the edges, so stripping once here
+    reads exactly as stripping after every line did; ``strip`` is False when
+    every line folded through the one branch that never stripped, which keeps
+    a quoted head's own edge spaces.
+    """
+    joined = " ".join(parts)
+    return joined.strip() if strip else joined
+
+
+def _is_item(line: str) -> bool:
+    return line.startswith("- ") or line == "-"
+
+
 def parse_block(block: str) -> dict:
-    """Parse a frontmatter block into a dict. Best-effort, never raises."""
+    """Parse a frontmatter block into a dict. Best-effort, never raises.
+
+    Top-level keys sit at the indent of the first key line (column 0 in any
+    real file). A `k: v` line deeper than that is never a top-level field:
+    reading it as one let `author: {name: Jane Doe}` rename the skill to
+    jane-doe and `metadata: {version: "2.0"}` set its version. Under a key with
+    no value of its own it is one entry of a nested map, kept as a dict under
+    that key (`meta["author"] == {"name": "Jane Doe"}`): a scalar, a flow list
+    or a block list per entry. Anything deeper than that one level, and an
+    indented `k: v` under a key that already has a value, is skipped.
+    """
+    # Continuation lines per folded key, joined once by `_fold_join` when the
+    # key closes. While a key folds, ``meta[key]`` holds a non-empty stand-in
+    # (its first non-empty piece), so the truthiness checks below read the
+    # folded state; ``settle`` writes the real value before anything else uses it.
+    folds: dict[str | None, list[str]] = {}
+    stripped: set[str | None] = set()   # keys folded by a branch that strips
+
+    def fold(k: str | None, line: str, strip: bool = True) -> None:
+        parts = folds.get(k)
+        if parts is None:
+            parts = folds[k] = [meta[k]]
+        parts.append(line)
+        if strip:
+            stripped.add(k)
+        if not meta[k]:
+            meta[k] = line
+
+    def settle(k: str | None) -> None:
+        parts = folds.pop(k, None)
+        if parts is not None:
+            meta[k] = _fold_join(parts, k in stripped)
+        stripped.discard(k)
     meta: dict = {}
     key = None
     in_block = False       # inside a | / > block scalar
     block_indent = 0       # indent of the key line that opened it
+    top_indent: int | None = None
+    nest: dict | None = None   # the nested map being filled, under `key`
+    nest_indent = 0            # column of that map's own keys
+    nest_key: str | None = None
+    skipping = False       # inside an indented subtree that is not modelled
     for raw in block.splitlines():
         if not raw.strip():
             continue
@@ -207,42 +302,78 @@ def parse_block(block: str) -> dict:
         # block-scalar content: every deeper-indented line folds in verbatim
         if in_block:
             if indent > block_indent:
-                prev = meta.get(key)
-                if isinstance(prev, str):
-                    meta[key] = (prev + " " + line).strip()
+                if isinstance(meta.get(key), str):
+                    fold(key, line)
                 continue
             in_block = False
         if line.startswith("#"):
             continue
+        if top_indent is not None and indent > top_indent:
+            if skipping:
+                continue
+            # A deeper line under a key holding a non-empty plain string is a
+            # folded continuation even when it carries ": " — a multi-line
+            # plain scalar cannot open a mapping in YAML. Skipping it here
+            # truncated "Use this skill when\n  reviewing code: it checks…"
+            # to its first line, and dropped every line after it.
+            prev = meta.get(key)
+            if not _is_item(line) and isinstance(prev, str) and prev:
+                fold(key, line, strip=False)
+                continue
+            if nest is None and not _is_item(line) and ":" in line:
+                if meta.get(key) not in ("", None):
+                    skipping = True
+                    continue
+                nest = meta[key] = {}
+                nest_indent, nest_key = indent, None
+            if nest is not None:
+                if indent == nest_indent and not _is_item(line) and ":" in line:
+                    nk, _, nv = line.partition(":")
+                    nest_key = nk.strip()
+                    val = _value(nv)
+                    if val is _BLOCK:   # nested block scalar: not modelled
+                        nest[nest_key], nest_key = "", None
+                    else:
+                        nest[nest_key] = val
+                elif (_is_item(line) and indent >= nest_indent
+                      and nest_key is not None):
+                    prev = nest.get(nest_key)
+                    if not isinstance(prev, list):
+                        prev = nest[nest_key] = [] if prev in ("", None) else [prev]
+                    prev.append(_scalar(line[1:].strip()))
+                continue
+        else:
+            nest, skipping = None, False
         # block-list item under the current key
-        if line.startswith("- ") or line == "-":
+        if _is_item(line):
             if key is None:
                 continue
+            settle(key)
             if not isinstance(meta.get(key), list):
                 meta[key] = [] if meta.get(key) in ("", None) else [meta[key]]
             meta[key].append(_scalar(line[1:].strip()))
             continue
         # folded continuation of the previous plain scalar
         if indent > 0 and ":" not in line and key is not None:
-            prev = meta.get(key)
-            if isinstance(prev, str):
-                meta[key] = (prev + " " + line).strip()
+            if isinstance(meta.get(key), str):
+                fold(key, line)
             continue
         if ":" not in line:
             continue
+        if top_indent is None:
+            top_indent = indent
         k, _, v = line.partition(":")
         key = k.strip()
-        v = v.strip()
-        # strip trailing comments on unquoted scalars
-        if v and not v.startswith(("'", '"', "[")) and " #" in v:
-            v = v.split(" #", 1)[0].strip()
-        if v.startswith("[") and v.endswith("]"):
-            meta[key] = _flow_list(v)
-        elif v in ("|", "|-", "|+", ">", ">-", ">+"):
+        folds.pop(key, None)   # a repeated key replaces its earlier value
+        stripped.discard(key)
+        val = _value(v)
+        if val is _BLOCK:
             meta[key] = ""  # block scalar: folded from the indented lines below
             in_block, block_indent = True, indent
         else:
-            meta[key] = _scalar(v)
+            meta[key] = val
+    for pending in list(folds):
+        settle(pending)
     return meta
 
 
@@ -250,6 +381,26 @@ def parse(text: str) -> tuple[dict, str]:
     """Parse a SKILL.md's text -> (frontmatter dict, markdown body)."""
     block, body = split(text)
     return (parse_block(block) if block else {}), body
+
+
+def tags_of(meta) -> list[str]:
+    """``tags:`` off third-party frontmatter as a list of strings.
+
+    A list and a comma string (``tags: a, b`` or a lone ``tags: testing``) are
+    both common in real repos; anything else reads as "no tags". Iterating the
+    raw value instead split a scalar string into single characters, and a
+    ``tags: {a: 1}`` must not raise. Case is kept; callers that facet fold it.
+    """
+    if not isinstance(meta, dict):
+        return []
+    raw = meta.get("tags")
+    if isinstance(raw, (str, int, float)) and not isinstance(raw, bool):
+        raw = str(raw).split(",")
+    if not isinstance(raw, (list, tuple)):
+        return []
+    return [str(t).strip() for t in raw
+            if isinstance(t, (str, int, float)) and not isinstance(t, bool)
+            and str(t).strip()]
 
 
 def _dump_item(v) -> str:
@@ -269,17 +420,58 @@ def dump(meta: dict) -> str:
     """
     lines = ["---"]
     for k, v in meta.items():
-        if isinstance(v, list):
+        if isinstance(v, dict):
+            # the one level of nested map `parse_block` models
             lines.append("%s:" % k)
-            lines.extend("  - %s" % _dump_item(item) for item in v)
-        elif isinstance(v, bool):
-            lines.append("%s: %s" % (k, "true" if v else "false"))
-        elif v is None:
-            lines.append("%s:" % k)
+            for nk, nv in v.items():
+                _dump_field(lines, nk, nv, "  ")
         else:
-            lines.append("%s: %s" % (k, _dump_item(v)))
+            _dump_field(lines, k, v, "")
     lines.append("---")
     return "\n".join(lines)
+
+
+def _dump_field(lines: list[str], k, v, pad: str) -> None:
+    if isinstance(v, list):
+        lines.append("%s%s:" % (pad, k))
+        lines.extend("%s  - %s" % (pad, _dump_item(item)) for item in v)
+    elif isinstance(v, bool):
+        lines.append("%s%s: %s" % (pad, k, "true" if v else "false"))
+    elif v is None:
+        lines.append("%s%s:" % (pad, k))
+    else:
+        lines.append("%s%s: %s" % (pad, k, _dump_item(v)))
+
+
+def splice_field(text: str, key: str, value) -> str:
+    """Return `text` with top-level frontmatter key `key` set to `value`,
+    changing that one line and no other byte.
+
+    :func:`set_field` rebuilds the file around the block it edits: it drops a
+    BOM, turns CRLF into LF, and puts a blank line after the closing fence.
+    That is fine for `evolve`, which writes a revision anyway, and wrong for a
+    copy whose only difference from its source is meant to be one field. Here
+    each line keeps its own ending, and a key the block lacks goes in just
+    before the closing fence with the ending the fence line uses. Returns
+    `text` unchanged when it has no closed frontmatter block.
+    """
+    lines = text.splitlines(keepends=True)
+    if not lines or lines[0].removeprefix(BOM).strip() != "---":
+        return text
+    close = next((i for i in range(1, len(lines))
+                  if lines[i].strip() in ("---", "...")), None)
+    if close is None:       # unclosed: there is no block to edit
+        return text
+    formatted = "%s: %s" % (key, _dump_item(value))
+    for i in range(1, close):
+        body = lines[i].rstrip("\r\n")
+        if (body[:1] not in (" ", "\t") and ":" in body
+                and body.split(":", 1)[0].strip() == key):
+            lines[i] = formatted + lines[i][len(body):]
+            return "".join(lines)
+    fence = lines[close]
+    lines.insert(close, formatted + (fence[len(fence.rstrip("\r\n")):] or "\n"))
+    return "".join(lines)
 
 
 def set_field(text: str, key: str, value) -> str:

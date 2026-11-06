@@ -40,7 +40,7 @@ comment rather than warning about it.
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence, Set
 from itertools import chain
 from typing import NamedTuple
 
@@ -118,6 +118,59 @@ def installed_names(pbase=None) -> frozenset[str]:
     if pbase is not None:
         names |= set(projectlock.installed(pbase))
     return frozenset(names)
+
+
+class InstalledSet(Set[str]):
+    """The installed item names, answering ``tap:name`` as well as ``name``.
+
+    Iterating yields bare names, like :func:`installed_names`. Membership is
+    what differs: a ``requires: [alpha:base]`` is met when ``base`` is
+    installed *from alpha* (or from a row that recorded no tap). Testing the
+    qualified token against a set of bare names never matched, so ``boost
+    install qual`` re-planned an installed ``base``, the reinstall refused, and
+    the command exited 1 after succeeding — while ``boost deps`` reported the
+    requirement unmet forever.
+    """
+
+    def __init__(self, taps: Mapping[str, Iterable[str]]):
+        self._taps = {name: frozenset(t) for name, t in taps.items()}
+
+    def __contains__(self, token: object) -> bool:
+        if not isinstance(token, str):
+            return False
+        qualifier, bare = catalog.split_name(token)
+        recorded = self._taps.get(bare)
+        if recorded is None:
+            return False
+        if qualifier is None:
+            return True
+        return any(not t or catalog.tap_matches(t, qualifier)
+                   for t in recorded)
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._taps)
+
+    def __len__(self) -> int:
+        return len(self._taps)
+
+
+def installed_set(pbase=None, also: Iterable[str] = ()) -> InstalledSet:
+    """:func:`installed_names` with each row's recorded tap kept.
+
+    ``also`` adds names to treat as present whatever their tap — a dry run's
+    earlier "would install" lines, which never reach the lock.
+    """
+    taps: dict[str, set[str]] = defaultdict(set)
+    sections: list[Mapping] = list(lockfile.all_installed().values())
+    if pbase is not None:
+        sections.append(projectlock.installed(pbase))
+    for section in sections:
+        for name, rec in section.items():
+            taps[name].add(str((rec if isinstance(rec, dict) else {})
+                               .get("tap") or ""))
+    for name in also:
+        taps[name].add("")
+    return InstalledSet(taps)
 
 
 def for_entries(entries: Sequence[Mapping], *, installed=None, pbase=None,
@@ -224,3 +277,26 @@ def install_hint(rows: Sequence[ItemPrereqs]) -> str:
             if miss.spec not in specs:
                 specs.append(miss.spec)
     return ("boost install %s" % " ".join(specs)) if specs else ""
+
+
+def summary_line(rows: Sequence[ItemPrereqs]) -> str:
+    """One line for every installed item's unmet prerequisites, or "".
+
+    One line, truncated to five names, not one per item: the census found
+    1,323 `skills:` values across 18 taps, so a line per declaring item buries
+    the rest of a health report. The install hint stays whole — it is a
+    command, and a truncated command does not run. CLI `boost doctor` and the
+    MCP `boost_doctor` both print this, so the two cannot disagree about it.
+    """
+    if not rows:
+        return ""
+    missing = sorted({m.spec for row in rows for m in row.unmet})
+
+    def s(n: int) -> str:
+        return "" if n == 1 else "s"
+
+    return ("%d installed item%s declare%s %d prerequisite%s not installed "
+            "(%s%s) — `%s`"
+            % (len(rows), s(len(rows)), "" if len(rows) > 1 else "s",
+               len(missing), s(len(missing)), ", ".join(missing[:5]),
+               ", …" if len(missing) > 5 else "", install_hint(rows)))

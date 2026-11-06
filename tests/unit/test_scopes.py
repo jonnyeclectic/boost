@@ -1116,3 +1116,24 @@ def test_ensure_spelled_holds_through_a_symlinked_base(tmp_path):
     link.symlink_to(real, target_is_directory=True)
     dest = link / ".claude" / "skills" / "x"
     assert scopes.ensure_spelled(link, dest) == Path(dest)
+
+
+class TestProjectLabel:
+    def test_user_scope_and_baseless_rows_have_none(self, tmp_path):
+        assert scopes.project_label({}) is None
+        assert scopes.project_label({"scope": "user", "base": str(tmp_path)}) is None
+        assert scopes.project_label({"scope": "project"}) is None
+        assert scopes.project_label({"scope": "project", "base": ""}) is None
+
+    def test_a_live_checkout_is_its_tilded_path(self, sandbox, tmp_path):
+        from boost_cli.core import paths
+        proj = tmp_path / "proj"
+        proj.mkdir()
+        entry = {"scope": "project", "base": str(proj)}
+        assert scopes.project_label(entry) == paths.tilde(proj)
+
+    def test_a_deleted_checkout_is_gone(self, sandbox, tmp_path):
+        from boost_cli.core import paths
+        proj = tmp_path / "gone"
+        entry = {"scope": "project", "base": str(proj)}
+        assert scopes.project_label(entry) == paths.tilde(proj) + " (gone)"

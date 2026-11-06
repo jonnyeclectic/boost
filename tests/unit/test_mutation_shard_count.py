@@ -1,15 +1,16 @@
 # Copyright the boost contributors.
 # SPDX-License-Identifier: Apache-2.0
-"""The shard count agrees everywhere, and the pack fits inside the job cap.
+"""The shard count agrees everywhere, and the pack fits inside the cap that fires.
 
 Two things this repo cannot derive and therefore has to assert.
 
 **The count.** ``mutation_shards.SHARDS`` is Python's copy of a number also
-spelled in the ``mutation-shard`` matrix, in the ``plan --shards`` the shard
-step runs, in the ``merge --shards`` the gate runs, and in
-``mutation-weights-refresh.yml``. They are not one value with four readers:
-a matrix cannot call Python, and ``merge`` reconstructs the same pack from
-scratch to know which shard owned which file.
+spelled in ``mutation_plan.FULL_SHARDS``, in the ``full --shards`` the
+``mutation-plan`` job runs (the shard matrix is built from its output), in
+the ``merge --shards`` the gate runs, and in ``mutation-weights-refresh.yml``.
+They are not one value with four readers: a workflow cannot call Python, and
+``merge`` reconstructs the same pack from scratch to know which shard owned
+which file.
 
 Disagreement is *loud*, and that is still worth a test. ``cmd_merge`` fails
 closed — it collects the shards whose ``.meta`` it cannot find and returns 1
@@ -23,7 +24,9 @@ runs.
 **The headroom.** ``timeout-minutes`` cannot be read through ``${{ }}``, so no
 job can check itself against it. The check runs here instead, which is better
 anyway: a pack that would be cancelled fails in the ``test`` job in
-milliseconds rather than 75 minutes into a matrix.
+milliseconds rather than 75 minutes into a matrix. The cap it checks is the
+mutate step's, not the job's. The step is nearly the whole job and its cap is
+lower, so that is the cap a slow shard reaches (see :func:`timeout_minutes`).
 
 Why that matters is on the record. On the merge of #1015 ``mutation-shard (4)``
 ran the cap out and was cancelled; ``ci`` then concluded ``cancelled`` rather
@@ -47,6 +50,12 @@ _spec = importlib.util.spec_from_file_location("mutation_shards_count", SCRIPT)
 ms = importlib.util.module_from_spec(_spec)
 assert _spec.loader is not None
 _spec.loader.exec_module(ms)
+
+_plan_spec = importlib.util.spec_from_file_location(
+    "mutation_plan_count", ROOT / "scripts" / "mutation_plan.py")
+mp = importlib.util.module_from_spec(_plan_spec)
+assert _plan_spec.loader is not None
+_plan_spec.loader.exec_module(mp)
 
 
 def _tree_is_mutated(root: Path = ROOT) -> bool:
@@ -78,33 +87,13 @@ def _ci() -> str:
     return CI.read_text(encoding="utf-8")
 
 
-def _matrix_indices() -> list[int]:
-    """The `index:` list under the mutation-shard matrix.
-
-    Regex, not a YAML loader, and the honest reason is that the repo's test
-    tier is stdlib-only — there is no YAML dependency to import here. So this
-    only understands the flow-sequence form the file actually uses
-    (``index: [0, 1, ...]``); a block sequence, or a list split over lines,
-    is equally valid YAML and would make this *fail*, not silently pass. That
-    is the acceptable direction for a mis-parse, and the assertion below says
-    which form it wants, so the failure explains itself.
-    """
-    body = _ci()
-    start = body.index("  mutation-shard:")
-    end = body.index("\n  mutation:", start)
-    m = re.search(r"^\s+index:\s*\[([^\]]+)\]", body[start:end], re.M)
-    assert m, ("no inline `index: [...]` matrix under mutation-shard — if it "
-               "was reformatted as a block sequence, teach this helper that "
-               "form rather than deleting the check")
-    return [int(x) for x in m.group(1).split(",")]
-
-
-def test_the_matrix_is_exactly_the_shard_count_zero_indexed():
-    # Not just the length. `plan --index` validates `0 <= index < shards` and
-    # exits non-zero outside it, so a matrix of [1..8] would fail one job and
-    # never run shard 0's units at all -- and the merge would see shard 0's
-    # artifact missing, which `mutmut` counts as unrun rather than as absent.
-    assert _matrix_indices() == list(range(ms.SHARDS))
+def test_the_planner_plans_the_shard_count():
+    # The matrix is no longer spelled in ci.yml: `mutation-plan` writes it
+    # from `mutation_plan.py full --shards N`, one entry per packed bin, so
+    # its width is FULL_SHARDS by construction. What is left to pin is that
+    # the planner's number is this one -- the flag itself is pinned against
+    # SHARDS just below, with every other `--shards` in the workflows.
+    assert mp.FULL_SHARDS == ms.SHARDS
 
 
 @pytest.mark.parametrize("path", [CI, REFRESH], ids=lambda p: p.name)
@@ -117,23 +106,220 @@ def test_every_shards_flag_in_the_workflows_matches(path):
         % (path.name, sorted(set(found)), ms.SHARDS))
 
 
-def test_the_step_name_counts_the_same_shards():
-    # Cosmetic only, and pinned anyway: "shard 3 of 6" over an eight-way
-    # matrix is the kind of thing that is read as evidence later, which is how
-    # the stale "planned 24.1 min per shard" comment above `timeout-minutes`
-    # survived the move to millisecond weights.
-    assert "of %d" % ms.SHARDS in _ci(), \
-        "the `mutate shard ... of N` step name disagrees with SHARDS"
+#: A job's key line in ci.yml: two spaces in, a bare `name:` and nothing
+#: after it. `on:`'s events and `permissions:`'s scopes sit at the same depth,
+#: but the events all come before `jobs:` and the scopes carry a value.
+_JOB_KEY = re.compile(r"^  ([A-Za-z0-9_-]+):[ \t]*$", re.M)
 
 
-def timeout_minutes() -> int:
-    """`mutation-shard`'s own `timeout-minutes`, not some other job's."""
-    body = _ci()
-    start = body.index("  mutation-shard:")
-    end = body.index("\n  mutation:", start)
-    m = re.search(r"^\s+timeout-minutes:\s*(\d+)", body[start:end], re.M)
-    assert m, "mutation-shard has no timeout-minutes"
+def _shard_job(text: str | None = None) -> str:
+    """`mutation-shard`'s block of ci.yml, not some other job's.
+
+    From its key line to the next job's key line, whichever job that is. It
+    used to end at `mutation:`, the job after it then; `mutation-advisory-
+    shard`, a full nightly's advisory diff legs, now sits between the two
+    with the same mutate step (pinned equal in test_mutation_plan.py), and a
+    block running on to `mutation:` would hold two `mutmut run` steps. Two
+    `mutation-shard:` keys, or none, fail rather than pick one.
+    """
+    body = _ci() if text is None else text
+    keys = list(_JOB_KEY.finditer(body))
+    at = [i for i, m in enumerate(keys) if m.group(1) == "mutation-shard"]
+    assert len(at) == 1, "expected one `mutation-shard:` job, found %d" % len(at)
+    i = at[0]
+    end = keys[i + 1].start() if i + 1 < len(keys) else len(body)
+    return body[keys[i].start():end]
+
+
+def job_timeout_minutes(text: str | None = None) -> int:
+    """`mutation-shard`'s job-level `timeout-minutes` (four spaces in)."""
+    m = re.search(r"^    timeout-minutes:\s*(\d+)", _shard_job(text), re.M)
+    assert m, "mutation-shard has no job-level timeout-minutes"
     return int(m.group(1))
+
+
+def step_timeout_minutes(text: str | None = None) -> int:
+    """The `timeout-minutes` of the step that runs `mutmut run`.
+
+    Found by what the step runs, not by its name, and only on a line that
+    runs it: the comments in that step say "`mutmut run`" too. A one-line
+    `run: ... mutmut run` counts as well as a block, so a second mutate step
+    written either way makes two and fails rather than going unseen.
+    """
+    steps = re.split(r"^      - ", _shard_job(text), flags=re.M)[1:]
+    mutate = [s for s in steps
+              if re.search(r"^\s*(?:run:\s+)?[^#\s]\S*mutmut run\b", s, re.M)]
+    assert len(mutate) == 1, (
+        "expected one mutation-shard step that runs `mutmut run`, found %d"
+        % len(mutate))
+    m = re.search(r"^        timeout-minutes:\s*(\d+)", mutate[0], re.M)
+    assert m, "the step that runs `mutmut run` has no timeout-minutes"
+    return int(m.group(1))
+
+
+def timeout_minutes(text: str | None = None) -> int:
+    """The cap a slow shard actually reaches: the mutate step's.
+
+    Not the job's. The step covers almost the whole job and its cap is
+    lower, so it fires first. Scoring the job's cap is how a pack at 84% of
+    the step's 145 passed as 76% of the job's 160. The test below holds the
+    step's cap under the job's, which is what keeps this the cap that fires.
+    """
+    return step_timeout_minutes(text)
+
+
+#: The most time any of 168 successful full-shard jobs spent outside the
+#: mutate step. That is job start to the step (median 0.38, max 3.40), plus
+#: the step's `Mutant results` to job end (median 0.14, max 1.85); the sum
+#: has a median of 0.53. The jobs come from seven runs, 2026-11-02..04, the
+#: ones listed in ci.yml above the job's cap. Frozen: it describes those jobs.
+OUTSIDE_THE_STEP_MAX_MIN = 3.67
+
+
+def check_step_fires_first(text: str | None = None) -> None:
+    job, step = job_timeout_minutes(text), step_timeout_minutes(text)
+    assert step < job, (
+        "the mutate step's timeout-minutes (%d) is not under the job's (%d), "
+        "so the job's cap fires first and the headroom check scores a cap "
+        "that never fires" % (step, job))
+    assert job - step > OUTSIDE_THE_STEP_MAX_MIN, (
+        "the job's cap (%d) leaves %d min for the work outside the mutate "
+        "step, which has taken up to %.2f min: a slow setup would hit the "
+        "job's cap before the step's" % (job, job - step,
+                                         OUTSIDE_THE_STEP_MAX_MIN))
+
+
+def _shard_block(name: str, job: int, step: int) -> str:
+    # A step before the mutate step carries its own cap, so a reader that
+    # takes the first step-level number reads the wrong one.
+    return (
+        "  %s:\n"
+        "    runs-on: ubuntu-latest\n"
+        "    timeout-minutes: %d\n"
+        "    steps:\n"
+        "      - name: install test deps\n"
+        "        timeout-minutes: 7\n"
+        "        run: pip install -r requirements/mutation-tools.txt\n"
+        "      - name: mutate shard 0\n"
+        "        # `mutmut run` with no arguments runs every mutant\n"
+        "        timeout-minutes: %d\n"
+        "        run: |\n"
+        "          .venv/bin/mutmut run -- \"${MUTMUT_ARGS[@]}\"\n"
+        "      - name: upload shard results\n"
+        "        run: true\n"
+    ) % (name, job, step)
+
+
+def _synthetic_ci(job: int, step: int, twin: tuple[int, int] | None = None) -> str:
+    """ci.yml's shape: `mutation-shard`, optionally its advisory twin, `mutation`.
+
+    ``twin`` is the (job, step) caps of a `mutation-advisory-shard` placed
+    where ci.yml places it, between `mutation-shard` and `mutation`, with the
+    same `mutmut run` step.
+    """
+    return ("jobs:\n" + _shard_block("mutation-shard", job, step)
+            + ("" if twin is None else
+               "  # The diff legs of a full nightly's shadow.\n"
+               + _shard_block("mutation-advisory-shard", *twin))
+            + "  mutation:\n"
+            "    timeout-minutes: 20\n")
+
+
+class TestWhichCapFires:
+    """The headroom check scores the cap that stops a slow shard."""
+
+    def test_the_step_cap_sits_under_the_job_cap(self):
+        check_step_fires_first()
+
+    @pytest.mark.parametrize("job, step", [(200, 210), (200, 200),
+                                           (200, 197)],
+                             ids=["over", "equal", "gap-too-small"])
+    def test_a_step_cap_that_would_not_fire_first_is_refused(self, job, step):
+        with pytest.raises(AssertionError):
+            check_step_fires_first(_synthetic_ci(job, step))
+
+    def test_the_check_reads_the_step_cap_not_the_jobs(self):
+        # The job's cap comes first in the text, so reading the first
+        # `timeout-minutes` in the job (as this file did) returns 200 here.
+        text = _synthetic_ci(200, 190)
+        assert job_timeout_minutes(text) == 200
+        assert step_timeout_minutes(text) == 190
+        assert timeout_minutes(text) == 190
+
+    def test_the_committed_check_scores_the_step(self):
+        assert timeout_minutes() == step_timeout_minutes()
+        assert timeout_minutes() != job_timeout_minutes()
+
+    # The advisory twin. A full nightly's diff legs run in
+    # `mutation-advisory-shard` with `mutation-shard`'s steps, placed between
+    # it and `mutation`. The checks above read `mutation-shard` and only it.
+
+    @pytest.mark.parametrize("twin", [(200, 190), (300, 290), (160, 145)],
+                             ids=["same-caps", "higher-caps", "lower-caps"])
+    def test_an_advisory_twin_after_the_shard_job_is_not_read(self, twin):
+        # Its caps never stand in for the shard job's, whichever way they
+        # differ, and its identical step is not a second mutate step.
+        text = _synthetic_ci(200, 190, twin=twin)
+        assert job_timeout_minutes(text) == 200
+        assert step_timeout_minutes(text) == 190
+        assert timeout_minutes(text) == 190
+        check_step_fires_first(text)
+        assert "mutation-advisory-shard" not in _shard_job(text)
+
+    def test_the_committed_twin_sits_outside_the_block_read(self):
+        # The case above, on the real file: the twin exists, after the shard
+        # job, and the block the caps are read from stops before it.
+        body = _ci()
+        assert body.index("\n  mutation-shard:\n") < body.index(
+            "\n  mutation-advisory-shard:\n") < body.index("\n  mutation:\n")
+        assert "\n  mutation-advisory-shard:" not in _shard_job()
+
+    @pytest.mark.parametrize("claim", [
+        "it is the one the headroom check in tests/unit/test_mutation_shard_count.py scores",
+        "see the block above the job's cap",
+    ])
+    def test_only_the_shard_jobs_step_claims_to_be_scored(self, claim):
+        # The twin's steps are `mutation-shard`'s verbatim, but comments are
+        # not steps: a copy of "this is the cap the headroom check scores" on
+        # the twin's step, or of the pointer to the measurements above the
+        # job's cap, sends whoever tunes the twin to a check that never reads
+        # it and a block that holds no such numbers. Comment text is joined
+        # per job block, so a claim wrapped over two lines still counts.
+        body = _ci()
+        keys = list(_JOB_KEY.finditer(body))
+        found = []
+        for i, key in enumerate(keys):
+            end = keys[i + 1].start() if i + 1 < len(keys) else len(body)
+            said = " ".join(m.group(1) for m in re.finditer(
+                r"^[ \t]*#[ \t]?(.*)$", body[key.start():end], re.M))
+            found += [key.group(1)] * " ".join(said.split()).count(claim)
+        assert found == ["mutation-shard"]
+
+    @pytest.mark.parametrize("second", [
+        "      - name: mutate again\n"
+        "        timeout-minutes: 100\n"
+        "        run: |\n"
+        "          .venv/bin/mutmut run\n",
+        "      - name: mutate again\n"
+        "        timeout-minutes: 100\n"
+        "        run: .venv/bin/mutmut run\n",
+        "      - run: .venv/bin/mutmut run\n"
+        "        timeout-minutes: 100\n",
+    ], ids=["block", "one-line", "unnamed"])
+    def test_two_mutate_steps_in_the_shard_job_still_fail_closed(self, second):
+        # Scoping the block must not turn "which step?" into a guess.
+        text = _synthetic_ci(200, 190).replace(
+            "      - name: upload shard results\n",
+            second + "      - name: upload shard results\n", 1)
+        with pytest.raises(AssertionError, match="found 2"):
+            step_timeout_minutes(text)
+
+    @pytest.mark.parametrize("count", [0, 2])
+    def test_a_shard_job_missing_or_doubled_fails_closed(self, count):
+        one = _shard_block("mutation-shard", 200, 190)
+        text = "jobs:\n" + one * count + "  mutation:\n    timeout-minutes: 20\n"
+        with pytest.raises(AssertionError, match="found %d" % count):
+            _shard_job(text)
 
 
 class TestHeadroom:
@@ -244,12 +430,15 @@ class TestPlanCliContract:
     @real_tree_only
     def test_a_pack_that_fits_exits_zero_and_one_that_does_not_exits_one(self,
                                                                         capsys):
-        assert ms.cmd_plan(self._args(explain=True, timeout_minutes=75)) == 0
+        # The mutate step's cap, read from ci.yml: a literal here went stale the
+        # day the cap moved off 75.
+        cap = timeout_minutes()
+        assert ms.cmd_plan(self._args(explain=True, timeout_minutes=cap)) == 0
         assert "headroom    : OK" in capsys.readouterr().out
         # Six is the pack that was cancelled; the exit code is what a CI step
         # or a `make` target would act on, so it is asserted, not just the text.
         assert ms.cmd_plan(self._args(shards=6, explain=True,
-                                      timeout_minutes=75)) == 1
+                                      timeout_minutes=cap)) == 1
         assert "TOO TIGHT" in capsys.readouterr().out
 
     def test_minutes_are_printed_only_where_the_weights_are_time(self, tmp_path,
@@ -318,7 +507,36 @@ class TestPlanCliContract:
 #: ratio in those 24 jobs is 1.49 against the committed 1.91, so the committed
 #: value over-estimates the tail, which is the safe direction for a cap check.
 #: Re-fit it when a comparable sample exists at the current shard count.
-FITTED_TOTAL_MS = 63_989_009
+#:
+#: **Re-anchored 2026-10-20 from 63,989,009 to 136,439,539, and this one is
+#: a correction, not drift.** The 2026-10-19 refresh (a3092119) committed a
+#: file with no time for store.py, because `weights` called a record partial
+#: when one mutant had mutmut's exit 33 ("no tests"), which is never run and
+#: so never timed. Rebuilt from CI run 39357937728 (fifteen shards, head
+#: 525611de) with main run 39330392672 filling in its cancelled shard 14,
+#: all 68 files are timed and `load_durations` sums 136,439,539 (the 26
+#: `store._inside` mutants neither run reached are imputed at store.py's own
+#: measured 7.11 s/mutant, 185 s of it). store.py
+#: alone is 53.1M of that, at 7.11 s/mutant. Re-fitted from the job API as
+#: the drift test prescribes: each of those fifteen jobs' own summed
+#: durations / 4 match its `Running mutation testing` phase at a median
+#: 0.970 (0.939-0.989), against the 0.98 committed. So RUNNER_EFFICIENCY
+#: stands and only this anchor moves. TAIL_MULTIPLIER is not re-fitted:
+#: that run's 21.8-73.4 spread was the missing store.py weight, not runners.
+#:
+#: **Re-anchored 2026-10-22 from 136,439,539 to 278,027,516.** This is drift,
+#: and most of it is cost per mutant: 36,182 -> 46,088 mutants (1.27x) and
+#: 3.77 -> 6.03 s each (1.60x). It was rebuilt from the 26 shard artifacts of
+#: main run 39729763526 and PR #1225's run 39750022044. Main's shard 7 never
+#: finished, so its 1,536 mutants are imputed up to the lower bound its
+#: 120.7-minute cancellation sets (ci.yml's block above `timeout-minutes`
+#: gives the method). Re-fitted from the job API as this test prescribes:
+#: over those runs' 25 successful jobs, mutant time / 4 matches the
+#: `Running mutation testing` phase at a median 0.973 (0.922-0.990), and on
+#: the pack the PR actually ran, every shard that finished was predicted to
+#: within 5 min. RUNNER_EFFICIENCY stands. TAIL_MULTIPLIER is not re-fitted:
+#: the outliers in those runs were lost runners, not the model.
+FITTED_TOTAL_MS = 278_027_516
 
 #: What the *planner* totals over the same committed file, which is larger, and
 #: the two are not interchangeable. `load_durations` sums the 63 files with a
@@ -340,7 +558,7 @@ PLANNED_TOTAL_MS = 66_708_651
 
 #: The shard count `PLANNED_TOTAL_MS` and the median prediction are anchored
 #: to: what main actually ran for the three runs the 24 jobs come from. It is
-#: deliberately NOT `ms.SHARDS` -- that is the width CI uses *now* (twelve),
+#: deliberately NOT `ms.SHARDS` -- that is the width CI uses *now* (sixteen),
 #: and re-pointing a historical measurement at it would silently restate what
 #: was observed.
 SHARDS_FOR_FIT = 8
@@ -377,7 +595,20 @@ TWELVE_SHARDS = 12
 #: rather than a measurement: `test_the_committed_width_has_actually_run`
 #: refuses an `ms.SHARDS` above it. This is the constant to raise after
 #: running a wider matrix; `TWELVE_SHARDS` above is the one to leave alone.
-SHARDS_OBSERVED = 12
+#:
+#: Raised to sixteen on 2026-10-19 by the PR that widened the matrix, because
+#: the weights refresh that day packed twelve at 95% of the cap and two
+#: consecutive runs lost a shard to the 75-minute timeout. That PR's own CI
+#: run is the first sixteen-wide observation; its p50 and worst job are
+#: recorded in the PR body rather than frozen here, since no second run at
+#: this width exists yet to say whether it reproduces.
+#:
+#: Raised to twenty-four on 2026-10-22 on the same terms. Sixteen has now
+#: run at scale: over main run 39729763526 and PR #1225's run 39750022044,
+#: 25 jobs succeeded at 27.1-115.7 min, and eight were cancelled or lost
+#: their runner, all on weights `plan` had put at a flat 43.9. The first
+#: twenty-four-wide observation is the CI run of the PR that widens it.
+SHARDS_OBSERVED = 24
 
 #: The eight-shard p50 the fit was re-checked against, named so the two
 #: widths can be compared in one assertion instead of one of them being a
@@ -435,8 +666,22 @@ EIGHT_SHARD_FIXED_MIN = 10.02
 TWELVE_SHARD_FIXED_MIN = 12.91
 
 #: The preamble without those tests: the 124 six-shard jobs of 2026-10-01/02,
-#: the last before they reached the baseline. `ms.FIXED_MINUTES` is this.
+#: the last before they reached the baseline. `ms.FIXED_MINUTES` was this
+#: until the re-measure below replaced it.
 PREAMBLE_WITHOUT_PLANNER_TESTS_MIN = 5.49
+
+#: The re-measure FIXED_MINUTES asked for, from the first sixteen-shard run
+#: on a cold cache after the planner tests left the baseline: CI run
+#: 39357937728, head 525611de, 2026-10-20. Median of its fifteen successful
+#: shards' job start to `Running mutation testing`; range 4.36-8.65.
+#: Frozen. `ms.FIXED_MINUTES` was this until the re-measure below.
+SIXTEEN_SHARD_COLD_FIXED_MIN = 7.09
+
+#: The next re-measure, from the 25 successful jobs of main run 39729763526
+#: (head c45107e8) and PR #1225's run 39750022044 (head 553b69ae),
+#: 2026-10-22, sixteen shards, cold. Median job start to `Running mutation
+#: testing`; range 6.60-15.57. Frozen. `ms.FIXED_MINUTES` is this, rounded.
+SIXTEEN_SHARD_TRAIN_FIXED_MIN = 9.98
 
 #: Mutation-phase minutes per weight-minute, each job graded on its own
 #: run's measured durations (the `mutation-weights` artifact) summed over the
@@ -519,7 +764,16 @@ class TestConversion:
         # planner tests out of mutmut's baseline run, so it is pinned to the
         # last preamble measured without them -- and below what twelve paid
         # with them, which is what this change removes.
-        assert abs(ms.FIXED_MINUTES - PREAMBLE_WITHOUT_PLANNER_TESTS_MIN) < 0.1
+        # Since 2026-10-20 it is the cold-cache re-measure, which came back
+        # above the 5.49 it was predicted from, so it was raised. On
+        # 2026-10-22 it came back at 9.98 and was raised again. That leaves
+        # it 0.02 under what eight paid WITH the planner tests, so the last
+        # assertion now holds with no margin. It is kept as the tripwire: a
+        # preamble past eight's means a cost has come back that a test
+        # skip took out once already.
+        assert abs(ms.FIXED_MINUTES - SIXTEEN_SHARD_TRAIN_FIXED_MIN) < 0.1
+        assert SIXTEEN_SHARD_COLD_FIXED_MIN < ms.FIXED_MINUTES
+        assert PREAMBLE_WITHOUT_PLANNER_TESTS_MIN < ms.FIXED_MINUTES
         assert ms.FIXED_MINUTES < EIGHT_SHARD_FIXED_MIN < TWELVE_SHARD_FIXED_MIN
 
     def test_widening_cannot_go_below_the_preamble(self):

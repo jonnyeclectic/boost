@@ -87,13 +87,38 @@ class TestTheAstBailIsStillTheDefault:
 class TestProofUnlocksIt:
     def test_a_complete_record_clears_the_class(self, tmp_path):
         path = make_tree(tmp_path, SOURCE, {"alpha": 10, "beta": 20})
-        assert ms.measured_partition(tmp_path, path) == ["alpha", "beta"]
+        assert ms.measured_partition(tmp_path, path) == \
+            ["alpha", "beta", ms.METHODS]
 
     def test_the_split_actually_happens_now(self, tmp_path):
         path = make_tree(tmp_path, SOURCE, {"alpha": 10, "beta": 20})
         units = ms.units_for(tmp_path, path, 1)
-        assert sorted(u.symbol for u in units) == ["alpha", "beta"], \
+        assert sorted(u.symbol for u in units) == \
+            sorted(["alpha", "beta", ms.METHODS]), \
             "a cleared module over the ceiling must split per function"
+
+    def test_the_methods_unit_addresses_methods_and_nothing_else(self, tmp_path):
+        """mutmut names a method's mutants `<module>.xǁ<Class>ǁ<m>__mutmut_<n>`.
+
+        The per-function units cannot match those, so without this unit a
+        cleared module's methods were never run (catalog.py, 6 mutants).
+        """
+        import fnmatch
+        path = make_tree(tmp_path, SOURCE, {"alpha": 10, "beta": 20})
+        pats = {u.symbol: ms.pattern_for(tmp_path, u)
+                for u in ms.units_for(tmp_path, path, 1)}
+        assert pats[ms.METHODS] == "boost_cli.core.sample.xǁ*"
+        method = "boost_cli.core.sample.xǁTapǁlabel__mutmut_1"
+        func = "boost_cli.core.sample.x_alpha__mutmut_1"
+        assert [s for s, p in pats.items() if fnmatch.fnmatchcase(method, p)] \
+            == [ms.METHODS]
+        assert [s for s, p in pats.items() if fnmatch.fnmatchcase(func, p)] \
+            == ["alpha"]
+
+    def test_a_module_without_methods_gets_no_methods_unit(self, tmp_path):
+        plain = SOURCE.split("\n\n\n", 1)[1]
+        path = make_tree(tmp_path, plain, {"alpha": 10, "beta": 20})
+        assert ms.measured_partition(tmp_path, path) == ["alpha", "beta"]
 
     def test_a_cleared_module_under_the_ceiling_still_stays_whole(self, tmp_path):
         """Clearing is not a reason to split; exceeding the ceiling is."""
@@ -146,7 +171,7 @@ class TestTheRecordIsProofNotThePartition:
         src = SOURCE + "\n\ndef gamma():\n    return 3\n"
         path = make_tree(tmp_path, src, {"alpha": 10, "beta": 20})
         assert ms.measured_partition(tmp_path, path) == [
-            "alpha", "beta", "gamma"]
+            "alpha", "beta", "gamma", ms.METHODS]
         units = ms.units_for(tmp_path, path, 1)
         assert "gamma" in {u.symbol for u in units}
 
@@ -155,8 +180,58 @@ class TestTheRecordIsProofNotThePartition:
         units = ms.units_for(tmp_path, path, 1)
         pats = [ms.pattern_for(tmp_path, u) for u in units]
         assert len(set(pats)) == len(pats), "two units share one pattern"
-        for p in pats:
-            assert p.endswith("__mutmut_*") and ".x_" in p
+        for u, p in zip(units, pats, strict=True):
+            if u.symbol == ms.METHODS:
+                assert p.endswith(".xǁ*")
+            else:
+                assert p.endswith("__mutmut_*") and ".x_" in p
+
+
+class TestAnUnmeasuredFunctionIsPricedBySize:
+    """A function the weights file has no time for is priced at the file's
+    measured rate per line, not at 1 ms -- or every new function lands in the
+    one lightest shard."""
+
+    SRC = ("def alpha():\n" + "    x = 1\n" * 9 + "    return x\n\n\n"
+           "def beta():\n" + "    y = 2\n" * 19 + "    return y\n\n\n"
+           "def gamma():\n" + "    z = 3\n" * 9 + "    return z\n")
+
+    def weights(self, tmp_path):
+        path = make_tree(tmp_path, self.SRC, {"alpha": 1000, "beta": 2000})
+        return {u.symbol: ms.unit_weight(tmp_path, u)
+                for u in ms.units_for(tmp_path, path, 1)}
+
+    def test_it_costs_what_a_measured_function_its_size_costs(self, tmp_path):
+        w = self.weights(tmp_path)
+        # gamma is alpha's size, and alpha measured 1000 of the file's 3000.
+        assert w["gamma"] == w["alpha"] == 1000
+        assert w["beta"] == 2000
+
+    def test_a_measured_function_keeps_its_measured_share(self, tmp_path):
+        path = make_tree(tmp_path, self.SRC,
+                         {"alpha": 1000, "beta": 2000, "gamma": 7})
+        w = {u.symbol: ms.unit_weight(tmp_path, u)
+             for u in ms.units_for(tmp_path, path, 1)}
+        assert w["gamma"] == 7
+
+    def test_with_no_record_the_body_size_split_is_unchanged(self, tmp_path):
+        path = make_tree(tmp_path, self.SRC, None)
+        assert ms.unmeasured_share(ms.Unit(path, "gamma"), {}, 30) == 1
+
+    def test_new_functions_spread_across_shards(self, tmp_path):
+        """The regression: priced at 1, all the new functions shared a bin."""
+        new = "".join("\n\ndef new_%d():\n" % i + "    q = 0\n" * 9
+                      + "    return q\n" for i in range(6))
+        # Unequal measured bins (2000 / 1500 / 1000): at 1 ms each, six new
+        # functions all fit in the lightest one's gap and never leave it.
+        path = make_tree(tmp_path, self.SRC + new,
+                         {"alpha": 1000, "beta": 2000, "gamma": 1500})
+        units = ms.units_for(tmp_path, path, 1)
+        bins = ms.pack(tmp_path, 3)
+        holding = {i for i, b in enumerate(bins)
+                   for u in b if (u.symbol or "").startswith("new_")}
+        assert len(units) == 9
+        assert len(holding) > 1, "every new function went to one shard"
 
 
 class TestTheInvariantHoldsOverTheRealTree:

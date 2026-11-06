@@ -22,19 +22,115 @@ someone's diff.
 from __future__ import annotations
 
 import json
-from contextlib import suppress
+import sys
+from collections.abc import Callable
 from pathlib import Path
 
-from . import jsonstate, util
+from ..errors import BoostError
+from . import gitutil, jsonstate, output, paths, util
 
 SCHEMA_VERSION = 1
 LOCK_DIRNAME = ".boost"
 LOCK_FILENAME = "skill-lock.json"
+LOCK_REL = LOCK_DIRNAME + "/" + LOCK_FILENAME
+
+# Lock paths already warned about, so one command that reads a corrupt lock
+# several times says so once — per repo, since one process can visit several.
+_WARNED_CORRUPT: set[str] = set()
+
+
+def recover_hint(base) -> str:
+    """How the corrupt project lock of the repo at ``base`` is recovered.
+
+    A checkout is offered only when git tracks the file, and is run with
+    ``-C <base>``: a relative ``git checkout -- .boost/skill-lock.json``
+    failed from any subdirectory of the repo (doctor and install resolve the
+    root from there), and in a repo that never committed the file it failed
+    everywhere, under a hint saying the repo tracked it.
+    """
+    if gitutil.tracks(Path(base), LOCK_REL):
+        return ("it is tracked by the repo, so `git -C %s checkout -- %s` "
+                "restores the committed copy; or repair the JSON by hand"
+                % (util.shell_arg(str(base)), LOCK_REL))
+    return ("git does not track it, so there is no committed copy to restore "
+            "— repair the JSON by hand")
+
+
+def remedy(base, err: str) -> str:
+    """The one step that repairs project lock problem ``err`` at ``base``.
+
+    An unreadable lock (:class:`jsonstate.Unreadable`) holds bytes that may be
+    perfectly good, so its fix is a permission or a stray directory
+    (:func:`jsonstate.read_remedy`) — never :func:`recover_hint`, whose
+    checkout overwrites the file and drops every uncommitted row in it.
+    """
+    if isinstance(err, jsonstate.Unreadable):
+        return jsonstate.read_remedy(err, paths.tilde)
+    return recover_hint(base)
 
 
 def lock_path(base) -> Path:
     """Path of the project lock for the repo at ``base``."""
     return Path(base) / LOCK_DIRNAME / LOCK_FILENAME
+
+
+def guard_path(base) -> Path:
+    """The sidecar :func:`mutate` locks for the repo at ``base``.
+
+    ``util.file_lock`` never deletes its sidecar, and the project lock is a
+    committed file, so a sidecar beside it would be a permanent untracked
+    entry in every teammate's ``git status``. Inside ``.git/`` nothing sees
+    it — the place `gitutil` already keeps its own lock. A linked worktree's
+    ``.git`` is a file naming its private git dir, which serves the same.
+    With no git dir at all it falls back to ``.boost/skill-lock.json.lock``.
+    """
+    git = _git_dir(Path(base))
+    if git is not None:
+        return git / "boost-skill-lock.lock"
+    p = lock_path(base)
+    return p.with_name(p.name + ".lock")
+
+
+def _git_dir(base: Path) -> Path | None:
+    """``base``'s git directory: ``.git`` itself, or where a ``.git`` file points."""
+    dot = base / ".git"
+    if dot.is_dir():
+        return dot
+    try:
+        text = dot.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    if not text.startswith("gitdir:"):
+        return None
+    target = base / text[len("gitdir:"):].strip()
+    return target if target.is_dir() else None
+
+
+def mutate(base, fn: Callable[[dict], bool | None]) -> bool:
+    """Apply ``fn`` to a fresh read of ``base``'s project lock and persist it.
+
+    The read happens under an exclusive cross-process lock, so ``fn`` sees
+    every write another boost process finished first: two `install --scope
+    project` runs used to each read, add their row and write, and the second
+    write dropped the first's row — leaving a copy on disk that install then
+    refused and uninstall disowned. ``fn`` returning False skips the write;
+    returns whether it wrote.
+
+    Refuses over a corrupt lock before ``fn`` runs, so a no-op ``fn`` cannot
+    report "nothing to change" about a record boost cannot read. That check
+    is a read too, and it belongs here under the guard: on Windows a read
+    that lands inside another process's ``os.replace`` is refused
+    (Permission denied), and ``remove_skill`` doing it unlocked reported a
+    sound lock as corrupt on windows-latest.
+    """
+    with util.file_lock(guard_path(base), what="the project lock",
+                        strict=False):
+        refuse_corrupt(base)
+        lock = read(base)
+        if fn(lock) is False:
+            return False
+        write(base, lock)
+        return True
 
 
 def exists(base) -> bool:
@@ -49,18 +145,18 @@ def _skeleton() -> dict:
 def read(base) -> dict:
     """Load the project lock, guaranteeing a ``skills`` key.
 
-    A missing file is simply an empty project. A corrupt one is preserved beside
-    itself as ``skill-lock.json.corrupt`` before falling back to the skeleton,
-    for the same reason the user lock does it: an unparseable file is not an
-    empty one, and the next write would otherwise erase the only record of what
-    the project had installed.
+    A missing file is simply an empty project. A corrupt one reads as the
+    skeleton too, with a warning, and is left exactly where it is: an
+    unparseable file is not an empty one, so :func:`write` refuses to replace
+    it (:func:`refuse_corrupt`) rather than let the next install record that
+    one skill and drop every other.
     """
     p = lock_path(base)
     if not p.is_file():
         return _skeleton()
-    lock, _err = jsonstate.read_object(p)
+    lock, err = jsonstate.read_object(p)
     if lock is None:
-        _preserve_corrupt(p)
+        _warn_corrupt(p, err or str(p))
         return _skeleton()
     lock.setdefault("version", SCHEMA_VERSION)
     skills = lock.get("skills")
@@ -68,20 +164,85 @@ def read(base) -> dict:
     return lock
 
 
-def _preserve_corrupt(p: Path) -> None:
-    """Copy an unparseable lock aside as ``.corrupt``; never raise."""
-    with suppress(OSError):
-        import shutil
-        shutil.copy(p, p.with_name(p.name + ".corrupt"))
+def _warn_corrupt(p: Path, err: str) -> None:
+    """Say once, on stderr, that this project lock reads as empty."""
+    if str(p) in _WARNED_CORRUPT:
+        return
+    _WARNED_CORRUPT.add(str(p))
+    if isinstance(err, jsonstate.Unreadable):
+        output.warn("project lock %s cannot be read (%s), so boost sees no "
+                    "project skills here and will not write over it — %s"
+                    % (paths.tilde(err.path), err.reason, remedy(p.parent.parent, err)),
+                    stream=sys.stderr, wrap=True)
+        return
+    output.warn("%s — boost sees no project skills here and will not write "
+                "over it; %s" % (err, recover_hint(p.parent.parent)),
+                stream=sys.stderr, wrap=True)
+
+
+def check(base) -> str | None:
+    """Why the project lock cannot be read, or None when it reads or is absent.
+
+    Never prints: `boost doctor` reports it.
+    """
+    return jsonstate.read_object(lock_path(base))[1]
+
+
+def refuse_corrupt(base) -> None:
+    """Raise while the project lock on disk is corrupt, so nothing writes over it.
+
+    :func:`read` hands its callers an empty skeleton, so a write would replace
+    every record with whatever one change added — `install --scope project`
+    did exactly that, and left the other skills' copies on disk unrecorded.
+    """
+    err = check(base)
+    if err is None:
+        return
+    if isinstance(err, jsonstate.Unreadable):
+        raise BoostError("project lock %s cannot be read (%s) — boost will "
+                         "not write over a lock it cannot read"
+                         % (paths.tilde(err.path), err.reason),
+                         hint="%s, then re-run" % remedy(base, err), wrap=True)
+    raise BoostError("project lock is corrupt — boost will not write over it "
+                     "(%s)" % err,
+                     hint=recover_hint(base), wrap=True)
 
 
 def write(base, lock: dict) -> None:
-    """Stamp version/updated onto ``lock`` and write it atomically."""
+    """Stamp version/updated onto ``lock`` and write it atomically.
+
+    Refuses over a corrupt lock (:func:`refuse_corrupt`). Takes no lock: a
+    read-modify-write goes through :func:`mutate`, which calls this.
+    """
+    refuse_corrupt(base)
     p = lock_path(base)
-    p.parent.mkdir(parents=True, exist_ok=True)
     lock["version"] = SCHEMA_VERSION
     lock["updated"] = util.now_iso()
-    util.atomic_write_text(p, json.dumps(lock, indent=2, sort_keys=True) + "\n")
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        util.atomic_write_text(
+            p, json.dumps(lock, indent=2, sort_keys=True) + "\n")
+    except OSError as e:
+        # A read-only `.boost/` was exit 70 and a crash report naming a temp
+        # file; the user lock has said which dir and which chmod for a while.
+        raise paths.save_refused(p, e) from e
+
+
+def refuse_unwritable(base, verb: str, name: str) -> None:
+    """Raise unless the project lock for ``base`` can be written.
+
+    Asked before an install copies or an uninstall deletes anything: the
+    lock write comes last, so a ``.boost/`` that refuses it used to leave
+    unrecorded copies behind (and a rerun refused over them), or copies gone
+    with the row still listed. Same wording as the user scope's
+    ``store._require_writable``.
+    """
+    d = lock_path(base).parent
+    block = paths.refuses_writes(d)
+    if block is not None:
+        raise BoostError("cannot %s %s: %s"
+                         % (verb, name, paths.not_writable(d, block)),
+                         hint="%s, then re-run" % paths.write_remedy(block))
 
 
 def installed(base) -> dict:
@@ -96,9 +257,9 @@ def get_skill(base, name: str) -> dict | None:
 
 def set_skill(base, name: str, entry: dict) -> None:
     """Insert or replace the project lock entry for ``name`` and persist."""
-    lock = read(base)
-    lock["skills"][name] = entry
-    write(base, lock)
+    def put(lock: dict) -> None:
+        lock["skills"][name] = entry
+    mutate(base, put)
 
 
 def remove_skill(base, name: str) -> bool:
@@ -107,10 +268,18 @@ def remove_skill(base, name: str) -> bool:
     When the last skill goes the file is left in place (empty) rather than
     deleted — it is a tracked file in someone's repo, and removing it would show
     up as a spurious deletion in their next ``git status``.
+
+    Refuses over a corrupt lock even though it reads as holding nothing:
+    "not present" would be a false answer about a record boost cannot read.
+    :func:`mutate` makes that check under the lock; only the existence probe
+    runs unlocked, so a missing lock creates no ``.boost/`` sidecar.
     """
-    lock = read(base)
-    if name in lock["skills"]:
+    if not exists(base):
+        return False    # nothing to remove, and no reason to create .boost/
+
+    def drop(lock: dict) -> bool:
+        if name not in lock["skills"]:
+            return False
         del lock["skills"][name]
-        write(base, lock)
         return True
-    return False
+    return mutate(base, drop)

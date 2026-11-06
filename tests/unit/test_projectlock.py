@@ -4,8 +4,14 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
 
-from boost_cli.core import projectlock
+import pytest
+
+from boost_cli.core import gitutil, jsonstate, paths, projectlock, util
+from boost_cli.errors import BoostError
 
 
 def _entry(version="1.0.0"):
@@ -103,24 +109,79 @@ def test_removing_the_last_skill_keeps_the_file(tmp_path):
     assert projectlock.installed(tmp_path) == {}
 
 
-def test_a_corrupt_lock_is_preserved_not_silently_emptied(tmp_path):
-    p = projectlock.lock_path(tmp_path)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text("{not json", encoding="utf-8")
-    assert projectlock.read(tmp_path)["skills"] == {}
-    sidecar = p.with_name(p.name + ".corrupt")
-    # Exact name: the recovery instructions point at it.
-    assert sorted(q.name for q in p.parent.iterdir()) == \
-        ["skill-lock.json", "skill-lock.json.corrupt"]
-    assert sidecar.read_text(encoding="utf-8") == "{not json"
+def _err(capsys) -> str:
+    """Captured stderr with the pane wrapping folded back to single spaces."""
+    return " ".join(capsys.readouterr().err.split())
 
 
-def test_a_non_dict_document_is_treated_as_corrupt(tmp_path):
+def _corrupt(tmp_path, raw: bytes):
     p = projectlock.lock_path(tmp_path)
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text("[1, 2, 3]", encoding="utf-8")
+    p.write_bytes(raw)
+    return p
+
+
+def test_a_corrupt_lock_is_left_in_place_not_silently_emptied(tmp_path, capsys):
+    p = _corrupt(tmp_path, b"{not json")
     assert projectlock.read(tmp_path)["skills"] == {}
-    assert p.with_name(p.name + ".corrupt").is_file()
+    # Left exactly where it is — no sidecar copy (it is committed; git has
+    # it), and above all nothing written over it.
+    assert sorted(q.name for q in p.parent.iterdir()) == ["skill-lock.json"]
+    assert p.read_bytes() == b"{not json"
+    err = _err(capsys)
+    assert "%s: invalid JSON" % p in err
+    assert "boost sees no project skills here and will not write over it" in err
+    # Not a repo, so no checkout is offered: there is nothing for git to restore.
+    assert "git does not track it" in err
+    assert "git -C" not in err
+
+
+def test_a_corrupt_lock_warns_once_per_lock(tmp_path, capsys):
+    _corrupt(tmp_path / "a", b"{")
+    _corrupt(tmp_path / "b", b"{")
+    for _ in range(3):
+        projectlock.read(tmp_path / "a")
+    projectlock.installed(tmp_path / "b")
+    assert _err(capsys).count("will not write over it") == 2
+
+
+def test_a_non_dict_document_is_treated_as_corrupt(tmp_path, capsys):
+    p = _corrupt(tmp_path, b"[1, 2, 3]")
+    assert projectlock.read(tmp_path)["skills"] == {}
+    assert projectlock.check(tmp_path) == \
+        "%s: expected a JSON object, found list" % p
+
+
+def test_check_is_none_for_a_missing_or_valid_lock(tmp_path, capsys):
+    assert projectlock.check(tmp_path) is None
+    projectlock.set_skill(tmp_path, "a", _entry())
+    assert projectlock.check(tmp_path) is None
+    assert capsys.readouterr().err == ""
+
+
+def test_write_refuses_over_a_corrupt_lock(tmp_path):
+    # The bug: the next project install recorded only itself and dropped
+    # every other skill's record, leaving their copies orphaned.
+    p = _corrupt(tmp_path, b'{"skills": {"a": {}, "b": {}')
+    with pytest.raises(BoostError) as exc:
+        projectlock.set_skill(tmp_path, "c", _entry())
+    assert exc.value.message == (
+        "project lock is corrupt — boost will not write over it (%s)"
+        % projectlock.check(tmp_path))
+    assert exc.value.hint == (
+        "git does not track it, so there is no committed copy to restore — "
+        "repair the JSON by hand")
+    assert p.read_bytes() == b'{"skills": {"a": {}, "b": {}'
+    with pytest.raises(BoostError):
+        projectlock.remove_skill(tmp_path, "a")
+    assert p.read_bytes() == b'{"skills": {"a": {}, "b": {}'
+
+
+def test_refuse_corrupt_passes_a_missing_or_valid_lock(tmp_path):
+    projectlock.refuse_corrupt(tmp_path)
+    projectlock.set_skill(tmp_path, "a", _entry())
+    projectlock.refuse_corrupt(tmp_path)
+    assert list(projectlock.installed(tmp_path)) == ["a"]
 
 
 def test_a_non_dict_skills_key_degrades_to_empty(tmp_path):
@@ -132,15 +193,201 @@ def test_a_non_dict_skills_key_degrades_to_empty(tmp_path):
 
 def test_there_is_no_history_directory(tmp_path):
     # git is this file's history — a .boost/lock-history would be litter.
+    # A real repo, so the write's lock sidecar goes in .git/ (see
+    # projectlock.guard_path); only a git-less dir gets one in .boost/.
+    (tmp_path / ".git").mkdir()
     projectlock.set_skill(tmp_path, "a", _entry())
     projectlock.set_skill(tmp_path, "a", _entry("2.0.0"))
     assert sorted(p.name for p in (tmp_path / ".boost").iterdir()) == \
         ["skill-lock.json"]
 
 
-def test_a_lock_that_is_not_utf8_is_preserved_not_a_crash(tmp_path):
-    p = projectlock.lock_path(tmp_path)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_bytes(b"\xff\xfe")
+def test_a_lock_that_is_not_utf8_is_preserved_not_a_crash(tmp_path, capsys):
+    p = _corrupt(tmp_path, b"\xff\xfe")
     assert projectlock.read(tmp_path)["skills"] == {}
-    assert p.with_name(p.name + ".corrupt").read_bytes() == b"\xff\xfe"
+    assert p.read_bytes() == b"\xff\xfe"
+    assert "%s: not valid UTF-8" % p in _err(capsys)
+
+
+def _git(cwd, *args):
+    subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t",
+                    "-c", "commit.gpgsign=false", *args], cwd=cwd, check=True,
+                   capture_output=True)
+
+
+@pytest.mark.skipif(not gitutil.has_git(), reason="needs git")
+class TestRecoverHint:
+    """The printed checkout must work from wherever it was printed."""
+
+    def test_an_uncommitted_lock_is_not_offered_a_checkout(self, tmp_path):
+        _git(tmp_path, "init", "-q")
+        _corrupt(tmp_path, b"{")
+        assert projectlock.recover_hint(tmp_path) == (
+            "git does not track it, so there is no committed copy to restore "
+            "— repair the JSON by hand")
+
+    def test_a_committed_lock_gets_a_checkout_that_runs_from_a_subdir(
+            self, tmp_path):
+        repo = tmp_path / "rh repo"          # a space, so the path is quoted
+        repo.mkdir()
+        _git(repo, "init", "-q")
+        projectlock.set_skill(repo, "a", _entry())
+        good = projectlock.lock_path(repo).read_bytes()
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "lock")
+        _corrupt(repo, b"{")
+        hint = projectlock.recover_hint(repo)
+        cmd = "git -C %s checkout -- .boost/skill-lock.json" % util.shell_arg(
+            str(repo))
+        assert hint == ("it is tracked by the repo, so `%s` restores the "
+                        "committed copy; or repair the JSON by hand" % cmd)
+        deep = repo / "src" / "deep"
+        deep.mkdir(parents=True)
+        subprocess.run(["git", "-C", str(repo), "checkout", "--",
+                        ".boost/skill-lock.json"], cwd=deep, check=True,
+                       capture_output=True)
+        # Compared parsed: under core.autocrlf (Git for Windows' default) the
+        # checkout writes CRLF, which is whitespace to the JSON reader.
+        assert json.loads(projectlock.lock_path(repo).read_bytes()) == \
+            json.loads(good)
+
+    def test_without_git_nothing_is_offered(self, tmp_path, monkeypatch):
+        _git(tmp_path, "init", "-q")
+        projectlock.set_skill(tmp_path, "a", _entry())
+        _git(tmp_path, "add", "-A")
+        assert gitutil.tracks(tmp_path, projectlock.LOCK_REL)
+        monkeypatch.setattr(gitutil, "has_git", lambda: False)
+        assert not gitutil.tracks(tmp_path, projectlock.LOCK_REL)
+        assert projectlock.recover_hint(tmp_path).startswith(
+            "git does not track it")
+
+
+_NOT_WINDOWS = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="chmod can't make a directory read-only on Windows")
+_NOT_ROOT = pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                               reason="root ignores mode bits")
+
+
+class TestAReadOnlyDotBoost:
+    """A refused write names the lock, the dir and the chmod — never exit 70."""
+
+    @pytest.fixture()
+    def ro(self, sandbox, tmp_path):
+        projectlock.set_skill(tmp_path, "a", _entry())
+        d = projectlock.lock_path(tmp_path).parent
+        d.chmod(0o555)
+        yield d
+        d.chmod(0o755)
+
+    @_NOT_WINDOWS
+    @_NOT_ROOT
+    def test_write_raises_save_refused(self, ro, tmp_path):
+        p = projectlock.lock_path(tmp_path)
+        before = p.read_bytes()
+        with pytest.raises(BoostError) as ei:
+            projectlock.set_skill(tmp_path, "b", _entry())
+        assert ei.value.message == (
+            "could not save %s (Permission denied): %s is not writable"
+            % (paths.tilde(p), paths.tilde(ro)))
+        assert ei.value.hint == "run `chmod u+w %s`, then re-run" \
+            % paths.tilde(ro)
+        assert isinstance(ei.value.__cause__, PermissionError)
+        assert p.read_bytes() == before
+
+    @_NOT_WINDOWS
+    @_NOT_ROOT
+    def test_refuse_unwritable_names_the_verb_and_dir(self, ro, tmp_path):
+        with pytest.raises(BoostError) as ei:
+            projectlock.refuse_unwritable(tmp_path, "uninstall", "a")
+        assert ei.value.message == ("cannot uninstall a: %s is not writable"
+                                    % paths.tilde(ro))
+        assert ei.value.hint == "run `chmod u+w %s`, then re-run" \
+            % paths.tilde(ro)
+
+    @_NOT_WINDOWS
+    @_NOT_ROOT
+    def test_an_unsearchable_dot_boost_needs_the_search_bit(self, ro,
+                                                             tmp_path):
+        ro.chmod(0o600)
+        with pytest.raises(BoostError) as ei:
+            projectlock.refuse_unwritable(tmp_path, "install", "b")
+        assert ei.value.message == ("cannot install b: %s is not searchable"
+                                    % paths.tilde(ro))
+        assert ei.value.hint == "run `chmod u+wx %s`, then re-run" \
+            % paths.tilde(ro)
+
+    def test_a_writable_or_missing_dot_boost_passes(self, sandbox, tmp_path):
+        assert projectlock.refuse_unwritable(tmp_path, "install", "a") is None
+        projectlock.set_skill(tmp_path, "a", _entry())
+        assert projectlock.refuse_unwritable(tmp_path, "install", "a") is None
+
+
+class TestAnUnreadableLock:
+    """A lock that cannot be *read* is not corrupt, and a checkout is no fix.
+
+    Its bytes may be fine: `git checkout` over it would throw away every row
+    not yet committed, so the remedy is the permission or the stray dir.
+    """
+
+    @pytest.fixture()
+    def locked(self, sandbox, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        if gitutil.has_git():
+            _git(repo, "init", "-q")
+        projectlock.set_skill(repo, "a", _entry())
+        if gitutil.has_git():
+            _git(repo, "add", "-A")
+            _git(repo, "commit", "-qm", "lock")
+        p = projectlock.lock_path(repo)
+        p.chmod(0o000)
+        yield repo, p
+        p.chmod(0o644)
+
+    @_NOT_WINDOWS
+    @_NOT_ROOT
+    def test_a_write_is_refused_as_unreadable_not_corrupt(self, locked):
+        repo, p = locked
+        with pytest.raises(BoostError) as ei:
+            projectlock.set_skill(repo, "b", _entry())
+        assert ei.value.message == (
+            "project lock %s cannot be read (Permission denied) — boost will "
+            "not write over a lock it cannot read" % paths.tilde(p))
+        assert ei.value.hint == ("make it readable with `chmod u+r %s`, then "
+                                 "re-run" % paths.tilde(p))
+        p.chmod(0o644)
+        assert list(projectlock.installed(repo)) == ["a"]
+
+    @_NOT_WINDOWS
+    @_NOT_ROOT
+    def test_a_read_warns_with_the_chmod(self, locked, capsys):
+        repo, p = locked
+        assert projectlock.read(repo)["skills"] == {}
+        err = _err(capsys)
+        assert err == (
+            "! project lock %s cannot be read (Permission denied), so boost "
+            "sees no project skills here and will not write over it — make "
+            "it readable with `chmod u+r %s`" % (paths.tilde(p),
+                                                 paths.tilde(p)))
+        assert "corrupt" not in err and "checkout" not in err
+
+    def test_a_directory_on_the_name_is_moved_aside(self, sandbox, tmp_path):
+        p = projectlock.lock_path(tmp_path)
+        p.mkdir(parents=True)
+        err = projectlock.check(tmp_path)
+        assert isinstance(err, jsonstate.Unreadable)
+        with pytest.raises(BoostError) as ei:
+            projectlock.set_skill(tmp_path, "a", _entry())
+        assert ei.value.message.startswith(
+            "project lock %s cannot be read (" % paths.tilde(p))
+        assert ei.value.hint == ("move the directory %s aside (it is not a "
+                                 "file), then re-run" % paths.tilde(p))
+        assert p.is_dir()
+
+    def test_a_corrupt_lock_keeps_the_recover_hint(self, tmp_path):
+        _corrupt(tmp_path, b"{")
+        err = projectlock.check(tmp_path)
+        assert not isinstance(err, jsonstate.Unreadable)
+        assert projectlock.remedy(tmp_path, err) == \
+            projectlock.recover_hint(tmp_path)

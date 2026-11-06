@@ -106,12 +106,19 @@ def ensure_tap() -> registry.Tap:
         origin = src / (rule + ".mdc")
         if origin.is_file():
             shutil.copyfile(origin, tap.path / (rule + ".mdc"))
-    cfg = config.load()
-    rows = cfg.setdefault("taps", [])
-    if not any(str(row.get("name")) == BUILTIN_TAP for row in rows):
-        rows.append({"name": BUILTIN_TAP, "url": BUILTIN_URL, "curated": True})
-        config.save(cfg)
+    if not any(t.name == BUILTIN_TAP for t in registry.list_taps()):
+        config.mutate(_register)    # checked unlocked first: the common case
     return tap
+
+
+def _register(cfg: dict) -> bool:
+    """Append the built-in tap's row to a fresh config, unless it is there."""
+    rows = cfg.setdefault("taps", [])
+    if any(isinstance(row, dict) and row.get("name") == BUILTIN_TAP
+           for row in rows):
+        return False
+    rows.append({"name": BUILTIN_TAP, "url": BUILTIN_URL, "curated": True})
+    return True
 
 
 def rule_is_available() -> bool:

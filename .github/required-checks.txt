@@ -38,17 +38,18 @@ install-smoke
 patch-coverage
 evals
 
-# Every matrix leg of ci.yml's `tests` job. They are listed individually
-# because GitHub requires the expanded matrix name, not the job id.
+# Every blocking matrix leg of ci.yml's `tests` job. They are listed
+# individually because GitHub requires the expanded matrix name, not the job
+# id. `tests (ubuntu-latest, 3.15)` is advisory (continue-on-error) and stays
+# out. macOS and Windows on 3.13/3.14 are not here because a pull request no
+# longer runs them: they are ci.yml's `tests-extended`, which runs on every
+# push to main (holding the release), nightly and on dispatch, and reports on
+# no pull request, so it can never be required.
 tests (ubuntu-latest, 3.13)
 tests (ubuntu-latest, 3.12)
 tests (ubuntu-latest, 3.14)
-tests (macos-latest, 3.13)
 tests (macos-latest, 3.12)
-tests (macos-latest, 3.14)
-tests (windows-latest, 3.13)
 tests (windows-latest, 3.12)
-tests (windows-latest, 3.14)
 
 # The Gherkin/BDD suite (tests/bdd). Runs on every
 # pull request and on the merge queue, same as the rest of ci.yml, so it is
@@ -84,9 +85,10 @@ onnx-inference
 # trigger to every PR (drop the `paths:` filter); adding it here without doing
 # that is now a lint failure, not a silent deadlock.
 #
-# `sonar-analyze` (sonarcloud.yml) IS unfiltered and would be safe to require;
-# it is left out deliberately so an outage of a third-party service cannot
-# block a merge.
+# `sonar-analyze` (sonarcloud.yml) is unfiltered, but its job starts only when
+# the SONAR_ENABLED repository variable is `true`, so it is not safe to
+# require; it is also left out deliberately so an outage of a third-party
+# service cannot block a merge.
 
 # A pull request must contain main's tip before it can merge. GitHub can
 # enforce this natively and this repo asks it to twice, which is how it went

@@ -7,8 +7,8 @@ category: Catalog · Data
 complexity: M
 impact: Med
 wow: 2
-note: 46 registries out of general, 4 unregistered taps added, caches rescan on a moved category
-order: 306
+note: 42 registries out of general, 4 unregistered taps added, caches rescan on a moved category
+order: 378
 owner: loop/backfill-categories
 pr: 1078
 title: "A registry moved out of <code>general</code> never reached a machine that had already tapped it"
@@ -23,15 +23,18 @@ on every machine until someone re-tapped it.
 <b>Shipped:</b> each tap cache now records the <code>tap_category</code> it was scanned under, and a
 cache whose value differs from today's registry data is stale the same way an old format is. It is
 rescanned when the clone is present and served as-is when it is not, so every future
-recategorisation reaches existing machines without bumping the format. The registry catalog read is
-memoised on its stat stamp, since 468 parses per search measured 201 ms. Of the 131
-<code>general</code> and unregistered repos, 46 were reassigned from the names of the items they
-ship (a ≥70% single-domain threshold, with each batch checked adversarially). Four of the
-unregistered taps were added with measured <code>est_items</code>; <code>sentry-agent-skills</code>
-was left out because <code>getsentry/sentry-for-ai</code> already supersedes it. Because
-<code>serve.entry_tags</code> derives its <code>topic:</code> tag from the same field, the tag facet
-is backfilled too. Projected over that same install: <code>general</code> 16,538 → 12,677 entries,
-uncategorised 312 → 59, <code>backend</code> 220 → 600, <code>agents</code> 1,032 → 2,121, <code>security</code> 722 → 1,014.
+recategorisation reaches existing machines without bumping the format. The same check makes
+<code>update</code> and <code>heal</code> rescan such a tap, since <code>cache_is_fresh</code> reads it
+too. The registry catalog read is memoised on its stat stamp, since 468 parses per search measured
+201 ms. Of the 125 registries filed under <code>general</code>, 42 were reassigned from the names of
+the items they ship (a ≥70% single-domain threshold, with each batch checked adversarially), which
+leaves 85 there. Four of the unregistered taps were added with measured <code>est_items</code>, two
+of them outside <code>general</code>; <code>sentry-agent-skills</code> was left out because
+<code>getsentry/sentry-for-ai</code> already supersedes it. Because <code>serve.entry_tags</code>
+derives its <code>topic:</code> tag from the same field, the tag facet is backfilled too. Projected
+over that same install against the 2026-10-13 catalogue: <code>general</code> 16,538 → 12,677
+entries, uncategorised 312 → 59, <code>backend</code> 220 → 600, <code>agents</code> 1,032 → 2,121,
+<code>security</code> 722 → 1,014.
 <br><br>
 <b>Left open:</b> clusters with no category to go to, which stayed in <code>general</code>: science
 (≈7 repos, including <code>K-Dense-AI/scientific-agent-skills</code>), mobile (≈4), finance,

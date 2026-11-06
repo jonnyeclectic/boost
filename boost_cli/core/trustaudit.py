@@ -215,7 +215,7 @@ def relation_list(meta: dict | None, key: str) -> list[str]:
     worthwhile follow-up, but retargeting three call sites is out of scope here.
     """
     val = (meta or {}).get(key)
-    if val in (None, "", False):
+    if val in (None, "", False) or isinstance(val, dict):
         return []
     if isinstance(val, list):
         return [str(x).strip() for x in val if str(x).strip()]

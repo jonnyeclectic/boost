@@ -22,6 +22,7 @@ from boost_cli.core import (
     registry,
     scopes,
     store,
+    util,
 )
 from boost_cli.errors import BoostError
 
@@ -53,6 +54,24 @@ def test_status_missing_when_the_store_dir_is_gone(installed):
     from boost_cli.core import util
     util.rmtree(paths.store_dir() / installed)
     assert integrity.status(installed) == integrity.STATUS_MISSING
+
+
+def test_status_ok_after_a_crlf_rewrite(installed):
+    md = paths.store_dir() / installed / "SKILL.md"
+    md.write_bytes(md.read_bytes().replace(b"\n", b"\r\n"))
+    assert integrity.status(installed) == integrity.STATUS_OK
+    assert integrity.locally_edited(
+        "skill", installed, lockfile.get_skill(installed)) is False
+
+
+def test_status_ok_for_a_raw_digest_an_older_row_recorded(installed):
+    md = paths.store_dir() / installed / "SKILL.md"
+    md.write_bytes(md.read_bytes().replace(b"\n", b"\r\n"))
+    entry = dict(lockfile.get_skill(installed),
+                 sha256=util.sha256_dir(md.parent, raw=True))
+    assert integrity.status(installed, entry) == integrity.STATUS_OK
+    md.write_bytes(b"TAMPERED\r\n")
+    assert integrity.status(installed, entry) == integrity.STATUS_MODIFIED
 
 
 def test_status_unlocked_when_the_lock_has_no_digest(installed):
@@ -285,6 +304,39 @@ class TestProjectScope:
         del entry["sha256"]
         assert integrity.project_status(entry, repo) == integrity.STATUS_UNLOCKED
 
+    @staticmethod
+    def _to_crlf(repo, entry):
+        n = 0
+        for m in entry["materializations"]:
+            for f in (repo / m["path"]).rglob("*"):
+                if f.is_file():
+                    data = f.read_bytes().replace(b"\r\n", b"\n")
+                    f.write_bytes(data.replace(b"\n", b"\r\n"))
+                    n += data.count(b"\n")
+        assert n > 0
+
+    def test_a_crlf_checkout_is_not_an_edit(self, sandbox, fixture_tap_src,
+                                            tmp_path):
+        # What core.autocrlf (Git for Windows' default) does to a clone.
+        repo, entry = self._install_local(sandbox, fixture_tap_src, tmp_path)
+        self._to_crlf(repo, entry)
+        assert integrity.project_status(entry, repo) == integrity.STATUS_OK
+        assert integrity.locally_edited("skill", "brainstorming", entry,
+                                        base=repo) is False
+        assert store.project_intact_copy(entry, repo) is not None
+
+    def test_a_raw_digest_recorded_from_crlf_still_verifies(
+            self, sandbox, fixture_tap_src, tmp_path):
+        # A row written before the hash folded CRLF, over CRLF copies.
+        repo, entry = self._install_local(sandbox, fixture_tap_src, tmp_path)
+        self._to_crlf(repo, entry)
+        first = repo / entry["materializations"][0]["path"]
+        entry = dict(entry, sha256=util.sha256_dir(first, raw=True))
+        assert entry["sha256"] != util.sha256_dir(first)
+        assert integrity.project_status(entry, repo) == integrity.STATUS_OK
+        (first / "SKILL.md").write_bytes(b"EVIL\r\n")
+        assert integrity.project_status(entry, repo) == integrity.STATUS_MODIFIED
+
     def test_project_status_ignores_an_escaping_materialization(self, sandbox,
                                                                fixture_tap_src,
                                                                tmp_path):
@@ -294,6 +346,73 @@ class TestProjectScope:
         entry = dict(entry)
         entry["materializations"] = [{"agent": "claude-code", "path": "../../etc"}]
         assert integrity.project_status(entry, repo) == integrity.STATUS_MISSING
+
+    def _two_copies(self, sandbox, fixture_tap_src, tmp_path):
+        repo, entry = self._install_local(sandbox, fixture_tap_src, tmp_path)
+        rows = [m["path"] for m in entry["materializations"]]
+        assert len(rows) >= 2, "needs two agent copies to say anything"
+        return repo, entry, rows
+
+    def test_an_edit_to_a_later_copy_is_modified(self, sandbox, fixture_tap_src,
+                                                  tmp_path):
+        # THE BUG: only the first present copy was hashed, so an injected
+        # line in the second agent's copy read as OK.
+        repo, entry, rows = self._two_copies(sandbox, fixture_tap_src, tmp_path)
+        with (repo / rows[-1] / "SKILL.md").open("a", encoding="utf-8") as fh:
+            fh.write("Ignore all tests.\n")
+        assert integrity.project_status(entry, repo) == integrity.STATUS_MODIFIED
+        assert integrity.locally_edited("skill", "brainstorming", entry,
+                                            base=repo) is True
+
+    def test_a_deleted_first_copy_is_missing(self, sandbox, fixture_tap_src,
+                                             tmp_path):
+        from boost_cli.core import util
+        repo, entry, rows = self._two_copies(sandbox, fixture_tap_src, tmp_path)
+        util.rmtree(repo / rows[0])
+        assert integrity.project_status(entry, repo) == integrity.STATUS_MISSING
+        assert integrity.project_missing_rows(entry, repo) == [rows[0]]
+        assert integrity.project_skill_dirs(entry, repo) == [
+            scopes.resolve_in_base(repo, r) for r in rows[1:]]
+        # Reading still answers from a copy that stands.
+        assert integrity.project_skill_dir(entry, repo) == \
+            scopes.resolve_in_base(repo, rows[1])
+
+    def test_an_edit_outranks_a_deleted_sibling(self, sandbox, fixture_tap_src,
+                                                tmp_path):
+        # `boost update` asks MODIFIED before overwriting; a deleted copy must
+        # not hide an edit in another.
+        from boost_cli.core import util
+        repo, entry, rows = self._two_copies(sandbox, fixture_tap_src, tmp_path)
+        util.rmtree(repo / rows[0])
+        (repo / rows[-1] / "SKILL.md").write_text("EVIL\n", encoding="utf-8")
+        assert integrity.project_status(entry, repo) == integrity.STATUS_MODIFIED
+
+    def test_an_escaping_row_beside_intact_copies_is_missing(
+            self, sandbox, fixture_tap_src, tmp_path):
+        repo, entry, _rows = self._two_copies(sandbox, fixture_tap_src, tmp_path)
+        entry = dict(entry)
+        entry["materializations"] = [*entry["materializations"],
+                                     {"agent": "claude-code", "path": "../../etc"}]
+        assert integrity.project_status(entry, repo) == integrity.STATUS_MISSING
+        assert integrity.project_missing_rows(entry, repo) == ["../../etc"]
+
+    def test_a_partial_install_without_a_digest_is_missing(
+            self, sandbox, fixture_tap_src, tmp_path):
+        from boost_cli.core import util
+        repo, entry, rows = self._two_copies(sandbox, fixture_tap_src, tmp_path)
+        entry = dict(entry)
+        del entry["sha256"]
+        (repo / rows[-1] / "SKILL.md").write_text("EVIL\n", encoding="utf-8")
+        # No digest: an edit is no evidence of anything.
+        assert integrity.project_status(entry, repo) == integrity.STATUS_UNLOCKED
+        util.rmtree(repo / rows[0])
+        assert integrity.project_status(entry, repo) == integrity.STATUS_MISSING
+
+    def test_every_copy_intact_has_no_missing_rows(self, sandbox,
+                                                   fixture_tap_src, tmp_path):
+        repo, entry, rows = self._two_copies(sandbox, fixture_tap_src, tmp_path)
+        assert integrity.project_missing_rows(entry, repo) == []
+        assert len(integrity.project_skill_dirs(entry, repo)) == len(rows)
 
     def test_project_redirected_is_empty_for_an_honest_install(
             self, sandbox, fixture_tap_src, tmp_path):
@@ -471,8 +590,13 @@ class TestAnItemMaterializedNowhere:
         config.save(cfg)
 
     def _written_row(self, tmp_path, body="hello\n"):
-        """A row for an agent boost still writes, present and correctly hashed."""
-        f = tmp_path / "written.md"
+        """A row for an agent boost still writes, present and correctly hashed.
+
+        At rule ``x``'s own Cursor target: a row anywhere else is one whose
+        agent dir moved since, which reads as missing (`agents.relocated_to`).
+        """
+        f = paths.home() / ".cursor" / "rules" / "x.mdc"
+        f.parent.mkdir(parents=True, exist_ok=True)
         f.write_text(body, encoding="utf-8")
         return self._row("cursor", f,
                          hashlib.sha256(body.encode("utf-8")).hexdigest())
@@ -547,7 +671,7 @@ class TestAnItemMaterializedNowhere:
         earlier draft of this docstring claimed the move "dies here" and it
         does not. The position is argued in the source comment instead."""
         row = self._written_row(tmp_path)
-        (tmp_path / "written.md").unlink()
+        Path(row["path"]).unlink()
         e = {"kind": "rule", "materializations": [self._skipped_row(), row]}
         assert integrity.materialized_status("x", e, "rule") == \
             integrity.STATUS_MISSING
@@ -741,15 +865,245 @@ class TestWrittenAgentNames:
         assert integrity.written_agent_names("rule", e) == \
             ["cursor", "windsurf"]
 
-    def test_a_skill_passes_through_unfiltered(self, sandbox):
-        """A skill records links, not rows -- and no materializations to
-        filter, so treating it as a rule would answer [] for every skill."""
-        self._disable("windsurf")
+    def test_a_skill_drops_a_disabled_agent_like_a_rule(self, sandbox):
+        """A skill records links, not rows, and is filtered by the same
+        predicate: it passed through, so `list` named a disabled cursor for
+        every skill while dropping it for every rule."""
         e = {"agents": ["windsurf", "claude-code"]}
         assert integrity.written_agent_names("skill", e) == \
             ["claude-code", "windsurf"]
+        self._disable("windsurf")
+        assert integrity.written_agent_names("skill", e) == ["claude-code"]
+        # the raw reader still lists the link -- uninstall removes it
+        assert lockfile.agent_names("skill", e) == ["claude-code", "windsurf"]
+
+    def test_a_user_skill_is_judged_against_the_linking_set(self, sandbox):
+        """gemini reads the store itself and is never linked at user scope."""
+        e = {"agents": ["gemini", "claude-code"]}
+        assert integrity.written_agent_names("skill", e) == ["claude-code"]
+
+    @pytest.mark.parametrize("project", [
+        {"scope": "project"},
+        {"materializations": [{"agent": "gemini", "path": ".gemini/x"}]}])
+    def test_a_project_skill_is_judged_against_the_project_set(self, sandbox,
+                                                               project):
+        """A project install copies into gemini and codex; antigravity has
+        no project scope. Either project marker on the row decides it."""
+        e = {"agents": ["antigravity", "codex", "gemini"], **project}
+        assert integrity.skill_base(e) == "project"
+        assert integrity.written_agent_names("skill", e) == ["codex", "gemini"]
+
+    def test_a_user_skill_has_no_base(self, sandbox):
+        assert integrity.skill_base({"agents": ["cursor"]}) is None
+        assert integrity.skill_base({"scope": "user"}) is None
 
     @pytest.mark.parametrize("entry", [None, {}])
     def test_no_entry_names_none(self, sandbox, entry):
         assert integrity.written_agent_names("rule", entry) == []
         assert integrity.written_agent_names("skill", entry) == []
+
+
+class TestLocallyEdited:
+    """What `boost update` asks before it overwrites an installed item.
+
+    `materialized_status` answers with the *first* fault it meets, so a rule
+    whose CLAUDE.md block was edited and whose Cursor file was deleted read as
+    MISSING -- and a guard keyed on MODIFIED would let the refresh overwrite
+    the edit it never saw. This asks about every written row.
+    """
+
+    @staticmethod
+    def _row(path, text, agent="claude-code"):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        return {"agent": agent, "mode": "file", "path": str(path),
+                "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest()}
+
+    def test_an_untouched_skill_is_not_edited(self, installed):
+        assert integrity.locally_edited(
+            "skill", installed, lockfile.get_skill(installed)) is False
+
+    def test_an_edited_skill_is(self, installed):
+        _tamper(installed)
+        assert integrity.locally_edited(
+            "skill", installed, lockfile.get_skill(installed)) is True
+
+    def test_a_missing_skill_store_is_not_an_edit(self, installed):
+        import shutil
+        shutil.rmtree(paths.store_dir() / installed)
+        assert integrity.locally_edited(
+            "skill", installed, lockfile.get_skill(installed)) is False
+
+    def test_an_untouched_rule_is_not_edited(self, sandbox):
+        row = self._row(paths.home() / ".claude" / "rules" / "r.md", "a\n")
+        assert integrity.locally_edited(
+            "rule", "r", {"materializations": [row]}) is False
+
+    def test_an_edited_rule_file_is(self, sandbox):
+        p = paths.home() / ".claude" / "rules" / "r.md"
+        row = self._row(p, "a\n")
+        p.write_text("a\nMY EDIT\n", encoding="utf-8")
+        assert integrity.locally_edited(
+            "rule", "r", {"materializations": [row]}) is True
+
+    def test_an_edit_behind_a_missing_row_is_still_seen(self, sandbox):
+        gone = self._row(paths.home() / ".claude" / "rules" / "gone.md", "a\n")
+        Path(gone["path"]).unlink()
+        p = paths.home() / ".claude" / "rules" / "kept.md"
+        kept = self._row(p, "a\n")
+        p.write_text("edited\n", encoding="utf-8")
+        e = {"materializations": [gone, kept]}
+        assert integrity.materialized_status("r", e, "rule") == \
+            integrity.STATUS_MISSING
+        assert integrity.locally_edited("rule", "r", e) is True
+
+    def test_an_edited_claude_block_is(self, sandbox):
+        from boost_cli.core import rules
+        p = paths.home() / ".claude" / "CLAUDE.md"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(rules.merge_block("", "r", "body"), encoding="utf-8")
+        block = rules.read_block(p.read_text(encoding="utf-8"), "r")
+        row = {"agent": "claude-code", "mode": rules.MODE_CLAUDE,
+               "path": str(p),
+               "sha256": hashlib.sha256(block.encode("utf-8")).hexdigest()}
+        e = {"materializations": [row]}
+        assert integrity.locally_edited("rule", "r", e) is False
+        p.write_text(p.read_text(encoding="utf-8").replace("body", "body!"),
+                     encoding="utf-8")
+        assert integrity.locally_edited("rule", "r", e) is True
+
+    def test_a_row_without_a_digest_is_no_evidence(self, sandbox):
+        row = self._row(paths.home() / ".claude" / "rules" / "r.md", "a\n")
+        del row["sha256"]
+        assert integrity.locally_edited(
+            "rule", "r", {"materializations": [row]}) is False
+
+    def test_a_quarantined_item_is_not_edited(self, sandbox):
+        p = paths.home() / ".claude" / "rules" / "r.md"
+        row = self._row(p, "a\n")
+        p.write_text("b\n", encoding="utf-8")
+        assert integrity.locally_edited(
+            "rule", "r", {"quarantined": True,
+                          "materializations": [row]}) is False
+
+    def test_a_workflows_edited_skill_store_copy_is_not_an_edit(
+            self, sandbox):
+        # The as-skill copy is preserved by install itself ("left the edited
+        # ... in place"), so holding the workflow for it would block the
+        # workflow's own files for an edit the refresh never overwrites.
+        from boost_cli.core import workflows
+        copy = paths.store_dir() / "reviewer" / "SKILL.md"
+        row = self._row(copy, "a\n") | {"agent": None,
+                                        "slot": workflows.SLOT_SKILL}
+        copy.write_text("a\nmy notes\n", encoding="utf-8")
+        assert integrity.locally_edited(
+            "workflow", "reviewer", {"materializations": [row]}) is False
+        cmd = paths.home() / ".claude" / "agents" / "reviewer.md"
+        other = self._row(cmd, "b\n")
+        cmd.write_text("b!\n", encoding="utf-8")
+        assert integrity.locally_edited(
+            "workflow", "reviewer",
+            {"materializations": [row, other]}) is True
+
+    def test_a_row_for_an_agent_boost_no_longer_writes_is_skipped(
+            self, sandbox):
+        p = paths.home() / ".cursor" / "rules" / "r.mdc"
+        row = self._row(p, "a\n", agent="cursor")
+        p.write_text("b\n", encoding="utf-8")
+        assert integrity.locally_edited(
+            "rule", "r", {"materializations": [row]}) is True
+        TestARowNothingWritesIsNotAMissingArtifact._disable("cursor")
+        assert integrity.locally_edited(
+            "rule", "r", {"materializations": [row]}) is False
+
+
+# ── modified_remedy: the next step every "modified" surface names ──────────
+def test_modified_remedy_for_an_edited_skill_is_a_reinstall(installed):
+    _tamper(installed)
+    assert integrity.modified_remedy(installed) == (
+        "boost reinstall brainstorming", "to discard local edits")
+
+
+def test_modified_remedy_for_a_deleted_skill_md_is_heal(installed):
+    # The same MODIFIED status, but heal's plan reinstalls this one.
+    (paths.store_dir() / installed / "SKILL.md").unlink()
+    assert integrity.status(installed) == integrity.STATUS_MODIFIED
+    assert integrity.modified_remedy(installed) == (
+        "boost heal", "to restore its missing SKILL.md")
+    assert integrity.modified_remedy(installed, "skill") == (
+        "boost heal", "to restore its missing SKILL.md")
+
+
+def test_modified_remedy_for_an_edited_held_copy_is_a_reinstall(installed):
+    # Sidelined: the store has no copy at all, but heal leaves a held row
+    # alone and would answer "nothing to heal".
+    store.sideline(installed, "focus")
+    held = store.held_copy_dir(installed)
+    (held / "SKILL.md").write_text("evil\n", encoding="utf-8")
+    assert integrity.status(installed) == integrity.STATUS_MODIFIED
+    assert integrity.modified_remedy(installed) == (
+        "boost reinstall brainstorming", "to discard local edits")
+    # Even with the held SKILL.md gone, heal is not the one that acts.
+    (held / "SKILL.md").unlink()
+    assert integrity.modified_remedy(installed) == (
+        "boost reinstall brainstorming", "to discard local edits")
+    # An explicit entry is used as given: no held_at, no store copy -> heal.
+    assert integrity.modified_remedy(installed, entry={}) == (
+        "boost heal", "to restore its missing SKILL.md")
+    assert integrity.modified_remedy(
+        "other", entry={"held_at": "/h/other"}) == (
+        "boost reinstall other", "to discard local edits")
+
+
+def test_modified_remedy_for_a_quarantined_copy_never_names_reinstall(installed):
+    # A reinstall refuses a quarantined row, and lifting the quarantine is
+    # not the fix for an edited held copy.
+    from boost_cli.core import lockfile
+
+    def quarantine(entry: dict) -> None:
+        entry["quarantined"] = True
+    lockfile.update_skill(installed, quarantine)
+    cmd, why = integrity.modified_remedy(installed)
+    assert (cmd, why) == ("boost quarantine --list",
+                          "to review it — it is quarantined, so a reinstall "
+                          "waits for `boost quarantine --release`")
+    assert "reinstall" not in cmd and cmd != "boost heal"
+    # Quarantine outranks held_at and a missing store SKILL.md alike.
+    held = {"quarantined": True, "held_at": "/h/x"}
+    assert integrity.modified_remedy("x", entry=held)[0] == (
+        "boost quarantine --list")
+    assert integrity.modified_remedy("x", entry={"quarantined": True})[0] == (
+        "boost quarantine --list")
+
+
+def test_modified_remedy_for_a_project_skill_carries_local(sandbox):
+    # No user store copy to probe: even a name with no store SKILL.md is
+    # a reinstall, and one that reads this repo's lock.
+    assert integrity.modified_remedy("p", scope="project") == (
+        "boost reinstall p --local", "to discard local edits")
+    assert integrity.modified_remedy("p", "skill", "user") == (
+        "boost heal", "to restore its missing SKILL.md")
+
+
+def test_modified_remedy_for_a_rule_or_workflow_is_a_reinstall(sandbox):
+    # No store copy to lose: a store dir with no SKILL.md says nothing
+    # about a rule of the same name.
+    for kind in ("rule", "workflow"):
+        assert integrity.modified_remedy("r", kind) == (
+            "boost reinstall r", "to discard local edits")
+
+
+def test_held_status_labels_an_intact_quarantined_copy(installed):
+    assert integrity.held_status(installed, lockfile.get_skill(installed)) \
+        == integrity.STATUS_OK
+    store.quarantine_skill(installed, lockfile.get_skill(installed))
+    entry = lockfile.get_skill(installed)
+    assert integrity.held_status(installed, entry) == \
+        integrity.STATUS_QUARANTINED
+    # An edit to the held copy is not laundered by the label.
+    md = store.held_copy_dir(installed) / "SKILL.md"
+    md.write_text("edit\n", encoding="utf-8")
+    assert integrity.held_status(installed, entry) == integrity.STATUS_MODIFIED
+    assert integrity.skill_modified(installed, entry) is True
+    util.rmtree(store.held_copy_dir(installed))
+    assert integrity.held_status(installed, entry) == integrity.STATUS_MISSING

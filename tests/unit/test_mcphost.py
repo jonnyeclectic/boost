@@ -370,6 +370,28 @@ class TestRegisterArgvOptions:
             "no_proxy": "*",
         }
 
+    def test_default_env_carries_relocated_state(self, sandbox, monkeypatch):
+        # The host starts the server with its own environment: without these
+        # the server read ~/.boost and ~/.agents/skills instead.
+        monkeypatch.setenv("BOOST_HOME", "~/alt")
+        monkeypatch.setenv("BOOST_AGENTS_STORE", str(sandbox / "st"))
+        assert mcphost.launch_env() == {
+            **mcphost.LAUNCH_ENV,
+            "BOOST_HOME": str(sandbox / "alt"),
+            "BOOST_AGENTS_STORE": str(sandbox / "st")}
+        assert mcphost.register_argv(mcphost.CODEX, SHIM) == [
+            "codex", "mcp", "add",
+            "--env", "BOOST_AGENTS_STORE=%s" % (sandbox / "st"),
+            "--env", "BOOST_HOME=%s" % (sandbox / "alt"),
+            "--env", "OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES",
+            "--env", "no_proxy=*", "boost", "--", SHIM, "mcp", "--stdio"]
+        assert mcphost.argv(mcphost.CODEX, "register", SHIM) == \
+            mcphost.register_argv(mcphost.CODEX, SHIM)
+
+    def test_default_env_without_overrides_is_launch_env(self, sandbox):
+        assert mcphost.launch_env() == mcphost.LAUNCH_ENV
+        assert mcphost.launch_env() is not mcphost.LAUNCH_ENV
+
     def test_unknown_host_raises(self):
         with pytest.raises(KeyError):
             mcphost.register_argv("copilot", SHIM)
@@ -550,6 +572,23 @@ class TestClassifyResult:
             "unregister", 1, "", "config file not found")
         assert status == "failed"
         assert detail == "config file not found"
+
+    def test_agy_not_found_at_rc1_is_not_registered(self):
+        # agy exits 1 for "nothing to remove", unlike Gemini/Codex (rc 0).
+        assert mcphost.classify_result(
+            "unregister", 1, "", 'Error: MCP server "boost" not found\n'
+        ) == ("not_registered", "")
+
+    def test_agy_not_found_wording_is_scoped_to_unregister(self):
+        status, detail = mcphost.classify_result(
+            "register", 1, "", 'Error: MCP server "boost" not found')
+        assert (status, detail) == ("failed", 'Error: MCP server "boost" not found')
+
+    def test_agy_marker_needs_the_quoted_server_name(self):
+        # A bare "mcp server not found" is not agy's wording; stays a failure.
+        status, _ = mcphost.classify_result(
+            "unregister", 1, "", "mcp server not found")
+        assert status == "failed"
 
     def test_plain_failure_returns_the_last_stderr_line(self):
         status, detail = mcphost.classify_result(
@@ -908,3 +947,25 @@ class TestEscapesHome:
         # wrong answer this function must never give.
         with pytest.raises(KeyError):
             mcphost.escapes_home("copilot", {}, tmp_path)
+
+
+class TestShellLine:
+    """A printed argv is pasted into a shell, so it must survive one."""
+
+    def test_a_glob_in_the_launch_env_is_quoted(self):
+        # The reported failure: zsh rejected the bare `no_proxy=*` with
+        # "no matches found" before codex ever ran.
+        argv = mcphost.register_argv(mcphost.CODEX, "/bin/boost")
+        line = mcphost.shell_line(argv)
+        assert "'no_proxy=*'" in line
+        assert " no_proxy=* " not in line
+
+    def test_round_trips_through_a_posix_split(self):
+        import shlex
+        for host in mcphost.hosts():
+            argv = mcphost.register_argv(host, "/a path/boost")
+            assert shlex.split(mcphost.shell_line(argv)) == argv
+
+    def test_a_plain_argv_is_printed_unchanged(self):
+        assert mcphost.shell_line(["claude", "mcp", "remove", "boost"]) \
+            == "claude mcp remove boost"

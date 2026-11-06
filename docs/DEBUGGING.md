@@ -231,6 +231,42 @@ plain `upgrade` has already been tried and refused.
 
 ---
 
+## `boost`: bad interpreter after a Homebrew upgrade
+
+```text
+zsh: /Users/you/.local/bin/boost: bad interpreter: /Users/you/.../pipx/venvs/boost-skill-cli/bin/python: no such file or directory
+```
+
+pipx built boost's environment on a Homebrew Python, and Homebrew has since
+removed that formula. Upgrading past `python@3.X` deletes it, so the
+environment's `bin/python` now points into a directory that is gone. Nothing in
+`~/.boost` is affected; only the environment needs rebuilding. boost cannot do
+that for you here, because it cannot start, so run the manager directly:
+
+```bash
+pipx reinstall --python 3.13 --fetch-python=always boost-skill-cli
+# uv: uv tool install --force --managed-python --python 3.13 "boost-skill-cli[rag]"
+```
+
+`pipx reinstall` replays the original install, `[rag]` extra included.
+`--fetch-python=always` downloads a standalone 3.13 into pipx's own directory
+even when Homebrew has one, which keeps the rebuilt environment out of reach of
+the next Homebrew cleanup. It needs pipx 1.18 or later (`brew upgrade pipx`);
+the older `--fetch-missing-python` downloads only when no `python3.13` is on
+PATH, so on most Macs it rebuilds on Homebrew's and the trap is set again.
+Once boost runs again, `boost self-update --python 3.13` does the same rebuild
+for you.
+
+3.13 rather than Homebrew's current `python3`: the `[rag]` extra's local
+embedding model needs onnxruntime, which has no Python 3.15 wheel yet. On 3.15
+the extra installs without it, and `boost doctor` reports semantic search off
+with this same remedy. If boost still starts on 3.15, you don't need the
+command above: `boost quickstart` and `boost self-update` notice a pipx or uv
+install of the extra with no API key set and offer to make the move
+themselves, after asking. `--keep-python` turns the offer off.
+
+---
+
 ## A corrupt config/settings/state file
 
 boost keeps several small JSON files — `~/.boost/config.json`, each agent's
@@ -276,13 +312,21 @@ Everything that changes boost's runtime behaviour, in one place:
 | `BOOST_HOME` | override `~/.boost` (state, cache, logs, repos) |
 | `BOOST_AGENTS_STORE` | override `~/.agents/skills` (the canonical store) |
 | `BOOST_DEBUG` | `=1` → console `DEBUG` + tracebacks |
-| `BOOST_LOG_LEVEL` | explicit console diagnostic level |
+| `BOOST_LOG_LEVEL` | explicit console diagnostic level — `OFF`, `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`; beats config `logging.level` (`OFF` silences it) |
 | `BOOST_LOG_FORMAT` | `text` (default) or `json` — one JSON object per log line |
 | `BOOST_NO_LOG` | `=1` → don't write the diagnostic log file |
 | `BOOST_NO_AI` | `=1` → disable all AI calls (offline / deterministic) |
 | `BOOST_NO_NET` | `=1` → skip the PyPI version check in `self-update` (air-gapped) |
-| `BOOST_ASSUME_YES` | `=1` → auto-confirm prompts (also `--yes`/`-y`) |
+| `BOOST_ASSUME_YES` | `=1` → answer yes to every confirm, including `install`'s offer to register skill-declared MCP servers machine-wide. A command's own `-y` answers only that command's prompt, never the MCP offer |
 | `NO_COLOR` / `CLICOLOR_FORCE` | force color off / on |
+
+The on/off switches (`BOOST_DEBUG`, `BOOST_NO_LOG`, `BOOST_NO_AI`,
+`BOOST_NO_NET`, `BOOST_ASSUME_YES`, `CLICOLOR_FORCE`, …) read `1`/`true`/`yes`/`on`
+as on and unset, empty, `0`/`false`/`no`/`off` as off. Any other value gets a
+one-line warning naming the variable and reads as the safe side: on for a
+`BOOST_NO_*` kill switch (so `BOOST_NO_NET=y` still stays offline), off for
+everything else (so `BOOST_ASSUME_YES=y` still asks). `NO_COLOR` is the exception: per
+no-color.org, any non-empty value turns color off.
 
 Tests sandbox the whole tool by pointing `HOME`/`BOOST_HOME`/`BOOST_AGENTS_STORE`
 at a throwaway directory — the same mechanism you can use to try boost without

@@ -52,7 +52,7 @@ def ai_on(sandbox, monkeypatch):
 def _with_cli(monkeypatch, rc=0, stdout="", stderr=""):
     calls = []
 
-    def fake_run(cmd, input=None, capture_output=None, text=None, timeout=None):
+    def fake_run(cmd, input=None, timeout=None, **_kw):
         calls.append({"cmd": cmd, "input": input, "timeout": timeout})
         return FakeProc(rc, stdout, stderr)
 
@@ -183,7 +183,7 @@ class TestAskCli:
         monkeypatch.setattr("boost_cli.core.nethttp.urlopen", _boom)
         assert ai.ask("hi", system="sys prompt") == "answer"
         assert calls == [{
-            "cmd": ["claude", "-p", "--model", DEFAULT_MODEL,
+            "cmd": ["/fake/bin/claude", "-p", "--model", DEFAULT_MODEL,
                     "--output-format", "text",
                     "--no-session-persistence",
                     "--append-system-prompt", "sys prompt"],
@@ -414,6 +414,51 @@ class TestExtractMarkdown:
         assert ai.extract_markdown("") == ""
         assert ai.extract_markdown(None) == ""
 
+    def test_chatter_after_the_closing_fence_is_dropped(self):
+        reply = ("```markdown\n---\nname: merged\ndescription: Merged rules\n"
+                 "---\n\n# Merged\n\n- Do X.\n```\n\n"
+                 "Let me know if you want any changes!\n")
+        assert ai.extract_markdown(reply) == (
+            "---\nname: merged\ndescription: Merged rules\n---\n\n"
+            "# Merged\n\n- Do X.")
+
+    def test_chatter_and_a_second_fenced_block_are_dropped(self):
+        reply = ("```markdown\n# Skill\n```\n\nFor example:\n"
+                 "```bash\nboost lint\n```\n")
+        assert ai.extract_markdown(reply) == "# Skill"
+
+    def test_an_inner_language_block_survives(self):
+        reply = ("```markdown\n# Skill\n\n```bash\nmake test\n```\n\n"
+                 "- Run it.\n```\nThanks!")
+        assert ai.extract_markdown(reply) == (
+            "# Skill\n\n```bash\nmake test\n```\n\n- Run it.")
+
+    def test_an_inner_language_line_inside_a_block_stays_inner(self):
+        reply = "```markdown\nA\n```sh\n```py\n```\nB\n```\nchat"
+        assert ai.extract_markdown(reply) == "A\n```sh\n```py\n```\nB"
+
+    def test_an_inner_bare_block_survives(self):
+        reply = "```markdown\nA\n```\nout\n```\nB\n```\nchat"
+        assert ai.extract_markdown(reply) == "A\n```\nout\n```\nB"
+
+    def test_a_longer_outer_fence_closes_only_on_its_own_width(self):
+        reply = "````markdown\nA\n```\nx\n```\n~~~~\n````\nchat"
+        assert ai.extract_markdown(reply) == "A\n```\nx\n```\n~~~~"
+
+    def test_a_tilde_outer_fence(self):
+        assert ai.extract_markdown("~~~\nA\n```\n~~~\nchat") == "A\n```"
+
+    def test_a_fence_with_an_info_string_does_not_close_a_tilde_outer(self):
+        # `~~~python` opens an inner block; only a bare `~~~` closes.
+        assert ai.extract_markdown(
+            "~~~markdown\nA\n~~~~python\nx\n~~~\nchat") == "A\n~~~~python\nx"
+
+    def test_a_short_fence_does_not_close_a_long_one(self):
+        assert ai.extract_markdown("````\nA\n```\nB") == "A\n```\nB"
+
+    def test_an_inline_backtick_opener_is_not_a_fence(self):
+        assert ai.extract_markdown("``x``\nB") == "``x``\nB"
+
 
 class _Recorder(logging.Handler):
     def __init__(self):
@@ -474,10 +519,34 @@ class TestFailureLogging:
         assert ai_log.messages == [
             "ai: claude CLI call failed: exit 3: Invalid API key · Fix external"]
 
-    def test_cli_empty_stderr_logs_bare_exit_code(self, ai_log, monkeypatch):
+    def test_cli_no_output_logs_a_next_step_not_an_empty_reason(
+            self, ai_log, monkeypatch):
         _with_cli(monkeypatch, rc=1, stderr="")
         assert ai.ask("hi") is None
-        assert ai_log.messages == ["ai: claude CLI call failed: exit 1: "]
+        assert ai_log.messages == [
+            "ai: claude CLI call failed: exit 1: no output — run `claude` by "
+            "itself to check it is logged in"]
+
+    def test_cli_reason_on_stdout_only_is_reported(self, ai_on, ai_log,
+                                                   monkeypatch):
+        """An unauthenticated `claude -p` puts its reason on stdout alone."""
+        _with_cli(monkeypatch, rc=1, stdout="Not logged in · Please run /login\n",
+                  stderr="  \n")
+        assert ai.ask("hi") is None
+        assert ai_log.messages == [
+            "ai: claude CLI call failed: exit 1: Not logged in · Please run /login"]
+        assert "Not logged in · Please run /login" in ai.unavailable_reason()
+
+    def test_cli_stderr_wins_over_stdout(self, ai_log, monkeypatch):
+        _with_cli(monkeypatch, rc=2, stdout="partial reply", stderr="bad flag")
+        assert ai.ask("hi") is None
+        assert ai_log.messages == ["ai: claude CLI call failed: exit 2: bad flag"]
+
+    def test_cli_long_stdout_reason_is_bounded(self, ai_log, monkeypatch):
+        _with_cli(monkeypatch, rc=1, stdout="z" * 500)
+        assert ai.ask("hi") is None
+        assert ai_log.messages == [
+            "ai: claude CLI call failed: exit 1: " + "z" * 200 + "..."]
 
     def test_cli_empty_reply_logged(self, ai_log, monkeypatch):
         _with_cli(monkeypatch, rc=0, stdout="   \n")
@@ -589,3 +658,109 @@ class TestFailureLogging:
         assert capsys.readouterr().err == ""
         assert "ai: Anthropic API call failed: URLError" in \
             logs.log_path().read_text(encoding="utf-8")
+
+
+class TestBadReply:
+    """A reply that arrived (exit 0) but could not be used is named, not
+    reported as a bare "AI unavailable" about a backend that just ran."""
+
+    def test_cli_reply_records_its_route(self, ai_on, monkeypatch):
+        _with_cli(monkeypatch, stdout="hello\n")
+        assert ai.ask("p") == "hello"
+        assert ai.last_route() == "claude CLI"
+        assert ai.ranker_label() == "AI relevance (claude CLI)"
+
+    def test_api_reply_records_its_route(self, ai_on, monkeypatch):
+        _without_cli(monkeypatch)
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-x")
+        _with_api(monkeypatch, {"content": [{"type": "text", "text": "hi"}]})
+        assert ai.ask("p") == "hi"
+        assert ai.last_route() == "Anthropic API"
+
+    def test_ask_resets_the_route_of_an_earlier_reply(self, ai_on, monkeypatch):
+        ai._last_route = "claude CLI"
+        _with_cli(monkeypatch, rc=1, stderr="boom")
+        assert ai.ask("p") is None
+        assert ai.last_route() is None
+        assert ai.ranker_label() == "AI relevance"
+
+    def test_note_names_the_route_and_cause(self, ai_on, ai_log, monkeypatch):
+        monkeypatch.setattr("boost_cli.core.ai.shutil.which",
+                            lambda n: "/fake/bin/claude")
+        ai._last_route = "claude CLI"
+        ai.note_bad_reply("no JSON array", "{not json [[ garbage")
+        assert ai.fallback_note() == (
+            "AI claude CLI reply was not usable (no JSON array) — see "
+            "~/.boost/logs/boost.log — using the heuristic fallback")
+        assert ai_log.messages == [
+            "ai: claude CLI reply unusable (no JSON array): "
+            "'{not json [[ garbage'"]
+        assert ai_log.records[0].levelno == logging.DEBUG
+
+    def test_note_without_a_route_and_a_long_reply(self, ai_on, ai_log,
+                                                   monkeypatch):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-x")
+        reply = "x" * (ai.BAD_REPLY_LOG_CHARS + 5) + "\n\n  tail"
+        ai.note_bad_reply("why", reply)
+        assert ai.unavailable_reason() == (
+            "reply was not usable (why) — see ~/.boost/logs/boost.log")
+        assert ai_log.messages == [
+            "ai: AI reply unusable (why): %r"
+            % ("x" * ai.BAD_REPLY_LOG_CHARS + "...")]
+
+    def test_note_keeps_a_reply_at_the_limit_whole(self, ai_on, ai_log):
+        reply = "y" * ai.BAD_REPLY_LOG_CHARS
+        ai.note_bad_reply("why", reply)
+        assert ai_log.messages == ["ai: AI reply unusable (why): %r" % reply]
+
+
+class TestAuthoredSkill:
+    def test_none_reply_is_none_and_notes_nothing(self, ai_on):
+        assert ai.authored_skill(None, "x") is None
+        assert ai.authored_skill("", "x") is None
+        assert ai._last_failure is None
+
+    def test_matching_name_is_returned_unchanged(self, ai_on):
+        text = "---\nname: x\ndescription: d\n---\n\nbody\n"
+        assert ai.authored_skill("```markdown\n%s```" % text, "x") == text.strip()
+
+    def test_a_different_name_is_overwritten_in_place(self, ai_on, ai_log):
+        reply = ("---\nname: something-else\ndescription: \"keep me\"\n"
+                 "version: 1.0.0\n---\n\n# Body\n")
+        assert ai.authored_skill(reply, "merged-one") == (
+            "---\nname: merged-one\ndescription: \"keep me\"\n"
+            "version: 1.0.0\n---\n\n# Body")
+        assert ai._last_failure is None
+        assert ai_log.messages == [
+            "ai: reply named the skill 'something-else'; using 'merged-one'"]
+
+    def test_a_missing_name_is_added(self, ai_on):
+        out = ai.authored_skill("---\ndescription: d\n---\n\nbody", "x")
+        assert out == "---\ndescription: d\nname: x\n---\n\nbody"
+
+    def test_no_frontmatter_is_unusable(self, ai_on, monkeypatch):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-x")
+        assert ai.authored_skill("{not json [[ garbage", "x") is None
+        assert ai.unavailable_reason() == (
+            "reply was not usable (no SKILL.md frontmatter) — see "
+            "~/.boost/logs/boost.log")
+
+    def test_an_empty_fence_is_unusable(self, ai_on, monkeypatch):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-x")
+        assert ai.authored_skill("```\n```", "x") is None
+        assert ai.unavailable_reason() == (
+            "reply was not usable (empty after removing the code fence) — "
+            "see ~/.boost/logs/boost.log")
+
+    @pytest.mark.parametrize("reply, why", [
+        ("---\nname: x\n---\n", "no description in the frontmatter"),
+        ("---\nname: x\ndescription: \"  \"\n---\n\nbody\n",
+         "no description in the frontmatter"),
+        ("---\nname: x\ndescription: d\n---\n\n  \n", "an empty SKILL.md body"),
+    ])
+    def test_frontmatter_without_a_skill_is_unusable(self, ai_on, monkeypatch,
+                                                     reply, why):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-x")
+        assert ai.authored_skill(reply, "x") is None
+        assert ai.unavailable_reason() == (
+            "reply was not usable (%s) — see ~/.boost/logs/boost.log" % why)

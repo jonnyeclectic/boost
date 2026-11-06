@@ -40,16 +40,40 @@ class SkillMarkdownLoader(BaseLoader):
         ``boost install`` rejects them (raises BoostError). A name installed
         as a rule or workflow is declined by kind rather than with a bare
         missing-file error: those kinds materialize into agent context files
-        and keep no store copy to load.
+        and keep no store copy to load. A name with no user-scope install is
+        declined with a BoostError naming the scope it is missing from — and,
+        for a ``boost install --local`` skill, where its project copy is —
+        rather than the bare FileNotFoundError ``load()`` would hit on a store
+        path, which reads as a broken install instead of an absent one.
         """
-        from boost_cli.core import lockfile, store
+        from boost_cli.core import integrity, lockfile, store
+        from boost_cli.errors import BoostError
+        path = store.skill_store_dir(name)   # rejects unsafe names first
         found = lockfile.find_any(name)
+        # A store copy with no lock row (put there by hand) still loads: the
+        # decline is for an absent skill, not an unmanaged one.
+        if found is None and not path.is_dir():
+            base, project = integrity.project_skills()
+            entry = project.get(name)
+            local = (integrity.project_skill_dir(entry, base)
+                     if entry is not None else None)
+            if local is not None:
+                raise BoostError(
+                    "%s is installed only in project scope, at %s — "
+                    "from_installed reads the user-scope canonical store"
+                    % (name, local),
+                    hint="load the project copy with SkillMarkdownLoader(%r)"
+                    % str(local))
+            raise BoostError(
+                "%s is not installed in user scope (the canonical store, %s)"
+                % (name, path.parent),
+                hint="boost install %s" % name)
         if found is not None and found[0] != "skill":
             raise ValueError(
                 "%s is a %s — it materializes into agent context files and "
                 "has no store copy to load; retrieve it with "
                 "BoostRetriever(kind=%r) instead" % (name, found[0], found[0]))
-        return cls(store.skill_store_dir(name))
+        return cls(path)
 
     def lazy_load(self) -> Iterator[Document]:
         path = self.path / "SKILL.md" if self.path.is_dir() else self.path

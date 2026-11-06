@@ -310,6 +310,8 @@ class TestRelationList:
 
     def test_empty_string_value(self):
         assert trustaudit.relation_list({"conflicts": ""}, "conflicts") == []
+        assert trustaudit.relation_list({"conflicts": {"a": "b"}},
+                                        "conflicts") == []
 
     def test_false_value(self):
         assert trustaudit.relation_list({"conflicts": False}, "conflicts") == []

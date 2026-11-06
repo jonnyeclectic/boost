@@ -274,3 +274,143 @@ class TestStaleTapHint:
         # The hint says it; it does not do it. Refreshing here would turn a
         # sub-second command into minutes and would strand imported shards.
         assert "taps last refreshed" in boost("search", "alpha").out
+
+
+@pytest.fixture()
+def moved_default_tap(tmp_path):
+    """A fixture repo tapped at its first commit, then upstream moves its
+    default branch to `trunk` (one new skill) and deletes the old branch —
+    the shape of a GitHub `master` -> `main` rename."""
+    import sys
+    from pathlib import Path
+
+    src = tmp_path / "regdefault"
+    subprocess.run([sys.executable,
+                    str(Path(__file__).resolve().parents[1] / "make_fixture.py"),
+                    str(src)], check=True, capture_output=True)
+
+    def git(*args):
+        return subprocess.run(["git", "-C", str(src), "-c", "user.email=t@t",
+                               "-c", "user.name=t", *args], check=True,
+                              capture_output=True, text=True).stdout.strip()
+
+    first = git("rev-parse", "HEAD")
+    old = git("symbolic-ref", "--short", "HEAD")
+
+    def move():
+        git("checkout", "-qb", "trunk")
+        skill = src / "skills" / "trunk-only"
+        skill.mkdir(parents=True)
+        (skill / "SKILL.md").write_text(
+            "---\nname: trunk-only\ndescription: zebracorn trunk branch skill\n"
+            "---\nbody\n", encoding="utf-8")
+        git("add", "-A")
+        git("commit", "-qm", "trunk")
+        git("branch", "-qD", old)
+        return git("rev-parse", "HEAD")
+    return src, first, move
+
+
+class TestUpdateFollowsTheDefaultBranch:
+    def test_an_unpinned_tap_follows_a_renamed_default_branch(
+            self, boost, moved_default_tap):
+        from boost_cli.core import gitutil, registry
+        src, _first, move = moved_default_tap
+        boost("tap", str(src))
+        new = move()
+        res = boost("update", "--taps-only")
+        assert "already up to date" not in res.out
+        assert gitutil.head_commit(registry.list_taps()[0].path) == new
+        assert "trunk-only" in boost("search", "zebracorn").out
+        # and it stays healthy: the next update is a clean no-op, not an error
+        assert "already up to date" in boost("update", "--taps-only").out
+
+    def test_a_pinned_tap_still_holds_still(self, boost, moved_default_tap):
+        from boost_cli.core import gitutil, registry
+        src, first, move = moved_default_tap
+        boost("tap", str(src), "--at", first)
+        new = move()
+        res = boost("update", "--taps-only")
+        assert "pinned" in res.out
+        tap = registry.list_taps()[0]
+        assert gitutil.head_commit(tap.path) == first
+        assert tap.pin == first
+        # --force is still the one way past, and it lands on the new branch
+        boost("update", "--taps-only", "--force")
+        tap = registry.list_taps()[0]
+        assert gitutil.head_commit(tap.path) == new
+        assert tap.pin == ""
+
+
+def _gc_away(src, keep):
+    """Rewrite ``src`` back to ``keep`` and drop every other object, the way a
+    force-push plus server gc leaves a commit nobody can fetch."""
+    for args in (["reset", "-q", "--hard", keep],
+                 ["reflog", "expire", "--expire=now", "--all"],
+                 ["gc", "-q", "--prune=now"]):
+        subprocess.run(["git", "-C", str(src), *args], check=True,
+                       capture_output=True)
+
+
+class TestPinGoneUpstream:
+    """A pin whose commit upstream rewrote away: name the commit and the two
+    remedies that work, never `boost untap` (the repository is alive)."""
+
+    def _pinned_then_gone(self, boost, two_commit_tap):
+        from boost_cli.core import registry, util
+        src, first, second = two_commit_tap
+        boost("tap", str(src), "--at", second)
+        _gc_away(src, first)
+        util.rmtree(registry.get("reg").path)
+        return src, second
+
+    def test_update_names_the_missing_pin_and_force(self, boost,
+                                                    two_commit_tap):
+        src, second = self._pinned_then_gone(boost, two_commit_tap)
+        r = boost("update", "reg", expect=1)
+        assert ("tap reg is pinned at %s, which is no longer on %s "
+                "(history rewritten upstream?)" % (second[:7], src.resolve())
+                ) in " ".join(r.err.split())
+        assert ("`boost update --force reg` re-clones its default branch and "
+                "drops the pin, or re-tap it with `--at <sha>` to pin a "
+                "commit that exists there") in " ".join(r.err.split())
+        assert "not our ref" not in r.err
+
+    def test_a_sweep_gives_the_remedy_not_untap(self, boost, two_commit_tap):
+        _src, second = self._pinned_then_gone(boost, two_commit_tap)
+        r = boost("update", expect=None)
+        flat = " ".join(r.out.split())
+        assert ("reg: tap reg is pinned at %s, which is no longer on"
+                % second[:7]) in flat
+        assert "`boost update --force reg` re-clones its default branch" in flat
+        assert "untap" not in flat
+        assert "could not be refreshed" not in flat
+
+    def test_doctor_names_force_for_an_uncloned_pinned_tap(self, boost,
+                                                           two_commit_tap):
+        _src, second = self._pinned_then_gone(boost, two_commit_tap)
+        r = boost("doctor", expect=None)
+        assert ("tap reg not cloned — run `boost update reg` to clone it at "
+                "its pin %s; if that commit is gone upstream, `boost update "
+                "--force reg` re-clones its default branch" % second[:7]
+                ) in " ".join(r.out.split())
+
+    def test_force_recovers_and_drops_the_pin(self, boost, two_commit_tap):
+        from boost_cli.core import registry
+        self._pinned_then_gone(boost, two_commit_tap)
+        r = boost("update", "--force")
+        assert "reg: cloned (pin cleared)" in r.out
+        assert registry.get("reg").pin == ""
+
+    def test_a_fresh_tap_at_an_unknown_commit_names_it(self, boost,
+                                                       two_commit_tap):
+        from boost_cli.core import registry
+        src, _first, _second = two_commit_tap
+        r = boost("tap", str(src), "--at", "deadbeef" * 5, expect=1)
+        flat = " ".join(r.err.split())
+        assert ("commit deadbee is not on %s (history rewritten upstream?)"
+                % src.resolve()) in flat
+        assert ("pin a commit that exists there, or tap without `--at` to "
+                "follow its default branch") in flat
+        assert "not our ref" not in flat
+        assert registry.list_taps() == []

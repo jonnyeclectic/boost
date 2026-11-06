@@ -178,6 +178,69 @@ class TestTilde:
     def test_accepts_path_object(self, sandbox):
         assert paths.tilde(sandbox / "cache") == "~/cache"
 
+    @pytest.mark.parametrize("var", ["BOOST_HOME", "BOOST_AGENTS_STORE"])
+    def test_override_expands_tilde_and_env(self, sandbox, monkeypatch, var):
+        # A quoted '~/x' reaches boost unexpanded; it must still mean $HOME/x.
+        monkeypatch.setenv(var, "~/x")
+        assert paths.env_dir(var) == sandbox / "x"
+        monkeypatch.setenv("BOOST_TEST_ROOT", str(sandbox / "r"))
+        monkeypatch.setenv(var, "${BOOST_TEST_ROOT}/x")
+        assert paths.env_dir(var) == sandbox / "r" / "x"
+        monkeypatch.setenv(var, "~")
+        assert paths.env_dir(var) == sandbox
+
+    @pytest.mark.parametrize("var", ["BOOST_HOME", "BOOST_AGENTS_STORE"])
+    def test_empty_override_is_unset(self, sandbox, monkeypatch, var):
+        monkeypatch.setenv(var, "")
+        assert paths.env_dir(var) is None
+        monkeypatch.delenv(var)
+        assert paths.env_dir(var) is None
+
+    @pytest.mark.parametrize("var", ["BOOST_HOME", "BOOST_AGENTS_STORE"])
+    @pytest.mark.parametrize("raw", ["rel", "./rel", "rel/~/x"])
+    def test_relative_override_refused(self, sandbox, monkeypatch, var, raw):
+        monkeypatch.setenv(var, raw)
+        with pytest.raises(BoostError) as ei:
+            paths.env_dir(var)
+        assert ei.value.message == (
+            "%s=%r is a relative path, so it would resolve against the "
+            "working directory" % (var, raw))
+        assert ei.value.hint == (
+            "export %s=/an/absolute/path (or ~/path)" % var)
+        with pytest.raises(BoostError):
+            paths.check_env()
+        # nothing was created under the working directory
+        assert list(Path.cwd().iterdir()) == []
+
+    def test_relative_override_refused_by_both_resolvers(self, sandbox,
+                                                         monkeypatch):
+        monkeypatch.setenv("BOOST_HOME", "rel")
+        with pytest.raises(BoostError, match="BOOST_HOME="):
+            paths.boost_home()
+        assert paths.store_dir() == sandbox / ".agents" / "skills"
+        monkeypatch.delenv("BOOST_HOME")
+        monkeypatch.setenv("BOOST_AGENTS_STORE", "rel")
+        with pytest.raises(BoostError, match="BOOST_AGENTS_STORE="):
+            paths.store_dir()
+        assert paths.boost_home() == sandbox / ".boost"
+
+    def test_check_env_passes_on_absolute(self, sandbox, monkeypatch):
+        monkeypatch.setenv("BOOST_HOME", str(sandbox / "b"))
+        monkeypatch.setenv("BOOST_AGENTS_STORE", str(sandbox / "s"))
+        assert paths.check_env() is None
+
+    def test_cli_refuses_relative_boost_home_before_logging(
+            self, sandbox, monkeypatch, capsys):
+        from boost_cli import cli
+        monkeypatch.setenv("BOOST_HOME", "~rel")
+        assert cli.main(["config", "list"]) == 1
+        err = capsys.readouterr().err
+        assert "BOOST_HOME='~rel' is a relative path" in err
+        assert "Traceback" not in err
+        # no log dir, crash report or config under cwd or the sandbox HOME
+        assert list(Path.cwd().iterdir()) == []
+        assert not (sandbox / ".boost").exists()
+
     def test_resolved_home_contracts_through_symlink(self, tmp_path, monkeypatch):
         # HOME is a symlink; a path expressed against the *resolved* home must
         # still contract (the helper tries both raw and resolved home).
@@ -189,6 +252,32 @@ class TestTilde:
         monkeypatch.delenv("BOOST_HOME", raising=False)
         resolved = str(paths.home().resolve())
         assert paths.tilde(resolved + os.sep + "sub") == "~/sub"
+
+
+class TestShellPath:
+    """A remedy is pasted into a shell: one word per path, ``~`` expandable."""
+
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="POSIX quoting; cmd.exe takes double quotes")
+    def test_chmod_command_quotes_a_space_or_quote(self, sandbox):
+        # Pasted unquoted, `chmod u+w ~/my proj/.boost` hands chmod two paths.
+        assert (paths.chmod_command(sandbox / "my proj" / ".boost")
+                == "chmod u+w ~/'my proj/.boost'")
+        assert (paths.chmod_command(sandbox / "it's")
+                == "chmod u+w ~/'it'\"'\"'s'")
+        assert paths.chmod_command(sandbox / ".boost") == "chmod u+w ~/.boost"
+        assert paths.chmod_command(sandbox) == "chmod u+w ~"
+        assert (paths.chmod_command(Path("/no such/dir"))
+                == "chmod u+w '/no such/dir'")
+        assert paths.chmod_command(Path("/plain/dir")) == "chmod u+w /plain/dir"
+
+    def test_tilde_stays_outside_the_quotes(self, sandbox):
+        assert paths.shell_path(sandbox / ".boost") == "~/.boost"
+        assert paths.shell_path(sandbox) == "~"
+        if sys.platform == "win32":
+            assert paths.shell_path(sandbox / "a b") == '~/"a b"'
+        else:
+            assert paths.shell_path(sandbox / "a b") == "~/'a b'"
 
 
 class TestEnsureDirs:
@@ -398,3 +487,139 @@ class TestCreateDirs:
     def test_a_file_in_the_way_is_refused_not_raised(self, tmp_path):
         (tmp_path / "f").write_text("x", encoding="utf-8")
         assert paths.create_dirs([tmp_path / "f"]) == [tmp_path / "f"]
+
+
+class TestOverrideEnv:
+    """What boost hands to a process it spawns or schedules."""
+
+    def test_empty_when_unset(self, sandbox):
+        assert paths.override_env() == {}
+
+    def test_each_only_when_set(self, sandbox, monkeypatch):
+        monkeypatch.setenv("BOOST_HOME", str(sandbox / "b"))
+        assert paths.override_env() == {"BOOST_HOME": str(sandbox / "b")}
+        monkeypatch.delenv("BOOST_HOME")
+        monkeypatch.setenv("BOOST_AGENTS_STORE", str(sandbox / "s"))
+        assert paths.override_env() == {
+            "BOOST_AGENTS_STORE": str(sandbox / "s")}
+
+    def test_values_are_expanded(self, sandbox, monkeypatch):
+        monkeypatch.setenv("BOOST_HOME", "~/b")
+        monkeypatch.setenv("BOOST_AGENTS_STORE", "~/s")
+        assert paths.override_env() == {
+            "BOOST_HOME": str(sandbox / "b"),
+            "BOOST_AGENTS_STORE": str(sandbox / "s")}
+
+    def test_relative_is_refused(self, sandbox, monkeypatch):
+        monkeypatch.setenv("BOOST_AGENTS_STORE", "rel")
+        with pytest.raises(BoostError, match="BOOST_AGENTS_STORE="):
+            paths.override_env()
+
+
+class TestCheckEnvHomeAndFileBoostHome:
+    def test_relative_home_is_refused(self, sandbox, monkeypatch):
+        monkeypatch.setenv("HOME", "rh")
+        with pytest.raises(BoostError) as e:
+            paths.check_env()
+        assert e.value.message == ("HOME='rh' is a relative path, so it would "
+                                   "resolve against the working directory")
+        assert e.value.hint == "export HOME=/an/absolute/path"
+
+    def test_cli_refuses_relative_home_before_writing(self, sandbox,
+                                                      monkeypatch, capsys):
+        from boost_cli import cli
+        monkeypatch.setenv("HOME", "rh")
+        assert cli.main(["config", "list"]) == 1
+        assert "HOME='rh' is a relative path" in capsys.readouterr().err
+        assert list(Path.cwd().iterdir()) == []
+
+    def test_boost_home_that_is_a_file_is_refused(self, sandbox, monkeypatch):
+        f = sandbox / "bhfile"
+        f.write_text("hi", encoding="utf-8")
+        monkeypatch.setenv("BOOST_HOME", str(f))
+        with pytest.raises(BoostError) as e:
+            paths.check_env()
+        assert e.value.message == "BOOST_HOME=%r is not a directory" % str(f)
+        assert e.value.hint == ("move ~/bhfile aside, or export "
+                                "BOOST_HOME=/a/directory")
+
+    def test_default_boost_home_file_is_left_to_its_writers(self, sandbox):
+        # Unset BOOST_HOME: nothing to name, so check_env stays quiet and the
+        # writers' own errors (save_refused, require_dirs) speak.
+        (sandbox / ".boost").write_text("x", encoding="utf-8")
+        assert paths.check_env() is None
+
+
+class TestEnsureDirsRefused:
+    def test_file_in_the_way_is_a_boost_error(self, sandbox, monkeypatch):
+        (sandbox / ".boost").write_text("x", encoding="utf-8")
+        with pytest.raises(BoostError) as e:
+            paths.require_dirs()
+        assert e.value.message.startswith("could not create ~/.boost (")
+        assert e.value.message.endswith("): ~/.boost is not a directory")
+        assert e.value.hint == "move ~/.boost aside, then re-run"
+
+    def test_names_boost_home_when_set(self, sandbox, monkeypatch):
+        f = sandbox / "bh"
+        f.write_text("x", encoding="utf-8")
+        monkeypatch.setenv("BOOST_HOME", str(f))
+        with pytest.raises(BoostError) as e:
+            paths.require_dirs()
+        assert e.value.hint == ("move ~/bh aside, or export "
+                                "BOOST_HOME=<a writable directory>, then "
+                                "re-run")
+
+    @pytest.mark.skipif(sys.platform == "win32" or os.geteuid() == 0,
+                        reason="chmod read-only needs POSIX and non-root")
+    def test_read_only_boost_home(self, sandbox, monkeypatch):
+        ro = sandbox / "ro"
+        ro.mkdir()
+        ro.chmod(0o555)
+        try:
+            monkeypatch.setenv("BOOST_HOME", str(ro))
+            with pytest.raises(BoostError) as e:
+                paths.require_dirs()
+        finally:
+            ro.chmod(0o755)
+        assert e.value.message == ("could not create ~/ro/repos (Permission "
+                                   "denied): ~/ro/repos cannot be created: "
+                                   "~/ro is not writable")
+        assert e.value.hint == ("run `chmod u+w ~/ro`, or export "
+                                "BOOST_HOME=<a writable directory>, then "
+                                "re-run")
+
+    def test_ensure_dirs_still_raises_the_oserror(self, sandbox):
+        # Its degrading callers (tap cache, rerank cache, refresh marker)
+        # catch OSError; a BoostError would escape every one of them.
+        (sandbox / ".boost").write_text("x", encoding="utf-8")
+        with pytest.raises(OSError):
+            paths.ensure_dirs()
+
+    def test_tap_with_a_file_for_boost_home_is_rc_1(self, sandbox, monkeypatch,
+                                                 capsys, fixture_tap_src):
+        from boost_cli import cli
+        (sandbox / ".boost").write_text("x", encoding="utf-8")
+        assert cli.main(["tap", str(fixture_tap_src)]) == 1
+        err = " ".join(capsys.readouterr().err.split())
+        assert "could not create ~/.boost (" in err
+        assert "move ~/.boost aside, then re-run" in err
+
+    def test_protocol_register_with_a_file_for_boost_home_is_rc_1(
+            self, sandbox, capsys):
+        # It writes its handler under state/ and cannot go on without it.
+        from boost_cli import cli
+        (sandbox / ".boost").write_text("x", encoding="utf-8")
+        assert cli.main(["protocol", "register"]) == 1
+        err = " ".join(capsys.readouterr().err.split())
+        assert "could not create ~/.boost (" in err
+        assert "move ~/.boost aside, then re-run" in err
+
+    def test_no_block_found_has_no_hint(self, sandbox, monkeypatch):
+        def boom(self, *a, **k):
+            raise OSError(28, "No space left on device")
+        monkeypatch.setattr(Path, "mkdir", boom)
+        with pytest.raises(BoostError) as e:
+            paths.require_dirs()
+        assert e.value.message == ("could not create ~/.boost (No space "
+                                   "left on device)")
+        assert e.value.hint is None

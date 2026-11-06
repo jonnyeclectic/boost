@@ -5,15 +5,29 @@ from __future__ import annotations
 
 import difflib
 import os
+import re
 import sys
 import time
+import urllib.parse
+import urllib.request
+from collections.abc import Collection
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 
 from ..errors import BoostError
-from . import config, gitutil, lockfile, output, paths, policy, util
+from . import (
+    config,
+    gitutil,
+    lockfile,
+    output,
+    paths,
+    policy,
+    projectlock,
+    scopes,
+    util,
+)
 
 
 @dataclass
@@ -28,6 +42,11 @@ class Tap:
     #: moved the clone to HEAD — silently invalidating any prebuilt vectors
     #: imported for that commit, which is the whole reason the pin exists.
     pin: str = ""
+    #: When this tap was added (``util.now_iso``), or "" for a config row
+    #: written before it was recorded. A lock row with no ``tap_url`` that
+    #: predates it was installed from an earlier tap of the same name
+    #: (:func:`source_changed`).
+    added_at: str = ""
 
     @property
     def safe_name(self) -> str:
@@ -45,9 +64,58 @@ class Tap:
         return paths.cache_dir() / (self.safe_name + ".json")
 
     @property
+    def owns_cache_file(self) -> bool:
+        """False when :attr:`cache_file` is one of boost's own indexes.
+
+        A local tap is named after its directory, so a directory called
+        ``rag_index`` mapped onto ``cache/rag_index.json`` — the BM25 index.
+        :func:`add` now refuses such a name; this guards a config written
+        before it did, so the catalog never overwrites, or `untap` deletes,
+        a file that is not the tap's.
+        """
+        return not reserved_cache_name(self.name)
+
+    @property
+    def is_wheel(self) -> bool:
+        """True for a tap that ships inside the wheel (no git clone)."""
+        return self.url.startswith(WHEEL_SCHEME)
+
+    @property
     def is_cloned(self) -> bool:
         """True if the tap's clone directory exists on disk."""
         return self.path.is_dir()
+
+    @property
+    def is_broken_clone(self) -> bool:
+        """True if the clone dir exists but is not a git repository.
+
+        `is_cloned` stays `path.is_dir()` — two dozen callers read it as "is
+        there a tree to scan", and the wheel tap is a legitimate tree with no
+        `.git`. But a git-backed tap whose `.git` is gone (a backup or sync
+        tool that skips it, a hand `rm`) answered True there, so doctor said
+        healthy, heal said nothing to heal, and every `boost update` failed
+        with "not a git repository" without ever re-cloning it.
+        """
+        return (self.is_cloned and not self.is_wheel
+                and not gitutil.is_repo(self.path))
+
+
+def reserved_cache_name(name: str) -> bool:
+    """True when tap ``name``'s catalog cache would be one of boost's own
+    files in ``cache/`` (:data:`paths.INTERNAL_CACHE_FILES`).
+
+    Case-folded: on a case-insensitive filesystem ``RAG_INDEX.json`` *is*
+    ``rag_index.json``.
+    """
+    leaf = (Tap(name=name, url="").safe_name + ".json").lower()
+    return leaf in paths.INTERNAL_CACHE_FILES
+
+
+def _reserved(name: str) -> BoostError:
+    return BoostError(
+        "tap name %s is reserved: its catalog would overwrite boost's own "
+        "cache/%s.json" % (name, Tap(name=name, url="").safe_name),
+        hint="rename the directory and tap it again")
 
 
 # One path component, in BYTES. ext4, APFS and NTFS all stop at 255, and
@@ -79,6 +147,15 @@ def parse_spec(spec: str):
     Accepts: owner/repo | full git URL | existing local path.
     """
     spec = spec.strip().rstrip("/")
+    # An empty spec is Path(""), which is the current directory: `boost tap
+    # "$REPO"` with REPO unset tapped whatever repo the script ran in, rc 0.
+    # The CLI refuses "" at parse time; this covers every other caller
+    # (add_many, a Boostfile line), and the whitespace-only and bare-"/"
+    # spellings that strip down to nothing here.
+    if not spec:
+        raise BoostError(
+            "tap spec is empty",
+            hint="use owner/repo, a git URL, or a local directory")
     # Reject control characters HERE, at the parse boundary, rather than letting
     # them travel. A NUL cannot appear in a GitHub owner/repo, a git URL or a
     # usable directory name, so nothing legitimate is turned away — but accepted,
@@ -97,16 +174,42 @@ def parse_spec(spec: str):
     # own home-dir lookup (USERPROFILE on Windows), which ignores the $HOME
     # override the whole test suite (and BOOST_HOME sandboxing) relies on.
     p = paths.expand(spec)
+    # `file://<dir>` of a directory on this machine is that directory: cloned
+    # as a URL it kept the spec as its `url`, so `boost tap <dir>` then
+    # `boost tap file://<dir>` was two taps of one repo under one name.
+    local = _file_url_path(spec)
+    if local is not None and _looks_like_a_directory(local):
+        p = local
     if _looks_like_a_directory(p):
-        if not gitutil.is_repo(p):
+        if not gitutil.is_repo_root(p):
+            top = gitutil.enclosing_toplevel(p)
+            if top is not None:
+                # A subdirectory of a work tree: `git init` there would nest
+                # a repo inside the user's, which then fails as "no commits".
+                raise BoostError(
+                    "%s is inside the git repository at %s; boost taps a "
+                    "whole repository" % (p, top),
+                    hint="`boost tap %s`, or `boost import %s` to copy just "
+                         "this directory in without a tap"
+                         % (util.shell_arg(str(top)), util.shell_arg(spec)))
             # The dir exists, so git's own "repository '...' does not exist"
             # (which is what `clone_shallow` would raise next) is a false
             # statement about the very thing this branch just confirmed.
             raise BoostError(
                 "%s is not a git repository" % p,
                 hint="`git init` it, or `boost import %s` to copy it in "
-                     "without a tap" % spec)
-        return _checked(p.resolve().name, str(p.resolve()), spec)
+                     "without a tap" % util.shell_arg(spec))
+        # Whitespace folded to `-`: a tap name is one token in `tap:skill` and
+        # in a Boostfile line, so `boost tap "my tap"` named it `my tap` and
+        # `bundle dump` wrote a `tap my tap …` line that its own `bundle
+        # install` read as a tap called `my`.
+        # A bare repo's directory conventionally ends in `.git`, which the
+        # URL branch below already drops from a name — `fx.git` and
+        # `file://…/fx.git` and `https://…/fx.git` are all tap `fx`.
+        dirname = p.resolve().name
+        return _checked(_WHITESPACE.sub("-", dirname.removesuffix(".git")
+                                        or dirname),
+                        str(p.resolve()), spec)
     # A spec shaped like a path (starts with ./, ../, ~, or a root separator,
     # or is absolute) that is not an actual directory must not fall through to
     # the owner/repo branch below — that branch prepends
@@ -123,14 +226,43 @@ def parse_spec(spec: str):
     if spec.startswith(("./", "../", "~", "/", "\\")) or p.is_absolute():
         raise BoostError("no such directory: %s" % p,
                         hint="boost tap needs an existing local git repository")
-    if spec.startswith(("http://", "https://", "git@", "ssh://")):
-        tail = spec.split(":")[-1] if spec.startswith("git@") else spec
-        parts = [x for x in tail.replace(".git", "").split("/") if x][-2:]
-        return _checked("/".join(parts), spec, spec)
+    # Any `scheme://` is a URL, not only the four this used to list: a
+    # `file://` or `git://` spec fell through to the owner/repo branch below
+    # and was cloned as `https://github.com/file:///…`. Which transports are
+    # safe is `gitutil.clone_shallow`'s call (it refuses `ext::` and kin), not
+    # a reason to rewrite the spec here.
+    if _SCHEME.match(spec) or spec.startswith("git@"):
+        tail = spec.split(":")[-1] if spec.startswith("git@") \
+            else spec.split("://", 1)[1]
+        segs = [x for x in tail.split("/") if x]
+        if segs:
+            # The suffix only: `.replace(".git", "")` named
+            # `foo/my.github.io` as `foo/myhub.io`.
+            segs[-1] = segs[-1].removesuffix(".git")
+        return _checked("/".join(segs[-2:]), spec, spec)
     if "/" in spec and " " not in spec:
         return _checked(spec, "https://github.com/%s" % spec, spec)
     raise BoostError("cannot parse tap spec %r" % spec,
                     hint="use owner/repo, a git URL, or a local directory")
+
+
+_WHITESPACE = re.compile(r"\s+")
+_SCHEME = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*://")
+
+
+def _file_url_path(spec: str) -> Path | None:
+    """The local path a `file://` spec names, or None if it names none.
+
+    Only an empty or `localhost` host is this machine; `file://otherhost/…`
+    stays a URL for git to judge.
+    """
+    try:
+        u = urllib.parse.urlparse(spec)
+    except ValueError:      # "Invalid IPv6 URL": an unbalanced `[` in the host
+        return None
+    if u.scheme.lower() != "file" or u.netloc.lower() not in ("", "localhost"):
+        return None
+    return Path(urllib.request.url2pathname(u.path))
 
 
 def _checked(name: str, url: str, spec: str) -> tuple[str, str]:
@@ -148,16 +280,6 @@ def _checked(name: str, url: str, spec: str) -> tuple[str, str]:
             hint="the name becomes one directory under ~/.boost/repos, and "
                  "no filesystem accepts a longer component")
     return (name, url)
-
-
-def parse_specs(specs: list[str]) -> list[tuple[str, str]]:
-    """Parse each spec to (name, url) via `parse_spec`, touching nothing.
-
-    Used by `tap --dry-run` to preview targets without cloning or writing
-    config — `parse_spec` is already pure (a directory stat at worst), so the
-    only job here is applying it across a SPEC list in order.
-    """
-    return [parse_spec(spec) for spec in specs]
 
 
 def tap_summary(tapped: list[tuple[str, int]]) -> str:
@@ -198,7 +320,8 @@ def list_taps() -> list[Tap]:
     if not isinstance(taps, list):
         return []
     return [Tap(name=t["name"], url=t.get("url", ""),
-                curated=bool(t.get("curated")), pin=str(t.get("pin") or ""))
+                curated=bool(t.get("curated")), pin=str(t.get("pin") or ""),
+                added_at=str(t.get("added_at") or ""))
             for t in taps if isinstance(t, dict) and t.get("name")]
 
 
@@ -215,9 +338,14 @@ def get(name: str) -> Tap:
     Raises BoostError (with a did-you-mean hint) if none match.
     """
     taps = list_taps()
-    for key in (lambda t: t.name, lambda t: t.safe_name,
-                lambda t: t.name.split("/")[-1]):
-        hits = [t for t in taps if key(t) == name]
+    # The case-folded tier comes last, so an exact spelling always wins: it is
+    # what lets `boost untap Obra/Superpowers` find `obra/superpowers`, whose
+    # clone is the same directory on a case-insensitive filesystem anyway.
+    for key, want in ((lambda t: t.name, name),
+                      (lambda t: t.safe_name, name),
+                      (lambda t: t.name.split("/")[-1], name),
+                      (lambda t: name_key(t.name), name_key(name))):
+        hits = [t for t in taps if key(t) == want]
         if len(hits) == 1:
             return hits[0]
         if len(hits) > 1:
@@ -229,6 +357,217 @@ def get(name: str) -> Tap:
     raise BoostError("no such tap: %s" % name,
                     hint=("did you mean %s?" % close[0]) if close
                     else "list taps with `boost taps`")
+
+
+def named(name: str) -> Tap | None:
+    """The configured tap whose *whole* name is ``name``, else None.
+
+    Narrower than :func:`get` on purpose: only the full name and, failing
+    that, its case-folded spelling count — never the bare repo tail or
+    ``safe_name``. The caller is `boost install`, where a NAME that is not a
+    tap must stay a skill name; `install superpowers` meaning "every skill
+    obra ships" because a repo happens to be called that would be a surprise
+    no prompt should have to catch. It resolves on its own rather than
+    handing off to :func:`get`, whose tail tier comes before the case-folded
+    one: with a local tap ``Skills`` and ``acme/skills`` both configured,
+    ``get("skills")`` answers ``acme/skills``. Two taps that differ only by
+    case and match neither exactly are an error, as they are for ``get``.
+    """
+    taps = list_taps()
+    hits = ([t for t in taps if t.name == name]
+            or [t for t in taps if name_key(t.name) == name_key(name)])
+    if len(hits) > 1:
+        raise BoostError(
+            "%r is ambiguous — it matches %d taps: %s"
+            % (name, len(hits), ", ".join(sorted(t.name for t in hits))),
+            hint="use the full owner/repo name")
+    return hits[0] if hits else None
+
+
+def url_for(entry: dict) -> str | None:
+    """The repository an installed or catalogued item comes from, or None.
+
+    In order: the ``tap_url`` a lock row recorded at install (what was
+    actually installed, even after an untap — :func:`source_changed` trusts
+    it the same way), then the configured tap's URL (a catalog row, or a lock
+    row written before the field, unless the name was tapped again since),
+    then a URL import's ``source_url``. A path import has none: its
+    ``source_dir`` is a directory, not a source.
+    Only an exact tap name is looked up — the entry's ``tap`` is already the
+    configured spelling, and :func:`get`'s looser tiers could answer with
+    another tap's URL.
+    """
+    recorded = str(entry.get("tap_url") or "")
+    if recorded:
+        return recorded
+    tap = str(entry.get("tap") or "")
+    if tap == "local" and "source_url" in entry:
+        # An import, whatever is configured: `local` is also a legal tap name
+        # (`boost tap ~/c/local`), and that tap's path is not this row's source.
+        return str(entry.get("source_url") or "") or None
+    for t in list_taps():
+        # A row written before `tap_url` existed, under a name tapped again
+        # since, came from the earlier repository — `boost outdated` calls
+        # that "source changed", so its URL must not be the new one's.
+        if tap and t.name == tap and t.url and not retapped_since(entry, t):
+            return t.url
+    return str(entry.get("source_url") or "") or None
+
+
+def same_source(a: str, b: str) -> bool:
+    """True when two tap URLs name the same repository.
+
+    A tap's name is only the last two parts of its URL, so the name alone
+    cannot answer "is this already tapped?": `~/a/fixture-tap` and
+    `~/b/fixture-tap` are both `fixture-tap`, and a GitHub and a GitLab
+    `owner/repo` are both `owner/repo`. Spellings of one remote still match —
+    `owner/repo`, `…/repo.git`, `git@host:owner/repo` — so re-tapping a repo
+    by another of its names stays the harmless no-op it was. Local paths
+    compare exactly (`parse_spec` has already resolved them); a remote's host
+    compares case-blind, and its path only on github.com, the one forge boost
+    can say that of. Two local spellings of one directory — `~/x` and `~/X`
+    on APFS or NTFS, where `resolve()` keeps the case it was given — match
+    by asking the filesystem, not by comparing the strings.
+    """
+    if _source_key(a) == _source_key(b):
+        return True
+    return _is_local(a) and _is_local(b) and _same_file(a, b)
+
+
+def source_changed(lk: dict, tap: Tap) -> bool:
+    """True when ``tap`` no longer names the repository ``lk`` came from.
+
+    A tap is addressed by its name, and a name is only the tail of a URL:
+    untap `~/a/reg` and tap `~/b/reg`, and the lock rows installed from the
+    first now resolve to the second. Comparing versions across that seam
+    called an unrelated skill of the same name an upgrade, and `boost update`
+    applied it. The lock's ``tap_url`` (written at install) is the source.
+
+    A row without one predates the field. While its tap stays configured
+    :func:`store.backfill_tap_urls` records the URL from config; once it was
+    untapped and the name tapped again, nothing says which repository it came
+    from, so a tap added after the row was last written (``added_at``) is a
+    change unless the clone still sits at the commit the row recorded. A
+    legacy row under a tap row that predates ``added_at`` cannot be told
+    apart and keeps the old behaviour.
+    """
+    recorded = str(lk.get("tap_url") or "")
+    if recorded:
+        return not same_source(recorded, tap.url)
+    return retapped_since(lk, tap)
+
+
+def retapped_since(lk: dict, tap: Tap) -> bool:
+    """Whether ``tap`` was added after lock row ``lk`` was last written.
+
+    Strictly after, so a tap and an install in the same second are one
+    source. A clone still at the row's ``commit`` is the same repository.
+    """
+    written = max(str(lk.get("installed_at") or ""),
+                  str(lk.get("updated_at") or ""))
+    if not (tap.added_at and written and written < tap.added_at):
+        return False
+    commit = str(lk.get("commit") or "")
+    return not (commit and gitutil.head_commit(tap.path) == commit)
+
+
+def _is_local(url: str) -> bool:
+    return not (url.startswith("git@") or _SCHEME.match(url))
+
+
+def _same_file(a: str, b: str) -> bool:
+    try:
+        return os.path.samefile(a, b)
+    except OSError:
+        # A clone source that has since moved or vanished is not evidence
+        # that two spellings are one directory.
+        return False
+
+
+def _source_key(url: str) -> str:
+    if url.startswith("git@"):
+        url = url[len("git@"):].replace(":", "/", 1)
+    elif _SCHEME.match(url):
+        url = url.split("://", 1)[1]
+        # Userinfo sits before the host; an `@` after the first `/` is path.
+        url = url.split("@", 1)[-1] if "@" in url.split("/", 1)[0] else url
+    else:
+        return url
+    host, _, path = url.partition("/")
+    host = host.lower()
+    path = path.rstrip("/").removesuffix(".git")
+    # A host is case-blind everywhere, a path only where the forge says so:
+    # a self-hosted `Team/Repo` and a `file:///srv/A` are not their
+    # lowercase twins.
+    if host.split(":", 1)[0] == "github.com":
+        path = path.lower()
+    return host + "/" + path
+
+
+def tapped_source_keys() -> set[str]:
+    """:func:`_source_key` of every configured tap's URL.
+
+    What "already tapped" means to a caller holding a GitHub ``owner/repo``
+    (see :func:`untapped_repos`): the URL, not the tap's name, because a
+    local tap named ``skills`` is not ``anthropics/skills``.
+    """
+    return {_source_key(t.url) for t in list_taps() if t.url}
+
+
+def untapped_repos(rows: list[dict]) -> tuple[list[dict], int]:
+    """``rows`` (each carrying a GitHub ``repo``) minus repos already tapped.
+
+    `boost discover` and the MCP `boost_discover_github` tool both promise
+    repositories nobody here has tapped, and both listed tapped ones: the
+    discovery index is a snapshot from before the tap, and the live search
+    never asked. Matched through :func:`_source_key`, so `Anthropics/Skills`
+    from GitHub and a tap of `https://github.com/anthropics/skills.git` are
+    one repository. Returns ``(kept, dropped_repo_count)``.
+    """
+    tapped = tapped_source_keys()
+    kept: list[dict] = []
+    dropped: set[str] = set()
+    for row in rows:
+        key = _source_key("https://github.com/%s" % row.get("repo", ""))
+        if key in tapped:
+            dropped.add(key)
+        else:
+            kept.append(row)
+    return kept, len(dropped)
+
+
+def name_key(name: str) -> str:
+    """The form of a tap name that decides whether two taps are one.
+
+    Case-folded, because a tap's clone and cache live at paths built from its
+    name: on APFS and NTFS `repos/foo` and `repos/FOO` are one directory, so
+    two config rows `foo` and `FOO` share one clone, and untapping either
+    deletes the other's. Folding everywhere — not only where the filesystem
+    happens to — keeps a config written on Linux valid on a Mac.
+    """
+    return name.casefold()
+
+
+def already_tapped(name: str, held: str) -> str:
+    """"x already tapped", naming the configured spelling when ``name``'s differs.
+
+    `boost tap leonxlnx/x` over a configured `Leonxlnx/x` is the same tap, and
+    saying so in the spelling the user typed hid which row holds it.
+    """
+    if name == held:
+        return "%s already tapped" % name
+    return "%s already tapped as %s" % (name, held)
+
+
+def _taken(name: str, url: str, existing: str) -> BoostError:
+    """The error for `name` already belonging to a different repository."""
+    return BoostError(
+        "tap name %s is already used by %s"
+        % (name, existing or "a config.json row with no url"),
+        # Both halves backticked: the hint folds to the pane, and only a
+        # backtick span is atomic — a quoted path with a space split at it.
+        hint="`boost untap %s`, then `boost tap %s` to tap it in its place"
+             % (util.shell_arg(name), util.shell_arg(url)))
 
 
 def is_tapped(name: str) -> bool:
@@ -243,6 +582,176 @@ def is_tapped(name: str) -> bool:
     return any(t.name == name for t in list_taps())
 
 
+def unfinished_clones() -> list[Path]:
+    """Dirs under `repos/` that no tap lists and whose HEAD does not resolve.
+
+    What a clone killed part-way leaves behind (a timeout, a ^C, a crash):
+    `repos/<name>/.git` and nothing recorded. `boost doctor` called that
+    machine healthy, because it only ever looked at the taps config lists.
+    A listed tap is judged by the tap checks instead, and an unlisted dir
+    with a real HEAD is someone's clone, not debris. Empty without git,
+    which is what answers whether a HEAD resolves.
+    """
+    root = paths.repos_dir()
+    if not root.is_dir() or not gitutil.has_git():
+        return []
+    listed = _clone_paths()
+    return sorted(d for d in root.iterdir()
+                  if d.is_dir() and not _is_listed(d, listed)
+                  and not gitutil.head_commit(d))
+
+
+def _clone_paths() -> set[Path]:
+    """Every configured tap's :attr:`Tap.path`, as config spells it."""
+    return {t.path for t in list_taps()}
+
+
+def _is_listed(d: Path, listed: set[Path]) -> bool:
+    """True if the `repos/` entry `d` is one of the `listed` clone dirs.
+
+    The spelling is the fast path; the filesystem is asked only about an entry
+    it misses. `iterdir` spells a name as it sits on disk and config as the
+    user typed it, and on APFS `repos/leonxlnx__x` *is* tap `Leonxlnx/x`'s
+    clone — doctor called that live clone unlisted and advised deleting it.
+    Never folded: on ext4 the same pair is an orphan beside a missing clone,
+    and folding case would hide both.
+    """
+    return d in listed or _shared(d, list(listed))
+
+
+#: The staging dir a re-clone fills beside the tap (see `_reclone`). Not a
+#: tap of its own, so a killed run's leftover is never offered `boost tap`.
+RECLONE_SUFFIX = ".boost-reclone"
+
+
+def unlisted_clones() -> list[tuple[Path, str]]:
+    """Real clones under `repos/` that no configured tap lists, with origin URL.
+
+    The complement of :func:`unfinished_clones`: a dir whose HEAD resolves is
+    someone's clone, left serving nothing once config.json lost its row. With
+    the file corrupt every clone is one, and doctor counted them without
+    naming any; after the user re-added the one they remembered, it called
+    the machine healthy over the rest. Empty without git.
+    """
+    root = paths.repos_dir()
+    if not root.is_dir() or not gitutil.has_git():
+        return []
+    listed = _clone_paths()
+    return [(d, gitutil.remote_url(d)) for d in sorted(root.iterdir())
+            if d.is_dir() and not _is_listed(d, listed)
+            and not d.name.endswith(RECLONE_SUFFIX) and gitutil.head_commit(d)]
+
+
+def _own_clone_of(clone: Path, taps: list[Tap]) -> Tap | None:
+    """The configured tap whose clone ``clone`` is, under another name."""
+    return next((t for t in taps if _shared(clone, [t.path])), None)
+
+
+def _leftover_of(clone: Path, url: str, taps: list[Tap]) -> Tap | None:
+    """The configured tap ``clone`` is a leftover of: its dir in another case.
+
+    The case-sensitive half of :func:`_is_listed`: on ext4 `repos/o__r` beside
+    a configured `O/R` is not that tap's clone, and `boost tap <its url>`
+    answers "already tapped" and changes nothing. Matched on the dir name
+    (:attr:`Tap.safe_name`), not on a name rebuilt from it — `__` maps back
+    to `/` for `o__r` and not for a tap called `my__tap` — and only when the
+    clone's origin ``url`` is that tap's source or unknown: a clone of another
+    repository is not restored by `boost update`, so it keeps its own hint.
+    """
+    key = name_key(clone.name)
+    return next((t for t in taps if name_key(t.safe_name) == key
+                 and (not url or same_source(t.url, url))), None)
+
+
+def readd_hint(clone: Path, url: str) -> str:
+    """The quoted command that re-adds the unlisted ``clone``, or words for one.
+
+    :func:`retap_hint` with the clone's dir name mapped back to a tap name, so
+    a clone with no origin still gets an honest sentence rather than a
+    command that fails. A clone that is a configured tap's, or a leftover of
+    one (:func:`_leftover_of`: its dir in another case, from that tap's
+    source), gets `boost update` for that tap instead: re-tapping is a no-op.
+    """
+    taps = list_taps()
+    tap = _own_clone_of(clone, taps) or _leftover_of(clone, url, taps)
+    if tap is not None:
+        return "`boost update %s`" % util.shell_arg(tap.name)
+    return _retap(clone, url)
+
+
+def _retap(clone: Path, url: str) -> str:
+    """:func:`retap_hint` for a clone dir, quoted when it is a command."""
+    hint = retap_hint(clone.name.replace("__", "/"), url)
+    return "`%s`" % hint if hint.startswith("boost tap ") else hint
+
+
+def unlisted_clone_line(clone: Path, url: str) -> str:
+    """The one line doctor and heal print for a :func:`unlisted_clones` row.
+
+    Never "delete the directory" for one that is a configured tap's own clone
+    under another name: that deletes the tap.
+    """
+    taps = list_taps()
+    own = _own_clone_of(clone, taps)
+    if own is not None:
+        return ("%s is tap %s's own clone under another name, so boost "
+                "already reads it — leave it in place"
+                % (paths.tilde(clone), own.name))
+    left = _leftover_of(clone, url, taps)
+    if left is not None:
+        return ("%s is a leftover of tap %s, whose clone is %s, so boost reads "
+                "nothing from it — run `boost update %s`, then delete the "
+                "directory" % (paths.tilde(clone), left.name,
+                               paths.tilde(left.path),
+                               util.shell_arg(left.name)))
+    return ("%s is a tap clone no configured tap lists, so boost reads "
+            "nothing from it — re-add it with %s, or delete the directory"
+            % (paths.tilde(clone), _retap(clone, url)))
+
+
+def stale_caches(files: Collection[Path]) -> list[Path]:
+    """The catalog caches among ``files`` that no configured tap owns.
+
+    Owned by its stem, or — asked of the filesystem, not the spelling — by
+    being the same file as a configured tap's :attr:`Tap.cache_file`: on APFS
+    `cache/leonxlnx__x.json` is tap `Leonxlnx/x`'s catalog, and `boost clean`
+    deleted it as stale. ``_shared`` skips a cache file that was never written.
+    """
+    taps = list_taps()
+    stems = {t.safe_name for t in taps}
+    caches = [t.cache_file for t in taps]
+    return [f for f in files if f.stem not in stems and not _shared(f, caches)]
+
+
+def broken_clone_line(name: str) -> str:
+    """The one line doctor and heal print for a `Tap.is_broken_clone` tap.
+
+    Shared so the two cannot prescribe different fixes. Not `boost untap`,
+    which is what `update`'s own failure line used to suggest: the source is
+    fine, only the local clone is damaged, and `update` re-clones it.
+    """
+    return ("tap %s is not a git repository (its .git is missing) — run "
+            "`boost update %s` to re-clone it" % (name, util.shell_arg(name)))
+
+
+def retap_hint(name: str, url: str = "") -> str:
+    """What to run to re-tap `name` once it is no longer configured.
+
+    The *name* is not a spec in general: a local tap is named after its
+    directory's basename (`boost tap fix` does not parse), and a tap from any
+    host other than GitHub is named `owner/repo`, which `parse_spec` resolves
+    to GitHub — a different repository. So the recorded `url` (the lock's
+    `tap_url`) is used when there is one. Without it — a lock entry written
+    before the field existed — only an owner/repo-shaped name is offered as a
+    command, and anything else gets words rather than a command that fails.
+    """
+    if url and not url.startswith(WHEEL_SCHEME):
+        return "boost tap %s" % util.shell_arg(url)
+    if url.startswith(WHEEL_SCHEME) or "/" not in name or " " in name:
+        return "re-tap %s from its original source (its URL was not recorded)" % name
+    return "boost tap %s" % util.shell_arg(name)
+
+
 def add(spec: str, curated: bool = False, at: str | None = None) -> Tap:
     """Parse `spec`, shallow-clone it, and record the tap in config.
 
@@ -255,10 +764,16 @@ def add(spec: str, curated: bool = False, at: str | None = None) -> Tap:
     Raises BoostError if a tap with that name is already configured.
     """
     name, url = parse_spec(spec)
+    if reserved_cache_name(name):
+        raise _reserved(name)
+    # Before the clone: the config write at the end would refuse anyway, and
+    # leave the clone behind as a tap no config lists.
+    config.refuse_unreadable()
     for existing in list_taps():
-        if existing.name == name:
-            raise BoostError("tap %s is already configured" % name,
-                            hint="`boost update %s` to refresh it" % name)
+        if name_key(existing.name) == name_key(name):
+            if not same_source(existing.url, url):
+                raise _taken(existing.name, url, existing.url)
+            raise _already_configured(existing.name, spec, at)
     # Validated here, before the clone, not only inside `checkout_commit`:
     # that check runs after `clone_shallow` below, so a malformed --at used to
     # cost one full clone (~1.6s) before reporting a typo.
@@ -266,7 +781,7 @@ def add(spec: str, curated: bool = False, at: str | None = None) -> Tap:
         raise BoostError("%r is not a full commit SHA" % at,
                          hint="pin with the 40-character hash a manifest names")
     tap = Tap(name=name, url=url, curated=curated)
-    paths.ensure_dirs()
+    paths.require_dirs()
     _clear_path(tap.path)
     gitutil.clone_shallow(url, tap.path)
     if at:
@@ -282,19 +797,215 @@ def add(spec: str, curated: bool = False, at: str | None = None) -> Tap:
     problems = policy.check_tap_signing(tap.path)
     if problems:
         util.rmtree(tap.path)  # leave no half-added tap behind
-        raise BoostError(
-            "tap %s failed provenance policy: %s" % (name, "; ".join(problems)),
-            hint="add its key with `boost trust add <name> <key>`, "
-                 "or relax `boost policy set require_signed_taps false`")
-    cfg = config.load()
-    row = {"name": name, "url": url, "curated": curated}
+        raise _signing_refused(name, problems)
+    row = _row(name, url, curated, by_user=curated)
     if at:
         row["pin"] = at
-    cfg.setdefault("taps", []).append(row)
-    config.save(cfg)
+
+    config.mutate(lambda cfg: _append_rows(cfg, [row]))
     start_refresh_clock()
     tap.pin = at or ""
     return tap
+
+
+#: The phrase every provenance refusal carries, so `boost update` can tell a
+#: refused tap (a security answer, worth a non-zero exit) from a dead one.
+POLICY_REFUSAL = "failed provenance policy"
+
+
+def _signing_hint() -> str:
+    """What repairs a provenance refusal.
+
+    An unreadable policy.json refuses every tap; trusting a key or relaxing
+    signing would not repair it, so say what would.
+    """
+    if policy.unreadable_violation("tap"):
+        return ("repair policy.json first — `boost policy` names each "
+                "unreadable value")
+    return ("add its key with `boost trust add <name> <key>`, "
+            "or relax `boost policy set require_signed_taps false`")
+
+
+def _signing_refused(name: str, problems: list[str],
+                     kept: str = "") -> BoostError:
+    """The error for a tap whose tree fails ``require_signed_taps``.
+
+    ``kept`` is the commit the clone stays on when the refused tree was a
+    move rather than a first clone — said, because "refused" alone leaves the
+    reader to wonder whether the tap is now broken.
+    """
+    msg = "tap %s %s: %s" % (name, POLICY_REFUSAL, "; ".join(problems))
+    if kept:
+        msg += " — kept at %s" % kept[:7]
+    return BoostError(msg, hint=_signing_hint())
+
+
+def require_signed_clone(name: str, clone: Path) -> None:
+    """Raise :func:`_signing_refused` when the working tree at ``clone``
+    fails ``require_signed_taps``; a no-op when the policy is off.
+
+    For a caller that downloads a tap afresh outside this module —
+    `boost compact --reclone` — so a fresh download is gated the way
+    `boost tap` gates the first one.
+    """
+    problems = policy.check_tap_signing(clone)
+    if problems:
+        raise _signing_refused(name, problems)
+
+
+def _signing_guard(tap: Tap):
+    """A ``verify`` callback for :func:`gitutil.pull`/``checkout_commit``.
+
+    Called with the fetched commit before the clone moves onto it, so a new
+    upstream commit that drops the signature (or swaps the signer) is refused
+    with the clone still on the tree that passed — `boost tap` checked the
+    first tree only, and every update after it was taken on trust.
+    """
+    def verify(commit: str) -> None:
+        problems = policy.check_tap_signing(tap.path, commit=commit)
+        if problems:
+            raise _signing_refused(tap.name, problems,
+                                   kept=gitutil.head_commit(tap.path))
+    return verify
+
+
+def _append_rows(cfg: dict, rows: list[dict]) -> bool:
+    """Append tap ``rows`` to a fresh config; False when none was new.
+
+    Runs inside :func:`config.mutate`. The duplicate check in :func:`add`
+    happens before the clone, outside any lock, so two processes tapping
+    one name both pass it — re-checking here keeps the second from adding
+    the same tap twice.
+
+    Only a row the reader uses holds a name (:func:`config.tap_row_issue`).
+    A malformed row of the same name — ``"url": 123`` — is one boost already
+    warned it skips, so the new row takes its place: counting it as taken
+    printed "tapped" over a config that still listed no usable tap.
+    """
+    taps = cfg.setdefault("taps", [])
+    have = {name_key(t["name"]) for t in taps
+            if config.tap_row_issue(t) is None}
+    added = False
+    for row in rows:
+        key = name_key(row["name"])
+        if key in have:
+            continue
+        stale = [i for i, t in enumerate(taps)
+                 if isinstance(t, dict) and isinstance(t.get("name"), str)
+                 and name_key(t["name"]) == key]
+        if stale:
+            taps[stale[0]] = row
+            for i in reversed(stale[1:]):
+                del taps[i]
+        else:
+            taps.append(row)
+        have.add(key)
+        added = True
+    return added
+
+
+#: In every message :func:`pin_missing` builds, so `cmd_update` can tell a tap
+#: whose pin is gone upstream from a dead tap in a sweep's failures -- the
+#: same substring contract as :data:`POLICY_REFUSAL`. `boost untap` is the
+#: wrong advice for it: the repository is alive, only the commit is gone.
+PIN_MISSING = "which is no longer on"
+
+
+def pin_missing_remedy(name: str) -> str:
+    """The two ways out of a pin whose commit upstream no longer has."""
+    return ("`boost update --force %s` re-clones its default branch and drops "
+            "the pin, or re-tap it with `--at <sha>` to pin a commit that "
+            "exists there" % util.shell_arg(name))
+
+
+def pin_missing(tap: Tap, pin: str, url: str = "") -> BoostError:
+    """The error for a tap pinned at a commit its remote no longer serves.
+
+    git says "not our ref <sha>", and the sweep then advised `boost untap`
+    -- discarding a live tap -- while `boost doctor` sent the user back to
+    the `boost update` that had just failed. `--force`, which works, was
+    never named.
+    """
+    return BoostError(
+        "tap %s is pinned at %s, %s %s (history rewritten upstream?)"
+        % (tap.name, pin[:7], PIN_MISSING, url or tap.url),
+        hint=pin_missing_remedy(tap.name), wrap=True)
+
+
+def _already_configured(name: str, spec: str, at: str | None) -> BoostError:
+    """The error for re-tapping a configured tap, with a hint that works.
+
+    With ``at`` the user wants another commit, and `boost update` cannot give
+    them one: it skips a pinned tap, and ``--force`` moves to branch HEAD and
+    drops the pin. Only a fresh tap at that commit lands there.
+    """
+    if at:
+        return BoostError(
+            "tap %s is already configured" % name,
+            hint="`boost untap %s`, then `boost tap %s --at %s` to move it "
+                 "to that commit" % (util.shell_arg(name), util.shell_arg(spec),
+                                     util.shell_arg(at)))
+    return BoostError("tap %s is already configured" % name,
+                      hint="`boost update %s` to refresh it"
+                           % util.shell_arg(name))
+
+
+#: Marks a ★ the user asked for (`--curated`, the defaults), as opposed to one
+#: copied from the catalogue's column. :func:`overstarred` never takes one back.
+CURATED_BY_USER = "user"
+
+
+def _row(name: str, url: str, curated: bool, by_user: bool) -> dict:
+    row: dict = {"name": name, "url": url, "curated": curated,
+                 "added_at": util.now_iso()}
+    if curated and by_user:
+        row["curated_by"] = CURATED_BY_USER
+    return row
+
+
+def overstarred() -> list[str]:
+    """Taps starred in config that the bundled catalogue does not curate.
+
+    Every catalogue row once shipped ``curated: true`` and `tap --catalog`
+    stamped the whole batch, so a machine that tapped the catalogue holds
+    ~460 starred rows where the catalogue now stars ~40. Only that direction
+    is drift: an unstarred tap stays unstarred, because a plain `boost tap` is
+    opt-in. A tap the catalogue does not list is the user's own and is never
+    named, nor is a row whose star the user asked for (``curated_by``). A row
+    written before that marker existed cannot say who starred it, so an
+    explicit `--curated` on a catalogue repo from back then reads as drift.
+    """
+    wanted = {str(e.get("name")): bool(e.get("curated"))
+              for e in config.load_registry_catalog()}
+    rows = config.get("taps", []) or []
+    if not isinstance(rows, list):
+        return []
+    return [str(t["name"]) for t in rows
+            if isinstance(t, dict) and t.get("curated")
+            and t.get("curated_by") != CURATED_BY_USER
+            and wanted.get(str(t.get("name"))) is False]
+
+
+def unstar(names: list[str]) -> list[str]:
+    """Clear the ★ on ``names`` in one config write; return those cleared.
+
+    Config only. Each tap's cache still carries the old flag on every entry
+    (stamped at scan time), so the caller rebuilds those caches.
+    """
+    todo = set(names)
+    if not todo:
+        return []
+    done: list[str] = []
+
+    def clear(cfg: dict) -> bool:
+        for t in cfg.get("taps") or []:
+            if (isinstance(t, dict) and t.get("name") in todo
+                    and t.get("curated")):
+                t["curated"] = False
+                done.append(str(t["name"]))
+        return bool(done)
+    config.mutate(clear)
+    return done
 
 
 #: Default concurrency for :func:`add_many`. Tapping is network-latency bound,
@@ -357,6 +1068,84 @@ def _clear_path(path) -> None:
                  "by hand, then retry") from exc
 
 
+def _reclone(tap: Tap, pin: str | None) -> None:
+    """Clone ``tap`` afresh (checked out at ``pin`` if given), replacing
+    whatever is at ``tap.path`` **only once the new clone is complete**.
+
+    The clone lands in a staging sibling first. Clearing the old path and
+    then cloning into it lost a broken clone's tree whenever the re-clone
+    failed — offline, an auth error, a remote moved or deleted — and that tree
+    was still scannable and installable from; doctor and heal both point at
+    `boost update <name>`, so their own remedy destroyed it. A failed clone or
+    an unhonourable pin now leaves ``tap.path`` exactly as it was. (A pin that
+    cannot be checked out still never lands as a tree on HEAD with a stale pin
+    beside it: the staging copy is discarded with it.)
+    """
+    staging = tap.path.with_name(tap.path.name + RECLONE_SUFFIX)
+    _clear_path(staging)
+    try:
+        gitutil.clone_shallow(tap.url, staging)
+        if pin:
+            try:
+                gitutil.checkout_commit(staging, pin)
+            except gitutil.CommitNotUpstream as err:
+                raise pin_missing(tap, pin, err.url) from err
+        # Checked on the staging tree, before it replaces anything: a
+        # re-clone is a fresh download, so it gets the same provenance gate
+        # `boost tap` applies — or a tap whose clone went missing would come
+        # back from an upstream that dropped its signature.
+        problems = policy.check_tap_signing(staging)
+        if problems:
+            raise _signing_refused(
+                tap.name, problems,
+                kept=gitutil.head_commit(tap.path) if tap.is_cloned else "")
+    except BoostError:
+        with suppress(OSError):
+            util.remove_path(staging)
+        raise
+    # `is_cloned` is `path.is_dir()`, which a *dangling* symlink answers
+    # False to, so a dangling link reaches here too and is cleared like any
+    # other leftover before the finished clone moves into place.
+    _clear_path(tap.path)
+    try:
+        os.replace(staging, tap.path)
+    except OSError as exc:
+        raise BoostError(
+            "could not move the new clone into %s" % paths.tilde(tap.path),
+            hint="retry `boost update %s`" % util.shell_arg(tap.name)) from exc
+
+
+def ensure_cloned(tap: Tap) -> bool:
+    """Clone a registered tap that has no clone, **at its pin**. True if it
+    cloned.
+
+    The path every consumer of a tap's files takes when the clone is missing
+    (`store.source_dir_for`, so `drift`, `info`, `install`). It used to be a
+    bare `clone_shallow`, which landed on HEAD while config.json kept the pin:
+    a read-only `boost drift` moved the tap, `update` then answered "pinned at
+    <pin> (skipped)" for a clone that was not, and `heal` rescanned the catalog
+    to match the wrong tree. Routed through :func:`_reclone`, the same staged,
+    sparse, pinned clone `update` uses for a missing clone.
+    """
+    if tap.is_cloned:
+        return False
+    _reclone(tap, tap.pin or None)
+    return True
+
+
+def off_pin(tap: Tap) -> str | None:
+    """The clone's HEAD when ``tap`` is pinned and its clone is not at the
+    pin, else ``None``.
+
+    ``None`` too when the answer is unknowable (no git, no clone, an
+    unresolvable HEAD): an unread HEAD is not evidence of a move.
+    """
+    if not tap.pin or not tap.is_cloned or not gitutil.has_git():
+        return None
+    head = gitutil.head_commit(tap.path)
+    return head if head and head.lower() != tap.pin.lower() else None
+
+
 def _clone_one(spec: str, curated: bool, at: str | None) -> dict:
     """Clone one tap without touching config. Never raises.
 
@@ -389,9 +1178,67 @@ def _clone_one(spec: str, curated: bool, at: str | None) -> dict:
     return {"spec": spec, "name": name, "url": url, "ok": True, "tap": tap}
 
 
+def plan_specs(specs: list[str]) -> list[dict]:
+    """How :func:`add_many` will treat each spec, in order, touching nothing.
+
+    One dict per spec: ``todo`` True for one it will clone (with ``name`` and
+    ``url``), else the result row it reports without cloning — ``skipped``
+    for a registry already tapped or repeated in the batch, ``ok`` False with
+    an ``error`` for one it refuses. `boost tap --dry-run` reads the same
+    plan, so its preview cannot list as "would tap" a registry the real run
+    skips.
+    """
+    existing = {name_key(t.name): t for t in list_taps()}
+    batch: dict[str, str] = {}
+    results: list[dict] = []
+    for spec in specs:
+        try:
+            name, url = parse_spec(spec)
+        except BoostError as exc:
+            results.append({"spec": spec, "name": spec, "ok": False,
+                            "error": exc.message})
+            continue
+        if reserved_cache_name(name):
+            results.append({"spec": spec, "name": name, "ok": False,
+                            "error": _reserved(name).message})
+            continue
+        # A different repository under a taken name is a failure, not a skip:
+        # "already tapped" with nothing tapped is the answer that hid it.
+        key = name_key(name)
+        held = existing.get(key)
+        if held is not None and not same_source(held.url, url):
+            results.append({"spec": spec, "name": name, "ok": False,
+                            "error": _taken(held.name, url, held.url).message})
+            continue
+        if held is not None:
+            results.append({"spec": spec, "name": name, "ok": False,
+                            "skipped": True, "error": "already tapped",
+                            "tapped_as": held.name})
+            continue
+        # Two specs of this one run claiming a name is not "already used by":
+        # nothing holds the name yet, and `boost untap` would not help.
+        if key in batch and not same_source(batch[key], url):
+            results.append({
+                "spec": spec, "name": name, "ok": False,
+                "error": "two specs in this batch both name %s: %s and %s"
+                         % (name, batch[key], url)})
+            continue
+        if key in batch:
+            results.append({"spec": spec, "name": name, "ok": False,
+                            "skipped": True, "error": "already tapped"})
+            continue
+        # Guard against the same registry appearing twice in one selection:
+        # two threads cloning into one directory is a corrupt clone, not a race
+        # anyone would enjoy debugging.
+        batch[key] = url
+        results.append({"spec": spec, "name": name, "url": url, "todo": True})
+    return results
+
+
 def add_many(specs: list[str], curated: bool = False,
              pins: dict[str, str] | None = None, jobs: int | None = None,
-             on_done=None) -> list[dict]:
+             on_done=None,
+             curated_names: Collection[str] = ()) -> list[dict]:
     """Clone many taps at once and register them in a single config write.
 
     Returns one result dict per spec, in the order given, each with ``ok`` and
@@ -401,34 +1248,29 @@ def add_many(specs: list[str], curated: bool = False,
 
     `pins` maps a tap name to the commit to check out, for published vector
     shards (see ``core.shards``).
+
+    `curated` stars every tap in the batch; `curated_names` stars only the
+    named ones. A catalogue tap needs the second: one flag for the whole batch
+    is how all 463 registries of `tap --catalog` came out curated, which made
+    the ★ mark everything and so mean nothing.
     """
     if not specs:
         return []
-    paths.ensure_dirs()
+    config.refuse_unreadable()      # before any clone, as in `add`
+    paths.require_dirs()
     pins = pins or {}
-    existing = {t.name for t in list_taps()}
     results: list[dict] = []
     todo: list[str] = []
-    for spec in specs:
-        try:
-            name, _url = parse_spec(spec)
-        except BoostError as exc:
-            results.append({"spec": spec, "name": spec, "ok": False,
-                            "error": exc.message})
-            continue
-        if name in existing:
-            results.append({"spec": spec, "name": name, "ok": False,
-                            "skipped": True, "error": "already tapped"})
-            continue
-        # Guard against the same registry appearing twice in one selection:
-        # two threads cloning into one directory is a corrupt clone, not a race
-        # anyone would enjoy debugging.
-        existing.add(name)
-        todo.append(spec)
+    for row in plan_specs(specs):
+        if row.pop("todo", False):
+            todo.append(row["spec"])
+        else:
+            results.append(row)
 
     def work(spec: str) -> dict:
         name, _url = parse_spec(spec)
-        return _clone_one(spec, curated, pins.get(name))
+        return _clone_one(spec, curated or name in curated_names,
+                          pins.get(name))
 
     with ThreadPoolExecutor(max_workers=tap_jobs(jobs)) as pool:
         for res in pool.map(work, todo):
@@ -440,16 +1282,17 @@ def add_many(specs: list[str], curated: bool = False,
     # lose taps, and 463 sequential rewrites of the same file is its own cost.
     fresh = [r for r in results if r.get("ok")]
     if fresh:
-        cfg = config.load()
-        rows = cfg.setdefault("taps", [])
+        new_rows = []
         for r in fresh:
-            row = {"name": r["name"], "url": r["url"], "curated": curated}
+            row = _row(r["name"], r["url"], r["tap"].curated,
+                       by_user=curated)
             pin = pins.get(r["name"])
             if pin:
                 row["pin"] = pin
                 r["tap"].pin = pin
-            rows.append(row)
-        config.save(cfg)
+            new_rows.append(row)
+
+        config.mutate(lambda cfg: _append_rows(cfg, new_rows))
         start_refresh_clock()
     # First occurrence, not last: a dict comprehension over `specs` keeps the
     # LAST index for a repeated spec, which pushed the duplicate — and so its
@@ -532,11 +1375,12 @@ def last_refresh_at() -> str | None:
 def pin(name: str, commit: str) -> Tap:
     """Record `commit` as the tap's pin, so `update` leaves it alone."""
     tap = get(name)
-    cfg = config.load()
-    for row in cfg.get("taps", []) or []:
-        if isinstance(row, dict) and row.get("name") == tap.name:
-            row["pin"] = commit
-    config.save(cfg)
+
+    def put(cfg: dict) -> None:
+        for row in cfg.get("taps", []) or []:
+            if isinstance(row, dict) and row.get("name") == tap.name:
+                row["pin"] = commit
+    config.mutate(put)
     tap.pin = commit
     return tap
 
@@ -544,11 +1388,12 @@ def pin(name: str, commit: str) -> Tap:
 def unpin(name: str) -> Tap:
     """Drop a tap's pin so it tracks its default branch again."""
     tap = get(name)
-    cfg = config.load()
-    for row in cfg.get("taps", []) or []:
-        if isinstance(row, dict) and row.get("name") == tap.name:
-            row.pop("pin", None)
-    config.save(cfg)
+
+    def drop(cfg: dict) -> None:
+        for row in cfg.get("taps", []) or []:
+            if isinstance(row, dict) and row.get("name") == tap.name:
+                row.pop("pin", None)
+    config.mutate(drop)
     tap.pin = ""
     return tap
 
@@ -570,7 +1415,7 @@ def retarget(name: str, commit: str) -> Tap:
     skipping the tap forever.
     """
     tap = get(name)
-    gitutil.checkout_commit(tap.path, commit)
+    gitutil.checkout_commit(tap.path, commit, verify=_signing_guard(tap))
     return pin(name, commit)
 
 
@@ -587,15 +1432,71 @@ def dependents(tap_name: str) -> list[tuple[str, str]]:
             if e.get("tap") == tap_name]
 
 
+def project_dependents(tap_name: str) -> list[str]:
+    """Skills installed ``--local`` in the current repo whose row names `tap_name`.
+
+    Name-sorted. :func:`dependents` reads the user lock only, so untapping the
+    source of a project skill went through with no warning and left a row
+    `drift` reads as source-missing. A project lock records skills only, and
+    only this repo's is reachable: other checkouts are not known to boost.
+    """
+    pbase = scopes.resolve_base(scopes.SCOPE_PROJECT)
+    if pbase is None:
+        return []
+    return [n for n, e in sorted(projectlock.installed(pbase).items())
+            if e.get("tap") == tap_name]
+
+
+def _shared(path: Path, others: list[Path]) -> bool:
+    """True if `path` names the same file as one of `others`.
+
+    Asked of the filesystem, not of the spelling: `repos/foo` and `repos/FOO`
+    are one directory on APFS and two on ext4, and only the first must be kept.
+    """
+    for other in others:
+        if other == path:
+            return True
+        try:
+            if os.path.samefile(path, other):
+                return True
+        except OSError:
+            continue
+    return False
+
+
 def remove(name: str) -> Tap:
     """Deregister a tap and delete its clone and cache file.
 
     Returns the removed Tap; raises BoostError if it does not exist.
     """
     tap = get(name)
-    cfg = config.load()
-    cfg["taps"] = [t for t in cfg.get("taps", []) if t["name"] != tap.name]
-    config.save(cfg)
+
+    def drop(cfg: dict) -> None:
+        rows = cfg.get("taps") or []
+        # Drop only the row this is, and keep every other row as it was — a
+        # malformed one included. `list_taps` reads a nameless or non-dict
+        # row as no tap, so indexing `t["name"]` here crashed the one command
+        # that could take the real tap out, and untap has no business
+        # deleting data it does not own.
+        if isinstance(rows, list):
+            cfg["taps"] = [t for t in rows
+                           if not (isinstance(t, dict)
+                                   and t.get("name") == tap.name)]
+    config.mutate(drop)
+    # A config written before names were case-folded can hold `foo` and
+    # `FOO`, which on a case-insensitive filesystem share one clone and one
+    # cache. Deleting either would strip the tap that stays configured.
+    others = list_taps()
+    if not _shared(tap.path, [t.path for t in others]):
+        _remove_clone(tap)
+    if (tap.cache_file.exists()
+            and not _shared(tap.cache_file, [t.cache_file for t in others])):
+        _remove_cache(tap)
+    return tap
+
+
+def _remove_clone(tap: Tap) -> None:
+    """Delete `tap`'s clone, warning rather than raising if it cannot."""
     try:
         util.remove_path(tap.path)
     except OSError as e:
@@ -608,25 +1509,38 @@ def remove(name: str) -> Tap:
                     "hand" % (tap.name, e.strerror or e,
                               paths.tilde(tap.path)),
                     stream=sys.stderr, wrap=True)
-    if tap.cache_file.exists():
-        try:
-            tap.cache_file.unlink()
-        except OSError as e:
-            # A cache dir boost cannot write (doctor flags it) made untap exit
-            # 70 here with the tap already deregistered. The file left behind
-            # names no configured tap, which is what `boost clean` sweeps.
-            output.warn("could not remove the catalog cache for %s (%s) — "
-                        "make %s writable, then run `boost clean`"
-                        % (tap.name, e.strerror or e,
-                           paths.tilde(tap.cache_file.parent)),
-                        stream=sys.stderr, wrap=True)
-    return tap
+
+
+def _remove_cache(tap: Tap) -> None:
+    """Delete `tap`'s catalog cache, warning rather than raising if it cannot."""
+    if not tap.owns_cache_file:
+        return      # boost's own index, not this tap's — see owns_cache_file
+    try:
+        tap.cache_file.unlink()
+    except OSError as e:
+        # A cache dir boost cannot write (doctor flags it) made untap exit
+        # 70 here with the tap already deregistered. The file left behind
+        # names no configured tap, which is what `boost clean` sweeps.
+        output.warn("could not remove the catalog cache for %s (%s) — "
+                    "make %s writable, then run `boost clean`"
+                    % (tap.name, e.strerror or e,
+                       paths.tilde(tap.cache_file.parent)),
+                    stream=sys.stderr, wrap=True)
 
 
 #: URL scheme marking a tap that ships inside the wheel rather than living on
 #: a remote. :func:`update` refreshes such a tap by re-copying package data —
 #: handing this to git is what made a revised built-in rule unreachable.
 WHEEL_SCHEME = "builtin:"
+
+
+def _update_needs_git(tap: Tap, force: bool) -> bool:
+    """Whether :func:`update` runs git for `tap`: not for boost's own wheel
+    tap, and not for a pinned clone it leaves alone."""
+    if tap.url.startswith(WHEEL_SCHEME):
+        return False
+    cloned = tap.is_cloned and not tap.is_broken_clone
+    return not (cloned and tap.pin and not force)
 
 
 def update(name: str | None = None,
@@ -659,6 +1573,10 @@ def update(name: str | None = None,
     used to cost one network round trip per tap, serially.
     """
     targets = [get(name)] if name else list_taps()
+    if any(_update_needs_git(t, force) for t in targets):
+        # Once, up front: per tap, a missing git became N copies of the same
+        # failure and a summary advising `boost untap` for every healthy tap.
+        gitutil.require_git()
     results: dict = {}
     failures: dict = {}
 
@@ -685,7 +1603,11 @@ def update(name: str | None = None,
             from . import builtin
             builtin.ensure_tap()
             return "refreshed from the installed package", False
-        elif not tap.is_cloned:
+        elif not tap.is_cloned or tap.is_broken_clone:
+            # A clone dir with no `.git` takes this branch too: `pull` can
+            # only fail there ("not a git repository"), forever, and the
+            # remedy is the same re-clone a missing dir gets.
+            #
             # A missing clone has nothing to hold still, so a pin here is
             # a target to land on rather than a reason to skip — skipping
             # used to report "pinned … (skipped)" while leaving nothing on
@@ -698,19 +1620,10 @@ def update(name: str | None = None,
             # create work tree dir ... File exists"). Without the removal the
             # tap can never be recovered: doctor reports it not cloned and
             # points at `update`, and update fails the same way forever.
-            _clear_path(tap.path)
-            gitutil.clone_shallow(tap.url, tap.path)
-            if tap.pin and not force:
-                try:
-                    gitutil.checkout_commit(tap.path, tap.pin)
-                except BoostError:
-                    # A pin that cannot be honoured must not leave a tap
-                    # on HEAD with a stale pin recorded beside it — the
-                    # next sweep would read `is_cloned` true and quietly
-                    # "skip" a tree that was never checked out.
-                    util.rmtree(tap.path)
-                    raise
-                return "cloned at %s" % tap.pin[:7], False
+            pin = tap.pin if not force else None
+            _reclone(tap, pin)
+            if pin:
+                return "cloned at %s" % pin[:7], False
             return "cloned", bool(tap.pin)
         elif tap.pin and not force:
             # A pinned tap is held at one commit on purpose: prebuilt
@@ -719,8 +1632,24 @@ def update(name: str | None = None,
             # like nothing at all. Not an error, because "update
             # everything" over 400 taps should not fail because three are
             # pinned.
+            #
+            # Unless the clone is not *at* the pin (a hand checkout, or a
+            # clone some older path made at HEAD): "skipped" would then name
+            # a commit the tree does not sit on, forever. Put it back — the
+            # remedy doctor prints for exactly this — and report it as a
+            # move, so the caller rescans the catalog and resyncs vectors.
+            head = off_pin(tap)
+            if head:
+                try:
+                    gitutil.checkout_commit(tap.path, tap.pin,
+                                            verify=_signing_guard(tap))
+                except gitutil.CommitNotUpstream as err:
+                    raise pin_missing(tap, tap.pin, err.url) from err
+                return ("%s → %s (back on its pin)"
+                        % (head[:7], tap.pin[:7]), False)
             return "pinned at %s (skipped)" % tap.pin[:7], False
-        return gitutil.pull(tap.path), bool(tap.pin)
+        return (gitutil.pull(tap.path, verify=_signing_guard(tap)),
+                bool(tap.pin))
 
     to_clear: list[str] = []
 
@@ -769,11 +1698,12 @@ def update(name: str | None = None,
         # registries, and for the same reason: N threads each doing their own
         # `config.load()`/`save()` would lose each other's drops at random.
         wanted = set(to_clear)
-        cfg = config.load()
-        for row in cfg.get("taps", []) or []:
-            if isinstance(row, dict) and row.get("name") in wanted:
-                row.pop("pin", None)
-        config.save(cfg)
+
+        def drop_pins(cfg: dict) -> None:
+            for row in cfg.get("taps", []) or []:
+                if isinstance(row, dict) and row.get("name") in wanted:
+                    row.pop("pin", None)
+        config.mutate(drop_pins)
 
     if results:
         # Stamped on any successful sweep, including one where every tap was

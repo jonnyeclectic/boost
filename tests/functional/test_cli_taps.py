@@ -104,7 +104,22 @@ class TestTap:
         # staleness a pin exists to prevent.
         r = boost("tap", tapped, "--at", "a" * 40, expect=1)
         assert "tap fixture-tap is already configured" in r.err
-        assert "boost update fixture-tap" in r.err  # the hint
+        # `boost update` skips a pinned tap and `--force` goes to HEAD, so
+        # the hint names the one sequence that lands on the commit asked for.
+        err = " ".join(r.err.split())
+        assert "boost untap fixture-tap" in err
+        assert "--at %s" % ("a" * 40) in err
+        assert "boost update" not in err
+
+    def test_untap_survives_a_nameless_config_row(self, boost, tapped):
+        cfg = config.load()
+        cfg["taps"].append({"url": "https://github.com/x/y"})
+        config.save(cfg)
+        boost("untap", "fixture-tap", "-f")
+        # Kept on disk as written; the merged view skips a nameless row.
+        on_disk = json.loads(paths.config_path().read_text(encoding="utf-8"))
+        assert on_disk["taps"] == [{"url": "https://github.com/x/y"}]
+        assert config.load()["taps"] == []
 
     def test_garbage_spec_rc1(self, boost, sandbox):
         r = boost("tap", "@@@garbage@@@", expect=1)
@@ -114,6 +129,27 @@ class TestTap:
     def test_no_args_rc2(self, boost, sandbox):
         r = boost("tap", expect=2)
         assert "provide a SPEC, --defaults, or --catalog" in r.err
+
+    @pytest.mark.parametrize("extra, named", [
+        (("--limit", "2"), "--limit only filters --catalog; pass --catalog "
+                           "or drop it"),
+        (("--include-lists",), "--include-lists only filters --catalog; "
+                               "pass --catalog or drop it"),
+        (("--type", "rule", "--category", "ui"),
+         "--type/--category only filter --catalog; pass --catalog or drop "
+         "them"),
+    ])
+    @pytest.mark.parametrize("target", [("--defaults",), ("someone/repo",)])
+    def test_catalog_filters_without_catalog_rc2(self, boost, sandbox, extra,
+                                                 named, target):
+        # They used to be ignored: `tap --limit 2 --defaults` cloned all seven.
+        r = boost("tap", "--dry-run", *extra, *target, expect=2)
+        assert named in r.err
+        assert r.out == ""
+
+    def test_catalog_filters_with_catalog_are_accepted(self, boost, sandbox):
+        r = boost("tap", "--catalog", "--dry-run", "--limit", "1")
+        assert "dry run" in r.out
 
     def test_missing_local_path_names_the_directory_not_github(
             self, boost, sandbox, tmp_path):
@@ -145,8 +181,9 @@ class TestTap:
 
         monkeypatch.setattr("boost_cli.core.gitutil.clone_shallow", boom)
         r = boost("tap", "--defaults", expect=1)
-        assert "could not tap anthropics/skills: network down" in r.out
-        assert "could not tap obra/superpowers: network down" in r.out
+        assert "  ! could not tap anthropics/skills: network down\n" in r.err
+        assert "  ! could not tap obra/superpowers: network down\n" in r.err
+        assert "could not tap" not in r.out
         assert registry.list_taps() == []   # nothing half-added
 
     def test_defaults_success_then_already_tapped(self, boost, sandbox,
@@ -210,6 +247,85 @@ class TestTap:
         assert "dry run — nothing tapped" in r.out
         assert registry.list_taps() == []
 
+    def test_dry_run_marks_a_tapped_spec_as_skipped_like_the_run(
+            self, boost, fixture_tap_src, tmp_path):
+        other = _copy_tap(fixture_tap_src, tmp_path / "other-tap")
+        boost("tap", fixture_tap_src)
+        before = _disk()
+        r = boost("tap", "--dry-run", fixture_tap_src)
+        assert _disk() == before
+        assert "fixture-tap already tapped" in r.out
+        assert "0 registries to tap, 1 already tapped (dry run — nothing " \
+               "tapped)" in r.out
+        assert "NAME" not in r.out                # no table of nothing
+        assert "fixture-tap already tapped" in boost("tap",
+                                                     fixture_tap_src).out
+        assert _disk() == before
+        r = boost("tap", "--dry-run", fixture_tap_src, str(other))
+        assert "1 registry to tap, 1 already tapped" in r.out
+        assert "other-tap" in r.out
+        r = boost("tap", fixture_tap_src, str(other))
+        assert "fixture-tap already tapped" in r.out
+        assert "tapped other-tap (5 items)" in r.out
+
+    def test_dry_run_defaults_counts_only_what_the_run_clones(
+            self, boost, sandbox, fixture_tap_src, monkeypatch):
+        monkeypatch.setattr(
+            "boost_cli.core.gitutil.clone_shallow",
+            lambda url, dest: shutil.copytree(fixture_tap_src, dest))
+        boost("tap", "--defaults")
+        before = _disk()
+        r = boost("tap", "--defaults", "--dry-run")
+        assert _disk() == before
+        n = len(config.DEFAULT_TAPS)
+        assert "0 registries to tap, %d already tapped" % n in r.out
+        for d in config.DEFAULT_TAPS:
+            assert "%s already tapped" % d["name"] in r.out
+
+    def test_dry_run_names_a_refusal_and_exits_1(self, boost, sandbox,
+                                                 fixture_tap_src, tmp_path):
+        boost("tap", fixture_tap_src)
+        # Same name, different repository: the real run refuses it.
+        clash = _copy_tap(fixture_tap_src, tmp_path / "x" / "fixture-tap")
+        r = boost("tap", "--dry-run", str(clash), expect=1)
+        assert "would not tap fixture-tap: " in r.out
+        assert "0 registries to tap, 1 refused" in r.out
+        boost("tap", str(clash), expect=1)
+
+    def test_dry_run_with_at_does_not_call_a_held_tap_skipped(
+            self, boost, fixture_tap_src):
+        boost("tap", fixture_tap_src)
+        r = boost("tap", "--dry-run", fixture_tap_src, "--at", "a" * 40,
+                  expect=1)
+        assert ("would not tap fixture-tap: already tapped, and --at does "
+                "not move it") in " ".join(r.out.split())
+        assert "fixture-tap already tapped" not in r.out
+
+
+def _disk():
+    """Every file and link under the sandbox HOME, with its bytes or target.
+
+    What a preview is held to. The diagnostic log is left out — every run
+    appends to it — and so are bare directories, which its creation adds.
+    """
+    home = paths.home()
+    logs = paths.logs_dir()
+    seen = {}
+    for root, dirs, files in os.walk(home):
+        if os.path.abspath(root) == os.path.abspath(logs):
+            dirs[:] = []
+            continue
+        for name in dirs + files:
+            p = os.path.join(root, name)
+            rel = os.path.relpath(p, home).replace(os.sep, "/")
+            if os.path.islink(p):
+                seen[rel] = ("link", os.readlink(p))
+            elif os.path.isfile(p):
+                with open(p, "rb") as fh:
+                    seen[rel] = ("file", fh.read())
+    return seen
+
+
 
 class TestTapCatalog:
     def test_dry_run_lists_without_tapping(self, boost, sandbox):
@@ -218,6 +334,26 @@ class TestTapCatalog:
         assert "dry run — nothing tapped" in r.out
         assert "3 registries" in r.out
         assert registry.list_taps() == []
+
+    def test_dry_run_leaves_a_tapped_registry_out_of_the_table(
+            self, boost, sandbox, monkeypatch):
+        from boost_cli.core import registry
+        sel = sorted(config.load_registry_catalog(),
+                     key=lambda e: (-int(e.get("est_items") or 0),
+                                    e["name"].lower()))
+        sel = [e for e in sel if e.get("type") == "skill"
+               and not e.get("list_only")][:3]
+        first = sel[0]
+        monkeypatch.setattr(registry, "list_taps", lambda: [registry.Tap(
+            name=first["name"], url=first["url"])])
+        r = boost("tap", "--catalog", "--type", "skill", "--limit", "3",
+                  "--dry-run")
+        assert "%s already tapped" % first["name"] in r.out
+        assert ("2 registries to tap, 1 already tapped · ~%d items (dry run "
+                "— nothing tapped)" % sum(int(e.get("est_items") or 0)
+                                          for e in sel[1:])) in r.out
+        table = r.out.split("%s already tapped" % first["name"])[0]
+        assert sel[1]["name"] in table and first["name"] not in table
 
     def test_type_filter_restricts_selection(self, boost, sandbox):
         r = boost("tap", "--catalog", "--type", "rule", "--dry-run")
@@ -254,13 +390,43 @@ class TestTapCatalog:
         assert "tapped " in r.out and "items)" in r.out
         assert len(registry.list_taps()) == 2
 
+    def test_catalog_tap_stars_only_curated_rows(self, boost, sandbox,
+                                                 fixture_tap_src, monkeypatch):
+        # One batch flag starred all 463 registries; the ★ must follow the
+        # catalogue's own column, row by row.
+        monkeypatch.setattr(
+            "boost_cli.core.gitutil.clone_shallow",
+            lambda url, dest: shutil.copytree(fixture_tap_src, dest))
+        boost("tap", "--catalog", "--type", "skill", "--limit", "12")
+        want = {e["name"]: bool(e.get("curated"))
+                for e in config.load_registry_catalog()}
+        got = {t["name"]: t["curated"]
+               for t in json.loads(paths.config_path().read_text(
+                   encoding="utf-8"))["taps"]}
+        assert got == {n: want[n] for n in got}
+        assert set(got.values()) == {True, False}
+
+    def test_catalog_tap_curated_flag_stars_everything(self, boost, sandbox,
+                                                       fixture_tap_src,
+                                                       monkeypatch):
+        monkeypatch.setattr(
+            "boost_cli.core.gitutil.clone_shallow",
+            lambda url, dest: shutil.copytree(fixture_tap_src, dest))
+        boost("tap", "--catalog", "--type", "skill", "--limit", "12",
+              "--curated")
+        taps = json.loads(paths.config_path().read_text(
+            encoding="utf-8"))["taps"]
+        assert len(taps) == 12 and all(t["curated"] for t in taps)
+
 
 # ── untap ────────────────────────────────────────────────────────────────
 
 class TestUntap:
     def test_unknown_rc1(self, boost, sandbox):
         r = boost("untap", "nope", expect=1)
-        assert "could not untap nope: no such tap: nope" in r.out
+        # The reason for rc 1 is on stderr, where a script looks for it.
+        assert r.err == "  ! could not untap nope: no such tap: nope\n"
+        assert "could not untap" not in r.out
 
     def test_dependents_declined_keeps_tap(self, boost, installed, monkeypatch):
         monkeypatch.delenv("BOOST_ASSUME_YES")
@@ -488,7 +654,7 @@ class TestOutdated:
         assert "1.4.0" in r.out and "1.5.0" in r.out
         assert "INSTALLED" in r.out and "LATEST" in r.out
         assert "1 outdated" in r.out
-        assert "pinned items stay put" in r.out
+        assert "pinned and quarantined items stay put" in r.out
 
         boost("pin", "brainstorming")
         r = boost("outdated")
@@ -502,7 +668,10 @@ class TestOutdated:
                                       "reason": "version",
                                       "latest_commit": None,
                                       "tap": "bumped-tap",
-                                      "pinned": True}]
+                                      "pinned": True,
+                                      "quarantined": False,
+                                      "local_edits": False,
+                                      "scope": "user"}]
 
     def test_local_import_always_current(self, boost, sandbox, tmp_path):
         d = tmp_path / "loc"
@@ -533,7 +702,8 @@ class TestOutdated:
                          "installed": "1.4.0", "latest": None,
                          "reason": staleness.SOURCE_MISSING,
                          "latest_commit": None,
-                         "tap": "fixture-tap", "pinned": False}]
+                         "tap": "fixture-tap", "pinned": False, "quarantined": False,
+                         "local_edits": False, "scope": "user"}]
 
     def test_mixed_footer_splits_upstream_from_source_missing(
             self, boost, fixture_tap_src, tmp_path):
@@ -551,9 +721,53 @@ class TestOutdated:
         boost("untap", "gone-tap", "--force")
 
         r = boost("outdated")
-        assert "2 outdated" in r.out
+        # jira-integration's `requires: [commit-messages]` resolves in the
+        # tap that declared it, so its dependency came from gone-tap too and
+        # is the second row whose source went with it.
+        assert "3 outdated" in r.out
         assert "1 upstream" in r.out
-        assert "1 source missing" in r.out
+        assert "2 source missing" in r.out
+
+    def test_entry_dropped_after_update_is_removed_upstream(
+            self, boost, fixture_tap_src, tmp_path):
+        # The reported path: `boost update` rescans, the catalog no longer
+        # lists the skill, and the footer used to say to re-tap a tap that
+        # `boost taps` shows present and current.
+        src = _copy_tap(fixture_tap_src, tmp_path / "drop-tap")
+        boost("tap", src)
+        boost("install", "brainstorming")
+        subprocess.run(["git", "-C", str(src), "rm", "-rq",
+                        "skills/brainstorming"], check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(src), "commit", "-qm", "drop"],
+                       check=True, capture_output=True)
+        assert "no longer in tap" in boost("update").out
+        r = boost("outdated")
+        assert "1 outdated · removed upstream" in r.out
+        assert "re-tap or" not in r.out
+        # The LATEST cell names the same state the footer does; the JSON
+        # keeps its machine reason unchanged.
+        row = next(l for l in r.out.splitlines() if "brainstorming" in l)
+        assert "removed upstream" in row
+        assert "source missing" not in r.out
+        data = json.loads(boost("outdated", "--json").out)
+        assert [(d["name"], d["reason"], d["latest"]) for d in data] == [
+            ("brainstorming", staleness.SOURCE_MISSING, None)]
+
+    def test_two_entries_dropped_upstream_read_in_the_plural(
+            self, boost, fixture_tap_src, tmp_path):
+        src = _copy_tap(fixture_tap_src, tmp_path / "drop2-tap")
+        boost("tap", src)
+        boost("install", "brainstorming")
+        boost("install", "jira-integration")
+        for d in ("skills/brainstorming", "skills/jira-integration"):
+            subprocess.run(["git", "-C", str(src), "rm", "-rq", d],
+                           check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(src), "commit", "-qm", "drop"],
+                       check=True, capture_output=True)
+        boost("update")
+        r = boost("outdated")
+        assert ("2 outdated · removed upstream — `boost update` can't bring "
+                "them back; `boost uninstall` them") in r.out
 
     def test_content_change_shows_head_commit(self, boost, installed):
         clone = paths.repos_dir() / "fixture-tap"
@@ -567,20 +781,29 @@ class TestOutdated:
         assert data == [{"name": "brainstorming", "kind": "skill",
                          "installed": "1.4.0", "latest": "1.4.0",
                          "reason": "content", "latest_commit": head[:7],
-                         "tap": "fixture-tap", "pinned": False}]
+                         "tap": "fixture-tap", "pinned": False, "quarantined": False,
+                         "local_edits": False, "scope": "user"}]
 
     def test_source_vanished_marker(self, boost, installed):
         clone = paths.repos_dir() / "fixture-tap"
         shutil.rmtree(clone / "skills" / "brainstorming")
         _commit_clone(clone, "drop skill")       # cache still lists it
         r = boost("outdated")
-        assert "source missing" in r.out
         assert "1 outdated" in r.out
+        # The tap is still configured, so re-tapping restores nothing: the
+        # row and the footer both name the item as removed upstream, not the
+        # tap as deleted (the JSON reason below stays source-missing).
+        row = next(l for l in r.out.splitlines() if "brainstorming" in l)
+        assert "removed upstream" in row
+        assert "source missing" not in r.out
+        assert "re-tap or" not in r.out
+        assert "deleted tap" not in r.out
         data = json.loads(boost("outdated", "--json").out)
         assert data == [{"name": "brainstorming", "kind": "skill",
                          "installed": "1.4.0", "latest": None,
                          "reason": "source-missing", "latest_commit": None,
-                         "tap": "fixture-tap", "pinned": False}]
+                         "tap": "fixture-tap", "pinned": False, "quarantined": False,
+                         "local_edits": False, "scope": "user"}]
 
     def test_changed_rule_source_is_listed_with_kind(self, boost,
                                                      fixture_tap_src, tmp_path):
@@ -609,7 +832,283 @@ class TestOutdated:
         assert data == [{"name": "house-style", "kind": "rule",
                          "installed": "1.0.0", "latest": "1.0.0",
                          "reason": "content", "latest_commit": None,
-                         "tap": "rule-tap", "pinned": False}]
+                         "tap": "rule-tap", "pinned": False, "quarantined": False,
+                         "local_edits": False, "scope": "user"}]
+
+
+def _commit_all(repo, msg):
+    """Stage and commit everything in a test-owned repo copy."""
+    subprocess.run(["git", "-C", str(repo), "add", "-A"],
+                   check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(repo), "-c", "user.email=t@boost.test",
+                    "-c", "user.name=Boost Test", "commit", "-qm", msg],
+                   check=True, capture_output=True)
+
+
+_RULE = "---\nname: house-style\nversion: %s\n---\n\n%s\n"
+
+
+@pytest.fixture()
+def two_sources(fixture_tap_src, tmp_path):
+    """Two different repos that both name themselves `reg`: the second ships
+    an unrelated `brainstorming` (at a higher version) and `house-style`."""
+    a = _copy_tap(fixture_tap_src, tmp_path / "a" / "reg")
+    b = _copy_tap(fixture_tap_src, tmp_path / "b" / "reg")
+    for repo, version, body in ((a, "1.0.0", "Two-space indents."),
+                                (b, "2.0.0", "Something unrelated.")):
+        rule = repo / "rules" / "house.mdc"
+        rule.parent.mkdir(parents=True)
+        rule.write_text(_RULE % (version, body), encoding="utf-8")
+        _commit_all(repo, "add rule")
+    (b / "skills" / "brainstorming" / "SKILL.md").write_text(
+        "---\nname: brainstorming\ndescription: Totally different skill from "
+        "another repo\nversion: 9.0.0\n---\n\nSomething unrelated.\n",
+        encoding="utf-8")
+    _commit_all(b, "unrelated skill")
+    return a, b
+
+
+class TestSourceIdentity:
+    """A tap name re-pointed at another repository is not an upstream: the
+    lock's recorded `tap_url` is compared against the configured tap, and a
+    mismatch is reported, never upgraded implicitly (not even with --yes)."""
+
+    def _retap_other(self, boost, two_sources):
+        a, b = two_sources
+        boost("tap", a)
+        boost("install", "brainstorming")
+        boost("install", "house-style")
+        boost("untap", "reg", "--force")
+        boost("tap", b)
+        return a, b
+
+    def test_outdated_reports_source_changed(self, boost, two_sources):
+        self._retap_other(boost, two_sources)
+        r = boost("outdated")
+        rows = {l.split()[0]: l for l in r.out.splitlines()
+                if l.startswith(("brainstorming", "house-style"))}
+        assert "source changed" in rows["brainstorming"]
+        assert "9.0.0" not in r.out
+        assert "source changed" in rows["house-style"]
+        assert ("2 outdated · 2 source changed (the tap now points at another "
+                "repo; `boost reinstall` takes its copy)") in r.out
+        data = json.loads(boost("outdated", "--json").out)
+        assert [(d["name"], d["kind"], d["reason"], d["latest"])
+                for d in data] == [
+            ("brainstorming", "skill", staleness.SOURCE_CHANGED, None),
+            ("house-style", "rule", staleness.SOURCE_CHANGED, None)]
+
+    def test_update_yes_never_replaces_the_installed_copy(self, boost,
+                                                          two_sources):
+        from boost_cli.core import lockfile, store
+        a, _b = self._retap_other(boost, two_sources)
+        md = store.skill_store_dir("brainstorming") / "SKILL.md"
+        before = md.read_bytes()
+        rule_sha = lockfile.installed_rules()["house-style"]["sha256"]
+        r = boost("update", "--yes")
+        assert "upgraded" not in r.out
+        assert "tap reg now points at" in r.out
+        assert "`boost reinstall brainstorming` takes the new" in r.out
+        assert "`boost reinstall house-style` takes the new" in r.out
+        assert "2 items held back" in r.out
+        assert "everything up to date" not in r.out
+        assert md.read_bytes() == before
+        assert lockfile.get_skill("brainstorming")["tap_url"] == str(
+            a.resolve())
+        rule = lockfile.installed_rules()["house-style"]
+        assert (rule["sha256"], rule["tap_url"]) == (rule_sha,
+                                                      str(a.resolve()))
+
+    def test_drift_names_the_changed_source(self, boost, two_sources):
+        self._retap_other(boost, two_sources)
+        rows = json.loads(boost("drift", "--json").out)["skills"]
+        assert {(r["name"], r["status"], r["hint"]) for r in rows} == {
+            ("brainstorming", "source-changed",
+             "boost reinstall brainstorming to take the new source's copy, "
+             "or re-tap the original"),
+            ("house-style", "source-changed",
+             "boost reinstall house-style to take the new source's copy, "
+             "or re-tap the original")}
+
+    def test_explicit_reinstall_takes_the_new_source(self, boost,
+                                                     two_sources):
+        from boost_cli.core import lockfile, store
+        _a, b = self._retap_other(boost, two_sources)
+        boost("reinstall", "brainstorming", "house-style")
+        md = store.skill_store_dir("brainstorming") / "SKILL.md"
+        assert "Totally different skill" in md.read_text(encoding="utf-8")
+        assert lockfile.get_skill("brainstorming")["tap_url"] == str(
+            b.resolve())
+        assert "everything up to date" in boost("outdated").out
+
+    def test_legacy_row_without_tap_url_keeps_old_behaviour(self, boost,
+                                                            two_sources):
+        # Only where nothing dates the tap either: a legacy row under a tap
+        # row written before `added_at` cannot be told apart from its source
+        # (TestLegacyRowSource covers a tap dated after the row).
+        from boost_cli.core import lockfile
+        self._retap_other(boost, two_sources)
+        def drop_urls(lock):
+            for section in ("skills", "rules"):
+                for row in lock.get(section, {}).values():
+                    row.pop("tap_url", None)
+        lockfile.mutate(drop_urls)
+
+        def undate(cfg):
+            for row in cfg["taps"]:
+                row.pop("added_at", None)
+        config.mutate(undate)
+        data = json.loads(boost("outdated", "--json").out)
+        assert ("brainstorming", staleness.VERSION, "9.0.0") in [
+            (d["name"], d["reason"], d["latest"]) for d in data]
+
+
+def _legacy_rows():
+    """Rows as a boost from before `tap_url` wrote them, dated well before
+    any tap this test makes, and the tap rows as one from before `added_at`."""
+    from boost_cli.core import lockfile
+
+    def age(lock):
+        for section in ("skills", "rules"):
+            for row in lock[section].values():
+                row.pop("tap_url", None)
+                row["installed_at"] = row["updated_at"] = "2026-01-01T00:00:00Z"
+    lockfile.mutate(age)
+
+    def undate(cfg):
+        for row in cfg["taps"]:
+            row.pop("added_at", None)
+    config.mutate(undate)
+
+
+def _old_untap(name):
+    """`boost untap` as an older boost ran it: the config row and the clone
+    go, and nothing is recorded on the lock rows first."""
+    def drop(cfg):
+        cfg["taps"] = [t for t in cfg["taps"] if t["name"] != name]
+    config.mutate(drop)
+    util.rmtree(paths.repos_dir() / name)
+
+
+class TestLegacyRowSource:
+    """Lock rows written before `tap_url`: while the tap is configured its URL
+    is in config.json, so sync, heal, update and untap record it; once a
+    later tap took the name, the row reads as a source change."""
+
+    @pytest.fixture()
+    def legacy(self, boost, two_sources):
+        from boost_cli.core import lockfile
+        a, b = two_sources
+        boost("tap", a)
+        boost("install", "brainstorming")
+        boost("install", "house-style")
+        _legacy_rows()
+        assert "tap_url" not in lockfile.get_skill("brainstorming")
+        return a, b
+
+    def _urls(self):
+        from boost_cli.core import lockfile
+        return (lockfile.get_skill("brainstorming").get("tap_url"),
+                lockfile.installed_rules()["house-style"].get("tap_url"))
+
+    def test_sync_records_the_configured_url(self, boost, legacy):
+        a, _b = legacy
+        r = boost("sync", "--diff")
+        assert "would record the tap URL of 2 lock rows" in r.out
+        assert self._urls() == (None, None)
+        r = boost("sync")
+        assert "recorded the tap URL of 2 lock rows" in r.out
+        assert self._urls() == (str(a.resolve()),) * 2
+        assert "tap URL" not in boost("sync").out
+
+    def test_then_a_retap_of_another_repo_is_held_back(self, boost, legacy):
+        from boost_cli.core import store
+        _a, b = legacy
+        boost("heal")
+        boost("untap", "reg", "--force")
+        boost("tap", b)
+        md = store.skill_store_dir("brainstorming") / "SKILL.md"
+        before = md.read_bytes()
+        r = boost("update", "--yes")
+        assert "upgraded" not in r.out
+        assert "2 items held back" in r.out
+        assert md.read_bytes() == before
+
+    def test_untap_records_it_before_the_config_row_goes(self, boost,
+                                                         legacy):
+        a, _b = legacy
+        boost("untap", "reg", "--force")
+        assert self._urls() == (str(a.resolve()),) * 2
+
+    def test_update_records_it_before_comparing(self, boost, legacy):
+        a, _b = legacy
+        boost("update")
+        assert self._urls() == (str(a.resolve()),) * 2
+
+    def test_a_retap_after_an_old_untap_is_a_source_change(self, boost,
+                                                           legacy):
+        from boost_cli.core import store
+        _a, b = legacy
+        _old_untap("reg")
+        boost("tap", b)
+        r = boost("outdated")
+        rows = {l.split()[0]: l for l in r.out.splitlines()
+                if l.startswith(("brainstorming", "house-style"))}
+        assert "source changed" in rows["brainstorming"]
+        assert "9.0.0" not in r.out
+        md = store.skill_store_dir("brainstorming") / "SKILL.md"
+        before = md.read_bytes()
+        r = boost("update", "--yes")
+        flat = " ".join(r.out.split())
+        assert ("brainstorming: not updated — tap reg now points at %s, and "
+                "was tapped again since it was installed, from a source it "
+                "did not record; `boost reinstall brainstorming` takes the "
+                "new source's copy" % paths.tilde(str(b.resolve())) in flat)
+        assert "upgraded" not in r.out
+        assert md.read_bytes() == before
+        # Never stamped with the new tap's URL: that is not where it came from.
+        assert "would record the tap URL" not in boost("sync", "--diff").out
+        assert self._urls() == (None, None)
+
+    def test_a_retap_of_the_same_unmoved_repo_is_not(self, boost, legacy):
+        a, _b = legacy
+        _old_untap("reg")
+        boost("tap", a)
+        r = boost("outdated")
+        assert "source changed" not in r.out
+        boost("sync")
+        assert self._urls() == (str(a.resolve()),) * 2
+
+
+class TestOutdatedNotCloned:
+    """A configured tap whose clone is gone is `boost update`'s to fix, and
+    `outdated` says so for every kind — not "removed upstream"."""
+
+    def test_skill_and_workflow_read_not_cloned(self, boost, fixture_tap_src,
+                                                tmp_path):
+        src = _copy_tap(fixture_tap_src, tmp_path / "two")
+        cmd = src / "commands" / "ship.md"
+        cmd.parent.mkdir(parents=True)
+        cmd.write_text("---\ndescription: Ship it\n---\n\nShip.\n",
+                       encoding="utf-8")
+        _commit_all(src, "add workflow")
+        boost("tap", src)
+        boost("install", "ship")
+        boost("install", "brainstorming")
+        util.rmtree(paths.repos_dir() / "two")
+        r = boost("outdated")
+        for name in ("brainstorming ", "ship (workflow)"):
+            row = next(l for l in r.out.splitlines() if l.startswith(name))
+            assert "not cloned" in row
+        assert "removed upstream" not in r.out
+        assert "2 outdated · 2 not cloned (`boost update` clones the tap)" \
+            in r.out
+        data = json.loads(boost("outdated", "--json").out)
+        assert [(d["name"], d["kind"], d["reason"]) for d in data] == [
+            ("brainstorming", "skill", staleness.NOT_CLONED),
+            ("ship", "workflow", staleness.NOT_CLONED)]
+        boost("update", "two")
+        assert "everything up to date" in boost("outdated").out
 
 
 # ── completion cache invalidation ───────────────────────────────────────

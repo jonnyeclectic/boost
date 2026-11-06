@@ -158,3 +158,65 @@ class TestFindConfusions:
         ]
         got = typosquat.find_confusions(target, entries)
         assert sorted(x["tap"] for x in got) == ["eve/clone", "mallory/evil"]
+
+
+class TestIndexedFindConfusions:
+    """`build_index` lets `_warn_confusions` check many targets without an
+    `edit_distance` against every catalog entry per target (~60 ms each over
+    63k entries). It may only narrow the comparison, never change the answer."""
+
+    CORPUS: ClassVar[list[dict]] = [
+        _e("deploy", "alice/skills"),
+        _e("deploy", "mallory/evil"),             # same name, other tap
+        {"name": "deploy", "tap": "mallory/evil", "rel_dir": "b"},  # mirror
+        _e("deployy", "alice/skills"),            # insertion, same tap
+        _e("deployy", "eve/x"),                   # insertion
+        _e("depoy", "eve/x"),                     # deletion
+        _e("deplox", "z/z"),                      # substitution
+        _e("edploy", "t/t"),                      # transposition: 2 edits
+        _e("DEPLOY", "case/only"),                # case-only difference
+        _e("Deployy", "case/only"),
+        _e("ab", "p/p"), _e("ba", "q/q"),         # share a variant, d=2
+        _e("a", "r/r"), _e("", "s/s"), {"tap": "nameless/x"},
+        _e("deploy-tools", "far/away"),
+    ]
+
+    def test_variants_are_the_name_and_its_single_deletions(self):
+        assert typosquat._variants("abc") == {"abc", "bc", "ac", "ab"}
+        assert typosquat._variants("aa") == {"aa", "a"}
+        assert typosquat._variants("") == {""}
+
+    def test_index_maps_variants_to_ascending_positions(self):
+        entries = [_e("Ab", "t"), _e("b", "u"), _e("ab", "v")]
+        assert typosquat.build_index(entries) == {
+            "ab": [0, 2], "a": [0, 2], "b": [0, 1, 2], "": [1]}
+
+    def test_indexed_answer_equals_the_full_scan_for_every_target(self):
+        index = typosquat.build_index(self.CORPUS)
+        for target in self.CORPUS:
+            full = typosquat.find_confusions(target, self.CORPUS)
+            fast = typosquat.find_confusions(target, self.CORPUS, index=index)
+            assert [id(x) for x in fast] == [id(x) for x in full], target
+
+    def test_indexed_answer_for_deploy(self):
+        target = self.CORPUS[0]
+        got = typosquat.find_confusions(
+            target, self.CORPUS, index=typosquat.build_index(self.CORPUS))
+        assert [(x["name"], x["tap"]) for x in got] == [
+            ("DEPLOY", "case/only"), ("deploy", "mallory/evil"),
+            ("Deployy", "case/only"), ("deplox", "z/z"), ("deployy", "eve/x"),
+            ("depoy", "eve/x")]
+        # The first mirror is the one kept, as the full scan keeps it.
+        assert "rel_dir" not in got[1]
+
+    def test_transposition_shares_a_variant_but_is_not_flagged(self):
+        entries = [_e("ab", "p/p"), _e("ba", "q/q")]
+        index = typosquat.build_index(entries)
+        assert typosquat.find_confusions(entries[0], entries, index=index) == []
+
+    def test_index_is_ignored_past_one_edit(self):
+        entries = [_e("deploy", "a/a"), _e("depployy", "b/b")]
+        index = typosquat.build_index(entries)
+        got = typosquat.find_confusions(entries[0], entries, max_distance=2,
+                                        index=index)
+        assert [x["name"] for x in got] == ["depployy"]

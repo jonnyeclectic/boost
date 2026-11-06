@@ -32,14 +32,26 @@ on:
     # guard only looked for a cron or a push, so three workflows that run on
     # main after everything else has reported were invisible to it. `release`
     # is publish.yml — the job that actually uploads to PyPI on every merge.
+    #
+    # `nightly-watch` is the one entry that reports an ABSENCE: `ci`'s
+    # whole-codebase run not happening at all, which no `workflow_run` of `ci`
+    # can report, since nothing completes. It fails when that run is overdue,
+    # and so opens its own tracker here.
     workflows: ["adapter-conformance", "boost-langchain", "ci", "codeql",
-      "demo", "eval-corpus-refresh", "eval-explain", "eval-scale",
+      "compat", "demo", "eval-corpus-refresh", "eval-explain", "eval-scale",
       "eval-stats", "floors", "fuzz", "html-validate", "licenses",
       "lighthouse", "links", "lock-refresh", "markdownlint",
-      "mutation-weights-refresh", "package-metadata", "pip-audit",
-      "post-deploy", "prose-lint", "release", "sbom",
+      "mutation-weights-refresh", "nightly-watch", "package-metadata",
+      "pip-audit", "post-deploy", "prose-lint", "release", "sbom",
       "scorecard", "shards", "sonarcloud", "theme-lint", "visual"]
     types: [completed]
+    # Only runs whose head branch is main start this workflow. Without the
+    # filter every completed run of the workflows above, PR runs included,
+    # started a run here whose jobs then skipped: 35 of this workflow's 59
+    # runs on 2026-11-02, a skipped entry in the run list for nearly every PR
+    # check. A skipped job takes no runner, so this saves noise, not minutes.
+    # The job guards below stay, since a fork's branch can be called main too.
+    branches: [main]
 
 # Nothing at the workflow level: `issues: write` granted here reaches every job,
 # and zizmor's excessive-permissions audit is right that a second job made that
@@ -138,7 +150,64 @@ jobs:
             // conclusion of `ci` silently skips the release for that commit.
             // Saying so here is the difference between "CI is red" and "and
             // nothing was published" — the second needs a rerun, not a fix.
-            const noRelease = run.name === 'ci'
+            //
+            // Unless the run was not a push. `ci` on a schedule or by hand is
+            // the whole-codebase mutation run plus `tests-extended` (macOS and
+            // Windows on 3.13/3.14), which publish.yml never releases from, so
+            // "rerun it to publish" would send the reader to rerun a run that
+            // cannot publish. A red `mutation`, or any red job but an extended
+            // leg, blocks the proven-tree skip: until a newer whole-codebase
+            // run on main is green, every push runs the full gate
+            // (scripts/ci_proven_tree.py, fact 3). A red extended leg alone
+            // does not -- every push runs those legs itself -- so the note
+            // names both halves rather than reading as a mutation failure, and
+            // says which one costs the skip. Nor does a red job of a nightly's
+            // diff shadow (`nightly-shadow-base`, `mutation-advisory-shard`):
+            // both are job-level continue-on-error, so neither makes the run
+            // red or opens this issue, and fact 3 drops them before it reads
+            // the page. They can still be red beside a red extended leg, so a
+            // nightly's note says they do not count.
+            //
+            // And, on a nightly, what NOT to do about a red extended leg. An
+            // idle nightly (it planned no mutation run and inherited an
+            // earlier one's verdict) counts for fact 3 only on its first
+            // attempt, so "re-run failed jobs" -- the obvious cleanup, and the
+            // one that closes this issue -- turns the skip off for every push
+            // until the next nightly. Left alone, the next green `ci` run on
+            // main closes this issue anyway. A dispatch is always a full run,
+            // and a re-run of one costs fact 3 nothing, so it gets no warning.
+            const extended = ', with the macOS/Windows 3.13 and 3.14 tests ' +
+              '(`tests-extended`)';
+            const wholeCodebase = {
+              schedule: 'the nightly whole-codebase mutation run (`schedule`)' +
+                extended,
+              workflow_dispatch: 'the whole-codebase mutation run, started by ' +
+                'hand (`workflow_dispatch`)' + extended,
+            };
+            const which = run.name === 'ci' ? wholeCodebase[run.event] : undefined;
+            const advisory = run.event === 'schedule'
+              ? ' (a red `nightly-shadow-base` or `mutation-advisory-shard` ' +
+                'job does not count: both are advisory)'
+              : '';
+            const noRerun = run.event === 'schedule'
+              ? ' If only `tests-extended` failed, do not use "Re-run failed ' +
+                'jobs" on this run: the re-run is attempt 2, and a nightly ' +
+                'that inherited its mutation verdict (an idle night) counts ' +
+                'for the proven-tree skip only on attempt 1. If this night was ' +
+                'idle, every push to main would then run in full until the ' +
+                'next nightly. Leave the run as it is: the next green `ci` ' +
+                'run on main closes this issue, ' +
+                'and a fix is tested by dispatching `compat.yml` on its branch.'
+              : '';
+            const noRelease = which
+              ? `\n\nThis was ${which}. **No release was involved** — ` +
+                '`publish.yml` releases only from a `push` run. Unless only ' +
+                '`tests-extended` failed' + advisory + ', every push to main runs the full ' +
+                'gate instead of skipping as proven until a newer ' +
+                'whole-codebase run on main passes; a red `tests-extended` ' +
+                'leg alone does not, since every push to main runs those legs ' +
+                'itself.' + noRerun
+              : run.name === 'ci'
               ? '\n\n**No release was cut for this commit** — `publish.yml` ' +
                 'ships only on a `success` conclusion. Once this is green ' +
                 'again, rerun the failed jobs on that run to publish it.'

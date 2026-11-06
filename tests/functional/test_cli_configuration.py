@@ -14,6 +14,8 @@ import itertools
 import json
 import os
 import pathlib
+import plistlib
+import shlex
 import socket
 import subprocess
 import sys
@@ -25,7 +27,8 @@ import urllib.request
 
 import pytest
 
-from boost_cli.core import frontmatter, journal, paths, policy, util
+from boost_cli.commands import configuration
+from boost_cli.core import config, frontmatter, journal, paths, policy, util
 from boost_cli.errors import BoostError
 
 
@@ -49,6 +52,35 @@ def _proc(cmd, rc=0, out="", err=""):
     return subprocess.CompletedProcess(cmd, rc, stdout=out, stderr=err)
 
 
+def _flat(text):
+    """Output with its pane wrapping undone, so a sentence can be asserted."""
+    return " ".join(text.split())
+
+
+def _disk():
+    """Every file and link under the sandbox HOME, with its bytes or target.
+
+    What a preview is held to: it may print anything, and must leave this
+    unchanged. The diagnostic log is left out — every run appends to it — and
+    so are bare directories, which the log's own creation adds.
+    """
+    home = paths.home()
+    logs = paths.logs_dir()
+    seen = {}
+    for root, dirs, files in os.walk(home):
+        if pathlib.Path(root) == logs:
+            dirs[:] = []
+            continue
+        for name in dirs + files:
+            p = pathlib.Path(root) / name
+            rel = p.relative_to(home).as_posix()
+            if p.is_symlink():
+                seen[rel] = ("link", os.readlink(p))
+            elif p.is_file():
+                seen[rel] = ("file", p.read_bytes())
+    return seen
+
+
 # ---------------------------------------------------------------- config
 
 class TestConfig:
@@ -57,7 +89,7 @@ class TestConfig:
         cfg = json.loads(r.out)
         assert cfg["ai"]["model"] == "claude-haiku-4-5-20251001"
         assert cfg["serve"]["port"] == 8787
-        assert cfg["telemetry"] is False
+        assert "telemetry" not in cfg   # retired: nothing read it
         # non-json variant appends the config path
         r = boost("config")
         assert "~/.boost/config.json" in r.out
@@ -73,7 +105,7 @@ class TestConfig:
     def test_list_once_config_json_exists_names_it_plainly(self, boost, sandbox):
         # The sibling of the pristine-home case: once the file is real, the
         # trailer goes back to naming it with no "not created yet" caveat.
-        boost("config", "set", "telemetry", "true")
+        boost("config", "set", "policy_enforce", "true")
         assert paths.config_path().exists()
         r = boost("config")
         assert r.out.rstrip().endswith("~/.boost/config.json")
@@ -88,8 +120,23 @@ class TestConfig:
         assert json.loads(r.out) == {"port": 8787}
         r = boost("config", "get", "no.such.key", expect=1)
         assert "no config key 'no.such.key'" in r.err
-        r = boost("config", "get", expect=1)
+        r = boost("config", "get", expect=2)     # usage error
         assert "config get requires a KEY" in r.err
+
+    def test_set_with_a_typo_warns_and_names_the_meant_key(self, boost, sandbox):
+        # It used to print only "✓ set ..." and exit 0 while
+        # agents.claude-code.enabled stayed true. The write is kept — unknown
+        # keys are accepted on purpose — but no longer reads as the fix.
+        r = boost("config", "set", "agents.claude-code.enable", "false")
+        assert "set agents.claude-code.enable = false" in r.out
+        assert ("did you mean 'agents.claude-code.enabled'?"
+                in " ".join(r.err.split()))
+        assert boost("config", "get", "agents.claude-code.enabled").out.strip() == "true"
+
+    def test_set_of_a_known_key_prints_no_warning(self, boost, sandbox):
+        r = boost("config", "set", "serve.port", "9998")
+        assert "did you mean" not in r.out + r.err
+        assert "not a key" not in r.out + r.err
 
     def test_set_nested_persists_to_disk(self, boost, sandbox):
         r = boost("config", "set", "serve.port", "9999")
@@ -97,13 +144,26 @@ class TestConfig:
         on_disk = json.loads(paths.config_path().read_text(encoding="utf-8"))
         assert on_disk["serve"]["port"] == 9999
         assert boost("config", "get", "serve.port", "--json").out.strip() == "9999"
-        r = boost("config", "set", "serve.port", expect=1)
+        r = boost("config", "set", "serve.port", expect=2)   # usage error
         assert "config set requires a VALUE" in r.err
 
     def test_set_through_scalar_fails_cleanly(self, boost, sandbox):
         r = boost("config", "set", "ai.model.extra", "1", expect=1)
         assert "config key 'model' is not a section" in r.err
         assert "the parent key holds a plain value" in r.err
+
+    def test_set_taps_refused_and_registry_kept(self, boost, sandbox):
+        taps = [{"name": "a/b", "url": "x", "curated": False}]
+        config.save({"taps": taps})
+        r = boost("config", "set", "taps", "foo", expect=1)
+        assert ("config key 'taps' is managed by `boost tap` — `config set` "
+                "would rewrite the tap registry") in r.err
+        assert "`boost untap <name>`" in r.err
+        assert "set taps" not in r.out
+        r = boost("config", "unset", "taps", expect=1)
+        assert "`config unset` would rewrite the tap registry" in r.err
+        assert config.get("taps") == taps
+        assert not journal.events(action="config")
 
     def test_unset_present_and_absent(self, boost, sandbox):
         boost("config", "set", "custom.flag", "true")
@@ -118,8 +178,8 @@ class TestConfig:
         # used to report success and freeze all of DEFAULTS into a brand new
         # config.json.
         assert not paths.config_path().exists()
-        r = boost("config", "unset", "telemetry")
-        assert "telemetry not set" in r.out
+        r = boost("config", "unset", "policy_enforce")
+        assert "policy_enforce not set" in r.out
         assert not paths.config_path().exists()
 
     def test_stray_positionals_are_usage_errors(self, boost, sandbox):
@@ -207,6 +267,55 @@ class TestClean:
         r = boost("clean")
         assert "nothing to clean" in r.out
         assert mine.is_symlink()
+
+    def test_leaves_a_native_store_agents_dir_to_its_owner(
+            self, boost, installed):
+        # boost never links into ~/.gemini/skills (Gemini reads the store
+        # directly), so doctor and heal call what dangles there someone
+        # else's. clean deleted it anyway, with no flag and no prompt.
+        theirs = paths.home() / ".gemini" / "skills" / "old-thing"
+        theirs.parent.mkdir(parents=True, exist_ok=True)
+        theirs.symlink_to(paths.store_dir() / "old-thing")
+        r = boost("clean", "--dry-run")
+        assert "nothing to clean" in r.out
+        assert "old-thing" not in r.out
+        boost("clean")
+        assert theirs.is_symlink()
+
+    def test_sweeps_a_dir_boost_linked_into_before(self, boost, installed):
+        cfg = config.load()
+        cfg["agents"]["cursor"]["dir"] = str(paths.home() / "elsewhere")
+        config.save(cfg)
+        ghost = paths.home() / ".cursor" / "skills" / "ghost"
+        ghost.symlink_to(paths.store_dir() / "ghost")
+        r = boost("clean", "--dry-run")
+        assert "would remove ~/.cursor/skills/ghost (broken symlink)" in r.out
+        boost("clean")
+        assert not ghost.is_symlink()
+
+    def test_leaves_the_inside_of_a_store_dir_no_lock_row_claims(
+            self, boost, installed):
+        # sync and heal name `notskill/` and leave it; clean reached inside.
+        other = paths.store_dir() / "notskill" / "__pycache__"
+        other.mkdir(parents=True)
+        (other / "x.pyc").write_bytes(b"1")
+        ds = paths.store_dir() / "has space" / ".DS_Store"
+        ds.parent.mkdir()
+        ds.write_bytes(b"1")
+        top = paths.store_dir() / ".DS_Store"
+        top.write_bytes(b"12")
+        mine = paths.store_dir() / "brainstorming" / "sub" / ".DS_Store"
+        mine.parent.mkdir()
+        mine.write_bytes(b"123")
+        r = boost("clean", "--dry-run")
+        assert "would remove ~/.agents/skills/.DS_Store (.DS_Store)" in r.out
+        assert ("would remove ~/.agents/skills/brainstorming/sub/.DS_Store "
+                "(.DS_Store)") in r.out
+        assert "notskill" not in r.out and "has space" not in r.out
+        assert "2 item(s) · 5B would be freed" in r.out
+        boost("clean")
+        assert other.is_dir() and ds.is_file()
+        assert not top.exists() and not mine.exists()
 
     def test_deep_clean_pycache_history_snapshots(self, boost, installed):
         import os
@@ -307,9 +416,9 @@ class TestCreate:
         r = boost("create", "My Fancy Skill", "--description", "Does a thing")
         text = (tmp_path / "my-fancy-skill" / "SKILL.md").read_text(encoding="utf-8")
         assert frontmatter.parse(text)[0]["description"] == "Does a thing"
-        # The slugging is no longer silent: the typed name and its slug both
-        # show up somewhere in the output.
-        assert "My Fancy Skill" in r.out
+        # The slugging is no longer silent: the note names both, on stderr so
+        # it can never land inside output a script parses.
+        assert r.err == "  using skill name 'my-fancy-skill' (from 'My Fancy Skill')\n"
         assert "my-fancy-skill" in r.out
 
     def test_refuses_a_name_with_no_letters_or_digits(self, boost, sandbox,
@@ -366,11 +475,24 @@ class TestCreate:
     def test_install_flag_declined_overwrite_leaves_it_installed(
             self, boost, installed, tmp_path, monkeypatch):
         monkeypatch.delenv("BOOST_ASSUME_YES")
-        r = boost("create", "brainstorming", "--dir", tmp_path, "--install")
+        # Declined, the --install half did not happen: exit 1, as every
+        # command that declines a confirm does.
+        r = boost("create", "brainstorming", "--dir", tmp_path, "--install",
+                  expect=1)
         assert "not installed: brainstorming is already installed from fixture-tap" in r.out
         assert (tmp_path / "brainstorming" / "SKILL.md").is_file()
         lock = json.loads(paths.lockfile_path().read_text(encoding="utf-8"))
         assert lock["skills"]["brainstorming"]["tap"] == "fixture-tap"
+
+    def test_install_flag_takes_yes_as_its_prompt_says(
+            self, boost, installed, tmp_path, monkeypatch):
+        # The prompt says "pass -y"; argparse used to reject it (rc 2).
+        monkeypatch.delenv("BOOST_ASSUME_YES")
+        r = boost("create", "brainstorming", "--dir", tmp_path, "--install", "-y")
+        assert "replaced brainstorming" in r.out
+        assert "replace it?" not in r.out
+        lock = json.loads(paths.lockfile_path().read_text(encoding="utf-8"))
+        assert lock["skills"]["brainstorming"]["tap"] == "local"
 
 
 # ---------------------------------------------------------------- policy
@@ -404,7 +526,7 @@ class TestPolicy:
         r = boost("policy", "set", "nope", "1", expect=1)
         assert "unknown policy key 'nope'" in r.err
         assert "blocked_skills" in r.err  # hint lists valid keys
-        r = boost("policy", "set", "pin_only", expect=1)
+        r = boost("policy", "set", "pin_only", expect=2)     # usage error
         assert "policy set requires a VALUE" in r.err
 
     def test_check_clean_vs_violations(self, boost, installed):
@@ -424,15 +546,47 @@ class TestPolicy:
             {"name": "brainstorming", "kind": "skill",
              "skill": "brainstorming", "violation": "on the blocklist"}]
 
+    def test_a_corrupt_policy_fails_closed(self, boost, tapped):
+        # A truncated write of a blocklist used to read as no policy at all:
+        # the blocked skill installed, check passed, doctor said healthy.
+        boost("policy", "set", "blocked_skills", "brainstorming")
+        p = paths.policy_path()
+        p.write_text('{"blocked_skills": ["brainstorming"]', encoding="utf-8")
+        err = policy.check()
+        r = boost("install", "brainstorming", expect=1)
+        assert ("policy blocks installing brainstorming: %s — boost cannot "
+                "read the policy, so it will not install until the file is "
+                "repaired" % err) in " ".join(r.err.split())
+        r = boost("policy", "check", "--json", expect=1)
+        assert json.loads(r.out)["violations"] == [
+            {"name": None, "kind": None, "skill": "(policy)",
+             "violation": "%s — boost cannot read the policy, so it will not "
+                          "install until the file is repaired" % err}]
+        r = boost("policy", "check", expect=1)
+        assert "1 policy violation(s) across 0 installed item(s)" in r.err
+        r = boost("doctor", "--json", expect=None)
+        assert r.rc == 1
+        rows = [c for c in json.loads(r.out)["checks"] if c["name"] == "policy"]
+        assert [c["message"] for c in rows] == [
+            "%s — every install is refused until it is repaired; the next "
+            "`boost policy set` moves it aside to policy.json.corrupt" % err]
+        # `set` keeps the bytes it cannot read, rather than writing over them.
+        boost("policy", "set", "require_description", "true")
+        assert (p.parent / "policy.json.corrupt").read_text(
+            encoding="utf-8") == '{"blocked_skills": ["brainstorming"]'
+        assert policy.check() is None
+
     def test_check_min_quality_and_pin_only_note(self, boost, installed):
         from boost_cli.core import store
         score, _ = util.score_skill(store.skill_store_dir("brainstorming"))
-        boost("policy", "set", "min_quality_score", "101")
+        # One over the skill's own score: 101 is no longer a settable floor.
+        assert score < 100
+        boost("policy", "set", "min_quality_score", str(score + 1))
         boost("policy", "set", "pin_only", "true")
         r = boost("policy", "check", expect=1)
         assert "pin-only mode is on — new installs and skill updates are frozen" in r.out
         assert "1 unpinned item(s): brainstorming" in r.out
-        assert "quality score %d < required 101" % score in r.out
+        assert "quality score %d < required %d" % (score, score + 1) in r.out
 
     def test_check_catches_what_install_would_have_blocked(self, boost, installed):
         """The coverage gap the audit found: require_version, max_skills and
@@ -550,6 +704,48 @@ class TestOnboard:
         path = lock["rules"]["house-style"]["materializations"][0]["path"]
         assert path == "~/.cursor/rules/house.mdc"
 
+    def test_from_a_subdir_writes_at_the_project_root(self, boost, installed,
+                                                      tmp_path, monkeypatch):
+        # GitHub only runs <root>/.github/workflows; a copy under src/ is dead.
+        repo = _mk_repo(tmp_path / "repo")
+        sub = repo / "packages" / "api" / "src"
+        sub.mkdir(parents=True)
+        monkeypatch.chdir(sub)
+        r = boost("onboard")
+        assert r.out.count("created") == 3
+        root = repo.resolve()
+        assert (root / ".github" / "workflows" /
+                "boost-skill-inventory.yml").is_file()
+        assert (root / ".boost" / "telemetry.json").is_file()
+        assert (root / ".skill-lock.json").is_file()
+        assert not (sub / ".github").exists()
+        assert not (sub / ".boost").exists()
+
+    def test_lock_carries_only_this_repos_local_rows(self, boost, installed,
+                                                     tmp_path):
+        from boost_cli.core import lockfile
+        home = paths.home()
+        other = home / "code" / "secret-client"
+        other.mkdir(parents=True)
+        repo = home / "code" / "oss"
+        repo.mkdir(parents=True)
+        lockfile.set_workflow("review-diff", {
+            "kind": "workflow", "scope": "project", "base": str(other),
+            "materializations": [{"agent": "claude-code", "path": str(
+                other / ".claude" / "commands" / "review-diff.md")}]})
+        lockfile.set_workflow("ship", {
+            "kind": "workflow", "scope": "project", "base": str(repo),
+            "materializations": [{"agent": "claude-code", "path": str(
+                repo / ".claude" / "commands" / "ship.md")}]})
+        boost("onboard", "--repo", repo)
+        raw = (repo / ".skill-lock.json").read_text(encoding="utf-8")
+        assert "secret-client" not in raw and str(home) not in raw
+        lock = json.loads(raw)
+        assert sorted(lock["workflows"]) == ["ship"]
+        assert lock["workflows"]["ship"]["base"] == "."
+        assert lock["workflows"]["ship"]["materializations"][0]["path"] == \
+            ".claude/commands/ship.md"
+
     def test_pr_without_gh_fails_before_writing(self, boost, sandbox, tmp_path,
                                                 monkeypatch):
         repo = _mk_repo(tmp_path / "repo")
@@ -569,7 +765,7 @@ class TestOnboard:
         real_run = subprocess.run
 
         def fake_run(cmd, **kw):  # intercept only gh; git must stay real
-            if cmd and cmd[0] == "gh":
+            if cmd and cmd[0] == "/usr/bin/gh":
                 calls.append(list(cmd))
                 return _proc(cmd, 0, out="https://github.com/o/r/pull/7\n")
             return real_run(cmd, **kw)
@@ -578,7 +774,9 @@ class TestOnboard:
                             fake_run)
         r = boost("onboard", "--repo", repo, "--pr")
         assert "opened PR https://github.com/o/r/pull/7" in r.out
-        assert calls == [["gh", "pr", "create", "--fill"]]
+        # launched by the path `which` found (a .cmd shim on Windows cannot
+        # be started by its bare name), with the git calls left alone
+        assert calls == [["/usr/bin/gh", "pr", "create", "--fill"]]
         head = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"],
                               cwd=str(repo), capture_output=True, text=True)
         assert head.stdout.strip() == "boost/onboard-skill-tracker"
@@ -594,10 +792,116 @@ class TestOnboard:
         monkeypatch.setattr(
             "boost_cli.commands.configuration.subprocess.run",
             lambda cmd, **kw: _proc(cmd, 1, err="boom")
-            if cmd and cmd[0] == "gh" else real_run(cmd, **kw))
+            if cmd and cmd[0] == "/usr/bin/gh" else real_run(cmd, **kw))
         r = boost("onboard", "--repo", repo, "--pr", expect=1)
         assert "gh pr create failed: boom" in r.err
         assert "boost/onboard-skill-tracker" in r.err  # hint names the branch
+
+    def test_pr_rerun_after_gh_failure_refuses_before_writing(
+            self, boost, sandbox, tmp_path, monkeypatch):
+        repo = _mk_repo(tmp_path / "repo")
+        monkeypatch.setattr("boost_cli.commands.configuration.shutil.which",
+                            lambda c: "/usr/bin/" + c)
+        real_run = subprocess.run
+        monkeypatch.setattr(
+            "boost_cli.commands.configuration.subprocess.run",
+            lambda cmd, **kw: _proc(cmd, 1, err="boom")
+            if cmd and cmd[0] == "/usr/bin/gh" else real_run(cmd, **kw))
+        boost("onboard", "--repo", repo, "--pr", expect=1)
+        main = subprocess.run(["git", "rev-parse", "--abbrev-ref", "@{-1}"],
+                              cwd=str(repo), capture_output=True, text=True)
+        subprocess.run(["git", "checkout", "-q", main.stdout.strip()],
+                       cwd=str(repo), check=True)
+        assert not (repo / ".boost").exists()
+        for argv in (("--pr",), ("--pr", "--dry-run")):
+            r = boost("onboard", "--repo", repo, *argv, expect=1)
+            assert ("branch boost/onboard-skill-tracker already exists in"
+                    in r.err)
+            assert "git branch -D boost/onboard-skill-tracker" in r.err
+            status = subprocess.run(["git", "status", "--porcelain"],
+                                    cwd=str(repo), capture_output=True,
+                                    text=True)
+            assert status.stdout == ""
+            assert not (repo / ".boost").exists()
+
+    def test_pr_rerun_on_its_own_branch_commits_onto_it(
+            self, boost, sandbox, tmp_path, monkeypatch):
+        # Run 1 skips a differing workflow, commits the rest on the branch,
+        # stays there and dies at gh; the `boost onboard -f` it advises
+        # must then finish the job rather than refuse "branch exists".
+        repo = _mk_repo(tmp_path / "repo")
+        wf = repo / ".github" / "workflows" / "boost-skill-inventory.yml"
+        wf.parent.mkdir(parents=True)
+        wf.write_text("name: mine\n", encoding="utf-8")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "own workflow")
+        monkeypatch.setattr("boost_cli.commands.configuration.shutil.which",
+                            lambda c: "/usr/bin/" + c)
+        gh_rc = [1]
+        real_run = subprocess.run
+        monkeypatch.setattr(
+            "boost_cli.commands.configuration.subprocess.run",
+            lambda cmd, **kw: _proc(cmd, gh_rc[0], out="https://x/pull/9\n",
+                                    err="boom")
+            if cmd and cmd[0] == "/usr/bin/gh" else real_run(cmd, **kw))
+        monkeypatch.delenv("BOOST_ASSUME_YES")   # stdin is not a tty -> "no"
+
+        r = boost("onboard", "--repo", repo, "--pr", expect=1)
+        assert "gh pr create failed: boom" in r.err
+        assert wf.read_text(encoding="utf-8") == "name: mine\n"
+
+        r = boost("onboard", "--repo", repo, "--pr", "--dry-run")
+        assert ("would commit them on boost/onboard-skill-tracker and run "
+                "`gh pr create --fill`") in r.out
+
+        gh_rc[0] = 0
+        r = boost("onboard", "--repo", repo, "--pr", "-f")
+        assert "already exists" not in r.err
+        assert "opened PR https://x/pull/9" in r.out
+        head = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                              cwd=str(repo), capture_output=True, text=True)
+        assert head.stdout.strip() == "boost/onboard-skill-tracker"
+        subjects = subprocess.run(["git", "log", "--pretty=%s"],
+                                  cwd=str(repo), capture_output=True,
+                                  text=True).stdout.splitlines()
+        assert subjects == ["chore: add boost skill tracking (boost onboard)"
+                            ] * 2 + ["own workflow", "init"]
+        assert wf.read_text(encoding="utf-8") == configuration._WORKFLOW_YML
+        status = subprocess.run(["git", "status", "--porcelain"],
+                                cwd=str(repo), capture_output=True, text=True)
+        assert status.stdout == ""
+
+    def test_pr_branch_exists_elsewhere_hint_works(
+            self, boost, sandbox, tmp_path, monkeypatch):
+        repo = _mk_repo(tmp_path / "repo")
+        _git(repo, "branch", "boost/onboard-skill-tracker")
+        monkeypatch.setattr("boost_cli.commands.configuration.shutil.which",
+                            lambda c: "/usr/bin/" + c)
+        r = boost("onboard", "--repo", repo, "--pr", expect=1)
+        assert ("hint: open its PR with `git checkout "
+                "boost/onboard-skill-tracker && gh pr create --fill`, or check "
+                "it out and rerun `boost onboard --pr -f` to commit onto it, "
+                "or delete it with `git branch -D boost/onboard-skill-tracker` "
+                "and rerun" in " ".join(r.err.split()))
+        assert not (repo / ".boost").exists()
+
+    def test_pr_refuses_a_stale_git_lock_before_writing(
+            self, boost, sandbox, tmp_path, monkeypatch):
+        repo = _mk_repo(tmp_path / "repo")
+        lock = repo / ".git" / "index.lock"
+        lock.write_text("", encoding="utf-8")
+        monkeypatch.setattr("boost_cli.commands.configuration.shutil.which",
+                            lambda c: "/usr/bin/" + c)
+        r = boost("onboard", "--repo", repo, "--pr", expect=1)
+        err = " ".join(r.err.split())
+        assert "%s has a git lock file" % paths.tilde(repo.resolve()) in err
+        assert ("another git process is working in this repository; if none "
+                "is, remove %s" % paths.tilde(lock.resolve())) in err
+        assert "tap's clone" not in err
+        assert not (repo / ".boost").exists()
+        head = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                              cwd=str(repo), capture_output=True, text=True)
+        assert head.stdout.strip() != "boost/onboard-skill-tracker"
 
     def test_pr_preconditions(self, boost, sandbox, tmp_path):
         r = boost("onboard", "--repo", "/no/such/dir", expect=1)
@@ -637,10 +941,67 @@ class TestOnboardOverwrite:
             self, boost, installed, tmp_path, monkeypatch):
         repo = self._seeded(boost, tmp_path)
         monkeypatch.delenv("BOOST_ASSUME_YES")   # stdin is not a tty -> "no"
-        r = boost("onboard", "--repo", repo)
+        r = boost("onboard", "--repo", repo, expect=1)
         assert (repo / self.LOCK).read_text(encoding="utf-8") == '{"mine": true}\n'
         assert "skipped" in r.out
         assert "created %s" % self.LOCK not in r.out
+        # A declined overwrite is a "no", not a finished onboard: it used to
+        # print "nothing to do — … already onboarded" and exit 0.
+        assert "already onboarded" not in r.out
+        assert ("1 file differs and was left unchanged — `boost onboard -f` "
+                "to overwrite") in r.out
+
+    def _restamped(self, boost, tmp_path, **extra):
+        """An onboarded repo whose lock differs only in ``updated`` (+extra)."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        boost("onboard", "--repo", repo)
+        lock = json.loads((repo / self.LOCK).read_text(encoding="utf-8"))
+        lock.update(updated="2001-01-01T00:00:00Z", **extra)
+        text = json.dumps(lock, indent=2, sort_keys=True) + "\n"
+        (repo / self.LOCK).write_text(text, encoding="utf-8")
+        return repo, text
+
+    def test_a_rerun_whose_lock_differs_only_in_its_stamp_is_onboarded(
+            self, boost, tmp_path, monkeypatch):
+        # No user lock: the skeleton stamps `updated` with *now*, so a re-run
+        # a second later used to "differ", decline on a non-TTY, and exit 1.
+        repo, text = self._restamped(boost, tmp_path)
+        monkeypatch.delenv("BOOST_ASSUME_YES")
+        r = boost("onboard", "--repo", repo)
+        assert "unchanged" in r.out and "skipped" not in r.out
+        assert "already onboarded" in r.out
+        assert (repo / self.LOCK).read_text(encoding="utf-8") == text
+
+    def test_a_lock_that_differs_beyond_its_stamp_still_asks(
+            self, boost, tmp_path, monkeypatch):
+        repo, text = self._restamped(boost, tmp_path, mine=True)
+        monkeypatch.delenv("BOOST_ASSUME_YES")
+        r = boost("onboard", "--repo", repo, expect=1)
+        assert "skipped" in r.out
+        assert (repo / self.LOCK).read_text(encoding="utf-8") == text
+
+    def test_declining_two_files_counts_both(
+            self, boost, installed, tmp_path, monkeypatch):
+        repo = self._seeded(boost, tmp_path)
+        wf = repo / self.WORKFLOW
+        wf.write_text(wf.read_text(encoding="utf-8") + "# mine\n",
+                      encoding="utf-8")
+        monkeypatch.delenv("BOOST_ASSUME_YES")
+        r = boost("onboard", "--repo", repo, expect=1)
+        assert "2 files differ and were left unchanged" in r.out
+        assert "already onboarded" not in r.out
+
+    def test_declining_one_file_still_writes_the_rest_and_exits_1(
+            self, boost, installed, tmp_path, monkeypatch):
+        repo = self._seeded(boost, tmp_path)
+        (repo / self.TELEMETRY).unlink()
+        monkeypatch.delenv("BOOST_ASSUME_YES")
+        r = boost("onboard", "--repo", repo, expect=1)
+        assert (repo / self.TELEMETRY).is_file()
+        assert "created" in r.out
+        assert "1 file differs and was left unchanged" in r.out
+        assert (repo / self.LOCK).read_text(encoding="utf-8") == '{"mine": true}\n'
 
     def test_force_overwrites_and_says_updated_not_created(
             self, boost, installed, tmp_path, monkeypatch):
@@ -694,7 +1055,7 @@ class TestOnboardOverwrite:
         repo = self._seeded(boost, tmp_path)
         (repo / self.WORKFLOW).write_bytes(b"\xff\xfe not utf-8")
         monkeypatch.delenv("BOOST_ASSUME_YES")
-        r = boost("onboard", "--repo", repo)
+        r = boost("onboard", "--repo", repo, expect=1)
         assert (repo / self.WORKFLOW).read_bytes() == b"\xff\xfe not utf-8"
         assert "skipped" in r.out
 
@@ -738,8 +1099,9 @@ class TestOnboardOverwrite:
         (repo / self.WORKFLOW).write_text("# theirs\n", encoding="utf-8")
         before = len(journal.events(action="onboard"))
         monkeypatch.delenv("BOOST_ASSUME_YES")
-        r = boost("onboard", "--repo", repo)
-        assert "nothing to do" in r.out
+        r = boost("onboard", "--repo", repo, expect=1)
+        assert "3 files differ and were left unchanged" in r.out
+        assert "nothing to do" not in r.out
         assert len(journal.events(action="onboard")) == before, \
             "a no-op run must not add an onboard event"
 
@@ -755,9 +1117,12 @@ class TestOnboardOverwrite:
         monkeypatch.setattr(
             "boost_cli.commands.configuration.subprocess.run",
             lambda cmd, **kw: _proc(cmd, 0, out="https://github.com/o/r/pull/9\n")
-            if cmd and cmd[0] == "gh" else real_run(cmd, **kw))
+            if cmd and cmd[0] == "/usr/bin/gh" else real_run(cmd, **kw))
         monkeypatch.delenv("BOOST_ASSUME_YES")     # decline the lock overwrite
-        boost("onboard", "--repo", repo, "--pr")
+        # The PR still opens for what was written; the decline is rc 1.
+        r = boost("onboard", "--repo", repo, "--pr", expect=1)
+        assert "opened PR https://github.com/o/r/pull/9" in r.out
+        assert "1 file differs and was left unchanged" in r.out
 
         names = subprocess.run(["git", "show", "--name-only", "--pretty=", "HEAD"],
                                cwd=str(repo), capture_output=True, text=True)
@@ -777,8 +1142,8 @@ class TestOnboardOverwrite:
         monkeypatch.setattr("boost_cli.commands.configuration.shutil.which",
                             lambda c: "/usr/bin/" + c)
         monkeypatch.delenv("BOOST_ASSUME_YES")
-        r = boost("onboard", "--repo", repo, "--pr")
-        assert "nothing to do" in r.out
+        r = boost("onboard", "--repo", repo, "--pr", expect=1)
+        assert "3 files differ and were left unchanged" in r.out
         head = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"],
                               cwd=str(repo), capture_output=True, text=True)
         assert head.stdout.strip() != "boost/onboard-skill-tracker", \
@@ -933,6 +1298,22 @@ class TestCompletionsInstall:
         assert "no one-shot install for fish yet" in r.err
         assert "boost completions fish" in r.err
 
+    @pytest.mark.parametrize("flag", ["--install", "--uninstall"])
+    def test_fish_hint_keeps_each_command_on_one_line(self, boost, sandbox,
+                                                      monkeypatch, flag):
+        # Unquoted, the wrapper split the command at its `>` and line one was
+        # a redirect with no target; and the redirect alone fails on a HOME
+        # where fish never ran, since nothing has made the directory.
+        monkeypatch.setenv("COLUMNS", "80")
+        r = boost("completions", "fish", flag, expect=1)
+        lines = r.err.splitlines()
+        install = ("`mkdir -p ~/.config/fish/completions && boost completions"
+                   " fish > ~/.config/fish/completions/boost.fish`")
+        remove = "`rm ~/.config/fish/completions/boost.fish`"
+        assert any(install in line for line in lines), r.err
+        assert any(remove in line for line in lines), r.err
+        assert lines[1].strip() == "hint: fish needs none — install:", r.err
+
     def test_install_and_uninstall_are_mutually_exclusive(self, boost, sandbox):
         r = boost("completions", "bash", "--install", "--uninstall", expect=2)
         assert "not allowed with argument" in r.err
@@ -1059,6 +1440,43 @@ class TestScheduleDarwin:
         r = boost("schedule", "status")
         assert "unknown (plist has no usable StartInterval)" in r.out
 
+    def test_status_invalid_plist_is_not_scheduled(self, boost, sandbox):
+        # launchd will not load a file it cannot parse; status used to say
+        # "scheduled yes" off the file merely existing.
+        plist = sandbox / "Library" / "LaunchAgents" / "com.boost.sync.plist"
+        plist.parent.mkdir(parents=True, exist_ok=True)
+        plist.write_text(
+            "<?xml version=\"1.0\"?><plist><dict>"
+            "<key>StartInterval</key><integer>21600</integer>"
+            "<key>StandardOutPath</key><string>/R&D/log</string>"
+            "</dict></plist>", encoding="utf-8")
+        r = boost("schedule", "status", "--json")
+        assert json.loads(r.out) == {
+            "platform": "darwin", "backend": "launchd", "scheduled": False,
+            "interval": None, "next_run": None,
+            "error": "~/Library/LaunchAgents/com.boost.sync.plist is not a "
+                     "valid property list"}
+        r = boost("schedule", "status")
+        assert "no" in r.out and "yes" not in r.out
+        assert "is not a valid property list" in r.out + r.err
+        assert "rewrite it with `boost schedule enable`" in r.out
+        assert "next run" not in r.out
+
+    def test_enable_records_state_dir(self, boost, sandbox, monkeypatch):
+        monkeypatch.setenv("BOOST_HOME", str(sandbox / "R&D boost"))
+        monkeypatch.setattr(
+            "boost_cli.commands.configuration.subprocess.run",
+            lambda cmd, **kw: _proc(cmd, 0))
+        boost("schedule", "enable")
+        plist = sandbox / "Library" / "LaunchAgents" / "com.boost.sync.plist"
+        data = plistlib.loads(plist.read_bytes())
+        assert data["EnvironmentVariables"] == {
+            "BOOST_HOME": str(sandbox / "R&D boost"), "HOME": str(sandbox)}
+        assert data["StandardOutPath"] == str(
+            sandbox / "R&D boost" / "logs" / "schedule.log")
+        assert json.loads(boost("schedule", "status", "--json").out)[
+            "scheduled"] is True
+
 
 class TestScheduleCron:
     """Non-darwin branches, with sys.platform and crontab faked."""
@@ -1111,7 +1529,8 @@ class TestScheduleCron:
         r = boost("schedule", "enable", "--interval", "12h")
         assert "`boost update` scheduled every 12h via cron" in r.out
         assert len(writes) == 1
-        assert writes[0].startswith("0 */12 * * * ")
+        assert writes[0].startswith("0 */12 * * * BOOST_HOME=")
+        assert " HOME=%s " % shlex.quote(str(sandbox)) in writes[0]
         assert writes[0].rstrip().endswith("# boost-sync")
 
     def test_enable_when_crontab_unusable(self, boost, sandbox, monkeypatch):
@@ -1388,6 +1807,26 @@ class TestMcp:
         assert "nothing was searched" in text
         assert "2 or more" in text
 
+    @pytest.mark.parametrize("q", ["", "   "])
+    def test_boost_search_refuses_a_blank_query(self, boost, tapped, q):
+        # The CLI's usage error, as a tool error: "no skills match ''" told the
+        # agent the catalogue lacked something it never asked for.
+        from boost_cli.commands import configuration
+        text, is_err = configuration._mcp_tool("boost_search", {"query": q})
+        assert is_err is True
+        assert text == ("boost_search needs a query — pass a plain-word "
+                        "description of the task")
+
+    def test_boost_search_says_a_stopword_query_searched_nothing(
+            self, boost, tapped):
+        from boost_cli.commands import configuration
+        boost("reindex")
+        text, is_err = configuration._mcp_tool(
+            "boost_search", {"query": "the and of"})
+        assert is_err is False
+        assert "no skills match" not in text
+        assert "only common words and punctuation" in text
+
     def test_boost_search_stays_quiet_when_vectors_read_the_query(
             self, boost, tapped, monkeypatch):
         # Same scope rule as the CLI: dense never calls `tokenize`, so the
@@ -1501,7 +1940,9 @@ class TestMcp:
         import hashlib
 
         from boost_cli.core import lockfile
-        rp = paths.home() / ".cursor" / "rules" / "house.mdc"
+        # The rule's own Cursor target: a row anywhere else reads as one
+        # left behind by a repointed agent dir, which doctor flags.
+        rp = paths.home() / ".cursor" / "rules" / "house-style.mdc"
         rp.parent.mkdir(parents=True)
         rp.write_text("rule body", encoding="utf-8")
         lockfile.set_rule("house-style", {
@@ -1761,6 +2202,45 @@ class TestMcp:
         assert "octo/skills — great skills" in text
         assert "acme/pack — b/SKILL.md" in text          # falls back to path
 
+    def test_discover_github_leaves_out_tapped_repos(self, sandbox,
+                                                      monkeypatch):
+        from boost_cli.commands import configuration, discovery
+        from boost_cli.core import config
+        config.save({"taps": [{"name": "skills",
+                               "url": "https://github.com/octo/skills"}]})
+        monkeypatch.setattr("boost_cli.commands.configuration.shutil.which",
+                            lambda c: "/usr/bin/gh")
+        monkeypatch.setattr(
+            discovery, "github_skill_search",
+            lambda query="", limit=20: [
+                {"repo": "Octo/Skills", "path": "a/SKILL.md", "url": "u",
+                 "description": "great skills"},
+                {"repo": "acme/pack", "path": "b/SKILL.md", "url": "u",
+                 "description": ""}])
+        text, is_err = configuration._mcp_tool("boost_discover_github",
+                                               {"query": "react"})
+        assert is_err is False
+        assert text == ("acme/pack — b/SKILL.md\n(1 already-tapped repo(s) "
+                        "not shown — boost_search covers them)")
+
+    def test_discover_github_only_tapped_repos(self, sandbox, monkeypatch):
+        from boost_cli.commands import configuration, discovery
+        from boost_cli.core import config
+        config.save({"taps": [{"name": "skills",
+                               "url": "https://github.com/octo/skills"}]})
+        monkeypatch.setattr("boost_cli.commands.configuration.shutil.which",
+                            lambda c: "/usr/bin/gh")
+        monkeypatch.setattr(
+            discovery, "github_skill_search",
+            lambda query="", limit=20: [
+                {"repo": "octo/skills", "path": "a/SKILL.md", "url": "u"}])
+        text, is_err = configuration._mcp_tool("boost_discover_github",
+                                               {"query": "react"})
+        assert is_err is False
+        assert text == ("no SKILL.md repositories found on GitHub for 'react'"
+                        "\n(1 already-tapped repo(s) not shown — boost_search "
+                        "covers them)")
+
     def test_discover_github_no_results(self, sandbox, monkeypatch):
         from boost_cli.commands import configuration, discovery
         monkeypatch.setattr("boost_cli.commands.configuration.shutil.which",
@@ -1810,7 +2290,11 @@ class TestMcp:
         calls = []
 
         def fake_run(cmd, **kw):
-            calls.append(list(cmd))
+            # Launched by the path `which` resolved, never the bare name:
+            # Windows cannot start an npm `.cmd` shim by its bare name.
+            cli = pathlib.PurePosixPath(cmd[0]).name
+            assert cmd[0] == "/usr/local/bin/" + cli
+            calls.append([cli, *cmd[1:]])
             return _proc(cmd, 0, out="Added stdio MCP server boost\n")
 
         monkeypatch.setattr("boost_cli.commands.configuration.subprocess.run",
@@ -1956,8 +2440,9 @@ class TestMcp:
                 self.returncode, self.stderr, self.stdout = rc, err, ""
 
         def fake_run(cmd, **kw):
-            seen.append(cmd[0])
-            return _P(*results[cmd[0]])
+            cli = pathlib.PurePosixPath(cmd[0]).name
+            seen.append(cli)
+            return _P(*results[cli])
 
         monkeypatch.setattr("boost_cli.commands.configuration.subprocess.run",
                             fake_run)
@@ -1974,7 +2459,8 @@ class TestMcp:
         })
         r = boost("mcp", "register", "--no-seed")
         assert seen == ["claude", "gemini"], seen
-        assert "already registered with Claude Code" in r.out
+        assert ("already registered with Claude Code (~/.claude.json) — "
+                "nothing to do") in r.out
         assert "registered boost as an MCP server for Gemini CLI" in r.out
 
     def test_a_real_failure_on_one_host_still_reaches_the_next(
@@ -2109,10 +2595,10 @@ class TestMcp:
         assert calls == []                            # nothing was run
         assert ("no agent CLI found (looked for: claude, gemini, agy, codex)"
                 in r.out)
-        assert " ".join(self._claude_add()) in r.out
-        assert " ".join(self._gemini_add()) in r.out
-        assert " ".join(self._agy_add()) in r.out
-        assert " ".join(self._codex_add()) in r.out
+        assert shlex.join(self._claude_add()) in r.out
+        assert shlex.join(self._gemini_add()) in r.out
+        assert shlex.join(self._agy_add()) in r.out
+        assert shlex.join(self._codex_add()) in r.out
         assert journal.events(action="mcp")[0]["hosts"] == ""
 
         r = boost("mcp", "unregister")
@@ -2141,7 +2627,7 @@ class TestMcp:
         r = boost("mcp", "register", "--host", "gemini", expect=1)
         assert calls == []
         assert "`gemini` CLI not found — run this yourself:" in r.out
-        assert " ".join(self._gemini_add()) in r.out
+        assert shlex.join(self._gemini_add()) in r.out
         assert "claude mcp add" not in r.out
         assert "no agent CLI found" not in r.out      # the named host said it
 
@@ -2155,11 +2641,11 @@ class TestMcp:
         assert ("registered boost as an MCP server for Claude Code "
                 "(scope: user)") in r.out
         assert "`gemini` CLI not found — run this yourself:" in r.out
-        assert " ".join(self._gemini_add()) in r.out
+        assert shlex.join(self._gemini_add()) in r.out
         assert "`agy` CLI not found — run this yourself:" in r.out
-        assert " ".join(self._agy_add()) in r.out
+        assert shlex.join(self._agy_add()) in r.out
         assert "`codex` CLI not found — run this yourself:" in r.out
-        assert " ".join(self._codex_add()) in r.out
+        assert shlex.join(self._codex_add()) in r.out
 
     def test_host_all_with_nothing_installed_still_succeeds(
             self, boost, sandbox, monkeypatch):
@@ -2269,6 +2755,16 @@ class TestMcp:
         r = boost("mcp", "register", "--host", "gemini", expect=1)
         assert "gemini mcp register failed — no auth" in r.out
 
+    def test_register_accepts_the_yes_its_hint_names(
+            self, boost, sandbox, monkeypatch):
+        # The boost-first offer's decline prints "pass -y …"; `boost mcp
+        # register -y` used to be an argparse error (rc 2).
+        calls = self._fake_clis(monkeypatch, "claude")
+        r = boost("mcp", "register", "-y", "--no-seed", "--dry-run")
+        assert calls == []
+        assert "unrecognized arguments" not in r.err
+        assert "dry run — nothing was registered, nothing tapped" in r.out
+
     def test_dry_run_prints_argv_and_install_status_without_acting(
             self, boost, sandbox, monkeypatch):
         # The one behaviour `--dry-run` exists for: the argv boost would run
@@ -2283,11 +2779,19 @@ class TestMcp:
         r = boost("mcp", "register", "--dry-run")
         assert calls == []                             # nothing was run
         assert ("Claude Code (installed): %s"
-                % " ".join(self._claude_add())) in r.out
+                % shlex.join(self._claude_add())) in r.out
         assert ("Gemini CLI (not installed): %s"
-                % " ".join(self._gemini_add())) in r.out
+                % shlex.join(self._gemini_add())) in r.out
         assert "dry run — nothing was registered, nothing tapped" in r.out
         assert "registered boost as an MCP server" not in r.out
+        # The printed line is for pasting: `no_proxy=*` bare is a zsh
+        # "no matches found" error, so it must arrive quoted and split back
+        # into exactly the argv boost would have run.
+        line = next(ln for ln in r.out.splitlines()
+                    if "Claude Code (installed): " in ln)
+        assert "'no_proxy=*'" in line
+        assert shlex.split(line.split("(installed): ", 1)[1]) \
+            == self._claude_add()
 
     def test_dry_run_scopes_to_the_named_host(self, boost, sandbox,
                                               monkeypatch):
@@ -2303,9 +2807,92 @@ class TestMcp:
         r = boost("mcp", "unregister", "--dry-run")
         assert calls == []
         assert ("Claude Code (installed): %s"
-                % " ".join(["claude", "mcp", "remove", "--scope", "user",
+                % shlex.join(["claude", "mcp", "remove", "--scope", "user",
                             "boost"])) in r.out
         assert "dry run — nothing was unregistered, nothing tapped" in r.out
+
+    def _fake_seed(self, monkeypatch):
+        """Let the seed run, recording what it would clone instead of cloning."""
+        from boost_cli.core import bootstrap, registry
+        monkeypatch.delenv(bootstrap.NO_SEED_ENV, raising=False)
+        cloned = []
+
+        def fake_seed(*, force=False):
+            names = bootstrap.seed_plan(force=force)
+            cloned.extend(names)
+            return bootstrap.SeedResult(tapped=[(n, 1) for n in names])
+
+        monkeypatch.setattr(bootstrap, "seed_catalog", fake_seed)
+        monkeypatch.setattr(registry, "add", lambda *a, **kw: pytest.fail(
+            "the test seed reached registry.add"))
+        return cloned
+
+    def test_dry_run_names_the_seed_the_real_run_performs(
+            self, boost, sandbox, monkeypatch):
+        cloned = self._fake_seed(monkeypatch)
+        self._fake_clis(monkeypatch)
+        before = _disk()
+        r = boost("mcp", "register", "--host", "claude", "--dry-run")
+        assert _disk() == before
+        names = [str(d["name"]) for d in config.DEFAULT_TAPS]
+        assert ("would tap %d recommended registries first (needs the "
+                "network): %s" % (len(names), ", ".join(names))) in _flat(r.out)
+        assert cloned == []
+        boost("mcp", "register", "--host", "claude", expect=1)
+        assert cloned == names
+
+    def test_dry_run_counts_only_the_missing_registries_under_seed(
+            self, boost, sandbox, monkeypatch):
+        self._fake_seed(monkeypatch)
+        self._fake_clis(monkeypatch)
+        names = [str(d["name"]) for d in config.DEFAULT_TAPS]
+        from boost_cli.core import registry
+        held = [registry.Tap(name=n, url="https://github.com/%s" % n)
+                for n in names[:-1]]
+        monkeypatch.setattr(registry, "list_taps", lambda: held)
+        r = boost("mcp", "register", "--host", "claude", "--seed", "--dry-run")
+        assert ("would tap 1 recommended registry first (needs the network): "
+                "%s" % names[-1]) in _flat(r.out)
+        r = boost("mcp", "register", "--host", "claude", "--dry-run")
+        assert "would tap" not in r.out
+
+    def test_dry_run_names_no_seed_when_seeding_is_off(
+            self, boost, sandbox, monkeypatch):
+        self._fake_seed(monkeypatch)
+        self._fake_clis(monkeypatch)
+        for argv in (("register", "--no-seed"), ("unregister",)):
+            r = boost("mcp", *argv, "--host", "claude", "--dry-run")
+            assert "would tap" not in r.out
+        from boost_cli.core import bootstrap
+        monkeypatch.setenv(bootstrap.NO_SEED_ENV, "1")
+        assert "would tap" not in boost(
+            "mcp", "register", "--host", "claude", "--dry-run").out
+
+    def test_dry_run_names_the_rule_offer_only_for_a_host_it_registers(
+            self, boost, sandbox, monkeypatch):
+        from boost_cli.commands import configuration
+        from boost_cli.core import builtin
+        monkeypatch.delenv(configuration.NO_RULE_ENV, raising=False)
+        self._fake_clis(monkeypatch, "claude")
+        before = _disk()
+        r = boost("mcp", "register", "--dry-run")
+        assert _disk() == before
+        target = configuration._boost_first_targets(["claude"])
+        assert len(target) == 1 and target[0].endswith("CLAUDE.md")
+        assert ("would then offer to add the `%s` rule to %s (asks first)"
+                % (builtin.BUILTIN_RULES[0], target[0])) in _flat(r.out)
+        # Gemini is not installed, so the real run registers nothing there
+        # and offers nothing for it.
+        assert "GEMINI.md" not in r.out
+        self._fake_clis(monkeypatch)
+        r = boost("mcp", "register", "--host", "claude", "--dry-run")
+        assert "would then offer" not in r.out
+        assert "would then offer" not in boost(
+            "mcp", "unregister", "--dry-run").out
+        monkeypatch.setenv(configuration.NO_RULE_ENV, "1")
+        self._fake_clis(monkeypatch, "claude")
+        assert "would then offer" not in boost("mcp", "register",
+                                               "--dry-run").out
 
     # ── the sandbox guard ────────────────────────────────────────────────
     # An agent CLI resolves its own configuration from the ambient
@@ -2341,12 +2928,13 @@ class TestMcp:
         calls = []
 
         def fake_run(cmd, **kw):
+            cli = pathlib.PurePosixPath(cmd[0]).name
             target = pathlib.Path(mcphost.user_config_path(
-                cmd[0], os.environ, os.environ["HOME"]))
+                cli, os.environ, os.environ["HOME"]))
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text('{"mcpServers": {"boost": {}}}',
                               encoding="utf-8")
-            calls.append(list(cmd))
+            calls.append([cli, *cmd[1:]])
             return _proc(cmd, 0, out="Added stdio MCP server boost\n")
 
         monkeypatch.setattr("boost_cli.commands.configuration.subprocess.run",
@@ -2373,7 +2961,7 @@ class TestMcp:
         assert str(elsewhere / ".claude.json") in blob
         # The refusal has to be actionable: name the way through and the argv.
         assert "--force" in blob
-        assert " ".join(self._claude_add()) in blob
+        assert shlex.join(self._claude_add()) in blob
 
     def test_unregister_is_guarded_too(
             self, boost, sandbox, monkeypatch, tmp_path):
@@ -2455,7 +3043,7 @@ class TestMcp:
         blob = r.out + r.err
         assert "refusing to register" in blob
         assert str(elsewhere / "config.toml") in blob
-        assert " ".join(self._codex_add()) in blob
+        assert shlex.join(self._codex_add()) in blob
 
     def test_codexs_default_subdirectory_is_not_refused(
             self, boost, sandbox, monkeypatch):
@@ -2570,10 +3158,32 @@ class TestSelfUpdate:
         monkeypatch.setattr("sys.prefix", str(sandbox))
         monkeypatch.setattr("boost_cli.core.selfupdate.installed_version",
                             lambda: "1.0.0")
+        monkeypatch.setattr("boost_cli.core.selfupdate.installer",
+                            lambda: "pip")
+        monkeypatch.setattr("boost_cli.core.selfupdate.has_pip", lambda: True)
         r = boost("self-update", "--dry-run")
         assert "installed with: pip" in r.out
         assert ("would run: %s -m pip install --no-cache-dir --upgrade "
                 "boost-skill-cli" % sys.executable) in r.out
+
+    def test_a_uv_pip_install_upgrades_with_uv_not_a_missing_pip(
+            self, boost, sandbox, monkeypatch):
+        # INSTALLER=uv in a venv made without pip: `python -m pip` there is
+        # "No module named pip", so the only command that can work is uv's.
+        self._not_a_checkout(monkeypatch, sandbox)
+        monkeypatch.setattr("sys.prefix", str(sandbox))
+        monkeypatch.setattr("boost_cli.core.selfupdate.installed_version",
+                            lambda: "1.0.9")
+        monkeypatch.setattr("boost_cli.core.selfupdate.installer",
+                            lambda: "uv")
+        monkeypatch.setattr("boost_cli.core.selfupdate.has_pip", lambda: False)
+        monkeypatch.setattr("boost_cli.core.selfupdate.shutil.which",
+                            lambda t: "/opt/bin/" + t)
+        r = boost("self-update", "--dry-run")
+        assert "installed with: uv-pip" in r.out
+        assert ("would run: /opt/bin/uv pip install --python %s --refresh "
+                "--upgrade boost-skill-cli" % sys.executable) in r.out
+        assert "-m pip" not in r.out
 
     def test_pipx_upgrade_reports_the_new_version(self, boost, sandbox,
                                                   monkeypatch):
@@ -2620,6 +3230,20 @@ class TestSelfUpdate:
         # The hint has to be actionable: a plain `upgrade` has already been
         # tried and declined, so it must pin the version and force it.
         assert "pipx install --force boost-skill-cli==99.0.0" in r.err
+
+    def test_a_dev_build_of_the_latest_release_is_not_up_to_date(
+            self, boost, sandbox, monkeypatch):
+        # 1.0.424.dev3 precedes 1.0.424 (PEP 440); comparing the release
+        # numbers alone called them equal and printed "already up to date".
+        self._no_op_upgrade(monkeypatch, sandbox, latest="1.0.424")
+        monkeypatch.setattr("boost_cli.commands.configuration.__version__",
+                            "1.0.424.dev3+g36b74ba")
+        monkeypatch.setattr("boost_cli.core.selfupdate.observed_version",
+                            lambda: "1.0.424.dev3+g36b74ba")
+        r = boost("self-update", expect=1)
+        assert "already up to date" not in r.out
+        assert ("pipx exited 0 but boost is still v1.0.424.dev3+g36b74ba — "
+                "PyPI has v1.0.424") in r.err
 
     def test_a_no_op_upgrade_at_the_latest_version_is_up_to_date(
             self, boost, sandbox, monkeypatch):
@@ -2688,6 +3312,184 @@ class TestSelfUpdate:
         assert "cannot work out how boost was installed" in r.err
         assert "pipx upgrade boost-skill-cli" in r.err
 
+    def test_python_dry_run_names_the_pipx_reinstall(self, boost, sandbox,
+                                                     monkeypatch):
+        self._pipx_install(monkeypatch, sandbox)
+        monkeypatch.setattr("boost_cli.core.selfupdate.pipx_version",
+                            lambda *a, **k: (1, 18))
+
+        def no_run(*a, **kw):
+            raise AssertionError("--dry-run must not reinstall")
+        monkeypatch.setattr("boost_cli.core.selfupdate.run_upgrade", no_run)
+        r = boost("self-update", "--python", "3.13", "--dry-run")
+        assert "installed with: pipx" in r.out
+        assert ("would run: /opt/bin/pipx reinstall --python 3.13 "
+                "--fetch-python=always boost-skill-cli") in r.out
+
+    def test_python_reinstalls_and_reports_the_observed_interpreter(
+            self, boost, sandbox, monkeypatch):
+        self._pipx_install(monkeypatch, sandbox)
+        monkeypatch.setattr("boost_cli.core.selfupdate.observed_version",
+                            lambda: None)
+        monkeypatch.setattr("boost_cli.core.selfupdate.pipx_version",
+                            lambda *a, **k: (1, 18))
+        ran = []
+        monkeypatch.setattr("boost_cli.core.selfupdate.run_upgrade",
+                            lambda cmd, **kw: ran.append((cmd, kw)))
+        monkeypatch.setattr(
+            "boost_cli.core.selfupdate.observed_python",
+            lambda: ("3.13.9", "/x/pipx/py/cpython-3.13.9-macos-aarch64"))
+        r = boost("self-update", "--python", "3.13")
+        assert ran == [(["/opt/bin/pipx", "reinstall", "--python", "3.13",
+                         "--fetch-python=always", "boost-skill-cli"],
+                        {"timeout": 900.0})]
+        assert "boost now runs on Python 3.13.9" in r.out
+        assert "Homebrew" not in r.out + r.err
+        ev = journal.events(action="self-update")[0]
+        assert ev["method"] == "pipx" and ev["python"] == "3.13.9"
+
+    def test_python_that_lands_on_homebrew_is_called_out(
+            self, boost, sandbox, monkeypatch):
+        # An older pipx gets `--fetch-missing-python`, which prefers a
+        # `python3.13` on PATH — Homebrew's, on the machines that need this.
+        self._pipx_install(monkeypatch, sandbox)
+        monkeypatch.setattr("boost_cli.core.selfupdate.observed_version",
+                            lambda: None)
+        monkeypatch.setattr("boost_cli.core.selfupdate.pipx_version",
+                            lambda *a, **k: (1, 7))
+        ran = []
+        monkeypatch.setattr("boost_cli.core.selfupdate.run_upgrade",
+                            lambda cmd, **kw: ran.append(cmd))
+        brew = "/opt/homebrew/opt/python@3.13/Frameworks/Python.framework"
+        monkeypatch.setattr("boost_cli.core.selfupdate.observed_python",
+                            lambda: ("3.13.18", brew))
+        r = boost("self-update", "--python", "3.13")
+        assert "--fetch-missing-python" in ran[0]
+        said = " ".join((r.out + r.err).split())
+        assert "boost now runs on Python 3.13.18" in said
+        assert "that Python is Homebrew's (%s)" % brew in said
+        assert "upgrade pipx to 1.18 or later" in said
+
+    def test_python_unobserved_says_so_rather_than_claiming_it(
+            self, boost, sandbox, monkeypatch):
+        self._pipx_install(monkeypatch, sandbox)
+        monkeypatch.setattr("boost_cli.core.selfupdate.observed_version",
+                            lambda: None)
+        monkeypatch.setattr("boost_cli.core.selfupdate.run_upgrade",
+                            lambda cmd, **kw: None)
+        monkeypatch.setattr("boost_cli.core.selfupdate.observed_python",
+                            lambda: None)
+        r = boost("self-update", "--python", "3.13")
+        assert "reinstalled via pipx; run `boost --version` to confirm" in r.out
+        assert "now runs on" not in r.out
+        assert journal.events(action="self-update")[0]["python"] == "3.13"
+
+    def test_python_on_a_checkout_is_refused_before_anything_runs(
+            self, boost, sandbox, monkeypatch):
+        monkeypatch.setattr("boost_cli.core.gitutil.is_repo", lambda p: True)
+
+        def no_git(*a, **kw):
+            raise AssertionError("--python must not pull a checkout")
+        monkeypatch.setattr("boost_cli.core.gitutil.run", no_git)
+        r = boost("self-update", "--python", "3.13", expect=1)
+        assert "installed with a git checkout" in r.err
+        assert "python3.13 -m venv --clear .venv" in r.err
+
+    def _stranded(self, monkeypatch, sandbox):
+        """A pipx install of [rag] on a Python onnxruntime has no wheel for.
+
+        Puts back the ONNX ceiling the conftest lifts, answers `find_spec`
+        as "sqlite_vec here, onnxruntime not", and clears every key.
+        """
+        import importlib.util
+
+        from boost_cli.core import embed, localembed
+        self._pipx_install(monkeypatch, sandbox)
+        monkeypatch.setattr("boost_cli.core.selfupdate.pipx_version",
+                            lambda *a, **k: (1, 18))
+        monkeypatch.setattr(localembed, "ONNX_WHEEL_CEILING", (3, 0))
+        real = importlib.util.find_spec
+
+        def find_spec(name, *a, **k):
+            if name == "onnxruntime":
+                return None
+            if name == "sqlite_vec":
+                return object()
+            return real(name, *a, **k)
+        monkeypatch.setattr(importlib.util, "find_spec", find_spec)
+        for env in embed.KEY_ENV.values():
+            monkeypatch.delenv(env, raising=False)
+        ran = []
+        monkeypatch.setattr("boost_cli.core.selfupdate.run_upgrade",
+                            lambda cmd, **kw: ran.append((cmd, kw)))
+        monkeypatch.setattr(
+            "boost_cli.core.selfupdate.observed_python",
+            lambda: ("3.13.9", "/x/pipx/py/cpython-3.13.9-macos-aarch64"))
+        monkeypatch.setattr("boost_cli.core.selfupdate.observed_version",
+                            lambda: "9.9.9")
+        return ran
+
+    _MOVE = ("/opt/bin/pipx", "reinstall", "--python", "3.13",
+             "--fetch-python=always", "boost-skill-cli")
+
+    def test_a_stranded_install_moves_instead_of_upgrading(
+            self, boost, sandbox, monkeypatch):
+        # One manager call: reinstall replays the spec unpinned, so it also
+        # lands on the latest release. `upgrade` must not run as well.
+        from boost_cli import __version__
+        ran = self._stranded(monkeypatch, sandbox)
+        r = boost("self-update")
+        assert ran == [(list(self._MOVE), {"timeout": 900.0})]
+        said = " ".join((r.out + r.err).split())
+        assert "has no onnxruntime wheel" in said
+        assert "a Python 3.13 that pipx downloads and manages" in said
+        assert "boost v%s → v9.9.9" % __version__ in said
+        assert "boost now runs on Python 3.13.9" in said
+        ev = journal.events(action="self-update")[0]
+        assert ev["method"] == "pipx" and ev["python"] == "3.13.9"
+        assert ev["subject"] == "9.9.9"
+
+    def test_a_stranded_dry_run_names_the_move_and_runs_nothing(
+            self, boost, sandbox, monkeypatch):
+        ran = self._stranded(monkeypatch, sandbox)
+
+        def no_confirm(*a, **k):
+            raise AssertionError("--dry-run must not ask")
+        monkeypatch.setattr("boost_cli.core.output.confirm", no_confirm)
+        r = boost("self-update", "--dry-run")
+        assert ran == []
+        said = " ".join((r.out + r.err).split())
+        assert "has no onnxruntime wheel" in said
+        assert "would run: %s" % shlex.join(self._MOVE) in said
+        assert "upgrade" not in r.out
+
+    def test_keep_python_upgrades_in_place(self, boost, sandbox, monkeypatch):
+        ran = self._stranded(monkeypatch, sandbox)
+        r = boost("self-update", "--keep-python")
+        assert [c for c, _ in ran] == [[
+            "/opt/bin/pipx", "upgrade", "boost-skill-cli",
+            "--pip-args=--no-cache-dir"]]
+        assert "onnxruntime" not in r.out + r.err
+
+    def test_a_declined_move_upgrades_and_says_how_to_move_later(
+            self, boost, sandbox, monkeypatch):
+        ran = self._stranded(monkeypatch, sandbox)
+        asked = []
+        monkeypatch.setattr("boost_cli.core.output.confirm",
+                            lambda prompt, *a, **k: asked.append(prompt)
+                            or False)
+        r = boost("self-update")
+        assert asked == ["Move boost to Python 3.13?"]
+        assert [c[1] for c, _ in ran] == ["upgrade"]
+        said = " ".join((r.out + r.err).split())
+        assert "`boost self-update --python 3.13` moves it later" in said
+
+    def test_a_key_means_no_move(self, boost, sandbox, monkeypatch):
+        ran = self._stranded(monkeypatch, sandbox)
+        monkeypatch.setenv("VOYAGE_API_KEY", "k")
+        boost("self-update")
+        assert [c[1] for c, _ in ran] == ["upgrade"]
+
     def test_git_checkout_dry_run_changes_nothing(self, boost, sandbox,
                                                   monkeypatch):
         monkeypatch.setattr("boost_cli.core.gitutil.is_repo", lambda p: True)
@@ -2742,11 +3544,15 @@ class TestSelfUpdate:
         # the pull fast-forwards HEAD -> report the git-described new version.
         # This path was unreachable before the fix (the old code grepped
         # __init__.py for a __version__ literal setuptools-scm never writes).
-        self._fake_git(monkeypatch, before="oldsha\n", after="newsha\n",
-                       described="v9.9.9\n")
+        calls = self._fake_git(monkeypatch, before="oldsha\n",
+                               after="newsha\n", described="v9.9.9\n")
         r = boost("self-update")
         from boost_cli import __version__
         assert ("boost v%s → v9.9.9" % __version__) in r.out
+        # Only version tags may describe the pull: a newer `shards-latest`
+        # tag otherwise reported "→ vshards-latest-1-g…".
+        assert ["-C", str(paths.repo_root()), "describe", "--tags", "--always",
+                "--dirty", "--match", "v[0-9]*"] in calls
         ev = journal.events(action="self-update")[0]
         assert ev["subject"] == "9.9.9"          # git-derived, not the stale const
         assert ev["previous"] == __version__
@@ -2868,6 +3674,22 @@ class TestTypedValues:
         assert "min_quality_score expects a whole number" in r.err
         assert "`boost policy set min_quality_score <int>`" in r.err
 
+    @pytest.mark.parametrize("key, raw, expected", [
+        ("min_quality_score", "500", "a whole number from 0 to 100"),
+        ("min_quality_score", "-5", "a whole number from 0 to 100"),
+        ("max_skills", "-1", "a whole number of 0 or more, or null for no limit"),
+    ])
+    def test_policy_set_refuses_a_value_out_of_range(self, boost, tapped, key,
+                                                     raw, expected):
+        # These printed a check mark at rc 0, and the next audit or install
+        # failed against a limit no skill could meet.
+        r = boost("policy", "set", key, raw, expect=1)
+        assert "%s expects %s" % (key, expected) in r.err
+        assert 'got "%s"' % raw in r.err
+        assert not paths.policy_path().exists()
+        boost("install", "brainstorming")
+        assert "policy check passed" in boost("policy", "check").out
+
     def test_policy_set_max_skills_still_takes_a_number_and_null(self, boost,
                                                                  sandbox):
         assert "set max_skills = 5" in boost("policy", "set",
@@ -2889,14 +3711,71 @@ class TestTypedValues:
         paths.policy_path().write_text(
             json.dumps({"max_skills": "abc", "blocked_skills": 42}),
             encoding="utf-8")
-        for argv in (("policy", "list"), ("policy", "check")):
-            r = boost(*argv)
-            assert ('ignoring max_skills = "abc" in policy.json — expects '
-                    "a whole number, or null for no limit") in r.out
-            assert ("ignoring blocked_skills = 42 in policy.json — expects "
-                    "a comma-separated list, or a JSON array") in r.out
-            assert ("using the default; fix it with "
-                    "`boost policy set max_skills <int-or-null>`") in r.out
+        for argv, rc in ((("policy", "list"), 0), (("policy", "check"), 1)):
+            r = boost(*argv, expect=rc)
+            out = " ".join(r.out.split())
+            assert ('cannot read max_skills = "abc" in policy.json — expects '
+                    "a whole number, or null for no limit") in out
+            assert ("cannot read blocked_skills = 42 in policy.json — expects "
+                    "a comma-separated list, or a JSON array") in out
+            assert ("installs and taps are refused until it is fixed with "
+                    "`boost policy set max_skills <int-or-null>`") in out
+            assert "using the default" not in out
+        # Shown as the default, but it is not one.
+        assert "all values at defaults" not in boost("policy", "list").out
+
+    @pytest.mark.parametrize("key, raw, expected, spec", [
+        ("blocked_skills", '{"cowboy-coding": true}',
+         "a comma-separated list, or a JSON array", "list"),
+        ("pin_only", "frozen",
+         "a boolean (true/false, yes/no, on/off, 1/0)", "bool"),
+        ("max_skills", "2.5", "a whole number, or null for no limit",
+         "int-or-null"),
+    ])
+    def test_policy_set_refuses_what_policy_json_could_not_hold(
+            self, boost, sandbox, key, raw, expected, spec):
+        r = boost("policy", "set", key, raw, expect=1)
+        err = " ".join(r.err.split())
+        assert "Error: %s expects %s" % (key, expected) in err
+        assert "try `boost policy set %s <%s>`" % (key, spec) in err
+        assert not paths.policy_path().exists()
+
+    def test_an_unreadable_policy_value_fails_closed(self, boost, tapped):
+        # `{"blocked_skills": {...}}` read as an empty blocklist: the blocked
+        # skill installed, check passed and doctor said healthy.
+        paths.ensure_dirs()
+        p = paths.policy_path()
+        p.write_text(json.dumps({"blocked_skills": {"brainstorming": True}}),
+                     encoding="utf-8")
+        why = ('policy.json holds blocked_skills = {"brainstorming": true}, '
+               "which expects a comma-separated list, or a JSON array — boost "
+               "cannot read it, so it will not install until it is fixed with "
+               "`boost policy set` or `boost policy unset`")
+        r = boost("install", "brainstorming", expect=1)
+        assert ("policy blocks installing brainstorming: %s" % why
+                in " ".join(r.err.split()))
+        r = boost("policy", "check", "--json", expect=1)
+        assert json.loads(r.out)["violations"] == [
+            {"name": None, "kind": None, "skill": "(policy)", "violation": why}]
+        r = boost("doctor", "--json", expect=None)
+        assert r.rc == 1
+        rows = [c for c in json.loads(r.out)["checks"] if c["name"] == "policy"]
+        assert [c["message"] for c in rows] == [
+            'policy.json holds blocked_skills = {"brainstorming": true}, which '
+            "expects a comma-separated list, or a JSON array — every install "
+            "is refused until it is fixed with `boost policy set "
+            "blocked_skills <list>`"]
+        # Setting another key keeps the unreadable value rather than writing
+        # the empty default over it.
+        boost("policy", "set", "require_description", "true")
+        assert json.loads(p.read_text(encoding="utf-8"))["blocked_skills"] == {
+            "brainstorming": True}
+        boost("install", "brainstorming", expect=1)
+        # Fixing the key itself is the repair, and the blocklist then holds.
+        boost("policy", "set", "blocked_skills", "brainstorming")
+        r = boost("install", "brainstorming", expect=1)
+        assert "skill 'brainstorming' is on the blocklist" in r.err
+        assert "cannot read" not in r.err
 
     def test_policy_set_and_unset_json(self, boost, sandbox):
         r = boost("policy", "set", "pin_only", "no", "--json")
@@ -2925,17 +3804,29 @@ class TestTypedValues:
     def test_config_set_rejects_a_non_number_port(self, boost, sandbox):
         r = boost("config", "set", "serve.port", "abc", expect=1)
         assert "serve.port expects a whole number" in r.err
-        assert '`boost config set serve.port <int>`' in r.err
+        # The placeholder names the range set_value enforces, not just "int".
+        assert '`boost config set serve.port <0-65535>`' in r.err
         assert not paths.config_path().exists()
 
     def test_config_set_boolean_words(self, boost, sandbox):
-        assert "set telemetry = false" in boost("config", "set",
-                                                "telemetry", "no").out
-        assert "set telemetry = true" in boost("config", "set",
-                                               "telemetry", "on").out
-        r = boost("config", "set", "telemetry", "maybe", expect=1)
-        assert "telemetry expects a boolean" in r.err
-        assert "`boost config set telemetry <bool>`" in r.err
+        assert "set policy_enforce = false" in boost(
+            "config", "set", "policy_enforce", "no").out
+        assert "set policy_enforce = true" in boost(
+            "config", "set", "policy_enforce", "on").out
+        r = boost("config", "set", "policy_enforce", "maybe", expect=1)
+        assert "policy_enforce expects a boolean" in r.err
+        assert "`boost config set policy_enforce <bool>`" in r.err
+
+    def test_config_set_retired_telemetry_warns(self, boost, sandbox):
+        # An old config.json holding it still loads; a set saves and says so.
+        r = boost("config", "set", "telemetry", "true")
+        assert r.out.strip() == "✓ set telemetry = true"
+        assert " ".join(r.err.split()) == (
+            "! 'telemetry' has no effect — boost collects no telemetry, so "
+            "nothing reads this key (saved anyway)")
+        assert json.loads(paths.config_path().read_text(
+            encoding="utf-8")) == {"telemetry": True}
+        assert boost("config", "list", "--json").out.count('"telemetry"') == 1
 
     def test_config_set_rejects_a_scalar_for_a_section(self, boost, sandbox):
         r = boost("config", "set", "ai", "3", expect=1)
@@ -2950,17 +3841,17 @@ class TestTypedValues:
         assert boost("config", "get", "custom.flag", "--json").out.strip() == "true"
 
     def test_config_set_json(self, boost, sandbox):
-        r = boost("config", "set", "telemetry", "no", "--json")
-        assert json.loads(r.out) == {"key": "telemetry", "value": False}
+        r = boost("config", "set", "policy_enforce", "no", "--json")
+        assert json.loads(r.out) == {"key": "policy_enforce", "value": False}
         r = boost("config", "set", "ai.enabled", "true", "--json")
         assert json.loads(r.out) == {"key": "ai.enabled", "value": True}
 
     def test_config_unset_json(self, boost, sandbox):
-        boost("config", "set", "telemetry", "no")
-        r = boost("config", "unset", "telemetry", "--json")
-        assert json.loads(r.out) == {"key": "telemetry", "unset": True}
-        r = boost("config", "unset", "telemetry", "--json")
-        assert json.loads(r.out) == {"key": "telemetry", "unset": False}
+        boost("config", "set", "policy_enforce", "no")
+        r = boost("config", "unset", "policy_enforce", "--json")
+        assert json.loads(r.out) == {"key": "policy_enforce", "unset": True}
+        r = boost("config", "unset", "policy_enforce", "--json")
+        assert json.loads(r.out) == {"key": "policy_enforce", "unset": False}
 
     def test_serve_help_survives_a_hand_edited_port(self, boost, sandbox):
         # `serve --help` used to die with a bare ValueError and exit 70,

@@ -8,27 +8,33 @@ install():  copy skill dir from a tap clone -> store, symlink into every
 from __future__ import annotations
 
 import contextlib
+import errno
+import operator
 import os
 import shutil
 import stat
 import tempfile
-from collections.abc import Iterator
+import time
+from collections.abc import Collection, Iterator, Mapping
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
-from ..errors import BoostError
+from ..errors import BoostError, NotUTF8Error
 from . import (
     agents,
     catalog,
     config,
+    foreign,
     gitutil,
     journal,
+    jsonstate,
     lockfile,
     paths,
     policy,
     projectlock,
     registry,
     scopes,
+    snapshot,
     util,
 )
 
@@ -51,7 +57,11 @@ class InstallResult:
     # clears that, so it is kept apart from `unwritable` and worded with
     # `link_refusal`.
     blocked: list[tuple[str, str]] = field(default_factory=list)
-    # The agents behind `unwritable` and `blocked` for a skill: the ones whose
+    # Agent dirs where the OS refused to make any symlink at all (Windows
+    # without Developer Mode, a FAT or exFAT mount): no chmod or move clears
+    # it, so it is worded apart, with :func:`symlink_refusal`.
+    unlinkable: list[str] = field(default_factory=list)
+    # The agents behind `unwritable`, `blocked` and `unlinkable` for a skill: the ones whose
     # dir refused the link. Recorded in the lock as ``refused_agents`` so a
     # later re-install retries them (:func:`preserved_agent_scope`).
     refused: list[str] = field(default_factory=list)
@@ -60,6 +70,33 @@ class InstallResult:
     # `linked` so the lock records only real links, while the install report can
     # still tell the user the skill reached them.
     native: list[str] = field(default_factory=list)
+    # Plugins that already put this skill in front of Claude Code — the same
+    # files, or a newer copy (:func:`serving_plugin`) — so no Claude Code link
+    # was made.
+    # Kept out of `refused`: nothing refused, and a refusal is retried by the
+    # next reinstall, where this link is meant to stay absent.
+    covered: list[str] = field(default_factory=list)
+    # A workflow's or rules-dir rule's target paths that already held a file
+    # boost did not write (no lock row records the path). Left alone, and recorded apart from the
+    # materializations, in the entry's ``foreign``: see :func:`foreign_rows`.
+    foreign: list[str] = field(default_factory=list)
+    # ``(agent, why)`` for a workflow file boost rendered and did not write
+    # because that agent would reject it at load (:func:`workflows.
+    # render_problem`) — a Gemini subagent the sanitizer could not repair.
+    # No row is recorded: there is no file, and nothing for sync to retry.
+    declined: list[tuple[str, str]] = field(default_factory=list)
+    # What a written workflow file could not carry over for one agent
+    # (:func:`workflows.render_notes`), worded by core, printed by the command.
+    render_notes: list[str] = field(default_factory=list)
+    # ``(agent, reason)`` for a rule or workflow: the agents a skill would
+    # reach that this kind's write set leaves out by their own config
+    # (:func:`skipped_agents`). No row is recorded for them, so this is the
+    # install report's only way to say so.
+    skipped_agents: list[tuple[str, str]] = field(default_factory=list)
+    # ``agent: how to run it`` for a workflow written somewhere ``/<name>``
+    # does not reach (:func:`workflows.invocation_hint`) -- a Claude Code
+    # subagent. Worded by core, printed by the install report.
+    invocation: list[str] = field(default_factory=list)
     score: int = 0
     upgraded: bool = False
     kind: str = "skill"
@@ -76,6 +113,9 @@ class InstallResult:
     # declared. The two differ when the file could not be written, and the
     # install report must show the former.
     mcp_recorded: list[str] = field(default_factory=list)
+    # Why the project's .mcp.json was left untouched (it exists but does not
+    # parse, its mcpServers is not an object, or the write failed), or None.
+    mcp_error: str | None = None
     # The tap an import just replaced (`install_from_path` only). Importing over
     # a tapped skill rewrites its lock entry to `local` and so drops the only
     # thing `boost update` refreshes it from; the caller says so.
@@ -85,6 +125,28 @@ class InstallResult:
     # removes a link — pruning stays `boost sync --prune`'s decision — so these
     # are exactly what the next `sync --diff` reports as out of scope.
     out_of_scope: list[str] = field(default_factory=list)
+    # A workflow's copy in the canonical store (`_skill_copy`): where it was
+    # written, or, when it was not, why — a name a skill already holds, a
+    # source with no description. Core words the reason; the command prints
+    # it.
+    skill_copy: Path | None = None
+    skill_note: str | None = None
+    # Its links (:func:`copy_link_targets`): the agents linked to it, why a
+    # target was not (:func:`copy_link_problems`), and the agents whose link
+    # this run took back -- the copy retired, or the agent now holds a file
+    # of the workflow's own. Kept apart from `linked`, `conflicts` and the
+    # rest, which say what became of the workflow's own files.
+    copy_linked: list[str] = field(default_factory=list)
+    copy_blocked: list[str] = field(default_factory=list)
+    copy_unlinked: list[str] = field(default_factory=list)
+    # Symlinks in the skill's source the copy left out (:func:`_copy_tree`):
+    # one leading to nothing, or out of the tap. Core words each; the command
+    # prints them.
+    skipped_links: list[str] = field(default_factory=list)
+    # Paths in the skill, relative to it, that are git submodules
+    # (:func:`unfetched_submodules`): boost never fetches one, so each landed
+    # as an empty directory. The command warns; the lock row records them.
+    submodules: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -154,7 +216,21 @@ def local_source_dir(entry: dict) -> Path | None:
     if not raw or entry.get("source_url"):
         return None
     src = Path(raw)
-    return src if (src / "SKILL.md").is_file() else None
+    # os.path: under a dir with no search bit, Path.is_file raises on 3.12.
+    return src if os.path.isfile(src / "SKILL.md") else None  # noqa: FURB146
+
+
+def url_source_name(url: str) -> str:
+    """The tap name ``boost tap <url>`` would give the repo ``url`` names.
+
+    What ``allowed_taps``/``blocked_taps`` are matched against for a URL
+    import. A URL ``registry.parse_spec`` cannot name is matched as itself,
+    so an allowlist still refuses it rather than letting it through unnamed.
+    """
+    try:
+        return str(registry.parse_spec(url)[0])
+    except BoostError:
+        return url
 
 
 def reinstall_from_url(name: str, entry: dict) -> InstallResult:
@@ -178,18 +254,91 @@ def reinstall_from_url(name: str, entry: dict) -> InstallResult:
         return install_from_path(src, name=name, force=True, remote=remote)
 
 
+def tap_configured(tap: str | None) -> bool:
+    """Whether a lock row's ``tap`` still names a configured tap, exactly."""
+    return bool(tap) and any(t.name == tap for t in registry.list_taps())
+
+
+def source_missing_message(label: str, name: str, lk: dict) -> str:
+    """Why ``reinstall`` skipped ``label`` (``name``) with no catalog match.
+
+    Two different facts used to share "not found in tap X — try `boost
+    update`": an item a configured tap no longer ships, where an update may
+    bring it back, and a tap that was untapped, where `boost update` answers
+    "everything up to date" and the hint loops. The second names the two
+    steps that work, as `boost outdated` does for the same state.
+    """
+    tap = lk.get("tap")
+    if tap_configured(tap):
+        return ("%s not found in tap %s — skipped (try `boost update`)"
+                % (label, tap))
+    url = lk.get("tap_url")
+    # `retap_hint` quotes the URL; a `~`-tilded path would be one the shell
+    # no longer expands once it is quoted.
+    retap = registry.retap_hint(str(tap or ""), str(url)) if url else ""
+    how = " with `%s`" % retap if retap.startswith("boost tap ") else ""
+    return ("%s: source missing — tap %s is no longer tapped and `boost "
+            "update` can't restore it; re-tap it%s, or `boost uninstall %s`"
+            % (label, tap, how, name))
+
+
+def record_moved_source(kind: str, name: str, entry: dict, commit: str, *,
+                        base: Path | str | None = None) -> bool:
+    """Point ``name``'s lock row at where its *unchanged* content now lives.
+
+    An upstream ``git mv`` with no edit leaves nothing for `update` to
+    reinstall, and the reinstall was the only writer of ``source_dir``: the
+    row kept naming a path the tap no longer has, so every `update` repeated
+    "no longer at its installed source", `info` showed the dead path, and
+    `drift` called the skill source-missing and suggested uninstalling it.
+    The caller decides the content matched; this records the new location
+    (``rel_dir`` for a skill, ``skill_md`` for a rule or workflow) and the
+    ``commit`` it was verified at. ``base`` names a project lock to write
+    instead of the user's. Returns whether a row was changed.
+    """
+    field, value = (("source_dir", entry.get("rel_dir", ".")) if kind == "skill"
+                    else ("source_file", entry.get("skill_md", "")))
+
+    def apply(row: dict) -> bool | None:
+        if row.get(field) == value and (not commit or row.get("commit") == commit):
+            return False
+        row[field] = value
+        if commit:
+            row["commit"] = commit
+        return None
+
+    if base is not None:
+        def apply_project(lock: dict) -> bool | None:
+            row = lock.get("skills", {}).get(name)
+            return False if row is None else apply(row)
+        return projectlock.mutate(base, apply_project)
+    return lockfile.update_entry(kind, name, apply)
+
+
 def skill_store_dir(name: str) -> Path:
     """Resolve ``name`` to its dir under the canonical store.
 
     Raises BoostError unless the name is a safe path component.
     """
     if not util.is_safe_component(name):
-        raise BoostError("invalid skill name %r" % name)
+        # Name the slug it would have, when it has one: a tap's `c++-helper`
+        # is catalogued (and installed) as `c--helper`, and a bare refusal
+        # left the user nothing to type instead.
+        slug = util.slugify(name)
+        hint = ("a name is a-z, A-Z, 0-9, '.', '_' and '-' — did you mean "
+                "%r?" % slug
+                if not set(name) & set("/\\:") and slug != "skill"
+                else None)
+        raise BoostError("invalid skill name %r" % name, hint=hint)
     return paths.store_dir() / name
 
 
-def read_skill_meta(name: str) -> tuple[dict, str] | None:
+def read_skill_meta(name: str, skill_dir: Path | None = None
+                    ) -> tuple[dict, str] | None:
     """(frontmatter, body) for an installed skill's store copy, or None.
+
+    ``skill_dir`` reads another copy instead — a project skill's, which is
+    not in the store (:class:`integrity.InstalledSkill` ``.dir``).
 
     None on anything that keeps the content from being read honestly: no
     store dir, no ``SKILL.md``, an unreadable file, or an unclosed
@@ -201,7 +350,11 @@ def read_skill_meta(name: str) -> tuple[dict, str] | None:
     """
     from . import frontmatter
 
-    skill_md = skill_store_dir(name) / "SKILL.md"
+    skill_md = (skill_dir if skill_dir is not None
+                else skill_store_dir(name)) / "SKILL.md"
+    if skill_dir is None and not skill_md.exists():
+        # Quarantined or sidelined: the installed copy is held aside.
+        skill_md = held_copy_dir(name) / "SKILL.md"
     if not skill_md.exists():
         return None
     try:
@@ -236,6 +389,7 @@ def resolve_lock_entry(name: str) -> tuple[str, str | None, dict | None]:
     "not installed", same as a bare miss.
     """
     qualifier, bare = catalog.split_name(name)
+    bare = catalog.addressable_name(bare)
     found = lockfile.find_any(bare)
     if found is None:
         return bare, None, None
@@ -243,6 +397,73 @@ def resolve_lock_entry(name: str) -> tuple[str, str | None, dict | None]:
     if qualifier and not catalog.tap_matches(str(entry.get("tap") or ""), qualifier):
         return bare, None, None
     return bare, kind, entry
+
+
+def installed_name(name: str, scope: str | None = None) -> str:
+    """The bare lock key a command acting on an installed ``name`` should use.
+
+    ``install`` accepts ``tap:skill`` and every ambiguity hint tells the user
+    to type it, but the lock — user and project — keys items by the bare
+    name, so a command that probed it with the qualified string answered
+    "not installed" about an item ``boost list`` shows. This is the one place
+    such a command turns what was typed into the key it looks up.
+
+    An unqualified ``name`` comes back unchanged, and so does — bare — a
+    qualified one nothing is installed under: the caller's own lookup then
+    reports the miss in its usual words. A qualifier that names a tap the
+    installed item did *not* come from raises rather than acting on another
+    tap's copy, and so does one that matches only an item the command would
+    not reach: a bare name resolves skill-first (:func:`lockfile.find_any`),
+    so ``other:x`` selecting the rule ``x`` while a skill ``x`` is installed
+    would otherwise uninstall or pin the skill.
+
+    ``scope`` is the command's own ``--scope``. Given one, only that scope's
+    rows are the ones the command acts on, so only they are checked: with a
+    user ``x`` from tap A and a project ``x`` from tap B, ``B:x --local``
+    names the project copy, and ``A:x --local`` names nothing in this repo.
+    Checking both against the user row first refused the first and let the
+    second remove or reinstall tap B's copy.
+    """
+    qualifier, bare = catalog.split_name(name)
+    bare = catalog.addressable_name(bare)
+    if qualifier is None:
+        return bare
+    held: list[tuple[str, dict]] = []
+    if scope != scopes.SCOPE_PROJECT:
+        held = [(kind, section[bare])
+                for kind, section in lockfile.all_installed().items()
+                if bare in section]
+    project_entry = None
+    if scope != scopes.SCOPE_USER:
+        pbase = scopes.resolve_base(scopes.SCOPE_PROJECT)
+        project_entry = (projectlock.get_skill(pbase, bare)
+                         if pbase is not None else None)
+    if project_entry is not None:
+        held.append(("skill", project_entry))
+    if not held:
+        return bare
+    taps = [str(entry.get("tap") or "local") for _kind, entry in held]
+    where = {scopes.SCOPE_PROJECT: " in this repo",
+             scopes.SCOPE_USER: " in your user config"}.get(scope or "", "")
+    if not any(catalog.tap_matches(t, qualifier) for t in taps):
+        raise BoostError(
+            "%s is not installed%s — %s is installed from %s, not %s"
+            % (name, where, bare, ", ".join(dict.fromkeys(taps)), qualifier),
+            hint="name it `%s` or `%s:%s`" % (bare, taps[0], bare), wrap=True)
+    if not catalog.tap_matches(taps[0], qualifier):
+        idx = next(i for i, t in enumerate(taps)
+                   if catalog.tap_matches(t, qualifier))
+        # The qualifier picks this repo's copy, which `--local` reaches:
+        # "uninstall one of the two first" would be the long way round.
+        local = project_entry is not None and idx == len(held) - 1
+        raise BoostError(
+            "%s is ambiguous here — it selects the %s %s, but the %s %s from %s "
+            "is the one this command would act on"
+            % (name, held[idx][0], bare, held[0][0], bare, taps[0]),
+            hint=("add `--local` to act on this repo's copy" if local
+                  else "uninstall one of the two first, or see `boost list`"),
+            wrap=True)
+    return bare
 
 
 def upstream_source(name: str) -> tuple[str, str, str, str]:
@@ -305,7 +526,7 @@ def installed() -> dict:
 
 
 def has_content() -> bool:
-    """True if the canonical store holds any skill directory at all.
+    """True if the canonical store holds any skill at all.
 
     Independent of the lock file: a store dir survives even when
     ``.skill-lock.json`` goes missing or corrupt, so this is how a caller
@@ -313,11 +534,74 @@ def has_content() -> bool:
     apart from one whose lock record vanished out from under a populated
     store (a fault `boost verify`/`drift`/`doctor` must not stay quiet
     about).
+
+    A skill is a dir holding a ``SKILL.md``. Any dir used to count, so
+    another tool's bucket in the store (one with no ``SKILL.md``) held `boost
+    doctor` at "lock file missing — run `boost sync`" for good: there was
+    nothing a lock could have recorded, and nothing sync could record.
+
+    A dir boost cannot look into counts as content: "no SKILL.md" is an answer
+    only when the lookup says so. ``os.path.isfile`` says False for a dir
+    with no search bit, and a store of those read as empty — which, over a
+    missing lock, told `verify` and `drift` there was nothing to check.
     """
     root = paths.store_dir()
-    if not root.is_dir():
+    try:
+        names = os.listdir(root)
+    except OSError:
         return False
-    return any(c.is_dir() and not c.name.startswith(".") for c in root.iterdir())
+    return any(not n.startswith(".") and _may_hold_skill(os.path.join(root, n))
+               for n in names)
+
+
+def _may_hold_skill(d: str) -> bool:
+    """True unless ``d`` is known to hold no ``SKILL.md`` file."""
+    try:
+        return stat.S_ISREG(os.stat(os.path.join(d, "SKILL.md")).st_mode)
+    except (FileNotFoundError, NotADirectoryError):
+        return False
+    except OSError:
+        return True
+
+
+def refuse_escape(tap: registry.Tap, path: Path, name: str) -> None:
+    """Raise unless ``path``, links followed, stays inside ``tap``'s clone.
+
+    `catalog.scan_dir` no longer indexes such a file, but a cache scanned
+    before it learned to (or a clone that moved under its cache) still names
+    one — and `exists()`/`is_file()` follow the link, so every reader and
+    installer would serve whatever it points at: a skill installed as an empty
+    store dir, a rule rendered from ``~/.ssh/id_rsa`` into CLAUDE.md.
+    """
+    if catalog.escapes(tap.path, path):
+        raise BoostError(
+            "refusing %s from tap %s: its file links outside the clone"
+            % (name, tap.name),
+            hint="run `boost update %s` to rescan the tap"
+                 % util.shell_arg(tap.name))
+
+
+def source_file_for(entry: dict) -> Path:
+    """The tap file a catalog entry indexes, on disk and inside its clone.
+
+    The read-side twin of :func:`source_dir_for`, for any kind: a skill goes
+    through it (so a missing clone is re-cloned and a sparse dir widened,
+    exactly as for install), a rule or workflow — one file inside the sparse
+    cone — only needs the clone. Either way a file that is gone says to run
+    `boost update` rather than surfacing an errno over an absolute path.
+    """
+    kind = entry.get("kind") or catalog.KIND_SKILL
+    if kind == catalog.KIND_SKILL:
+        return source_dir_for(entry) / "SKILL.md"
+    tap = registry.get(entry["tap"])
+    registry.ensure_cloned(tap)
+    path = tap.path / entry.get("skill_md", "")
+    if not path.is_file():
+        raise BoostError("source for %s %s vanished from tap %s"
+                         % (kind, entry["name"], tap.name),
+                         hint="run `boost update %s`" % util.shell_arg(tap.name))
+    refuse_escape(tap, path, entry["name"])
+    return path
 
 
 def source_dir_for(entry: dict) -> Path:
@@ -352,24 +636,216 @@ def source_dir_for(entry: dict) -> Path:
         raise BoostError("%s is a %s, not a skill: it has no source directory"
                          % (entry["name"], kind))
     tap = registry.get(entry["tap"])
-    if not tap.is_cloned:
-        gitutil.clone_shallow(tap.url, tap.path)
+    # At its pin, never HEAD: see registry.ensure_cloned.
+    registry.ensure_cloned(tap)
     src = tap.path if entry["rel_dir"] == "." else tap.path / entry["rel_dir"]
     gitutil.materialize(tap.path, entry["rel_dir"])
     if not (src / "SKILL.md").exists():
         raise BoostError("source for %s vanished from tap %s" % (entry["name"], tap.name),
-                        hint="run `boost update %s`" % tap.name)
+                        hint="run `boost update %s`" % util.shell_arg(tap.name))
+    refuse_escape(tap, src / "SKILL.md", entry["name"])
+    _materialize_link_targets(tap.path, src)
     return src
 
 
-def link_agents(name: str, only: list[str] | None = None) -> InstallResult:
+def unfetched_submodules(entry: dict) -> list[str]:
+    """Skill-relative paths of ``entry``'s tap source that are submodules.
+
+    A tap is one shallow clone and boost never runs ``submodule update``, so
+    each one checks out, and installs, as an empty directory: a skill whose
+    ``scripts/`` is a submodule reported "Installed" and verify called it
+    ``ok``. Fetching another repository on a skill's say-so is not something
+    an install should do quietly, so boost names them instead (the install
+    warns, the lock row records them, `verify` and `info` say so). Empty for
+    a rule or workflow, or an entry whose tap is not cloned.
+    """
+    if (entry.get("kind") or catalog.KIND_SKILL) != catalog.KIND_SKILL:
+        return []
+    try:
+        tap = registry.get(entry["tap"])
+    except BoostError:
+        return []
+    if not tap.is_cloned:
+        return []
+    rel = str(entry.get("rel_dir") or ".").strip("/")
+    found = gitutil.gitlinks(tap.path, rel)
+    if rel in ("", "."):
+        return found
+    return [PurePosixPath(p).relative_to(rel).as_posix() for p in found
+            if PurePosixPath(p).is_relative_to(rel)]
+
+
+def submodule_note(path: str) -> str:
+    """How every command words one of :func:`unfetched_submodules`."""
+    return ("%s is a git submodule, which boost does not fetch, so it is "
+            "empty" % path)
+
+
+def _materialize_link_targets(repo: Path, src: Path) -> None:
+    """Widen ``repo``'s cone to what ``src``'s links lead to, transitively.
+
+    A directory a link leads to is walked in turn once it is on disk, since
+    :func:`_copy_tree` copies it as its target and its own links obey the
+    same rule. Each path is fetched once, so a cycle of links ends.
+
+    Only a directory that resolves inside ``repo`` is walked: ``os.walk``
+    follows its top, so a tap path that is itself a link to ``/`` (lexically
+    in the tap, so named above) walked the whole filesystem on install.
+    """
+    seen: set[str] = set()
+    todo = [src]
+    while todo:
+        new = [t for t in link_targets_to_fetch(repo, todo.pop(), src)
+               if t not in seen]
+        if not new:
+            continue
+        seen.update(new)
+        gitutil.materialize_paths(repo, new)
+        todo += [repo / t for t in new if (repo / t).is_dir()
+                 and not catalog.escapes(repo, repo / t)]
+
+
+def copy_view_sha(src: Path, within: Path | None) -> str:
+    """``sha256_dir`` of what :func:`_copy_tree` puts in the store from ``src``.
+
+    The lock records the hash of the *copy*, so the source side of every
+    "did the tap move this skill?" comparison has to hash the same view. A
+    raw ``sha256_dir(src)`` reads a link out of the tap as its target's
+    bytes, a link install skips by policy, so a skill holding one compared
+    unequal forever: `update` re-copied it as "source changed" on every tap
+    move and `drift` called it upstream-moved after `update` had nothing to
+    do. A tree with no link hashes in place; one with any is staged through
+    ``_copy_tree`` itself, so the two cannot disagree about what lands.
+    """
+    with _copy_view(Path(src), within) as view:
+        return util.sha256_dir(view)
+
+
+@contextlib.contextmanager
+def _copy_view(src: Path, within: Path | None) -> Iterator[Path]:
+    """``src`` as :func:`_copy_tree` would land it: in place when it holds
+    no link, else staged through ``_copy_tree`` itself."""
+    if not any(Path(here, n).is_symlink()
+               for here, dirs, names in os.walk(src)
+               for n in (*dirs, *names)):
+        yield src
+        return
+    with tempfile.TemporaryDirectory(prefix=util.TEMP_PREFIX) as tmp:
+        view = Path(tmp) / "view"
+        _copy_tree(src, view, within)
+        yield view
+
+
+def skill_source_sha(entry: dict) -> str:
+    """:func:`copy_view_sha` of a catalog entry's tap source.
+
+    Raises ``BoostError`` as :func:`source_dir_for` does. Bounded by the tap
+    clone, as a tap install's copy is.
+    """
+    src = source_dir_for(entry)
+    return copy_view_sha(src, registry.get(entry["tap"]).path)
+
+
+def source_exec_changed(entry: dict, lk: dict, copy: Path | None) -> bool:
+    """Whether catalog ``entry``'s source has other exec bits than the install.
+
+    The content hash cannot see a mode, so a commit that only made a script
+    executable read as up to date, and `update` never copied the bit over.
+    The install's bits are what its lock row ``lk`` recorded, or — a row from
+    before rows recorded them — what the ``copy`` on disk holds: the copy is
+    made with ``copy2``, so it has the source's modes as of the install.
+    False when neither is known or the source cannot be read; the content
+    comparison beside this one reports that.
+    """
+    want = lk.get("exec")
+    if want is None:
+        if copy is None or not copy.is_dir():
+            return False
+        want = util.exec_bits(copy)
+        if want is None:
+            return False
+    try:
+        src = source_dir_for(entry)
+    except BoostError:
+        return False
+    with _copy_view(src, registry.get(entry["tap"]).path) as view:
+        have = util.exec_bits(view)
+    return have is not None and have != want
+
+
+def _inside(path: str, root: str) -> bool:
+    """Whether ``path`` is ``root`` or under it (both already normalized)."""
+    try:
+        return os.path.commonpath([path, root]) == root
+    except ValueError:      # different drives on Windows
+        return False
+
+
+def link_targets_to_fetch(repo: Path, src: Path,
+                          skill: Path | None = None) -> list[str]:
+    """Repo-relative paths ``src``'s symlinks lead to that the copy needs
+    fetched: a target not on disk, or any directory.
+
+    A tap checks out Markdown and each installed skill's own dir, so a link
+    from the skill to a file elsewhere in the tap (``../../shared/helper.py``)
+    dangles in the clone though the file exists upstream; copying it then
+    fails. A directory is named even when it exists, because existing says
+    nothing about being whole: a link to another skill's dir found its
+    ``SKILL.md`` (Markdown is always in the cone) and copied that alone,
+    unless that skill had been installed first and so widened it. The copy
+    then depended on install order.
+
+    Only targets inside ``repo`` are named — a link out of the tap is never
+    followed, so there is nothing to fetch for it. Nor is one inside
+    ``skill`` (default ``src``), which is checked out already and copied as
+    the link it is, or a directory holding it, which the copy refuses as a
+    loop rather than widen the cone over it.
+    """
+    root = os.path.abspath(repo)
+    own = os.path.abspath(skill if skill is not None else src)
+    found: list[str] = []
+    for here, dirs, names in os.walk(src):
+        dirs[:] = [d for d in dirs if d not in util.IGNORED]
+        for n in (*dirs, *names):
+            p = Path(here, n)
+            if not p.is_symlink():
+                continue
+            target = os.path.normpath(os.path.join(here, os.readlink(p)))
+            if (not _inside(target, root) or _inside(target, own)
+                    or _inside(own, target)):
+                continue
+            if Path(target).is_dir() or not Path(target).exists():
+                found.append(Path(os.path.relpath(target, root)).as_posix())
+    return found
+
+
+#: :func:`link_agents`' default ``updated_at``: read the date from the lock.
+FROM_LOCK = "lock"
+
+
+def link_agents(name: str, only: list[str] | None = None, *,
+                keep_theirs: bool = False,
+                updated_at: str | None = FROM_LOCK) -> InstallResult:
     """Symlink store/<name> into each linking agent dir. Returns result with
     .linked (agent names), .conflicts (paths that were real files/dirs) and
     .native (agents that read the store directly and needed no link).
 
     A link that already leads to the store copy is left alone and counts as
     linked, so a dir that refuses writes only refuses a link that needs one:
-    a missing link, or one pointing elsewhere."""
+    a missing link, or one pointing elsewhere.
+
+    Claude Code gets no new link while an enabled plugin ships the same files,
+    or a copy newer than boost's (.covered, :func:`serving_plugin`): it
+    already lists the plugin's copy, and a link would list the skill a second
+    time. That holds for an explicit ``--agent claude-code`` too, since the
+    skill is in front of Claude Code either way. ``updated_at`` is when boost's
+    copy last changed (:func:`source_updated_at`); an install passes the date
+    of what it is about to record, and every other caller the lock's.
+
+    ``keep_theirs`` leaves a symlink that is not boost's (:func:`is_boost_link`)
+    where it is, as a conflict, the way a file is left. :func:`unsideline`
+    passes it: :func:`sideline` leaves the user's own link alone, and
+    relinking replaced it with a link to the store copy."""
     res = InstallResult(name=name, dest=skill_store_dir(name))
     target = skill_store_dir(name)
     # Deliberately NOT filtered by `only`. That list scopes which agents get a
@@ -384,6 +860,17 @@ def link_agents(name: str, only: list[str] | None = None) -> InstallResult:
         if only and agent not in only:
             continue
         link = adir / name
+        # Asked before anything is written, so a covered skill costs Claude
+        # Code's dir no mkdir and loses no link it already has: one that leads
+        # here stays until `sync --prune` drops it, and `update` changes
+        # nothing an agent sees.
+        if (agent == foreign.CLAUDE
+                and not (os.path.islink(link)  # noqa: FURB146
+                         and _already_links(link, target))
+                and (hit := serving_plugin(name, _lock_date(name, updated_at)))
+                is not None):
+            res.covered.append(hit[0].id)
+            continue
         try:
             adir.mkdir(parents=True, exist_ok=True)
             if link.is_symlink():
@@ -393,7 +880,11 @@ def link_agents(name: str, only: list[str] | None = None) -> InstallResult:
                     # writes, the unlink raised PermissionError and a reinstall
                     # printed "not linked" over a link still on disk, still
                     # pointing at the store, and still in the lock's `agents`.
+                    agents.remember_link_dir(agent, adir)
                     res.linked.append(agent)
+                    continue
+                if keep_theirs and not points_into_store(link):
+                    res.conflicts.append(str(link))
                     continue
                 link.unlink()
             elif link.exists():
@@ -414,7 +905,15 @@ def link_agents(name: str, only: list[str] | None = None) -> InstallResult:
             res.unwritable.append(str(paths.refuses_writes(adir) or adir))
             res.refused.append(agent)
             continue
-        except OSError:
+        except OSError as exc:
+            # No symlink can be made here at all: every install used to exit
+            # 70 from the line above. Skip the agent, as for an unwritable
+            # dir; the store copy still reaches the agents that read it
+            # directly, and `boost sync` links the rest once links work.
+            if symlinks_unsupported(exc):
+                res.unlinkable.append(str(adir))
+                res.refused.append(agent)
+                continue
             # A dangling symlink or a file where the agent dir belongs: the
             # mkdir raises FileExistsError or NotADirectoryError. It escaped
             # here after `_copy_skill` had run, so the install exited 70 with
@@ -426,8 +925,96 @@ def link_agents(name: str, only: list[str] | None = None) -> InstallResult:
             res.blocked.append((str(adir), str(block)))
             res.refused.append(agent)
             continue
+        # So a later uninstall still finds this link after the agent's dir is
+        # repointed (:func:`agents.former_link_dirs`).
+        agents.remember_link_dir(agent, adir)
         res.linked.append(agent)
     return res
+
+
+#: What a filesystem or OS that cannot make a symlink at all raises: EINVAL
+#: from Windows without Developer Mode (ERROR_PRIVILEGE_NOT_HELD arrives as a
+#: plain OSError, not a PermissionError), ENOTSUP/EOPNOTSUPP/ENOSYS from FAT
+#: and exFAT mounts. EPERM is left out on purpose: it is a PermissionError,
+#: and :func:`link_agents` already reads that as an unwritable agent dir.
+_NO_SYMLINK_ERRNOS = frozenset({errno.EINVAL, errno.ENOTSUP,
+                                errno.EOPNOTSUPP, errno.ENOSYS})
+_ERROR_PRIVILEGE_NOT_HELD = 1314
+
+
+def symlinks_unsupported(exc: OSError) -> bool:
+    """Whether ``exc``, raised making a symlink, means none can be made."""
+    if getattr(exc, "winerror", None) == _ERROR_PRIVILEGE_NOT_HELD:
+        return True
+    return (not isinstance(exc, PermissionError)
+            and exc.errno in _NO_SYMLINK_ERRNOS)
+
+
+def symlink_refusal(adir: str) -> tuple[str, str]:
+    """Why a dir from ``res.unlinkable`` refused, and what clears it."""
+    return ("this system refused to create a symlink in %s" % paths.tilde(adir),
+            "on Windows turn on Developer Mode (Settings > System > For "
+            "developers) or use an administrator shell; on a FAT or exFAT "
+            "drive keep your home on a filesystem with symlinks")
+
+
+def _lock_date(name: str, updated_at: str | None) -> str | None:
+    """``updated_at``, or the lock's date for ``name`` when it is :data:`FROM_LOCK`."""
+    if updated_at != FROM_LOCK:
+        return updated_at
+    return (lockfile.get_skill(name) or {}).get("source_updated_at")
+
+
+def source_updated_at(tap_name: str | None, rel_dir: str,
+                      rev: str = "HEAD") -> str | None:
+    """When a tap skill's files last changed at ``rev``, as :func:`util.now_iso` writes.
+
+    The newest commit touching anything under its source dir — ``SKILL.md``,
+    scripts, assets. A tap clone is ``--depth 1``, where that question has
+    one answer for every dir, so the clone is deepened first
+    (:func:`gitutil.unshallow`: commits and trees only, and once per tap).
+    None for the ``local`` tap, a tap that is gone or not cloned, no git, or
+    a clone that could not be deepened (offline): the date is what decides
+    between boost's copy and a plugin's, and an unknown one decides nothing.
+    """
+    if not tap_name or tap_name == "local":
+        return None
+    try:
+        tap = registry.get(tap_name)
+        if not tap.is_cloned:
+            return None
+        gitutil.unshallow(tap.path)
+        when = gitutil.path_updated_at(tap.path, rel_dir or ".", rev or "HEAD")
+    except BoostError:
+        return None
+    return None if when is None else util.iso_from_epoch(when)
+
+
+def backfill_source_dates(taps) -> list[str]:
+    """Record :func:`source_updated_at` for installed skills that have none.
+
+    For the skills from ``taps`` installed before boost recorded the date:
+    ``boost update`` reinstalls only a skill whose source changed, so without
+    this the date would reach no skill already on the machine. Read at the
+    commit each was installed from, so a pinned skill is dated by the files
+    it has. A ``boost import`` row has no tap clone to read and is skipped.
+    Returns the names dated.
+    """
+    wanted = set(taps)
+    done = []
+    for name, entry in sorted(lockfile.installed().items()):
+        if (entry.get("tap") not in wanted or entry.get("source_updated_at")
+                or entry.get("source_url")):
+            continue
+        when = source_updated_at(entry.get("tap"), entry.get("source_dir") or ".",
+                                 entry.get("commit") or "HEAD")
+        if when is None:
+            continue
+        def date(row: dict, when: str = when) -> None:
+            row["source_updated_at"] = when
+        if lockfile.update_skill(name, date):
+            done.append(name)
+    return done
 
 
 def _already_links(link: Path, target: Path) -> bool:
@@ -495,10 +1082,12 @@ def preserved_agent_scope(only_agents: list[str] | None,
 
     An explicit ``only_agents`` still wins, so re-running install with
     ``--agent`` remains the way to widen the scope again. Skills record their
-    scope as ``agents``; rules and workflows record one ``materializations``
-    row per agent. An empty record means "nothing was linked", not "link
-    nothing", so it falls back to every enabled agent — exactly what
-    ``link_agents`` does with ``None``.
+    scope as ``agents``. Rules and workflows replay only a declared
+    ``only_agents``: their ``materializations`` rows record what was written,
+    and an undeclared install fans out to every agent that takes it. An entry
+    written before they recorded the field still replays its rows. An empty
+    record means "nothing was linked", not "link nothing", so it falls back to
+    every enabled agent — exactly what ``link_agents`` does with ``None``.
     """
     if only_agents is not None:
         return only_agents
@@ -514,9 +1103,31 @@ def preserved_agent_scope(only_agents: list[str] | None,
     if declared:
         return list(declared)
     recorded = existing.get("agents")
+    if recorded is None and "only_agents" in existing:
+        # A rule or workflow that records its declaration: its rows say which
+        # agents were *written* last time, not which the user asked for.
+        # Replaying them froze an install made with no `--agent` to the agents
+        # enabled that day: enable cursor afterwards and `sync`, `reinstall`,
+        # `update` and `install --force` all skipped it, while doctor called
+        # the rule fully materialized. Undeclared means every agent, as
+        # `scoped_agents` already says for a skill's links. A row for an agent
+        # this run does not write is still carried forward
+        # (:func:`_refused_materializations`), so nothing becomes unremovable.
+        return None
     if recorded is None:
+        # An entry from before rules and workflows recorded ``only_agents``:
+        # its rows are the only trace of an `--agent` narrowing, so they are
+        # still replayed rather than widened on the next `update`.
         recorded = [m.get("agent")
                     for m in existing.get("materializations") or ()]
+        # A workflow agent whose path held the user's own file is kept in
+        # scope the way a refused skill link is, and for the same reason:
+        # without it the agent dropped out of every later reinstall, update
+        # and sync, so moving the file aside never brought the command back.
+        # Only beside written agents, as below: none written means every
+        # agent already, and narrowing to the foreign ones would strand it.
+        if any(recorded):
+            recorded += [r.get("agent") for r in foreign_rows(existing)]
     elif recorded:
         # A skill's `agents` is what is linked, so an agent whose dir refused
         # the link was not in it, and replaying it never retried that agent:
@@ -603,6 +1214,20 @@ def declared_agent_scope(only_agents: list[str] | None,
     return (existing or {}).get("only_agents")
 
 
+def _declared_field(only_agents: list[str] | None,
+                    existing: dict | None) -> dict:
+    """The ``only_agents`` field a rule or workflow lock write carries.
+
+    Written on a fresh install, an explicit ``--agent`` and any entry that
+    already has it. Left off an entry from before the field existed, whose
+    rows are still the only record of a narrowing: writing ``None`` there
+    would widen it on the next `update` (:func:`preserved_agent_scope`).
+    """
+    if only_agents is None and existing and "only_agents" not in existing:
+        return {}
+    return {"only_agents": declared_agent_scope(only_agents, existing)}
+
+
 def scoped_agents(entry: dict, enabled: dict[str, Path]) -> dict[str, Path]:
     """The enabled agents a locked skill is supposed to be linked into.
 
@@ -611,27 +1236,343 @@ def scoped_agents(entry: dict, enabled: dict[str, Path]) -> dict[str, Path]:
     agent. That keeps ``boost sync`` doing its other job, which is linking
     already-installed skills into an agent that was enabled afterwards.
     """
-    scope = entry.get("only_agents")
+    scope = effective_scope(entry)
     if not scope:
         return enabled.copy()
     return {a: d for a, d in enabled.items() if a in scope}
 
 
-def unlink_agents(name: str) -> list[str]:
-    """Remove the ``name`` symlink from every linking agent dir.
+def unknown_scope_agents(entry: dict) -> list[str]:
+    """The names in ``entry``'s ``only_agents`` that are no agent boost knows.
 
-    Returns the agents unlinked; non-symlink files are left alone. Agents that
-    read the canonical store directly never had a link, so there is nothing
-    here to reverse for them — uninstalling the store dir is what removes the
-    skill from their view.
+    A lock carried from another boost version or machine can hold one, and
+    `boost install --agent` refuses the same name as "unknown agent". A
+    disabled agent is still known. In declaration order, once each.
     """
-    removed = []
-    for agent, adir in agents.linking_agents().items():
+    declared = entry.get("only_agents")
+    if not isinstance(declared, list):
+        return []
+    known = agents.known_agents()
+    return list(dict.fromkeys(a for a in declared
+                              if isinstance(a, str) and a not in known))
+
+
+def _recorded_agents(entry: dict) -> list[str]:
+    """The agents ``entry`` records reaching: a skill's linked ``agents``,
+    a rule's or workflow's materialization rows (never the skill copy)."""
+    if "materializations" in entry:
+        names = [m.get("agent") for m in entry.get("materializations") or ()
+                 if isinstance(m, dict) and not lockfile.is_skill_copy(m)]
+    else:
+        names = list(entry.get("agents") or ())
+    return list(dict.fromkeys(a for a in names if isinstance(a, str)))
+
+
+def effective_scope(entry: dict) -> list[str] | None:
+    """``entry``'s ``--agent`` narrowing, less the names no agent has.
+
+    An unknown name narrows to nothing, and a scope of only unknown names
+    read as "linked for no agent": doctor told the user to `boost sync
+    --prune`, which unlinked the skill from every agent. Such a scope falls
+    back to the agents the entry records reaching — what it reaches now
+    stays what it reaches — and to no narrowing when it records none.
+    `boost heal` writes the same answer into the lock
+    (:func:`drop_unknown_scope_agents`), so the two never disagree.
+    """
+    declared = entry.get("only_agents")
+    if not declared:
+        return declared
+    unknown = unknown_scope_agents(entry)
+    if not unknown:
+        return declared
+    kept = [a for a in declared if a not in unknown]
+    if kept:
+        return kept
+    known = agents.known_agents()
+    return [a for a in _recorded_agents(entry) if a in known] or None
+
+
+def unknown_scope_rows() -> list[tuple[str, str, list[str]]]:
+    """``(kind, name, unknown agents)`` for every lock row whose declared
+    scope names an agent boost does not know, kind then name order."""
+    return [(kind, name, bad)
+            for kind, section in lockfile.all_installed().items()
+            for name, entry in sorted(section.items())
+            if isinstance(entry, dict)
+            and (bad := unknown_scope_agents(entry))]
+
+
+def unknown_scope_line(kind: str, name: str, unknown: list[str]) -> str:
+    """doctor's wording for an :func:`unknown_scope_rows` row."""
+    n = len(unknown)
+    return ("%s %s's declared agent scope names %s, %s boost does not know "
+            "— it is ignored; `boost heal` drops %s from the lock"
+            % (kind, name, ", ".join(unknown),
+               "an agent" if n == 1 else "agents",
+               "it" if n == 1 else "them"))
+
+
+def drop_unknown_scope_agents(dry: bool = False) -> list[str]:
+    """Rewrite each :func:`unknown_scope_rows` row's ``only_agents`` to its
+    :func:`effective_scope`; one line per row, worded for ``dry`` or not.
+
+    Converges: the agents an entry reaches are the same before and after, so
+    nothing is linked or unlinked by it, and the next run finds no row.
+    """
+    lines = []
+    for kind, name, unknown in unknown_scope_rows():
+        what = "%s %s's declared agent scope" % (kind, name)
+        gone = ", ".join(unknown)
+        if dry:
+            lines.append("would drop %s from %s" % (gone, what))
+            continue
+
+        def fix(row: dict) -> bool:
+            if not unknown_scope_agents(row):
+                return False
+            row["only_agents"] = effective_scope(row)
+            return True
+        if lockfile.update_entry(kind, name, fix):
+            lines.append("dropped %s from %s" % (gone, what))
+    return lines
+
+
+def unlink_agents(name: str, into: list[str] | None = None) -> list[str]:
+    """Remove boost's ``name`` link from every linking agent dir.
+
+    Returns the agents unlinked. Only boost's kind of link goes
+    (:func:`is_boost_link`): a file, or the user's own link to a checkout,
+    is left where it is. Any symlink used to count, so uninstalling a skill
+    `boost sync` had recorded beside the user's link took that link too, and
+    `focus --clear` then put a link to the store copy in its place. Agents
+    that read the canonical store directly never had a link, so there is
+    nothing here to reverse for them — uninstalling the store dir is what
+    removes the skill from their view.
+
+    ``into`` is filled as each link goes (and returned), so a caller rolling
+    back after an interrupt part-way through knows which ones to put back.
+    """
+    removed: list[str] = [] if into is None else into
+    # Disabled agents too (:func:`agents.unlinking_agents`): a link left in
+    # one dangles into the store dir uninstall deletes next.
+    for agent, adir in agents.unlinking_agents().items():
         link = adir / name
-        if os.path.islink(link):  # noqa: FURB146
+        if is_boost_link(link):
             link.unlink()
             removed.append(agent)
+    # And the dirs an agent linked into before its dir was repointed: the
+    # lock names agents, not paths, so a link made under `~/.cursor/skills`
+    # was left dangling once `agents.cursor.dir` moved.
+    for agent, adir in agents.former_link_dirs():
+        link = adir / name
+        if is_boost_link(link):
+            link.unlink()
+            if agent not in removed:
+                removed.append(agent)
+    # And a dir boost linked into before that agent's ``links_skills`` went
+    # false. Other tools link into the store from there too, so only the
+    # link to this skill's own store dir goes, live or dangling.
+    for agent, adir in agents.remembered_native_dirs():
+        link = adir / name
+        if is_boost_link(link) and links_to_store_dir(link, name):
+            link.unlink()
+            if agent not in removed:
+                removed.append(agent)
     return removed
+
+
+def links_to_store_dir(link: Path, name: str) -> bool:
+    """Whether symlink ``link``'s own target is skill ``name``'s store dir.
+
+    The raw ``readlink()``, as :func:`points_into_store` reads it, so a link
+    that dangles since its store dir went still answers.
+    """
+    try:
+        target = link.readlink()
+    except OSError:
+        return False
+    if not target.is_absolute():
+        target = link.parent / target
+    return (normalize_link_target(target)
+            == normalize_link_target(skill_store_dir(name)))
+
+
+#: Lock field naming where a withheld skill's store copy is held aside.
+HELD_KEY = "held_at"
+
+
+def held_copy_dir(name: str) -> Path:
+    """Where skill ``name``'s store copy sits while it is held aside."""
+    if not util.is_safe_component(name):
+        raise BoostError("invalid skill name %r" % name)
+    return paths.held_skills_dir() / name
+
+
+def is_held(entry: dict | None) -> bool:
+    """Whether ``entry`` records its store copy as held aside."""
+    return bool((entry or {}).get(HELD_KEY))
+
+
+def copy_dir(name: str, entry: dict | None) -> Path:
+    """The dir that holds skill ``name``'s copy: held aside, or the store."""
+    return held_copy_dir(name) if is_held(entry) else skill_store_dir(name)
+
+
+def hold_store_copy(name: str) -> str | None:
+    """Move ``name``'s store copy out of the canonical store.
+
+    Unlinking is all a linking agent needs, but Gemini CLI and Codex read
+    ``~/.agents/skills`` itself (:func:`agents.native_store_agents`), so a
+    quarantined or sidelined skill whose copy stayed there stayed loaded in
+    both while ``boost info`` said "agents (none)". Held aside always, not
+    only while such an agent is enabled: enabling one later must not
+    resurface the skill. Returns the held path to record, or None when there
+    is no copy in either place. A re-run finds the copy already held; a held
+    copy beside a store copy is a stale one and the store copy replaces it.
+    """
+    src, dest = skill_store_dir(name), held_copy_dir(name)
+    if os.path.lexists(src):
+        if os.path.lexists(dest):
+            util.remove_path(dest)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(src), str(dest))
+    elif not os.path.lexists(dest):
+        return None
+    return str(dest)
+
+
+def restore_store_copy(name: str) -> None:
+    """Put back what :func:`hold_store_copy` moved, before anything relinks.
+
+    A store copy that exists again (an install since) is the current one, so
+    the held copy is dropped rather than moved over it.
+    """
+    src, dest = held_copy_dir(name), skill_store_dir(name)
+    if not os.path.lexists(src):
+        return
+    if os.path.lexists(dest):
+        util.remove_path(src)
+        return
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(src), str(dest))
+
+
+_SIDELINE_RETURN = {
+    "focus": "`boost focus --clear` puts it back",
+    "context": "`boost context disable` puts it back",
+    "profile": "a `boost profile use` that includes it puts it back",
+}
+
+
+def held_refusal(name: str, entry: dict | None) -> BoostError | None:
+    """The error for a command that writes ``name``'s store copy while it is
+    held aside, or None when it is in the store.
+
+    "SKILL.md missing — repair the store with `boost sync`" was the wrong
+    answer for it: sync leaves a held skill alone by design, so the hint
+    looped. This names why it is away and the command that brings it back.
+    """
+    if entry is None or not is_held(entry):
+        return None
+    why, back = held_reason(name, entry)
+    return BoostError("%s is %s — its store copy is held aside" % (name, why),
+                      hint="%s first" % back)
+
+
+def quarantine_refusal(name: str, entry: dict | None,
+                       kind: str = "skill") -> BoostError | None:
+    """The error for an install over quarantined ``name``, or None.
+
+    ``install --force`` and ``reinstall`` used to lift a quarantine without a
+    word: the held copy, edits and all, was thrown away, the item jumped to
+    the tap's HEAD and was linked into every agent, and no ``release`` was
+    journalled — while ``update`` holds the same item back on purpose. Lifting
+    a quarantine is its own decision, so the one command that makes it is
+    named, ``force`` or not.
+    """
+    if not (entry or {}).get("quarantined"):
+        return None
+    label = name if kind == "skill" else "%s %s" % (kind, name)
+    return BoostError("%s is quarantined — not reinstalled" % label,
+                      hint="`boost quarantine --release %s` first" % name)
+
+
+def lost_held_copy_hint(name: str) -> str:
+    """The way back for a held skill whose held copy is gone.
+
+    Not ``boost heal`` (it leaves a held row alone by design), not ``boost
+    reinstall`` (it refuses a quarantined row, :func:`quarantine_refusal`)
+    and not a release (there is nothing to put back): the record goes, and a
+    fresh install fetches the tap's copy. Release and doctor both word it
+    with this, so they cannot send the user round each other.
+    """
+    return ("`boost uninstall %s` drops the record, then `boost install %s` "
+            "fetches it again" % (name, name))
+
+
+def held_reason(name: str, entry: dict) -> tuple[str, str]:
+    """``(why, back)`` for a held skill: why it is away, what returns it.
+
+    ``list`` and ``info`` word a held copy with this rather than as "missing
+    from the store": that sent the user to `boost heal`, which (rightly)
+    leaves a held skill alone and answered "nothing to heal".
+    """
+    if entry.get("quarantined"):
+        return ("quarantined",
+                "`boost quarantine --release %s` puts it back" % name)
+    by = str(entry.get("sidelined_by") or "")
+    return ("sidelined by `boost %s`" % by if by else "sidelined",
+            _SIDELINE_RETURN.get(by, "relinking it puts it back"))
+
+
+def missing_from_store(name: str, entry: dict | None) -> bool:
+    """Whether recorded skill ``name`` has no store copy and none held aside.
+
+    What ``list`` and ``info`` flag, and why :func:`sync_plan` skips a held
+    row too: a quarantined or sidelined skill's copy is away on purpose, and
+    is not damage.
+    """
+    return not is_held(entry) and not skill_store_dir(name).is_dir()
+
+
+def held_copies() -> dict[str, Path]:
+    """Each recorded skill's held copy, by name: what a snapshot archives
+    beside the store, since the lock rows saying ``held_at`` are inside it."""
+    return {name: held_copy_dir(name)
+            for name, entry in lockfile.installed().items()
+            if is_held(entry) and util.is_safe_component(name)}
+
+
+def unhold_lost_copies() -> list[str]:
+    """Clear the sideline of each sidelined row whose held copy is gone.
+
+    A snapshot saved before held copies were archived restores rows that say
+    ``held_at`` with no copy anywhere: `focus --clear` "restored" them into
+    dangling links and `heal` skipped them as held. Un-held, they read as
+    missing from the store, which the restore's own sync reinstalls. A
+    quarantined row is left alone — bringing its content back is
+    `quarantine --release`'s call. Returns the names cleared.
+    """
+    lost = sorted(name for name, entry in lockfile.installed().items()
+                  if is_held(entry) and not entry.get("quarantined")
+                  and util.is_safe_component(name)
+                  and not os.path.lexists(held_copy_dir(name)))
+
+    def unhold(lock: dict) -> None:
+        for name in lost:
+            entry = lock["skills"].get(name)
+            if entry is not None:
+                entry.pop(HELD_KEY, None)
+                entry.pop("sidelined_by", None)
+    if lost:
+        lockfile.mutate(unhold)
+    return lost
+
+
+def drop_held_copy(name: str) -> None:
+    """Remove a held copy no lock row will restore; a leftover is harmless."""
+    with contextlib.suppress(OSError):
+        util.remove_path(held_copy_dir(name))
 
 
 def sideline(name: str, by: str) -> list[str]:
@@ -653,16 +1594,27 @@ def sideline(name: str, by: str) -> list[str]:
     lockfile.write() itself does not read.
     """
     removed = unlink_agents(name)
-    entry = lockfile.get_skill(name)
-    if entry is not None:
+    # Out of the store too, or Gemini CLI and Codex keep loading it — but
+    # only a skill the lock records: a store dir with no row (one `boost
+    # sync` has not recorded yet) would be moved where nothing restores it.
+    held = (hold_store_copy(name) if lockfile.get_skill(name) is not None
+            else None)
+
+    def aside(entry: dict) -> None:
         entry["sidelined_by"] = by
+        if held:
+            entry[HELD_KEY] = held
         # `agents` is defined as the links measured from disk, and the links
         # have just been removed — so leaving the old list had `boost list`
         # keep advertising the skill to agents that could no longer see it.
         # `quarantine` clears it for the same reason; :func:`unsideline`
         # recomputes it, exactly as `quarantine --release` does.
         entry["agents"] = []
-        lockfile.set_skill(name, entry)
+    try:
+        lockfile.update_skill(name, aside)
+    except BaseException:
+        restore_store_copy(name)
+        raise
     return removed
 
 
@@ -674,16 +1626,69 @@ def unsideline(name: str) -> InstallResult:
     disable``. Clears the flag regardless of which mechanism set it — only
     one can be true of a skill at a time, and whichever command relinks it is
     the one ending it.
+
+    Only into the agents the install declared (``only_agents``): relinking
+    into every agent turned a skill installed ``--agent cursor`` into one
+    linked everywhere the moment a `profile use` or `focus --clear` touched it.
     """
-    res = link_agents(name)
-    entry = lockfile.get_skill(name)
-    if entry is not None:
+    current = lockfile.get_skill(name) or {}
+    if current.get("quarantined"):
+        # Quarantine owns the held copy now. Restoring and relinking it here
+        # is what had `focus --clear` and `context disable` put a quarantined
+        # skill back in every agent while the lock still said quarantined;
+        # only `quarantine --release` brings it back. The stale sideline
+        # flag is dropped so no later un-sideline tries again.
+        def unflag(entry: dict) -> None:
+            entry.pop("sidelined_by", None)
+        lockfile.update_skill(name, unflag)
+        return InstallResult(name, skill_store_dir(name))
+    declared = current.get("only_agents") or None
+    # Back into the store first: the links point at it.
+    restore_store_copy(name)
+    res = link_agents(name, declared, keep_theirs=True)
+
+    def relinked(entry: dict) -> None:
         # Record the links this just made, since sideline() emptied the list,
         # and the agents that refused, so a later reinstall retries them.
         record_links(entry, res)
         entry.pop("sidelined_by", None)
-        lockfile.set_skill(name, entry)
+        entry.pop(HELD_KEY, None)
+    lockfile.update_skill(name, relinked)
     return res
+
+
+def sideline_priors(installed: dict, names: list[str],
+                    carried: dict | None = None) -> dict[str, str]:
+    """The mechanism other than focus that had set each of ``names`` aside.
+
+    ``boost focus X`` relinks X whatever sidelined it, so a skill ``context``
+    had set aside came back linked at ``focus --clear`` against the branch
+    rule. Recorded here so the clear can put that sideline back. ``carried``
+    is the running session's own record: a re-focus keeps it, since a skill
+    it relinked is a focus sideline now and its first flag is the true one.
+    """
+    prior = {str(k): str(v) for k, v in (carried or {}).items() if v}
+    for name in names:
+        by = (installed.get(name) or {}).get("sidelined_by")
+        if by and by != "focus":
+            prior[name] = str(by)
+    return prior
+
+
+def focus_displaced(active: list[str], installed: dict) -> list[tuple[str, str]]:
+    """``(name, why)`` for each focused skill that is no longer linked.
+
+    `profile use` and `quarantine` can set a focused skill aside mid-session,
+    and `focus --status` went on naming it the active focus.
+    """
+    displaced = []
+    for name in active:
+        entry = installed.get(name)
+        if entry is None:
+            displaced.append((name, "not installed"))
+        elif entry.get("quarantined") or entry.get("sidelined_by"):
+            displaced.append((name, held_reason(name, entry)[0]))
+    return displaced
 
 
 def linked_agents(name: str) -> list[str]:
@@ -696,19 +1701,84 @@ def linked_agents(name: str) -> list[str]:
     left three symlinks and a lock claiming one, and every reporting surface
     believed the lock.
 
-    Deliberately the same ``is_symlink()`` test :func:`unlink_agents` uses, so
-    what an install records is exactly what an uninstall will remove. A regular
-    file sitting where a link should be is a conflict, not a link, and is
-    excluded by both.
+    Deliberately the same test :func:`unlink_agents` uses, :func:`is_boost_link`,
+    so what an install records is exactly what an uninstall will remove. A
+    regular file sitting where a link should be is a conflict, not a link, and
+    so is the user's own link to a checkout outside the scope an install
+    wrote: both are excluded by both.
 
     ``os.path.islink``, not ``Path.is_symlink``: under an agent dotdir with no
     search bit the latter raises PermissionError on Python 3.12 and 3.13 (3.14
     answers False), and it raised here *after* the store copy, so the install
     exited 70 with the skill in the store and nothing in the lock. A link boost
     may not even look at is not one it can count.
+
+    ``unlinking_agents``, not ``linking_agents``: disabling an agent stops new
+    links without removing old ones, so a live link in a disabled agent's dir
+    is still linked — and still what an uninstall removes. Counting only the
+    enabled ones made a reinstall with claude-code disabled drop it from
+    ``agents`` while ``~/.claude/skills/<name>`` stayed live, and re-enabling
+    it changed nothing any command reported.
     """
-    return [agent for agent, adir in agents.linking_agents().items()
-            if os.path.islink(adir / name)]  # noqa: FURB146
+    return [agent for agent, adir in agents.unlinking_agents().items()
+            if is_boost_link(adir / name)
+            and misdirected(name, adir / name) is None]
+
+
+def misdirected(name: str, link: Path) -> Path | None:
+    """Where a live boost link for ``name`` leads, when it is not ``name``'s copy.
+
+    None for a link that leads to ``name``'s own store dir, and for anything
+    that is not a live boost link (:func:`is_boost_link`): a dangling one is
+    stale, and a user's own link is the user's. Containment in the store was
+    the only question every check asked, so ``~/.claude/skills/brainstorming
+    -> ~/.agents/skills/tdd-workflow`` read as healthy to doctor, heal and
+    sync while Claude loaded tdd-workflow under brainstorming's name.
+
+    The answer is the store dir it leads into when there is one, so a message
+    can name the skill the agent really gets.
+    """
+    if not is_boost_link(link) or _dangles(link):
+        return None
+    target = skill_store_dir(name)
+    if _already_links(link, target):
+        return None
+    # By inode too: on a case-insensitive volume a link to ``~/.Agents/...``
+    # is the right copy under a spelling ``resolve()`` keeps.
+    with contextlib.suppress(OSError):
+        if os.path.samefile(link, target):
+            return None
+    # The entry's name, unless it is this skill's own: a link into a subdir
+    # of its copy is wrong too, and "linked to <its own dir>, not its own
+    # store dir" would contradict itself, so that one names the real path.
+    entry = _store_entry(link)
+    return (paths.store_dir() / entry if entry and entry != name
+            else Path(os.path.realpath(link)))
+
+
+def misdirected_links(name: str) -> list[tuple[str, Path]]:
+    """``(agent, where)`` for each linking agent whose ``name`` link is
+    :func:`misdirected`."""
+    return [(agent, wrong) for agent, adir in agents.linking_agents().items()
+            if (wrong := misdirected(name, adir / name)) is not None]
+
+
+def out_of_scope_agents(name: str, entry: dict,
+                        linking: dict[str, Path]) -> list[str]:
+    """The agents in ``linking`` holding a boost link for ``name`` outside
+    the ``--agent`` narrowing ``entry`` declares, read from disk.
+
+    Empty without a narrowing: :func:`scoped_agents` fails open, so every
+    agent is in scope. boost's links only, so the user's own link is not
+    offered to ``--prune``. ``sync_plan`` and ``doctor`` both ask this: doctor
+    used to read the lock's ``agents`` instead, and missed a link made by hand
+    that sync went on to report.
+    """
+    if not entry.get("only_agents"):
+        return []
+    in_scope = scoped_agents(entry, linking)
+    return [agent for agent, adir in linking.items()
+            if agent not in in_scope and is_boost_link(adir / name)]
 
 
 def refusing_dir(path: Path) -> Path:
@@ -743,8 +1813,11 @@ def _untouched_materializations(existing: dict | None,
     in ``CLAUDE.md`` or a live slash command that no record claimed and no
     command could reverse.
     """
+    # The skill copy is never carried: it names no agent, so it is never in
+    # ``linked``, and carrying it appended a second copy of the row on every
+    # reinstall. `_install_workflow` decides it afresh each run.
     return [m for m in (existing or {}).get("materializations") or []
-            if m.get("agent") not in linked]
+            if m.get("agent") not in linked and not lockfile.is_skill_copy(m)]
 
 
 def materialization_is_written(kind: str, entry: dict, m: dict) -> bool:
@@ -764,6 +1837,106 @@ def materialization_is_written(kind: str, entry: dict, m: dict) -> bool:
                                              m.get("agent"))
 
 
+def unmaterialized_agents(kind: str, entry: dict) -> list[str]:
+    """The agents boost writes ``kind`` into that ``entry`` has no row for.
+
+    Rows record what an install wrote, so an agent enabled afterwards -- or
+    added to the defaults since -- has none, and every check that walks the
+    rows found nothing wrong with it: doctor called the rule fully
+    materialized and `boost sync` linked the skill beside it and left the
+    rule out. An ``unwritable`` row and a workflow's ``foreign`` row count as
+    present: each already names the agent, with its own remedy.
+
+    Within a declared ``--agent`` narrowing only, so this never widens one.
+    Empty for an entry that records no ``only_agents`` at all: it predates
+    the field, its rows are its only record of a narrowing, and reading them
+    as gaps would undo one. Empty for an entry with no rows, which predates rows and has
+    nothing to compare (:func:`integrity.reaches_no_agent` reads it the same
+    way), and for a quarantined or stranded entry, whose artifacts are absent
+    on purpose.
+    """
+    rows = entry.get("materializations") or []
+    if (not rows or "only_agents" not in entry or entry.get("quarantined")
+            or scopes.stranded(entry)):
+        return []
+    base = entry.get("base")
+    writes = (agents.workflow_agents(base) if kind == "workflow"
+              else agents.materializing_agents(base))
+    declared = entry.get("only_agents")
+    have = {m.get("agent") for m in rows} | {
+        r["agent"] for r in (*foreign_rows(entry), *declined_rows(entry))}
+    return [a for a in writes
+            if a not in have and (not declared or a in declared)]
+
+
+def skipped_agents(kind: str, entry: dict) -> list[tuple[str, str]]:
+    """``(agent, reason)`` for every agent ``entry``'s scope reaches with a
+    skill that ``kind``'s write set leaves out by the agent's own config.
+
+    The sibling of :func:`unmaterialized_agents`, for the agents that one
+    cannot see: it asks which agents boost *writes* and has no row for, and
+    an agent :func:`agents.materializing_agents` or
+    :func:`agents.workflow_agents` excludes (``skills_only``, ``workflows:
+    false``) is not one of them. It never gets a row either, so every
+    reporter that walks the rows missed it: install listed only the agents it
+    wrote, and doctor called the item fully materialized while a Claude Code
+    profile added as ``skills_only`` got no subagent and no rule at all.
+
+    The agents asked are the ones a skill reaches -- :func:`agents.
+    linking_agents` at user scope, :func:`agents.project_agents` in a repo --
+    so an agent that reads the store natively (Codex, which reaches a
+    workflow through its skill copy) is not reported as missing it. Within a
+    declared ``--agent`` narrowing only, so this never widens one. An agent
+    any row already names is left to that row: a materialization row the
+    agent stopped taking is :func:`unwritten_materializations`'s, and a
+    ``foreign`` or ``declined`` row has its own wording. Empty for a skill,
+    and for a quarantined or stranded entry, whose artifacts are absent on
+    purpose. Unlike :func:`unmaterialized_agents` an entry with no rows is
+    still judged: an item every agent skips is exactly one with none.
+    """
+    if (kind not in ("rule", "workflow") or entry.get("quarantined")
+            or scopes.stranded(entry)):
+        return []
+    base = entry.get("base")
+    reach = agents.linking_agents() if base is None else agents.project_agents()
+    declared = entry.get("only_agents")
+    have = {m.get("agent") for m in entry.get("materializations") or ()} | {
+        r["agent"] for r in (*foreign_rows(entry), *declined_rows(entry))}
+    skipped = []
+    for agent in reach:
+        if agent in have or (declared and agent not in declared):
+            continue
+        why = agents.materialization_skip_reason(kind, base, agent)
+        if why is not None:
+            skipped.append((agent, why))
+    return skipped
+
+
+def skipped_agent_items() -> list[tuple[str, str, bool, list[str]]]:
+    """``(agent, reason, via_copy, ["rule x", "workflow y", …])`` over every
+    installed rule and workflow: :func:`skipped_agents`, grouped by agent for
+    `boost doctor`, which names each agent once rather than once per item.
+
+    ``via_copy`` splits an agent's items in two: a workflow whose skill copy
+    is linked into the agent (:func:`copy_link_targets`) reaches it after
+    all, as a skill, and a rule -- or a workflow with no copy -- does not.
+
+    In the order first met -- rules before workflows, each section by name --
+    so two runs print the same line.
+    """
+    found: dict[tuple[str, str, bool], list[str]] = {}
+    for kind, section in (("rule", lockfile.installed_rules()),
+                          ("workflow", lockfile.installed_workflows())):
+        for name, entry in sorted(section.items()):
+            copied = (copy_link_targets(name, entry) if kind == "workflow"
+                      else {})
+            for agent, why in skipped_agents(kind, entry):
+                found.setdefault((agent, why, agent in copied), []).append(
+                    "%s %s" % (kind, name))
+    return [(agent, why, copied, items)
+            for (agent, why, copied), items in found.items()]
+
+
 def unwritten_materializations() -> list[tuple[str, str, str, str]]:
     """``(kind, name, agent, reason)`` for every row boost no longer writes --
     what `boost doctor` names once instead of reporting as rot.
@@ -773,8 +1946,31 @@ def unwritten_materializations() -> list[tuple[str, str, str, str]]:
     `boost sync` remedy cannot run -- the very failure this list exists to
     end. The ``reason`` is :func:`agents.materialization_skip_reason`, because
     *disabled* is only one of the ways a row stops being written.
+
+    Skills are named too, user scope and the current project's, because
+    :func:`integrity.written_agent_names` drops the same agents from their
+    ``agents`` list: a disabled cursor is gone from `boost list` for a skill as
+    for a rule, and doctor naming only the rule left the skill's links -- still
+    on disk, still read by Cursor -- accounted for nowhere. A quarantined or
+    sidelined skill is left out as a quarantined rule is: its links are
+    removed on purpose.
     """
-    return [(kind, name, m["agent"],
+    pbase = scopes.resolve_base(scopes.SCOPE_PROJECT)
+    project = projectlock.installed(pbase) if pbase is not None else {}
+    skills: list[tuple[str, dict, str | None]] = [
+        (name, entry, None)
+        for name, entry in sorted(lockfile.installed().items())
+        if not (is_held(entry) or entry.get("quarantined")
+                or entry.get("sidelined_by"))]
+    skills += [(name, entry, scopes.SCOPE_PROJECT)
+               for name, entry in sorted(project.items())]
+    unlinked = [("skill", name, agent,
+                 agents.materialization_skip_reason("skill", base, agent)
+                 or agents.REASON_UNKNOWN)
+                for name, entry, base in skills
+                for agent in lockfile.agent_names("skill", entry)
+                if not agents.materialization_is_written("skill", base, agent)]
+    return unlinked + [(kind, name, m["agent"],
              agents.materialization_skip_reason(kind, entry.get("base"),
                                                 m["agent"])
              or agents.REASON_UNKNOWN)
@@ -958,7 +2154,10 @@ def occupied_targets() -> list[Path]:
 
 
 def _refused_materializations(existing: dict | None, linked: list[str],
-                              refused: list[dict]) -> list[dict]:
+                              refused: list[dict],
+                              source_sha: str | None = None,
+                              declared: list[str] | None = None
+                              ) -> list[dict]:
     """The rows to record beside this run's writes: refused, then untouched.
 
     An agent whose directory refused the write is still recorded, as a row
@@ -971,13 +2170,45 @@ def _refused_materializations(existing: dict | None, linked: list[str],
     A refused row replaces that agent's old one. The old file, if any, is
     still on disk at the same path, and the new row still names that path, so
     uninstall removes it.
+
+    An untouched row is marked ``stale`` when ``source_sha`` says the source
+    changed: its file is the old version, and it still hashes to its own
+    old digest, so every check passed it. `boost update` with windsurf
+    disabled recorded v2 over windsurf's v1 copy, and after re-enabling it
+    doctor, verify, drift and sync all said in sync. A stale row stays stale
+    until a run writes that agent.
+
+    Only within ``declared``, the ``--agent`` narrowing in force: a row for an
+    agent outside it is kept so uninstall can remove its file, but no `sync`
+    will ever write that agent, so a ``stale`` flag there was a remedy that
+    never converged -- doctor said "run `boost sync`", sync re-wrote only the
+    narrowed agents, and doctor said it again. Such a row loses the flag.
     """
     done = linked + [r["agent"] for r in refused]
-    return refused + _untouched_materializations(existing, done)
+    kept = _untouched_materializations(existing, done)
+    changed = bool(existing and source_sha is not None
+                   and existing.get("sha256") != source_sha)
+    out: list[dict] = []
+    for m in kept:
+        row = {k: v for k, v in m.items() if k != "stale"}
+        if declared and m.get("agent") not in declared:
+            out.append(row)
+        elif changed or m.get("stale"):
+            out.append(row | {"stale": True})
+        else:
+            out.append(row)
+    return refused + out
 
 
-def _copy_skill(src: Path, dest: Path) -> None:
-    """Copy a skill tree into ``dest`` atomically.
+def _copy_skill(src: Path, dest: Path, *, within: Path | None = None,
+                keep_old: list[Path] | None = None) -> list[str]:
+    """Copy a skill tree into ``dest`` atomically; return the links skipped.
+
+    Symlinks follow :func:`_copy_tree`: one that stays inside the skill is
+    copied as a link, one out of it is copied as what it points at only when
+    that is inside ``within`` (the tap clone; anywhere when None, as for a
+    local import), and anything else is skipped and named in the returned
+    lines.
 
     The old rmtree-then-copytree left a window where a crash destroyed the
     previous good copy before the new one finished — on a reinstall/upgrade the
@@ -986,6 +2217,10 @@ def _copy_skill(src: Path, dest: Path) -> None:
     filesystem, then swap it in with directory renames: the existing copy stays
     untouched until the new one is complete, the failure window shrinks to two
     fast renames, and a failed swap rolls back to the original.
+
+    With ``keep_old`` a list, the moved-aside original is appended to it
+    rather than deleted, so a caller whose later step fails can swap it back
+    (:func:`_restore_old_copy`); deleting it is then that caller's job.
     """
     dest = Path(dest)
     # Staging needs to *write* next to dest, and a store that cannot be written
@@ -996,8 +2231,11 @@ def _copy_skill(src: Path, dest: Path) -> None:
     # report for it. Name the directory instead: that is the whole diagnosis.
     try:
         dest.parent.mkdir(parents=True, exist_ok=True)
+        # util.TEMP_PREFIX, not ``.<name>.tmp``: the name embedded made the
+        # staging dir 13 bytes longer than the skill's own, so a name that
+        # fits as a store dir could not be staged.
         staged = Path(tempfile.mkdtemp(dir=str(dest.parent),
-                                       prefix="." + dest.name + ".tmp"))
+                                       prefix=util.TEMP_PREFIX))
     except PermissionError as exc:
         raise BoostError(
             "cannot write to the skill store at %s" % dest.parent,
@@ -1012,10 +2250,32 @@ def _copy_skill(src: Path, dest: Path) -> None:
             % (dest.parent, exc.strerror or exc),
             hint="free space or fix the mount, then re-run") from exc
     backup = None
+    skipped: list[str] = []
     try:
-        shutil.copytree(
-            src, staged, dirs_exist_ok=True,
-            ignore=shutil.ignore_patterns(".git", "__pycache__", ".DS_Store"))
+        try:
+            skipped = _copy_tree(Path(src), staged,
+                                 None if within is None else Path(within))
+        except shutil.Error as exc:
+            # A file that vanished or could not be read mid-copy. It reached
+            # the crash handler as a repr of every failing path; one path is
+            # the diagnosis.
+            rows = exc.args[0] if exc.args and isinstance(exc.args[0], list) else []
+            first = rows[0][0] if rows and rows[0] else str(exc)
+            n = max(len(rows), 1)
+            raise BoostError(
+                "could not copy %s into the skill store: %d file%s failed"
+                % (dest.name, n, "" if n == 1 else "s"),
+                hint="first: %s" % first) from None
+        # A SKILL.md that is a link out of bounds is skipped by _copy_tree
+        # like any other, which left an empty store dir that install called
+        # a success and `list` showed as installed. No SKILL.md, no skill.
+        if not (staged / "SKILL.md").exists():
+            raise BoostError(
+                "refusing to install %s: no SKILL.md would reach the store"
+                % dest.name,
+                hint="a SKILL.md that links outside its source is never "
+                     "copied")
+        _own_writable(staged)
         # is_symlink() as well as exists(): a dangling symlink is still
         # something in the way that has to be moved aside.
         if dest.exists() or dest.is_symlink():
@@ -1025,12 +2285,151 @@ def _copy_skill(src: Path, dest: Path) -> None:
     except BaseException:
         if backup is not None and not (dest.exists() or dest.is_symlink()):
             os.replace(backup, dest)      # swap-in failed: restore the original
-        shutil.rmtree(staged, ignore_errors=True)
+        with contextlib.suppress(OSError):
+            _own_writable(staged)     # a half-copied 0555 dir refuses rmtree
+        with contextlib.suppress(OSError):
+            util.rmtree(staged)
         if backup is not None and (backup.exists() or backup.is_symlink()):
             _remove_backup(backup)
         raise
     if backup is not None:
-        _remove_backup(backup)
+        if keep_old is None:
+            _remove_backup(backup)
+        else:
+            keep_old.append(backup)
+    return skipped
+
+
+def _own_writable(root: Path) -> None:
+    """Give the owner write on every directory and file of a fresh copy.
+
+    ``copytree`` copies modes, so a skill imported from a read-only source
+    (``chmod 555``, a read-only mount, a package manager's tree) arrived in
+    the store read-only — and the store copy is boost's to write. ``import
+    --name`` then crashed writing the renamed frontmatter beside SKILL.md, and
+    the cleanup that should have removed the unrecorded copy could not unlink
+    anything inside it either, so every rerun refused the stranded dir. Links
+    are left alone: ``chmod`` follows them, out of the copy.
+    """
+    for d, dirs, files in os.walk(root):
+        for n in (*dirs, *files):
+            p = Path(d, n)
+            if not p.is_symlink():
+                p.chmod(p.lstat().st_mode | stat.S_IWUSR)
+    Path(root).chmod(Path(root).lstat().st_mode | stat.S_IWUSR)
+
+
+def _restore_old_copy(old: Path, dest: Path) -> None:
+    """Put the moved-aside original back at ``dest``, the new copy aside.
+
+    Renames only, so an interrupt mid-restore cannot lose both copies: the
+    new copy goes to its own ``.new`` name before the old one comes back.
+    """
+    if os.path.lexists(dest):
+        aside = old.with_name(old.name[:-len(".old")] + ".new")
+        os.replace(dest, aside)
+        try:
+            os.replace(old, dest)
+        except BaseException:
+            # Put the new copy back: install's cleanup deletes ``old`` next,
+            # and an empty ``dest`` would lose both copies.
+            os.replace(aside, dest)
+            raise
+        _remove_backup(aside)
+    else:
+        os.replace(old, dest)
+
+
+#: The names a skill copy never takes, at any depth (:data:`util.IGNORED`).
+_COPY_IGNORE = shutil.ignore_patterns(*sorted(util.IGNORED))
+
+
+def _copy_tree(src: Path, dst: Path, within: Path | None) -> list[str]:
+    """Copy ``src`` to ``dst`` without following a link out of ``within``.
+
+    ``copytree`` with its default ``symlinks=False`` follows every link, so a
+    skill's link to ``../../shared/helper.py`` — a file the sparse tap clone
+    may not hold — failed the whole install with a raw ``shutil.Error``, and
+    a link to ``/etc/passwd`` or ``~/.ssh`` would have copied that into the
+    store. Instead:
+
+    * a link that resolves to something inside ``src`` is copied as the link
+      it is, so the copy's relative links lead into the copy;
+    * one that resolves elsewhere inside ``within`` is copied as its target,
+      a file or a directory (whose own links obey the same test);
+    * one that leads nowhere, or out of ``within``, is skipped, and the line
+      returned says which and why. With ``within`` None there is no bound:
+      a local import copies what the user's own links lead to, as it always
+      did.
+    """
+    src_real = os.path.realpath(src)
+    root = None if within is None else os.path.realpath(within)
+    escaping: list[Path] = []
+
+    def ignore(d: str, names: list[str]) -> set[str]:
+        skip = _COPY_IGNORE(d, names).copy()
+        for n in names:
+            p = Path(d, n)
+            if n in skip or not p.is_symlink():
+                continue
+            # copytree copies a link verbatim, so it stays one only when its
+            # spelling leads into the copy too: not absolute (that points back
+            # at the tap) and not via the skill dir's own name (``../x/f``),
+            # which the store may spell differently.
+            spelled = os.readlink(p)
+            lexical = os.path.normpath(os.path.join(
+                os.path.relpath(d, src), spelled))
+            if (Path(spelled).is_absolute()
+                    or lexical.split(os.sep)[0] == os.pardir
+                    or not p.exists()
+                    or not _inside(os.path.realpath(p), src_real)):
+                skip.add(n)
+                escaping.append(p)
+        return skip
+
+    shutil.copytree(src, dst, symlinks=True, ignore=ignore, dirs_exist_ok=True)
+    _own_dirs(dst)
+    skipped: list[str] = []
+    for p in escaping:
+        rel = Path(os.path.relpath(p, src)).as_posix()
+        target = os.path.realpath(p)
+        shown = "%s → %s" % (rel, os.readlink(p))
+        if not Path(target).exists():
+            skipped.append("%s leads to nothing" % shown)
+        elif root is not None and not _inside(target, root):
+            skipped.append("%s leads outside the tap" % shown)
+        elif Path(target).is_dir():
+            if _inside(src_real, target):
+                # A link to an ancestor of the skill: copying it copies the
+                # skill into itself, without end.
+                skipped.append("%s loops back over the skill" % shown)
+            else:
+                skipped += ["%s/%s" % (rel, s) for s in
+                            _copy_tree(Path(target), dst / rel, within)]
+        else:
+            shutil.copy2(target, dst / rel)
+    return skipped
+
+
+def _own_dirs(top: Path) -> None:
+    """Give ``top`` and every directory under it at least ``u+rwx``.
+
+    ``copytree`` copies each directory's mode, so a skill imported from a
+    read-only source (a nix store path, an extracted tarball) landed with
+    0o555 directories, and the store copy could then be neither uninstalled
+    nor replaced. Directories only: a file's mode, its exec bit above all,
+    is the skill's. A link is never chmod-ed — that changes its target.
+    """
+    def own(d: str) -> None:
+        mode = os.lstat(d).st_mode
+        if not stat.S_ISLNK(mode) and mode & stat.S_IRWXU != stat.S_IRWXU:
+            os.chmod(d, mode | stat.S_IRWXU)
+
+    own(str(top))
+    # Top-down, so each directory is fixed before the walk lists it.
+    for here, dirs, _names in os.walk(top):
+        for n in dirs:
+            own(os.path.join(here, n))
 
 
 def _remove_backup(backup: Path) -> None:
@@ -1038,14 +2437,238 @@ def _remove_backup(backup: Path) -> None:
 
     ``shutil.rmtree`` on a symlink raises, and with ``ignore_errors=True`` it
     fails silently — so when the displaced ``dest`` was a symlink rather than a
-    real directory, the ``.<name>.tmpXXXX.old`` staging link was left behind
+    real directory, the ``.boost-XXXXXXXX.old`` staging link was left behind
     forever. Harmless-looking, but it accumulates in the user's agent dirs and
     every one of them is a dangling pointer.
+
+    :func:`util.rmtree`, not ``shutil.rmtree(ignore_errors=True)``: a copy
+    holding a read-only directory (one installed before :func:`_copy_tree`
+    normalised modes) failed to delete in silence, and every reinstall left
+    one more ``.old`` dir in the store. Still best-effort — this runs in
+    cleanup paths, where raising would mask the error being cleaned up after
+    — and a leftover is what `boost doctor` names and `boost clean` removes
+    (:func:`leftover_copies`).
     """
     if backup.is_symlink():
         backup.unlink(missing_ok=True)
     else:
-        shutil.rmtree(backup, ignore_errors=True)
+        with contextlib.suppress(OSError):
+            util.rmtree(backup)
+
+
+#: The suffixes of a moved-aside copy: :func:`_copy_skill`'s ``.old`` and
+#: :func:`_restore_old_copy`'s ``.new``.
+_LEFTOVER_SUFFIXES = (".old", ".new")
+
+
+def leftover_copies() -> list[Path]:
+    """Moved-aside skill copies a swap left in the store, sorted.
+
+    Only ``.boost-*.old`` / ``.boost-*.new``: a bare ``.boost-XXXXXXXX`` is
+    the staging dir of an install that may be copying right now.
+    """
+    root = paths.store_dir()
+    if not root.is_dir():
+        return []
+    return sorted(p for p in root.iterdir()
+                  if p.name.startswith(util.TEMP_PREFIX)
+                  and p.name.endswith(_LEFTOVER_SUFFIXES))
+
+
+#: How old a temp file or staging dir must be before it is called stale. No
+#: write or install holds one anywhere near this long; one younger may be in
+#: use by a boost running right now.
+STALE_TEMP_AGE = 3600.0
+
+#: The characters of the random part ``tempfile`` gives ``mkstemp``/``mkdtemp``.
+_TEMP_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789_")
+
+
+def _temp_token(name: str, suffix: str) -> bool:
+    """Whether ``name`` is ``.boost-`` + an 8-char tempfile token + ``suffix``."""
+    head = util.TEMP_PREFIX
+    if not (name.startswith(head) and name.endswith(suffix)):
+        return False
+    token = name[len(head):len(name) - len(suffix)]
+    return len(token) == 8 and set(token) <= _TEMP_CHARS
+
+
+def stale_temps(now: float | None = None) -> list[tuple[Path, str]]:
+    """What a killed boost left in the store, as ``(path, kind)``, sorted.
+
+    ``util.atomic_write_text``'s ``.boost-XXXXXXXX.tmp`` (a 0600 copy of the
+    lock file, when that was the write) and a ``_copy_skill`` staging dir
+    ``.boost-XXXXXXXX``. Neither is ever renamed into place once the process
+    that made it is gone, and doctor said "healthy" over both while the store
+    is a directory Gemini CLI and Codex read directly. Only boost's own exact
+    names (:func:`leftover_copies` has the ``.old``/``.new`` ones) and only
+    older than :data:`STALE_TEMP_AGE`, since a younger one may be a write or
+    install in progress. A symlink is never one.
+
+    Beyond the store, the same ``.tmp`` files in every other dir boost writes
+    atomically into (:func:`atomic_write_dirs`): beside ``config.json``, the
+    tap caches, and each rule's or workflow's file in an agent's dotdir.
+    """
+    root = paths.store_dir()
+    now = time.time() if now is None else now
+    found = []
+    try:
+        entries = list(root.iterdir())
+    except OSError:
+        entries = []    # no store: the other dirs below may still hold one
+    for p in entries:
+        try:
+            st = p.lstat()
+        except OSError:
+            continue
+        if now - st.st_mtime <= STALE_TEMP_AGE:
+            continue
+        if stat.S_ISREG(st.st_mode) and _temp_token(p.name, ".tmp"):
+            found.append((p, STALE_TEMP_FILE))
+        elif stat.S_ISDIR(st.st_mode) and _temp_token(p.name, ""):
+            found.append((p, "stale staging dir"))
+    found += _stale_restore_dirs(root, now)
+    found += _stale_write_temps(now)
+    return sorted(found)
+
+
+def recorded_store_dirs() -> list[Path]:
+    """The store dirs the lock claims: each skill's, and each workflow's
+    skill copy. Sorted, once each, only names a store dir could have."""
+    lock = lockfile.read()
+    store = paths.store_dir()
+    found = {store / n for n in (lock.get("skills") or {})
+             if util.is_safe_component(n)}
+    for entry in (lock.get("workflows") or {}).values():
+        if not isinstance(entry, dict):
+            continue
+        for m in entry.get("materializations") or ():
+            if (isinstance(m, dict) and lockfile.is_skill_copy(m)
+                    and isinstance(m.get("path"), str)):
+                d = Path(m["path"]).parent
+                if d.parent == store:
+                    found.add(d)
+    return sorted(found)
+
+
+def hygiene_candidates() -> list[Path]:
+    """What `boost clean` may sweep for ``__pycache__``/``.DS_Store``.
+
+    The store's own top level, then everything under a dir the lock records
+    (:func:`recorded_store_dirs`), sorted. Not the rest of the store: a dir
+    there that no lock row claims is one `boost sync` and `boost heal` name
+    and leave alone as not boost's, and clean used to reach inside it.
+    """
+    store = paths.store_dir()
+    if not os.path.isdir(store):  # noqa: FURB146
+        return []
+    found = [p for p in store.iterdir() if p.name in (".DS_Store", "__pycache__")]
+    for d in recorded_store_dirs():
+        if os.path.isdir(d) and not os.path.islink(d):  # noqa: FURB146
+            found.extend(d.rglob("*"))
+    return sorted(found)
+
+
+#: :func:`stale_temps`' kind for an ``atomic_write_text`` temp file.
+STALE_TEMP_FILE = "stale temp file"
+
+
+def atomic_write_dirs() -> list[Path]:
+    """The dirs besides the store that boost writes files into atomically.
+
+    ``util._replace_atomically`` makes its ``.boost-XXXXXXXX.tmp`` beside the
+    target, so a kill leaves one next to ``config.json``, a tap cache, or a
+    user's ``CLAUDE.md`` — and a scan of the store alone said "healthy" over
+    a 0600 copy of that ``CLAUDE.md``. boost's own dirs, then the dir of
+    every rule or workflow file the lock records (project-scope rows too:
+    the temp sits in the repo just the same), nominal and resolved, since
+    ``write_user_file`` writes through a symlink and makes its temp beside
+    the real file. Each once, in order, the store left out.
+    """
+    store = paths.store_dir()
+    dirs = [d for d in paths.boost_dirs() if d != store]
+    lock = lockfile.read()
+    for _kind, section in lockfile.SECTIONS[1:]:
+        for entry in (lock.get(section) or {}).values():
+            if not isinstance(entry, dict):
+                continue
+            for m in lockfile._row_paths(entry):
+                p = Path(m["path"])
+                # Only an absolute row names a dir: ``""`` or a relative
+                # path has ``.`` for a parent, and `boost clean` would then
+                # delete from wherever it was run.
+                if not p.is_absolute():
+                    continue
+                dirs.extend((p.parent, Path(os.path.realpath(p)).parent))
+    def key_of(d: Path) -> str:
+        return os.path.normcase(os.path.realpath(d))
+    seen: set[str] = {key_of(store)}
+    out_: list[Path] = []
+    for d in dirs:
+        key = key_of(d)
+        if key not in seen:
+            seen.add(key)
+            out_.append(d)
+    return out_
+
+
+def _stale_write_temps(now: float) -> list[tuple[Path, str]]:
+    """The aged ``.boost-XXXXXXXX.tmp`` files in :func:`atomic_write_dirs`.
+
+    Files only: a ``.boost-XXXXXXXX`` dir is a staging dir, and only the
+    store holds those. Never one path twice when two dirs are one on disk.
+    """
+    found: dict[str, Path] = {}
+    for d in atomic_write_dirs():
+        try:
+            entries = list(d.iterdir())
+        except OSError:
+            continue
+        for p in entries:
+            if not _temp_token(p.name, ".tmp"):
+                continue
+            try:
+                st = p.lstat()
+            except OSError:
+                continue
+            if stat.S_ISREG(st.st_mode) and now - st.st_mtime > STALE_TEMP_AGE:
+                found.setdefault(os.path.realpath(p), p)
+    return [(p, STALE_TEMP_FILE) for p in found.values()]
+
+
+#: :func:`stale_temps`' kind for a ``snapshot restore``'s parked previous
+#: store: the only copy of it once a kill cut the restore short, so `boost
+#: clean` names it and leaves it, and `boost doctor` says what it holds.
+PARKED_STORE = "previous store parked by an interrupted restore"
+
+
+def _stale_restore_dirs(root: Path, now: float) -> list[tuple[Path, str]]:
+    """The dirs a killed `snapshot restore` left beside the store.
+
+    :func:`snapshot.restore` makes them in the store's parent, so a scan of
+    the store alone never saw them: a SIGTERM mid-swap left the previous
+    store in one, and neither doctor nor `clean --dry-run` said a word.
+    """
+    try:
+        entries = list(root.resolve().parent.iterdir())
+    except OSError:
+        return []
+    found = []
+    for p in entries:
+        prefix = next((x for x in snapshot.RESTORE_PREFIXES
+                       if p.name.startswith(x)), None)
+        token = p.name[len(prefix):] if prefix else ""
+        if not (len(token) == 8 and set(token) <= _TEMP_CHARS):
+            continue
+        try:
+            st = p.lstat()
+        except OSError:
+            continue
+        if not stat.S_ISDIR(st.st_mode) or now - st.st_mtime <= STALE_TEMP_AGE:
+            continue
+        found.append((p, PARKED_STORE if prefix == snapshot.PARKED_PREFIX
+                      else "stale restore staging dir"))
+    return found
 
 
 def declared_mcp_servers(skill_dir) -> list[dict]:
@@ -1082,23 +2705,65 @@ def project_mcp_sidecar(base) -> Path:
     return Path(base) / mcpdecl.SIDECAR
 
 
-def _load_sidecar(path: Path) -> dict | None:
-    """The sidecar document, or None if absent or unreadable.
+def _load_sidecar(path: Path) -> tuple[dict | None, str | None]:
+    """``(doc, None)``, ``(None, None)`` if absent, ``(None, error)`` if unusable.
 
-    Best-effort by design, exactly like :func:`declared_mcp_servers`: by the
-    time this runs the skill is already on disk, so a corrupt ``.mcp.json`` must
-    not turn a completed install into a traceback. ``merge_into`` treats a
-    non-dict as empty, so a damaged file is rebuilt rather than propagated.
+    An existing ``.mcp.json`` that does not parse, is not an object, or holds a
+    non-object ``mcpServers`` is *refused*, not rebuilt: the file is rewritten
+    whole from the parsed view, so rebuilding a trailing-comma file from an
+    empty one silently discarded every server the user had configured. The
+    error names the file and the cause (:func:`jsonstate.read_object`'s
+    contract, which ``settings.json`` and ``config.json`` already follow), and
+    callers write nothing while it is set. Not raising keeps the other half of
+    the old contract: by the time this runs the skill is already on disk, so a
+    damaged file must not turn a completed install into a traceback.
     """
-    import json
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
+    from . import jsonstate, mcpdecl
+    doc, err = jsonstate.read_object(path)
+    if err is not None:
+        return None, err
+    if doc is not None:
+        problem = mcpdecl.sidecar_problem(doc)
+        if problem is not None:
+            return None, "%s: %s" % (path, problem)
+    return doc, None
+
+
+#: Project-lock key set when boost's install is what created ``.mcp.json``.
+SIDECAR_CREATED_KEY = "mcp_sidecar_created"
+
+
+def sidecar_style(text: str | None) -> tuple[str | int | None, str]:
+    """``(indent, end)`` that re-serialize ``text`` the way it was written.
+
+    ``.mcp.json`` is a committed file, and rewriting it as sorted, 2-space,
+    ``\\u``-escaped JSON put a reformatting diff on every server the user
+    had, for an install that added one entry. The indent is the first
+    indented line's whitespace (a tab, or that many spaces), a file with no
+    line break stays on one line, and a trailing newline stays exactly as
+    present or absent. No file yet: 2 spaces and a newline.
+    """
+    if not text:
+        return 2, "\n"
+    end = "\n" if text.endswith("\n") else ""
+    body = text.strip()
+    if "\n" not in body:
+        return None, end
+    for line in body.splitlines()[1:]:
+        rest = line.lstrip(" \t")
+        if rest and len(rest) < len(line):
+            ws = line[:len(line) - len(rest)]
+            return ("\t" if ws.startswith("\t") else len(ws)), end
+    return 2, end
 
 
 def _write_sidecar(path: Path, doc: dict) -> bool:
-    """Write the sidecar as indented JSON. False if it could not be written.
+    """Write the sidecar in the file's own style. False if it could not be
+    written.
+
+    Keys keep their order and non-ASCII stays literal (:func:`sidecar_style`
+    for the indent), so a round trip that adds and removes only boost's
+    entry leaves a ``json.dumps``-shaped file byte-identical.
 
     Best-effort on the way OUT as well as in. ``_load_sidecar`` already refuses
     to turn a corrupt file into a traceback, but the write is the half that runs
@@ -1110,47 +2775,140 @@ def _write_sidecar(path: Path, doc: dict) -> bool:
     """
     import json
     try:
-        path.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n",
+        old = path.read_text(encoding="utf-8") if path.is_file() else None
+    except OSError:
+        old = None
+    indent, end = sidecar_style(old)
+    try:
+        path.write_text(json.dumps(doc, indent=indent, ensure_ascii=False) + end,
                         encoding="utf-8")
         return True
     except OSError:
         return False
 
 
-def register_project_mcp(base, rows, skill: str) -> list[str]:
-    """Record ``skill``'s declared MCP servers in the repo. Returns names added.
+def record_project_mcp(base, rows, skill: str,
+                       ) -> tuple[list[str], str | None]:
+    """Record ``skill``'s declared MCP servers -> ``(added, error)``.
 
     Never overwrites a server already present — one the user configured by hand,
     or one another skill declared first — and never creates the file for a skill
     that declares nothing registrable, so a repo gains an ``.mcp.json`` only
-    when there is genuinely something in it.
+    when there is genuinely something in it. ``error`` is set, and the file left
+    byte-for-byte as it was, when an existing ``.mcp.json`` cannot be read as
+    one (see :func:`_load_sidecar`), and when the write itself fails. So
+    ``([], None)`` for a registrable declaration means every server was
+    already in the file.
     """
     from . import mcpdecl as _decl
     if not _decl.registrable(rows):
-        return []
+        return [], None
     path = project_mcp_sidecar(base)
-    doc, added = _decl.merge_into(_load_sidecar(path), rows, skill)
+    existing, err = _load_sidecar(path)
+    if err is not None:
+        return [], err
+    doc, added = _decl.merge_into(existing, rows, skill)
     if added and not _write_sidecar(path, doc):
-        return []          # nothing was recorded; do not claim otherwise
-    return added
+        # Nothing was recorded; do not claim otherwise.
+        return [], "%s: could not be written" % path
+    if added and existing is None and projectlock.exists(base):
+        # Boost created the file, so the last uninstall may remove it again
+        # rather than leave a `{"mcpServers": {}}` the repo never had. Kept
+        # in the project lock the install just wrote, which is committed
+        # beside the file it describes.
+        def created(lock: dict) -> None:
+            lock[SIDECAR_CREATED_KEY] = True
+        with contextlib.suppress(OSError, BoostError):
+            projectlock.mutate(base, created)
+    return added, None
 
 
-def unregister_project_mcp(base, skill: str) -> list[str]:
-    """Remove the servers boost recorded for ``skill``. Returns names removed.
+def register_project_mcp(base, rows, skill: str) -> list[str]:
+    """:func:`record_project_mcp`'s names alone."""
+    return record_project_mcp(base, rows, skill)[0]
 
-    Marker-keyed entries only, so a hand-configured server and another skill's
-    server both survive. Writes nothing when it owns nothing, which keeps an
-    uninstall from rewriting — and reformatting — a file it has no claim on.
+
+def _project_declarers(base) -> tuple[dict[str, str], bool]:
+    """``({server: skill}, complete)`` over the skills the project lock holds.
+
+    Each remaining skill's declarations are read from its installed copy —
+    every materialization is tried, and each lock path goes through
+    :func:`scopes.resolve_in_base`, because the lock is committed input. When
+    several skills declare one server the alphabetically first owns it.
+    ``complete`` is False when some entry has no readable copy on this machine
+    (a teammate's clone that never ran ``boost sync``): what it declares is
+    then unknown.
+    """
+    from . import scopes
+    owners: dict[str, str] = {}
+    complete = True
+    for name, entry in sorted(projectlock.installed(base).items()):
+        dirs = [scopes.resolve_in_base(base, m.get("path") or "")
+                for m in (entry or {}).get("materializations") or []
+                if isinstance(m, dict)]
+        found = next((d for d in dirs
+                      if d is not None and (d / "SKILL.md").is_file()), None)
+        if found is None:
+            complete = False
+            continue
+        for row in declared_mcp_servers(found):
+            owners.setdefault(row["name"], name)
+    return owners, complete
+
+
+def forget_project_mcp(base, skill: str) -> tuple[list[str], str | None]:
+    """Remove the servers boost recorded for ``skill`` -> ``(removed, error)``.
+
+    Marker-keyed entries only, so a hand-configured server is never touched,
+    and reference-counted by declaration: a server another skill still in the
+    project lock declares stays, re-marked to that skill, so the last
+    declarer's uninstall is the one that removes it. Call this after the
+    skill's own lock row is gone. When some remaining skill's declarations
+    cannot be read, nothing is removed — a leaked entry is recoverable, and a
+    teammate's server deleted from a committed file is not.
+
+    Writes nothing when nothing changes, which keeps an uninstall from
+    rewriting — and reformatting — a file it has no claim on, and nothing at
+    all over an unreadable file (``error`` says why).
     """
     from . import mcpdecl as _decl
     path = project_mcp_sidecar(base)
-    existing = _load_sidecar(path)
+    existing, err = _load_sidecar(path)
+    if err is not None:
+        return [], err
     if existing is None:
-        return []
-    doc, removed = _decl.strip_owned(existing, skill)
-    if removed and not _write_sidecar(path, doc):
-        return []
-    return removed
+        return [], None
+    keep, complete = _project_declarers(base)
+    if not complete:
+        return [], None
+    doc, removed = _decl.strip_owned(existing, skill, keep)
+    # Compare the servers, not the documents: ``strip_owned`` always sets the
+    # key, so a file with no (or a null) ``mcpServers`` would otherwise be
+    # rewritten — and reformatted — by an uninstall that owns nothing in it.
+    if doc[_decl.SERVERS_KEY] == (existing.get(_decl.SERVERS_KEY) or {}):
+        return removed, None
+    if (not doc[_decl.SERVERS_KEY] and set(doc) == {_decl.SERVERS_KEY}
+            and projectlock.read(base).get(SIDECAR_CREATED_KEY)):
+        # Empty again, and boost made it: remove it rather than leave a
+        # stray untracked file behind a round trip.
+        try:
+            path.unlink()
+        except OSError:
+            return [], "%s: could not be removed" % path
+
+        def forgot(lock: dict) -> None:
+            lock.pop(SIDECAR_CREATED_KEY, None)
+        with contextlib.suppress(OSError, BoostError):
+            projectlock.mutate(base, forgot)
+        return removed, None
+    if not _write_sidecar(path, doc):
+        return [], "%s: could not be written" % path
+    return removed, None
+
+
+def unregister_project_mcp(base, skill: str) -> list[str]:
+    """:func:`forget_project_mcp`'s names alone."""
+    return forget_project_mcp(base, skill)[0]
 
 
 def _enforce_capability_policy(name: str, source_md: Path) -> None:
@@ -1203,6 +2961,10 @@ def _require_project_base(scope: str, base, what: str) -> Path | None:
         raise BoostError(
             "there is no project here to install %s into" % what,
             hint="cd into a repo, or drop --local to install for your user")
+    if scope == scopes.SCOPE_PROJECT:
+        # A store dir, a tap clone or a bare repo has no project marker, so
+        # the unmarked fallback would claim it; writing there corrupts it.
+        scopes.refuse_managed(resolved)
     return resolved
 
 
@@ -1273,9 +3035,239 @@ def _check_scope_conflict(name: str, existing: dict | None, scope: str,
             raise BoostError("%s is already installed" % name,
                             hint="`boost reinstall %s` to force" % name)
         return
+    if existing.get("scope", "user") == scope == scopes.SCOPE_PROJECT:
+        # Same scope, another repo. Calling that "a different scope" sent the
+        # user looking for a scope mismatch that was not there: the limit is
+        # the one-row-per-name lock, so a rule or workflow can be --local in
+        # one repo per machine (a skill, with a lock in each repo, cannot hit
+        # this).
+        raise BoostError(
+            "%s is already installed --local in %s, and a %s can be installed "
+            "--local into only one repo per machine"
+            % (name, paths.tilde(Path(existing["base"]))
+               if existing.get("base") else "another repo",
+               existing.get("kind") or "rule or workflow"),
+            hint="`boost uninstall %s` from that repo first; --force cannot "
+                 "move it" % name, wrap=True)
     raise BoostError(
         "%s is already installed at %s" % (name, _lock_location(existing)),
         hint="uninstall it there first — a different scope cannot force-overwrite it")
+
+
+def policy_refusal(entry: dict, installed: dict, *,
+                   replaces: bool | None = None) -> str | None:
+    """Why the install policy refuses ``entry``, or ``None`` if it allows it.
+
+    ``installed`` is the skill map ``max_skills`` is weighed against and
+    ``replaces`` is :func:`_count_others`'s. The one wording every install
+    path raises — and that a dry run reports, so a preview cannot promise an
+    install the run then refuses.
+    """
+    violations = policy.check_install(
+        entry, _count_others(installed, entry["name"], replaces=replaces))
+    if not violations:
+        return None
+    return "policy blocks installing %s: %s" % (entry["name"],
+                                                "; ".join(violations))
+
+
+def refuse_by_policy(entry: dict, installed: dict, *,
+                     replaces: bool | None = None) -> None:
+    """Raise :func:`policy_refusal`'s reason, if there is one."""
+    why = policy_refusal(entry, installed, replaces=replaces)
+    if why:
+        raise BoostError(why, hint="inspect with `boost policy list`")
+
+
+def install_policy_refusal(entry: dict, *, scope: str = scopes.SCOPE_USER,
+                           base=None, existing=None) -> str | None:
+    """:func:`policy_refusal` against the lock :func:`install` would weigh.
+
+    For a preview: a project-scope skill counts the project lock, every other
+    install the user lock — and a rule or workflow replaces an item only when
+    ``existing`` (``check_existing``'s answer) records one, as the run says.
+    """
+    if entry.get("kind", "skill") != "skill":
+        return policy_refusal(entry, lockfile.installed(),
+                              replaces=existing is not None)
+    if scope == scopes.SCOPE_PROJECT:
+        return policy_refusal(entry, projectlock.installed(base))
+    return policy_refusal(entry, lockfile.installed())
+
+
+def _count_others(installed: dict, name: str, *,
+                  replaces: bool | None = None) -> int:
+    """How many skills ``installed`` holds besides ``name``: the count an
+    install of ``name`` is weighed against for ``max_skills``.
+
+    An upgrade or reinstall replaces an item already counted, so it adds none.
+    ``replaces`` says whether this install replaces one; it defaults to
+    ``name in installed``, which is the skill case. A rule or workflow is
+    recorded in its own table, so its name is never in the skills map and its
+    caller passes ``replaces`` from the record it is replacing: passing the bare
+    skill count refused `boost update` and `boost reinstall` of every rule and
+    workflow at exactly ``max_skills``, while the same skill went through.
+    """
+    if replaces is None:
+        replaces = name in installed
+    return len(installed) - (1 if replaces else 0)
+
+
+def refuse_case_collision(name: str, recorded: dict, where: str = "",
+                          shares: str = "one store dir") -> None:
+    """Refuse ``name`` when ``recorded`` holds a skill it differs from only
+    by case.
+
+    On a case-insensitive filesystem (macOS, Windows) ``Foo`` and ``foo`` are
+    one store dir and one link per agent, so installing the second wrote over
+    the first: ``--force`` replaced Foo's files with foo's, the lock recorded
+    both as healthy, and uninstalling either deleted the dir both rows name.
+    Refused on every filesystem, and whatever ``force`` says, so the answer
+    does not depend on which machine asks — and ``--force`` is never the hint,
+    because what it would replace is a different skill.
+    """
+    folded = name.casefold()
+    other = next((k for k in recorded if k != name and k.casefold() == folded),
+                 None)
+    if other is not None:
+        raise BoostError(
+            "%s differs only by case from %s, which is already installed%s; "
+            "on a case-insensitive filesystem they would share %s"
+            % (name, other, where, shares),
+            hint="`boost uninstall %s` first if %s should replace it"
+                 % (other, name),
+            wrap=True)
+
+
+def refuse_copy_case_collision(name: str) -> None:
+    """Refuse skill ``name`` when a workflow's skill copy holds the store dir
+    it differs from only by case.
+
+    The copy is recorded on the workflow, so :func:`refuse_case_collision`
+    over the skills section never saw it: installing ``ship`` beside workflow
+    ``Ship``'s copy was called a dir "the lock file does not record", whose
+    ``--force`` hint replaced Ship's copy with ship's files and whose
+    uninstall then deleted it. Refused whatever ``force`` says; the remedy is
+    the one that takes the copy out of the store.
+    """
+    folded = name.casefold()
+    for wname, row in lockfile.installed_workflows().items():
+        m = _copy_row(row)
+        held = Path(m.get("path", "")).parent.name if m else ""
+        if held and held != name and held.casefold() == folded:
+            raise BoostError(
+                "%s differs only by case from %s, the skill copy of workflow "
+                "%s at %s; on a case-insensitive filesystem they would share "
+                "one store dir" % (name, held, wname,
+                                   paths.tilde(skill_store_dir(held))),
+                hint="`%s --force --no-as-skill` takes the copy out of the "
+                     "store, then re-run this install" % _workflow_spelling(
+                         wname),
+                wrap=True)
+
+
+def _same_place(rows: dict, scope: str, base: Path | None) -> dict:
+    """The rule/workflow ``rows`` installed at ``scope``/``base``: the ones
+    whose files share directories with an install there."""
+    want = str(base) if base is not None else None
+    return {k: v for k, v in rows.items()
+            if v.get("scope", "user") == scope and v.get("base") == want}
+
+
+def check_existing(entry: dict, *, force: bool = False, scope: str = "user",
+                   base=None, kind: str | None = None) -> dict | None:
+    """The lock record an install of ``entry`` would replace, or its refusal.
+
+    Every "already installed" / "is pinned" / cross-scope refusal the install
+    paths make about what is *already there*, in one place, so that
+    ``install --dry-run`` asks the very same question before it prints a plan.
+    The preview used to read the lock itself and call any hit an "upgrade",
+    exiting 0 where the run it described refused with exit 1.
+
+    ``kind`` defaults to the entry's own; ``scope``/``base`` are what
+    :func:`install` is called with. Returns the existing record (``None`` for a
+    fresh install); a returned record therefore means ``force`` let it through.
+    """
+    kind = kind or entry.get("kind", "skill")
+    name = util.check_item_name(entry["name"], kind)
+    if kind in ("rule", "workflow"):
+        resolved_base = _require_project_base(scope, base, "%s %s" % (kind, name))
+        _refuse_stranded_base(scope, base, kind, name)
+        # Before the lock row is read: ``Ship.md`` and ``ship.md`` are one
+        # file per agent on a case-insensitive filesystem, so the second
+        # install wrote nothing, called boost's own Ship.md "not managed by
+        # boost" and still reported "Installed".
+        refuse_case_collision(
+            name, _same_place(lockfile.installed_rules() if kind == "rule"
+                              else lockfile.installed_workflows(),
+                              scope, resolved_base),
+            shares="one file per agent")
+        existing = (lockfile.get_rule if kind == "rule"
+                    else lockfile.get_workflow)(name)
+        refusal = quarantine_refusal(name, existing, kind)
+        if refusal is not None:
+            raise refusal
+        _check_scope_conflict(name, existing, scope, resolved_base, force)
+        return existing
+    if scope == scopes.SCOPE_PROJECT:
+        resolved_base = _require_project_base(scope, base, name)
+        if resolved_base is None:         # _require_project_base already raised
+            raise BoostError("there is no project here to install %s into" % name)
+        refuse_case_collision(name, projectlock.installed(resolved_base),
+                              " in this project")
+        existing = projectlock.get_skill(resolved_base, name)
+        if existing and not force:
+            other = _other_tap(entry, existing)
+            if other:
+                raise BoostError(
+                    "%s is already installed in this project (v%s) from %s, "
+                    "not %s" % (name, existing.get("version"), other,
+                                entry.get("tap")),
+                    hint="`boost install %s --local --force` to replace it"
+                         % util.shell_arg("%s:%s" % (entry.get("tap"), name)),
+                    wrap=True)
+            # `reinstall --local` reads this repo's lock, so it reaches the
+            # recorded tap even where a bare `install x` would stop at "exists
+            # in multiple taps".
+            raise BoostError(
+                "%s is already installed in this project (v%s)"
+                % (name, existing.get("version")),
+                hint="`boost reinstall %s --local` to force" % name)
+        return existing
+    refuse_case_collision(name, lockfile.installed())
+    refuse_copy_case_collision(name)
+    existing = lockfile.get_skill(name)
+    refusal = quarantine_refusal(name, existing)
+    if refusal is not None:
+        raise refusal
+    if existing and existing.get("pinned") and not force:
+        raise BoostError("%s is pinned" % name, hint="`boost unpin %s` first" % name)
+    if existing and not force:
+        other = _other_tap(entry, existing)
+        if other:
+            # Not `boost reinstall`: it reinstalls the copy the lock records,
+            # which is the other tap's.
+            raise BoostError(
+                "%s is already installed (v%s) from %s, not %s"
+                % (name, existing.get("version"), other, entry.get("tap")),
+                hint="`boost install %s --force` to replace it"
+                     % util.shell_arg("%s:%s" % (entry.get("tap"), name)),
+                wrap=True)
+        raise BoostError("%s is already installed (v%s)" % (name, existing.get("version")),
+                        hint="`boost reinstall %s` to force, `boost update` to upgrade" % name)
+    return existing
+
+
+def _other_tap(entry: dict, existing: dict) -> str:
+    """The installed record's tap when ``entry`` comes from a different one.
+
+    ``""`` when they agree, or when either side names no tap: only two taps
+    both spelled out can be told apart, and the bare-name hint stays right
+    for everything else. Naming the other tap matters because each bare-name
+    remedy acts on the installed copy, never on the one that was asked for.
+    """
+    want, have = str(entry.get("tap") or ""), str(existing.get("tap") or "")
+    return have if want and have and want != have else ""
 
 
 def _require_writable(name: str) -> None:
@@ -1300,6 +3292,81 @@ def _require_writable(name: str) -> None:
                          hint="%s, then re-run" % paths.write_remedy(block))
 
 
+def install_spelling(tap: str | None, name: str,
+                     rel_dir: str | None = None) -> str:
+    """The `boost install` command that names exactly this one item.
+
+    Qualified with its tap and, when it has one, its directory — the spelling
+    a hint has to use, because a name that is a skill AND a workflow in one
+    tap, or ships twice, is ambiguous bare: `boost install ship --force`
+    answered "'ship' matches 2 different items", for the user who had just
+    typed the qualified form that works.
+    """
+    spelled = "boost install %s" % ("%s:%s" % (tap, name) if tap else name)
+    if rel_dir and rel_dir != ".":
+        spelled += " --path %s" % rel_dir
+    return spelled
+
+
+def _workflow_spelling(name: str) -> str:
+    """:func:`install_spelling` for the installed workflow ``name``."""
+    entry = lockfile.get_workflow(name) or {}
+    source = str(entry.get("source_file") or "")
+    tap = entry.get("tap")
+    return install_spelling(tap if isinstance(tap, str) else None, name,
+                            source.rpartition("/")[0] or None)
+
+
+def _refuse_unrecorded(name: str, existing: dict | None, force: bool,
+                       retry: str | None = None) -> str | None:
+    """Refuse to copy over a store dir the lock file does not record.
+
+    Such a dir is a skill the user put in the store by hand, another tool's
+    copy, or one a lost lock forgot, and :func:`_copy_skill` replaces it
+    whole — for the first, deleting the only copy there is. Nothing that
+    installs knew to look: ``existing`` is ``None`` for every one of them,
+    which reads exactly like a fresh install. ``force`` is the user saying
+    to replace it anyway, and ``retry`` names the command that does.
+
+    Returns the workflow whose skill copy a forced install is taking over,
+    for the caller to disown with :func:`_drop_skill_copy_row` once every
+    other refusal has passed. Dropping it here would let a later refusal
+    (policy, capability, an unwritable store) leave the copy unowned, and
+    `boost sync` would then adopt it and link it beside the workflow.
+    """
+    owner = None if existing else skill_copy_owner(name)
+    if owner is not None:
+        if force:
+            # The user asked for the skill. The workflow keeps its own files
+            # and loses only its copy, and its next install finds a skill by
+            # this name and skips the copy rather than writing over it.
+            return owner
+        raise BoostError("%s is already in the store at %s, as the skill copy "
+                         "of workflow %s" % (name, paths.tilde(
+                             skill_store_dir(name)), owner),
+                         hint=("%s replaces it; the workflow keeps its own "
+                               "files" % retry if retry else
+                               "`%s --force --no-as-skill` takes the copy out "
+                               "of the store" % _workflow_spelling(owner)),
+                         wrap=True)
+    if existing or force:
+        return None
+    dest = skill_store_dir(name)
+    if not os.path.lexists(dest):
+        return None
+    integ = lockfile.check()
+    if integ.problem in ("corrupt", "unreadable", "schema"):
+        hint = ("the lock file cannot be read — %s, and it will know whose "
+                "it is" % lockfile.remedy(integ))
+    else:
+        hint = "`boost sync` says whose it is, and records it if it is yours"
+        if retry:
+            hint += "; %s replaces it" % retry
+    raise BoostError("%s is already in the store at %s, and the lock file "
+                     "does not record it" % (name, paths.tilde(dest)),
+                     hint=hint, wrap=True)
+
+
 def _refuse_self_installing(entry: dict) -> None:
     """Refuse to half-copy an item whose repo installs itself.
 
@@ -1308,7 +3375,11 @@ def _refuse_self_installing(entry: dict) -> None:
     the upstream command is the whole point — a refusal that only says "no"
     leaves the user exactly where `boost install` pretending would have.
     """
-    cmd = config.self_installing_command(entry.get("tap") or "")
+    tap = entry.get("tap") or ""
+    # The configured URL is what says which repository a tap is; its name is
+    # only the URL's tail, and a local `~/work/gstack` is named `gstack` too.
+    url = next((t.url for t in registry.list_taps() if t.name == tap), "")
+    cmd = config.self_installing_command(tap, url)
     if not cmd:
         return
     raise BoostError(
@@ -1318,10 +3389,208 @@ def _refuse_self_installing(entry: dict) -> None:
         hint="run the registry's own installer: %s" % cmd, wrap=True)
 
 
+def record_rebuilt(name: str, row: dict) -> None:
+    """Write skill ``name``'s rebuilt ``row``, carrying the user state of the
+    row as it is *under the lock*.
+
+    An install's ``existing`` row is read by :func:`check_existing` before a
+    copy that can take seconds, and carrying ``tags`` and ``pinned`` from it
+    dropped a `boost tag` or `pin` landed meanwhile. ``row`` holds the derived
+    fields; ``installed_at``, ``pinned``, ``tags`` and
+    :func:`carried_user_state` come from the held row here, at the write.
+    """
+    def put(lock: dict) -> None:
+        held = lock["skills"].get(name) or {}
+        new = row.copy()
+        new["installed_at"] = held.get("installed_at", row["installed_at"])
+        new["pinned"] = bool(held.get("pinned"))
+        new["tags"] = held.get("tags", [])
+        new.update(carried_user_state(held))
+        lock["skills"][name] = new
+    lockfile.mutate(put)
+
+
+def carried_user_state(existing: dict | None) -> dict:
+    """The user-set lock fields a re-install must carry that it does not rebuild.
+
+    Every lock builder below recomputes an entry from scratch, so a field it
+    does not name is dropped. Audited, the fields split three ways:
+
+    * **user state, carried** — ``installed_at``, ``pinned``, ``tags``,
+      ``only_agents`` (via :func:`declared_agent_scope`), a workflow's
+      ``as_skill``, and ``commit_pin``, which is the one this returns. Each
+      builder carried the others by name and none carried ``commit_pin``, so
+      ``boost reinstall`` of a commit-pinned item erased the integrity pin
+      without a word and ``boost verify`` went on passing.
+    * **derived, rebuilt** — ``version``, ``tap``, ``source_*``, ``commit``,
+      ``sha256``, ``updated_at``, ``agents``, ``refused_agents``,
+      ``source_updated_at``, ``materializations``, a workflow's ``foreign``.
+    * **reset on purpose** — ``quarantined`` (the content was just put back)
+      and ``sidelined_by`` (the install relinks, and ``agents`` is measured
+      from disk, so keeping the flag would describe links that exist). An
+      ``update`` or ``reinstall`` then puts a sidelined skill back aside
+      (:func:`keep_sideline`), so the flag it ends with is measured too.
+    """
+    pin = (existing or {}).get("commit_pin")
+    return {"commit_pin": pin} if pin else {}
+
+
+def project_carried_state(existing: dict | None) -> dict:
+    """The user-set fields a project skill's rebuilt lock row must carry.
+
+    :func:`carried_user_state` for the project lock: ``pinned`` (which
+    ``boost pin`` writes there) plus a ``commit_pin``. Only set flags are
+    carried, so an unpinned row stays free of a ``pinned: false`` key.
+    """
+    carried = carried_user_state(existing)
+    if (existing or {}).get("pinned"):
+        carried["pinned"] = True
+    return carried
+
+
+def set_project_pin(base, name: str, pinned: bool) -> dict | None:
+    """Set or clear ``pinned`` on ``name``'s row in ``base``'s project lock.
+
+    Returns the row as written, or ``None`` when the project lock has no
+    such skill. Releasing a version pin releases a commit pin with it, the
+    same rule ``boost unpin`` applies at user scope.
+    """
+    if projectlock.get_skill(base, name) is None:
+        return None     # checked unlocked first, so a miss creates nothing
+    written: list[dict] = []
+
+    def edit(lock: dict) -> bool:
+        # Re-read under the lock: another process may have dropped the row,
+        # or added others that a stale copy written back would erase.
+        entry = lock["skills"].get(name)
+        if entry is None:
+            return False
+        if pinned:
+            entry["pinned"] = True
+        else:
+            entry.pop("pinned", None)
+            entry.pop("commit_pin", None)
+        written.append(entry)
+        return True
+    projectlock.mutate(base, edit)
+    return written[0] if written else None
+
+
+def project_skills(start=None) -> tuple[Path | None, dict]:
+    """``(base, skills)`` for the project the cwd (or ``start``) is in.
+
+    The same walk ``boost list`` makes: :func:`scopes.resolve_base` for the
+    project root, then that root's own ``.boost/skill-lock.json``. ``base`` is
+    ``None`` — and ``skills`` empty — where no project directory applies
+    (``$HOME`` is never one), so a caller can tell "no project" from "a
+    project with nothing installed".
+    """
+    pbase = scopes.resolve_base(scopes.SCOPE_PROJECT, start=start)
+    if pbase is None:
+        return None, {}
+    return pbase, projectlock.installed(pbase)
+
+
+def reapply_recorded_holds(name: str, want: dict) -> bool:
+    """Put a recorded skill row's holds back onto its freshly installed row.
+
+    ``replay rollback`` reinstalls a removed skill from its tap, and an
+    install of a name with no lock row starts from nothing: the ``pinned``
+    flag and the ``commit_pin`` the user set are not carried, because there
+    is no existing row to carry them from (:func:`carried_user_state`). This
+    writes both back from ``want`` — the row the snapshot recorded.
+
+    Returns True when the recorded commit pin no longer matches the commit
+    just installed, i.e. ``boost verify`` will now flag the skill; the pin is
+    restored regardless, since dropping it would make ``verify`` pass on a
+    commit the user never accepted.
+    """
+    pinned = bool(want.get("pinned"))
+    commit_pin = want.get("commit_pin")
+    if not (pinned or commit_pin):
+        return False
+    row = lockfile.get_skill(name)
+    if row is None:
+        return False
+    if pinned:
+        row["pinned"] = True
+    if commit_pin:
+        row["commit_pin"] = commit_pin
+    lockfile.set_skill(name, row)
+    return bool(commit_pin) and row.get("commit") != commit_pin
+
+
+def reapply_recorded_aside(name: str, want: dict) -> str | None:
+    """Set a freshly reinstalled skill aside again, if ``want`` recorded it so.
+
+    An install resets ``quarantined`` and ``sidelined_by``
+    (:func:`carried_user_state`), so ``replay rollback`` brought a skill the
+    snapshot recorded as quarantined back linked into every agent. This puts
+    it back the way the row says: quarantined (held aside, unlinked) or
+    sidelined by the mechanism it names. Returns how it was set aside, or
+    None when the row recorded neither.
+    """
+    if want.get("quarantined"):
+        row = lockfile.get_skill(name)
+        if row is None:
+            return None
+        quarantine_skill(name, row)
+        return "quarantined"
+    by = str(want.get("sidelined_by") or "")
+    if not by or lockfile.get_skill(name) is None:
+        return None
+    sideline(name, by)
+    return "sidelined by `boost %s`" % by
+
+
+def restore_recorded_holds(name: str, want: dict) -> list[str]:
+    """Put a present skill row's holds back as ``want`` recorded them.
+
+    For ``replay rollback`` over a skill both states have: the fields of
+    :data:`lockfile.HOLD_FIELDS` that differ are set, or cleared, to the
+    recorded value — a pin the snapshot lacked is released, and a changed
+    agent scope is relinked into the recorded agents. A held (quarantined or
+    sidelined) skill only has its scope recorded, since nothing of it is
+    linked; whatever relinks it reads the scope. Returns the fields changed.
+    """
+    row = lockfile.get_skill(name)
+    if row is None:
+        return []
+    diffs = lockfile.row_differences(want, row)
+    changed = [f for f in lockfile.HOLD_FIELDS if f in diffs]
+    if not changed:
+        return []
+    scope = list(want.get("only_agents") or []) or None
+    res = None
+    # A held copy is only ever a withheld one, so the two flags are the test.
+    if ("only_agents" in changed and not row.get("quarantined")
+            and not row.get("sidelined_by")):
+        unlink_agents(name)
+        res = link_agents(name, scope)
+
+    def put_back(entry: dict) -> None:
+        for f in ("pinned", "commit_pin"):
+            if f in changed:
+                if want.get(f):
+                    entry[f] = want[f]
+                else:
+                    entry.pop(f, None)
+        if "only_agents" in changed:
+            if scope:
+                entry["only_agents"] = scope
+            else:
+                entry.pop("only_agents", None)
+            if res is not None:
+                record_links(entry, res)
+    lockfile.update_skill(name, put_back)
+    return changed
+
+
 def install(entry: dict, force: bool = False,
             only_agents: list[str] | None = None,
             scope: str = "user", base=None,
-            via: str | None = None) -> InstallResult:
+            via: str | None = None,
+            as_skill: bool | None = None) -> InstallResult:
     """Install a catalog entry. Raises BoostError on policy block or conflict.
 
     ``scope`` is ``"user"`` (default — the canonical store, symlinked into the
@@ -1333,16 +3602,25 @@ def install(entry: dict, force: bool = False,
     ``registry.add``'s ``via=`` kwarg to ``journal.log``. ``None`` means an
     ordinary ``boost install``, and is dropped from the event like any other
     ``None``-valued field (``journal.log``).
+
+    ``as_skill`` is a workflow's ``--as-skill``/``--no-as-skill``; ``None``
+    replays what the lock recorded, else follows ``workflows_as_skills``. Any
+    other kind ignores it.
     """
     scopes.check_scope(scope)
     _refuse_self_installing(entry)
+    if scope != scopes.SCOPE_PROJECT:
+        # Before anything is copied or linked: lockfile.write refuses a
+        # corrupt lock too, but by then the files would be on disk unrecorded.
+        lockfile.refuse_corrupt()
     kind = entry.get("kind", "skill")
     if kind == "rule":
         return _install_rule(entry, force=force, only_agents=only_agents,
                              scope=scope, base=base, via=via)
     if kind == "workflow":
         return _install_workflow(entry, force=force, only_agents=only_agents,
-                                 scope=scope, base=base, via=via)
+                                 scope=scope, base=base, via=via,
+                                 as_skill=as_skill)
     if kind != "skill":
         raise BoostError(
             "%s is a %s, which boost does not know how to install" % (entry["name"], kind),
@@ -1351,41 +3629,120 @@ def install(entry: dict, force: bool = False,
         return _install_project_skill(entry, force=force, only_agents=only_agents,
                                       base=base, via=via)
     name = entry["name"]
-    existing = lockfile.get_skill(name)
-    if existing and existing.get("pinned") and not force:
-        raise BoostError("%s is pinned" % name, hint="`boost unpin %s` first" % name)
-    if existing and not force:
-        raise BoostError("%s is already installed (v%s)" % (name, existing.get("version")),
-                        hint="`boost reinstall %s` to force, `boost update` to upgrade" % name)
+    # Resolve the agent table before anything is written: a row it refuses (a
+    # relative or unset-${VAR} dir) used to raise after the copy, from inside
+    # the rollback's own unlink_agents, so the store kept a copy the lock did
+    # not record and the next install refused it as someone else's.
+    agents.known_agents()
+    existing = check_existing(entry, force=force, kind="skill")
 
-    violations = policy.check_install(entry, len(lockfile.installed()))
-    if violations:
-        raise BoostError("policy blocks installing %s: %s" % (name, "; ".join(violations)),
-                        hint="inspect with `boost policy list`")
+    # An upgrade or reinstall replaces a skill already counted, so it adds
+    # none: at exactly max_skills, `boost update` declined every upgrade.
+    refuse_by_policy(entry, lockfile.installed())
 
+    disowned = _refuse_unrecorded(name, existing, force,
+                                  retry="`%s --force`" % install_spelling(
+                                      entry.get("tap"), name,
+                                      entry.get("rel_dir")))
     src = source_dir_for(entry)
     _enforce_capability_policy(name, src / "SKILL.md")
     dest = skill_store_dir(name)
     _require_writable(name)
-    _copy_skill(src, dest)
+    if disowned:
+        _drop_skill_copy_row(disowned)
+    tap = registry.get(entry["tap"])
+    # Dated before linking: it is what decides whether a plugin's copy of the
+    # same name is newer, and so whether Claude Code gets boost's link. And
+    # dated before copying: on a shallow tap this is a network fetch of up to
+    # a minute, and a Ctrl-C in it used to leave a store copy no lock row
+    # recorded, which the rerun then refused to touch.
+    dated = source_updated_at(entry["tap"], entry.get("rel_dir", "."))
+    fresh = not dest.exists()
+    old: list[Path] = []
+    try:
+        res = _copy_link_record(entry, name, src, dest, tap, existing,
+                                only_agents, dated, keep_old=old)
+    except BaseException:
+        # Nothing recorded it, so nothing else would ever clean it up: undo a
+        # fresh install whole, so a plain rerun starts from where it began.
+        if fresh and lockfile.get_skill(name) is None:
+            with contextlib.suppress(OSError):
+                unlink_agents(name)
+            with contextlib.suppress(OSError):
+                util.rmtree(dest)
+        # An upgrade whose new row never landed swaps the old copy back. Left
+        # in place, the new copy no longer matched the row's sha256, so every
+        # later `update`, `verify` and `drift` called it a local edit.
+        elif old and lockfile.get_skill(name) == existing:
+            with contextlib.suppress(OSError):
+                _restore_old_copy(old[0], dest)
+        raise
+    finally:
+        for b in old:
+            if os.path.lexists(b):
+                _remove_backup(b)
+    if via in REFRESH_VIAS:
+        keep_sideline(name, existing, res)
+    journal.log("install", name, tap=entry["tap"], version=entry.get("version"), via=via)
+    return res
 
-    res = link_agents(name, only=preserved_agent_scope(only_agents, existing))
+
+#: The ``via`` of an install that refreshes content rather than asks for the
+#: skill back: ``update`` and ``reinstall`` keep a sidelined skill sidelined.
+REFRESH_VIAS = frozenset({"update", "reinstall"})
+
+
+def keep_sideline(name: str, existing: dict | None, res: InstallResult) -> bool:
+    """Set ``name`` aside again after a refresh, if ``existing`` had been.
+
+    The install relinks and resets ``sidelined_by`` (:func:`carried_user_state`),
+    which is right for a ``boost install`` but not for ``update`` or
+    ``reinstall`` during a focus or context session: those relinked the skill
+    the session had set aside, dropped the flag, and ``focus --clear`` then
+    counted one restore fewer. The new copy is held aside like the old one, so
+    the refresh lands and the sideline stands. Returns whether it re-sidelined.
+    """
+    by = str((existing or {}).get("sidelined_by") or "")
+    if not by or (existing or {}).get("quarantined"):
+        return False
+    sideline(name, by)
+    # The links this install reported were just taken away again.
+    res.linked = []
+    return True
+
+
+def _copy_link_record(entry: dict, name: str, src: Path, dest: Path, tap,
+                      existing: dict | None, only_agents: list[str] | None,
+                      dated: str | None, *,
+                      keep_old: list[Path] | None = None) -> InstallResult:
+    """:func:`install`'s copy, link and lock-row steps, in that order."""
+    skipped = _copy_skill(src, dest, within=tap.path, keep_old=keep_old)
+    # The install resets `quarantined` and `sidelined_by`, so no row will
+    # restore a held copy any more.
+    drop_held_copy(name)
+    res = link_agents(name, only=preserved_agent_scope(only_agents, existing),
+                      updated_at=dated)
+    res.skipped_links = skipped
+    res.submodules = unfetched_submodules(entry)
     res.upgraded = existing is not None
     res.score, _ = util.score_skill(dest)
     res.mcp_servers = declared_mcp_servers(dest)
 
-    tap = registry.get(entry["tap"])
-    from . import gitutil
     now = util.now_iso()
-    lockfile.set_skill(name, {
+    record_rebuilt(name, {
         "version": entry.get("version", "0.0.0"),
         "tap": entry["tap"],
+        # Where the tap came from, so a drift hint can re-tap it after
+        # `untap` drops the config row: the name alone is not a spec.
+        "tap_url": tap.url,
         "source_dir": entry.get("rel_dir", "."),
         "commit": gitutil.head_commit(tap.path),
         "sha256": util.sha256_dir(dest),
-        "installed_at": (existing or {}).get("installed_at", now),
+        # Modes the hash cannot see; `integrity.exec_drifted` reads them.
+        "exec": util.exec_bits(dest),
+        # record_rebuilt carries the held one, with pinned/tags/commit_pin.
+        "installed_at": now,
         "updated_at": now,
-        "pinned": bool((existing or {}).get("pinned")),
         "quarantined": False,
         # `agents` is what IS linked; `only_agents` is what the user ASKED for.
         # sync needs the second: it links a skill into every enabled agent, and
@@ -1399,14 +3756,14 @@ def install(entry: dict, force: bool = False,
         # other symlinks lived on — a divergence no boost command could see.
         "agents": linked_agents(name),
         "only_agents": declared_agent_scope(only_agents, existing),
-        "tags": (existing or {}).get("tags", []),
         # The agents whose dir refused the link, so `install --force` retries
         # them once the dir is fixed (preserved_agent_scope), and those whose
         # link could not be looked at, so uninstall does not forget it.
         **({"refused_agents": refused} if (refused := unrecorded_agents(name, res))
            else {}),
+        **({"source_updated_at": dated} if dated else {}),
+        **({"submodules": res.submodules} if res.submodules else {}),
     })
-    journal.log("install", name, tap=entry["tap"], version=entry.get("version"), via=via)
     return res
 
 
@@ -1430,25 +3787,20 @@ def _install_project_skill(entry: dict, force: bool = False,
     resolved_base = _require_project_base(scopes.SCOPE_PROJECT, base, name)
     if resolved_base is None:             # _require_project_base already raised
         raise BoostError("there is no project here to install %s into" % name)
+    # Before anything is copied: projectlock.write refuses a corrupt lock too,
+    # but by then the copies would be on disk unrecorded.
+    projectlock.refuse_corrupt(resolved_base)
+    projectlock.refuse_unwritable(resolved_base, "install", name)
 
-    existing = projectlock.get_skill(resolved_base, name)
-    if existing and not force:
-        raise BoostError(
-            "%s is already installed in this project (v%s)"
-            % (name, existing.get("version")),
-            # Not `reinstall --local`: reinstall has no scope flag (it would
-            # exit 2), and bare `reinstall` reads the user lock only, so it
-            # answers "not installed" for the very skill this line is about.
-            hint="`boost install %s --local --force` to force" % name)
+    existing = check_existing(entry, force=force, scope=scopes.SCOPE_PROJECT,
+                              base=resolved_base, kind="skill")
 
-    violations = policy.check_install(entry, len(projectlock.installed(resolved_base)))
-    if violations:
-        raise BoostError("policy blocks installing %s: %s" % (name, "; ".join(violations)),
-                        hint="inspect with `boost policy list`")
+    refuse_by_policy(entry, projectlock.installed(resolved_base))
 
     src = source_dir_for(entry)
     _enforce_capability_policy(name, src / "SKILL.md")
     explicit_agents = only_agents is not None
+    asked = only_agents
     only_agents = preserved_agent_scope(only_agents, existing)
     # agents_for_scope, not enabled_agents: project scope puts each agent under
     # a repo-local dotdir, and Antigravity's user layout is two levels deep with
@@ -1500,8 +3852,10 @@ def _install_project_skill(entry: dict, force: bool = False,
     # first target — the result fields below (`sha256`, `dest`, the score, the
     # MCP scan) all read one real directory and used to be reachable with None.
     first: Path = targets[0][1]
+    within = registry.get(entry["tap"]).path
+    skipped: list[str] = []
     for agent, dest in targets:
-        _copy_skill(src, dest)
+        skipped = _copy_skill(src, dest, within=within)
         # Relative, because this record is committed and read on machines where
         # the absolute path does not exist.
         materializations.append(
@@ -1519,23 +3873,36 @@ def _install_project_skill(entry: dict, force: bool = False,
 
     now = util.now_iso()
     tap = registry.get(entry["tap"])
+    submodules = unfetched_submodules(entry)
     projectlock.set_skill(resolved_base, name, {
         "kind": "skill",
         "version": entry.get("version", "0.0.0"),
         "tap": entry["tap"],
+        "tap_url": tap.url,
         "source_dir": entry.get("rel_dir", "."),
         "commit": gitutil.head_commit(tap.path),
         "sha256": util.sha256_dir(first),
+        "exec": util.exec_bits(first),
         "scope": scopes.SCOPE_PROJECT,
         "installed_at": (existing or {}).get("installed_at", now),
         "updated_at": now,
         "agents": all_agents,
         "materializations": materializations,
-    })
+        **({"submodules": submodules} if submodules else {}),
+    # What the user ASKED for, beside what was written: without it an agent
+    # enabled afterwards (here or on a teammate's machine) could not be told
+    # from one narrowed away, so sync never copied into it.
+    #
+    # A forced re-install (`boost reinstall`) of a pinned project skill must
+    # leave it pinned: the row is rebuilt from scratch, and a flag it does not
+    # name is a pin `boost update` silently stops honouring.
+    } | _declared_field(asked, existing) | project_carried_state(existing))
     journal.log("install", name, tap=entry["tap"], version=entry.get("version"),
                 scope=scopes.SCOPE_PROJECT, via=via)
 
     res = InstallResult(name=name, dest=first, kind="skill")
+    res.skipped_links = skipped
+    res.submodules = submodules
     res.linked = linked
     res.upgraded = existing is not None
     res.scope = scopes.SCOPE_PROJECT
@@ -1545,7 +3912,8 @@ def _install_project_skill(entry: dict, force: bool = False,
     # it to the command layer's `<host> mcp add` offer, which is user-scoped and
     # would put a machine-wide registration behind a --scope project install.
     # Recorded here so it lands with the skill and reverses with it.
-    res.mcp_recorded = register_project_mcp(resolved_base, res.mcp_servers, name)
+    res.mcp_recorded, res.mcp_error = record_project_mcp(
+        resolved_base, res.mcp_servers, name)
     return res
 
 
@@ -1747,6 +4115,9 @@ def uninstall_project(name: str, base=None) -> dict:
     not undo it, and said something false while refusing.
     """
     resolved_base = _resolve_base(scopes.SCOPE_PROJECT, base)
+    if resolved_base is not None:
+        # A corrupt lock reads as empty: say so, not "not installed here".
+        projectlock.refuse_corrupt(resolved_base)
     entry = projectlock.get_skill(resolved_base, name) if resolved_base else None
     if not entry:
         owned = project_materialized(name, resolved_base)
@@ -1755,6 +4126,9 @@ def uninstall_project(name: str, base=None) -> dict:
             return (_uninstall_rule if owned_kind == "rule"
                     else _uninstall_workflow)(name, owned_entry)
         raise _not_in_this_project(name)
+    # After the rule/workflow fall-through, which records in the user lock:
+    # only a skill's row lives in `.boost/`, so only it can be stranded there.
+    projectlock.refuse_unwritable(resolved_base, "uninstall", name)
     removed: list[str] = []
     refused: list[str] = []
     redirected: list[str] = []
@@ -1848,7 +4222,7 @@ def uninstall_project(name: str, base=None) -> dict:
     # server the user configured by hand — or one another skill still needs —
     # survives. Without this a skill tried once keeps launching its server for
     # every project that clones the repo.
-    unregistered = unregister_project_mcp(resolved_base, name)
+    unregistered, mcp_error = forget_project_mcp(resolved_base, name)
     journal.log("uninstall", name, scope=scopes.SCOPE_PROJECT)
     return {"name": name, "unlinked": removed, "entry": entry,
             # How many paths actually came off disk, which `unlinked` does not
@@ -1875,7 +4249,8 @@ def uninstall_project(name: str, base=None) -> dict:
             # puts config drift on screen.
             "expected": sorted(scopes.relative_to_base(resolved_base, p)
                                for p in legal),
-            "mcp_unregistered": unregistered, "kind": "skill",
+            "mcp_unregistered": unregistered, "mcp_error": mcp_error,
+            "kind": "skill",
             "scope": scopes.SCOPE_PROJECT, "base": str(resolved_base)}
 
 
@@ -1901,6 +4276,9 @@ def project_sync_plan(base=None) -> dict[str, list]:
             path = scopes.resolve_in_base(resolved_base, m.get("path"))
             if path is None or not path.is_dir():
                 plan["missing"].append((name, m.get("agent", "?")))
+        plan["missing"].extend(
+            (name, agent)
+            for agent in unmaterialized_project_agents(resolved_base, name, entry))
     # project_agents, and the declared dotdir: the scan must look exactly where
     # the install writes. Walking enabled_agents() reached `<repo>/antigravity-cli`,
     # a path project install never writes, and deriving the dotdir would miss
@@ -1916,6 +4294,48 @@ def project_sync_plan(base=None) -> dict[str, list]:
             if child.is_dir() and child.name not in lock:
                 plan["orphaned"].append(str(child))
     return plan
+
+
+def _project_target(base: Path, name: str, agent: str) -> Path | None:
+    """Where a project install would copy ``name`` for ``agent``, or None
+    when ``agent`` takes no project-scope skill."""
+    skills_dir = agents.project_agents().get(agent)
+    if skills_dir is None:
+        return None
+    return scopes.skill_target(skills_dir, name, base=base,
+                               dotdir=agents.project_dotdir(agent, skills_dir))
+
+
+def unmaterialized_project_agents(base: Path, name: str,
+                                  entry: dict) -> list[str]:
+    """The project-scope agents a project skill has no copy *recorded* for.
+
+    :func:`unmaterialized_agents` for a ``--local`` skill. Its rows record
+    what the install wrote, so an agent enabled afterwards had none, and
+    doctor, `sync` and `heal` all called the skill intact while the agent
+    never got it — at user scope the same sequence is a missing link that
+    sync makes.
+
+    Within a declared ``--agent`` narrowing only, so it never widens one.
+    Empty for an entry with no ``only_agents`` at all: it predates the field,
+    and its rows are the only record of a narrowing. Empty for a quarantined
+    entry. An agent whose target path already holds something is left out:
+    that is not boost's copy, and sync never writes over a directory it did
+    not put there.
+    """
+    rows = entry.get("materializations") or []
+    if not rows or "only_agents" not in entry or entry.get("quarantined"):
+        return []
+    declared = entry.get("only_agents")
+    have = {m.get("agent") for m in rows}
+    out_ = []
+    for agent in agents.project_agents():
+        if agent in have or (declared and agent not in declared):
+            continue
+        dest = _project_target(base, name, agent)
+        if dest is not None and not os.path.lexists(dest):
+            out_.append(agent)
+    return out_
 
 
 def project_sync_apply(plan: dict[str, list], base=None) -> list[str]:
@@ -1940,26 +4360,286 @@ def project_sync_apply(plan: dict[str, list], base=None) -> list[str]:
     for name in sorted(wanted):
         entry = projectlock.get_skill(resolved_base, name) or {}
         tap_name = entry.get("tap")
-        if tap_name and tap_name != "local":
-            try:  # noqa: FURB107 - per-item resilience in a loop (see PERF203)
-                from . import catalog
-                matches = [e for e in catalog.find(name)
-                           if e["tap"] == tap_name and e.get("kind", "skill") == "skill"]
-                cat_entry, warning = catalog.select_lock_source(matches, entry)
-                if warning:
-                    actions.append(warning)
-                if cat_entry:
-                    install(cat_entry, force=True, scope=scopes.SCOPE_PROJECT,
-                            base=resolved_base, only_agents=wanted[name])
-                    actions.append("re-materialized %s from %s" % (name, tap_name))
+        # A copy still at the locked hash is the locked content, so it is
+        # restored from with no tap read at all: a moved tap declined this,
+        # and doctor went on prescribing the heal that declined it.
+        sibling = project_intact_copy(entry, resolved_base)
+        blocked = (None if sibling is None else
+                   _sibling_policy_violations(resolved_base, name, entry,
+                                              sibling))
+        if sibling is not None and blocked is not None:
+            if not blocked:
+                try:  # noqa: FURB107 - per-item resilience in a loop
+                    _write_project_copies(
+                        resolved_base, name, sibling, sibling,
+                        *_project_dests(resolved_base, name, entry,
+                                        wanted[name]))
+                    actions.append("re-materialized %s from its %s copy"
+                                   % (name, scopes.relative_to_base(
+                                       resolved_base, sibling)))
                     continue
+                except BoostError:
+                    pass
+            actions.append(_project_gone(name))
+            continue
+        cat_entry, warning = _project_source(name, entry)
+        if warning:
+            actions.append(warning)
+        if cat_entry and not _project_restorable(entry, cat_entry):
+            actions.append(_project_moved(name))
+            continue
+        if cat_entry:
+            try:  # noqa: FURB107 - per-item resilience in a loop (see PERF203)
+                _restore_project_copies(resolved_base, name, entry, cat_entry,
+                                        wanted[name])
+                actions.append("re-materialized %s from %s" % (name, tap_name))
+                continue
             except BoostError:
                 pass
-        actions.append("%s is missing from the project but its source is gone — "
-                       "run `boost update` or reinstall" % name)
+        actions.append(_project_gone(name))
     if actions:
         journal.log("sync", "%d project fixes" % len(actions))
     return actions
+
+
+def _project_moved(name: str) -> str:
+    return ("%s's tap source has moved since the project lock was written%s"
+            "(`boost install --local %s --force` takes the new content and "
+            "updates the lock)" % (name, _DECLINED_MARK, name))
+
+
+def project_intact_copy(entry: dict, base) -> Path | None:
+    """A copy of a project skill on disk that still holds the locked content.
+
+    Hashed as :func:`integrity.project_status` hashes, so "intact" means what
+    verify means by it. None for a row with no recorded ``sha256``: nothing
+    says which copy, if any, is the locked one.
+    """
+    from . import integrity
+    recorded = entry.get("sha256")
+    if not recorded:
+        return None
+    for copy in integrity.project_skill_dirs(entry, base):
+        if (util.sha256_matches(copy, recorded)
+                and not integrity.exec_drifted(copy, entry)):
+            return copy
+    return None
+
+
+def _sibling_policy_violations(resolved_base: Path, name: str, entry: dict,
+                               sibling: Path) -> list[str] | None:
+    """The install policy gate for a repair copied from ``sibling``.
+
+    A blocklisted skill must not come back through a sibling any more than
+    through its tap. The entry gated is the lock row with the copy's own
+    description; None when the copy's SKILL.md cannot be read honestly, so
+    the caller does not restore from it.
+    """
+    meta = read_skill_meta(name, sibling)
+    if meta is None:
+        return None
+    violations = policy.check_install(
+        {"name": name, "tap": entry.get("tap", ""),
+         "version": entry.get("version"),
+         "description": util.frontmatter_text(meta[0], "description")},
+        _count_others(projectlock.installed(resolved_base), name))
+    try:
+        _enforce_capability_policy(name, sibling / "SKILL.md")
+    except BoostError as e:
+        violations.append(e.message)
+    return violations
+
+
+def project_source_moved(name: str, entry: dict) -> bool:
+    """Whether a project skill's tap has left the commit its lock records.
+
+    Read-only and offline (one HEAD read), for `boost doctor`: when it has,
+    a repair from the tap goes ahead only if this skill's files did not
+    change, and answering that means hashing the source, which can widen a
+    sparse clone and fetch. False when there is no tap source to judge.
+    """
+    from . import gitutil
+    cat_entry, _warning = _project_source(name, entry)
+    if cat_entry is None:
+        return False
+    locked = entry.get("commit")
+    return not locked or gitutil.head_commit(
+        registry.get(cat_entry["tap"]).path) != locked
+
+
+def _project_restorable(entry: dict, cat_entry: dict) -> bool:
+    """Whether the tap can still hand back what the project lock records.
+
+    A repair restores the committed lock; it never moves it. Re-installing
+    from the tap's HEAD did: one missing ``.cursor`` copy came back at the
+    new version beside an untouched ``.claude`` copy at the old one, the lock
+    was rewritten to the new commit, and `boost verify` then failed the copy
+    nobody had touched. True when the tap still sits on the locked commit,
+    or its source for this skill hashes to the locked ``sha256`` (the tap
+    moved, this skill did not). The commit check comes first because it
+    costs no materialize.
+    """
+    from . import gitutil
+    locked_commit = entry.get("commit")
+    if locked_commit and gitutil.head_commit(
+            registry.get(cat_entry["tap"]).path) == locked_commit:
+        return True
+    locked_sha = entry.get("sha256")
+    return bool(locked_sha) and _skill_source_sha(cat_entry) == locked_sha
+
+
+def _project_policy_violations(resolved_base: Path, name: str,
+                               cat_entry: dict) -> list[str]:
+    """The install policy gate, applied to a sync repair.
+
+    The install a repair replaced applied it, so a skill or tap blocklisted
+    since the lock was written must not come back through `boost sync` — and
+    the dry run asks the same question, so it does not promise a restore the
+    run then refuses.
+    """
+    return policy.check_install(
+        cat_entry, _count_others(projectlock.installed(resolved_base), name))
+
+
+def _restore_project_copies(resolved_base: Path, name: str, entry: dict,
+                            cat_entry: dict, missing: list) -> None:
+    """Copy ``cat_entry``'s source back to the recorded paths ``missing``.
+
+    Writes the directories, and a lock row only for an agent that had none
+    (:func:`unmaterialized_project_agents`) — a recorded row already says what
+    is there. No ``.mcp.json`` (the install registered it), and only the
+    agents named, because the other copies are committed files a team edits
+    in place. Every destination is checked before the first copy, the same
+    two checks a project install makes. Raises :class:`BoostError` when there
+    is nothing it may write.
+    """
+    violations = _project_policy_violations(resolved_base, name, cat_entry)
+    if violations:
+        raise BoostError("policy blocks restoring %s: %s"
+                         % (name, "; ".join(violations)))
+    src = source_dir_for(cat_entry)
+    _enforce_capability_policy(name, src / "SKILL.md")
+    _write_project_copies(resolved_base, name, src,
+                          registry.get(cat_entry["tap"]).path,
+                          *_project_dests(resolved_base, name, entry, missing))
+
+
+def _project_dests(resolved_base: Path, name: str, entry: dict,
+                   missing: list) -> tuple[list[Path], list[dict]]:
+    """Where a repair of ``missing`` writes, and the lock rows it adds.
+
+    The recorded rows of the agents named, plus a target and a new row for
+    an agent that never had one; each checked as a project install checks it.
+    Raises :class:`BoostError` when there is nothing it may write.
+    """
+    dests: list[Path] = []
+    for m in entry.get("materializations") or []:
+        if m.get("agent", "?") not in missing:
+            continue
+        dest = scopes.resolve_in_base(resolved_base, m.get("path"))
+        if dest is None or dest.is_dir():
+            continue
+        scopes.ensure_in_base(resolved_base, dest)
+        scopes.ensure_spelled(resolved_base, dest)
+        dests.append(dest)
+    recorded = {m.get("agent") for m in entry.get("materializations") or []}
+    new_rows: list[dict] = []
+    for agent in missing:
+        if agent in recorded:
+            continue
+        target = _project_target(resolved_base, name, agent)
+        if target is None or os.path.lexists(target):
+            continue
+        scopes.ensure_in_base(resolved_base, target)
+        scopes.ensure_spelled(resolved_base, target)
+        dests.append(target)
+        new_rows.append({"agent": agent, "path": scopes.relative_to_base(
+            resolved_base, target)})
+    if not dests:
+        raise BoostError("no recorded copy of %s to restore" % name)
+    return dests, new_rows
+
+
+def _write_project_copies(resolved_base: Path, name: str, src: Path,
+                          within: Path, dests: list[Path],
+                          new_rows: list[dict]) -> None:
+    """Copy ``src`` to each of ``dests`` and record ``new_rows`` in the lock."""
+    for dest in dests:
+        _copy_skill(src, dest, within=within)
+    if new_rows:
+        def record(lock: dict) -> bool | None:
+            row = lock["skills"].get(name)
+            if row is None:
+                return False
+            row.setdefault("materializations", []).extend(new_rows)
+            row["agents"] = list(dict.fromkeys(
+                [*(row.get("agents") or []), *(r["agent"] for r in new_rows)]))
+            return None
+        projectlock.mutate(resolved_base, record)
+
+
+def _project_gone(name: str) -> str:
+    return "%s%s — run `boost update` or reinstall" % (name, _PROJECT_GONE_MARK)
+
+
+def _project_source(name: str, entry: dict) -> tuple[dict | None, str | None]:
+    """The catalog entry a project lock row would be restored from.
+
+    Shared by :func:`project_sync_apply` and :func:`project_sync_preview`, so a
+    dry run decides "restorable" exactly as the run does: `heal --dry-run`
+    promised to re-materialize a copy whose tap was gone, exited 0, and the run
+    then reported the source gone and exited 1.
+    """
+    tap_name = entry.get("tap")
+    if not tap_name or tap_name == "local":
+        return None, None
+    try:
+        from . import catalog
+        matches = [e for e in catalog.find(name)
+                   if e["tap"] == tap_name and e.get("kind", "skill") == "skill"]
+        return catalog.select_lock_source(matches, entry)
+    except BoostError:
+        return None, None
+
+
+def project_sync_preview(plan: dict[str, list], base=None) -> list[str]:
+    """What :func:`project_sync_apply` would do with ``plan``, writing nothing.
+
+    A copy with no resolvable source gets the same unrepaired line the run
+    prints, so :func:`is_unrepaired` marks it and a dry run fails over it too.
+    """
+    lines: list[str] = []
+    resolved_base = _resolve_base(scopes.SCOPE_PROJECT, base)
+    if resolved_base is None:
+        return lines
+    wanted: dict[str, list] = {}
+    for name, agent in plan.get("missing", []):
+        wanted.setdefault(name, []).append(agent)
+    for name in sorted(wanted):
+        entry = projectlock.get_skill(resolved_base, name) or {}
+        sibling = project_intact_copy(entry, resolved_base)
+        blocked = (None if sibling is None else
+                   _sibling_policy_violations(resolved_base, name, entry,
+                                              sibling))
+        if sibling is not None and blocked is not None:
+            lines.append(_project_gone(name) if blocked else
+                         "would re-materialize project skill %s → %s from its "
+                         "%s copy" % (name, ", ".join(wanted[name]),
+                                      scopes.relative_to_base(resolved_base,
+                                                              sibling)))
+            continue
+        cat_entry, warning = _project_source(name, entry)
+        if warning:
+            lines.append(warning)
+        if cat_entry and not _project_restorable(entry, cat_entry):
+            lines.append(_project_moved(name))
+        elif cat_entry and not _project_policy_violations(
+                resolved_base, name, cat_entry):
+            lines.append("would re-materialize project skill %s → %s from %s"
+                         % (name, ", ".join(wanted[name]), entry.get("tap")))
+        else:
+            lines.append(_project_gone(name))
+    return lines
 
 
 def narrow_project_agents(scoped: dict, only_agents, name: str,
@@ -2088,6 +4768,84 @@ def narrow_materializing(targets: dict, only_agents, name: str, kind: str,
     return kept
 
 
+def refuse_unreachable_skill(only_agents: list[str] | None, name: str) -> None:
+    """Refuse a user-scope skill install whose ``--agent`` reaches no agent.
+
+    The user-scope twin of :func:`narrow_project_agents`, in
+    :func:`narrow_materializing`'s words. :func:`link_agents` filters rather
+    than refusing, so `install X --agent cursor` with cursor disabled copied
+    into the store, linked nothing, recorded ``agents: []`` and exited 0 —
+    where the same flag on a rule, a workflow or a ``--local`` skill refuses.
+
+    Only an explicit ``--agent``: the command layer calls this, and only with
+    the flag it parsed. A narrowing the lock replays (``update``, ``sync``, a
+    profile restore) is left to install linkless, so a later `boost sync`
+    links it once the agent is enabled again rather than dropping the row.
+    A native-store agent counts as reached: it reads the store directly.
+    """
+    if not only_agents:
+        return
+    reach = agents.linking_agents() | agents.native_store_agents()
+    narrow_materializing(reach, only_agents, name, "skill", explicit=True)
+
+
+def _refuse_shared_rule_file(name: str, path: Path) -> None:
+    """Refuse a rules-dir file that is another installed rule's file.
+
+    Two names that differ only by case (``alpha``, ``ALPHA``) map to one file
+    on a case-insensitive filesystem, and a symlinked rules dir can alias two
+    paths the same way. The second install wrote over the first rule's file,
+    and uninstalling it deleted that file while the first rule's lock row
+    still named it. Checked before any agent is written, so the refusal
+    leaves every file and the lock as they were. Context-file rows are not
+    compared: every rule shares ``CLAUDE.md`` and owns only its block there.
+    """
+    from . import rules
+    if not os.path.lexists(path):
+        return
+    for other, entry in lockfile.installed_rules().items():
+        if other == name:
+            continue
+        for m in entry.get("materializations") or ():
+            if m.get("mode") == rules.MODE_CLAUDE or not m.get("path"):
+                continue
+            try:
+                same = os.path.samefile(path, m["path"])
+            except OSError:
+                continue
+            if same:
+                raise BoostError(
+                    "cannot install rule %s: %s is rule %s's file"
+                    % (name, paths.tilde(path), other),
+                    hint="the two names collide on this filesystem; "
+                    "uninstall %s first, or keep it and skip %s"
+                    % (other, name))
+
+
+def _context_file_created(name: str, path: Path, prior: dict) -> bool:
+    """Whether boost, not the user, made the context file at ``path``.
+
+    Recorded on the row so uninstall deletes a file that its strip leaves
+    empty only when boost created it; a file the user made, even an empty
+    one, stays. A re-install finds the file it created already there, so the
+    answer is carried from this rule's own row, and from any other rule's
+    row at the same path, whose block is what made the file exist.
+    """
+    from . import rules
+    if not os.path.lexists(path):
+        return True
+    if (prior.get(str(path)) or {}).get("created") is True:
+        return True
+    for other, entry in lockfile.installed_rules().items():
+        if other == name:
+            continue
+        for m in entry.get("materializations") or ():
+            if (m.get("mode") == rules.MODE_CLAUDE and m.get("created") is True
+                    and m.get("path") == str(path)):
+                return True
+    return False
+
+
 def _install_rule(entry: dict, force: bool = False,
                   only_agents: list[str] | None = None,
                   scope: str = "user", base=None,
@@ -2109,22 +4867,20 @@ def _install_rule(entry: dict, force: bool = False,
     # is nowhere to put this, say so immediately. Also needed ahead of the
     # existing-install check below, which compares against this scope/base.
     resolved_base = _require_project_base(scope, base, "rule %s" % name)
-    _refuse_stranded_base(scope, base, "rule", name)
-    existing = lockfile.get_rule(name)
-    _check_scope_conflict(name, existing, scope, resolved_base, force)
+    existing = check_existing(entry, force=force, scope=scope, base=base,
+                              kind="rule")
     explicit_agents = only_agents is not None
     only_agents = preserved_agent_scope(only_agents, existing)
 
-    violations = policy.check_install(entry, len(lockfile.installed()))
-    if violations:
-        raise BoostError("policy blocks installing %s: %s" % (name, "; ".join(violations)),
-                        hint="inspect with `boost policy list`")
+    refuse_by_policy(entry, lockfile.installed(),
+                     replaces=existing is not None)
 
     tap = registry.get(entry["tap"])
     src = tap.path / entry.get("skill_md", "")
     if not src.is_file():
         raise BoostError("source for rule %s vanished from tap %s" % (name, tap.name),
-                        hint="run `boost update %s`" % tap.name)
+                        hint="run `boost update %s`" % util.shell_arg(tap.name))
+    refuse_escape(tap, src, name)
     _enforce_capability_policy(name, src)
     raw = src.read_text(encoding="utf-8", errors="replace")
     meta, body = frontmatter.parse(raw)
@@ -2140,81 +4896,209 @@ def _install_rule(entry: dict, force: bool = False,
     blocked: list[tuple[str, str]] = []
     conflicts: list[str] = []
     refused: list[dict] = []
+    foreign: list[str] = []
+    foreign_record: list[dict] = []
+    prior = {m.get("path"): m for m in (existing or {}).get("materializations")
+             or () if isinstance(m, dict)}
     targets = narrow_materializing(agents.materializing_agents(resolved_base),
                                     only_agents, name, "rule",
                                     explicit=explicit_agents)
+    # A damaged block in any context file stops the install before the first
+    # write. merge_block refuses it too, but mid-loop, after earlier agents'
+    # files had landed with no lock row to undo them.
     for agent, skills_dir in targets.items():
         mode, path = rules.rule_target(
             agent, skills_dir, name, base=resolved_base,
             dotdir=agents.project_dotdir(agent, skills_dir))
-        # Project scope writes into the repo, so a committed agent dir could be
-        # a symlink escaping it (see scopes.ensure_in_base). User scope writes
-        # into the user's own ~/.claude, which they control — nothing to guard.
+        # Containment first: reading through an escaping symlink would name
+        # a file outside the repo in the refusal and send the user to fix it.
         if resolved_base is not None:
             scopes.ensure_in_base(resolved_base, path)
-        try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            if mode == rules.MODE_CLAUDE:
-                current = path.read_text(encoding="utf-8") if path.exists() else ""
-                util.atomic_write_text(path, rules.merge_block(current, name, claude_body))
-                # Hash what `rules.read_block` will read back (the stripped
-                # body), so `boost verify` can tell an edited block from ours.
-                written = claude_body.strip("\n")
-            else:
-                util.atomic_write_text(path, raw)
-                written = raw
-        except OSError as err:
-            if not _refused_target(err, path, unwritable, blocked,
-                                   conflicts):
-                raise
-            refused.append({"agent": agent, "mode": mode, "path": str(path),
-                            "unwritable": True})
+        if mode != rules.MODE_CLAUDE:
+            _refuse_shared_rule_file(name, path)
             continue
-        materializations.append({
-            "agent": agent, "mode": mode, "path": str(path),
-            "sha256": hashlib.sha256(written.encode("utf-8")).hexdigest()})
-        linked.append(agent)
+        try:
+            text = util.read_user_text(path)
+        except OSError:
+            continue  # absent, or refused: the write loop handles both
+        rules.require_well_formed(text, name, path)
+    # Every file this run writes, with what it held before: an interrupt
+    # or a failed lock write puts them back, as a skill install removes
+    # its copy, rather than leaving every agent's file with no row that
+    # `uninstall` could act on.
+    undo: list[tuple[Path, str | None, bool]] = []
+    record: dict | None = None
+    try:
+        for agent, skills_dir in targets.items():
+            mode, path = rules.rule_target(
+                agent, skills_dir, name, base=resolved_base,
+                dotdir=agents.project_dotdir(agent, skills_dir))
+            # Project scope writes into the repo, so a committed agent dir could be
+            # a symlink escaping it (see scopes.ensure_in_base). User scope writes
+            # into the user's own ~/.claude, which they control — nothing to guard.
+            if resolved_base is not None:
+                scopes.ensure_in_base(resolved_base, path)
+            # A rules dir is the user's as much as boost's: a file there that no
+            # row of this rule records is theirs, as for a workflow's command.
+            # A context file is shared by design and takes a managed block.
+            if mode != rules.MODE_CLAUDE and _foreign_target(path, raw, set(prior)):
+                foreign.append(str(path))
+                foreign_record.append({"agent": agent, "mode": mode,
+                                       "path": str(path)})
+                continue
+            created = None
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                if mode == rules.MODE_CLAUDE:
+                    created = _context_file_created(name, path, prior)
+                    current = util.read_user_text(path) if path.exists() else ""
+                    _note_prior(undo, path, user_file=True)
+                    # A context file is the user's: write through a symlink to
+                    # it and keep its mode (see util.write_user_file).
+                    util.write_user_file(
+                        path, rules.merge_block(current, name, claude_body),
+                        base=resolved_base)
+                    # Hash what `rules.read_block` will read back (the stripped
+                    # body), so `boost verify` can tell an edited block from ours.
+                    written = claude_body.strip("\n")
+                else:
+                    _note_prior(undo, path)
+                    util.atomic_write_text(path, raw)
+                    written = raw
+            except OSError as err:
+                if not _refused_target(err, path, unwritable, blocked,
+                                       conflicts):
+                    raise
+                refused.append({"agent": agent, "mode": mode, "path": str(path),
+                                "unwritable": True})
+                continue
+            row = {"agent": agent, "mode": mode, "path": str(path),
+                   "sha256": hashlib.sha256(written.encode("utf-8")).hexdigest()}
+            if created is not None:
+                row["created"] = created
+            materializations.append(row)
+            linked.append(agent)
 
-    # Carry forward the agents this run did not touch — the same reason the
-    # project-scope skill path does it, but the stakes are higher here. A
-    # rule's materialization is a managed block inside a file the user reads
-    # every session (~/.claude/CLAUDE.md); dropping the record does not drop
-    # the block, and `_uninstall_rule` is record-driven, so an unrecorded block
-    # could never be removed by any boost command again.
-    materializations.extend(_refused_materializations(existing, linked, refused))
+        # A row this run moved off (the agent's dir was repointed): its old
+        # file, or its block in the old context file, is boost's to remove
+        # now, or nothing would ever record it again.
+        materializations.extend(_retire_moved(name, existing, linked,
+                                              materializations,
+                                              base=resolved_base))
+        # Carry forward the agents this run did not touch — the same reason the
+        # project-scope skill path does it, but the stakes are higher here. A
+        # rule's materialization is a managed block inside a file the user reads
+        # every session (~/.claude/CLAUDE.md); dropping the record does not drop
+        # the block, and `_uninstall_rule` is record-driven, so an unrecorded block
+        # could never be removed by any boost command again.
+        materializations.extend(_refused_materializations(
+            existing, linked, refused,
+            source_sha=hashlib.sha256(raw.encode("utf-8")).hexdigest(),
+            declared=declared_agent_scope(
+                only_agents if explicit_agents else None, existing)))
+        # As for a workflow: an agent this run did not try keeps its foreign row.
+        tried = {*linked, *(r["agent"] for r in refused),
+                 *(r["agent"] for r in foreign_record)}
+        foreign_record += [r for r in foreign_rows(existing)
+                           if r["agent"] not in tried]
 
-    now = util.now_iso()
-    lockfile.set_rule(name, {
-        "kind": "rule",
-        "version": entry.get("version", "0.0.0"),
-        "tap": entry["tap"],
-        "source_file": entry.get("skill_md", ""),
-        "commit": gitutil.head_commit(tap.path),
-        "sha256": hashlib.sha256(raw.encode("utf-8")).hexdigest(),
-        "scope": scope,
-        "base": str(resolved_base) if resolved_base is not None else None,
-        "installed_at": (existing or {}).get("installed_at", now),
-        "updated_at": now,
-        # Same governance contract as a skill entry: a pin survives a forced
-        # reinstall, quarantine does not — the reinstall just re-materialized
-        # the content, so a surviving flag would be a lie.
-        "pinned": bool((existing or {}).get("pinned")),
-        "quarantined": False,
-        "materializations": materializations,
-    })
+        now = util.now_iso()
+        record = {
+            "kind": "rule",
+            "version": entry.get("version", "0.0.0"),
+            # What the installed copy says it is. The catalog moves with the
+            # tap's HEAD, so after `update --taps-only` it describes the next
+            # version; `boost info` reads this instead (core.installedview).
+            "description": str(entry.get("description") or ""),
+            "tap": entry["tap"],
+            "tap_url": tap.url,
+            "source_file": entry.get("skill_md", ""),
+            "commit": gitutil.head_commit(tap.path),
+            "sha256": hashlib.sha256(raw.encode("utf-8")).hexdigest(),
+            "scope": scope,
+            "base": str(resolved_base) if resolved_base is not None else None,
+            "installed_at": (existing or {}).get("installed_at", now),
+            "updated_at": now,
+            # Same governance contract as a skill entry: a pin survives a forced
+            # reinstall, quarantine does not — the reinstall just re-materialized
+            # the content, so a surviving flag would be a lie.
+            "pinned": bool((existing or {}).get("pinned")),
+            "quarantined": False,
+            **carried_user_state(existing),
+            "materializations": materializations,
+            # What the user asked for, beside what was written: the rows above
+            # cannot say which, and :func:`preserved_agent_scope` replays this.
+            **_declared_field(only_agents if explicit_agents else None, existing),
+            **({"foreign": foreign_record} if foreign_record else {}),
+        }
+        lockfile.set_rule(name, record)
+    except BaseException:
+        if not _row_landed(lockfile.get_rule, name, record):
+            _undo_writes(undo)
+        raise
     journal.log("install", name, tap=entry["tap"], version=entry.get("version"), via=via)
 
     res = InstallResult(
         name=name,
         dest=Path(materializations[0]["path"]) if materializations else paths.store_dir(),
         kind="rule", scan_text=raw)
+    res.foreign = foreign
     res.linked = linked
     res.unwritable = unwritable
     res.blocked = blocked
     res.conflicts = conflicts
     res.upgraded = existing is not None
     res.scope = scope
+    res.skipped_agents = skipped_agents("rule", record)
     return res
+
+
+def _note_prior(undo: list[tuple[Path, str | None, bool]], path: Path,
+                user_file: bool = False) -> None:
+    """Record what ``path`` holds before an install writes it, for
+    :func:`_undo_writes`: its text, or None when there is no file.
+
+    A file that cannot be read back (not UTF-8, a dangling link) is not
+    recorded, so a rollback leaves it as the write left it rather than
+    deleting something it could not have restored. ``user_file`` restores
+    through :func:`util.write_user_file`, keeping a context file's link and
+    mode.
+    """
+    try:
+        prior = util.read_user_text(path) if os.path.lexists(path) else None
+    except (OSError, NotUTF8Error):
+        return
+    undo.append((path, prior, user_file))
+
+
+def _undo_writes(undo: list[tuple[Path, str | None, bool]]) -> None:
+    """Put back every file :func:`_note_prior` recorded, newest first.
+
+    Newest first, so a file two agents share ends at what it held before the
+    first write. A file still holding its old text is not rewritten, and each
+    step is best-effort: this runs on the way out with the original error,
+    which a cleanup failure must not replace.
+    """
+    for path, prior, user_file in reversed(undo):
+        with contextlib.suppress(OSError, NotUTF8Error):
+            if prior is None:
+                path.unlink(missing_ok=True)
+            elif util.read_user_text(path) != prior:
+                if user_file:
+                    util.write_user_file(path, prior)
+                else:
+                    util.atomic_write_text(path, prior)
+
+
+def _row_landed(get, name: str, record: dict | None) -> bool:
+    """Whether the lock already holds ``record`` for ``name`` — an interrupt
+    that arrived after the write, when the files it describes must stay."""
+    if record is None:
+        return False
+    try:
+        return bool(get(name) == record)
+    except Exception:  # an unreadable lock recorded nothing
+        return False
 
 
 def _removal_refused(name: str, path: Path) -> BoostError:
@@ -2244,11 +5128,13 @@ def _refused_removal(name: str, path: Path):
         raise _removal_refused(name, path) from None
 
 
-def _remove_all_or_nothing(name: str, plan: list[tuple[Path, str]]) -> int:
+def _remove_all_or_nothing(name: str, plan: list[tuple[Path, str | None]],
+                           base=None) -> int:
     """Apply an uninstall's removals, or none of them. Returns how many files.
 
-    ``plan`` holds ``(path, new_text)`` for each file to change: ``""`` to
-    delete it, other text to rewrite it. Every dir is checked before the
+    ``plan`` holds ``(path, new_text)`` for each file to change: ``None`` to
+    delete it, text to rewrite it -- ``""`` included, which empties a context
+    file the user made rather than deleting it. Every dir is checked before the
     first change, because a refusal part-way left some agents' files gone and
     the lock still naming them, so a `boost sync` in between wrote them back.
     The per-file guard stays, for what ``os.access`` cannot foresee.
@@ -2269,16 +5155,25 @@ def _remove_all_or_nothing(name: str, plan: list[tuple[Path, str]]) -> int:
     from <repo>" off this, the way :func:`uninstall_project` reports it off
     paths that came off disk rather than off the agent list.
     """
-    once: dict[Path, tuple[Path, str]] = {}
+    once: dict[Path, tuple[Path, str | None]] = {}
     for path, text in plan:
-        once.setdefault(path.parent.resolve() / path.name, (path, text))
-    for path, _text in once.values():
+        # The leaf resolves too: `GEMINI.md -> AGENTS.md` is one file.
+        once.setdefault(Path(os.path.realpath(path.parent / path.name)),
+                        (path, text))
+    for path, text in once.values():
         if not os.access(str(path.parent), os.W_OK):
             raise _removal_refused(name, path)
+        if text is not None or path.is_symlink():
+            # A committed link re-pointed out of the repo is refused here,
+            # before any file changes, not by the write part-way through.
+            with _refused_removal(name, path):
+                util.user_file_target(path, base)
     for path, text in once.values():
         with _refused_removal(name, path):
-            if text:
-                util.atomic_write_text(path, text)
+            if text is not None or path.is_symlink():
+                # Rewritten in place through any link, so the user's link
+                # survives uninstall; a linked file emptied stays, empty.
+                util.write_user_file(path, text or "", base=base)
             else:
                 path.unlink(missing_ok=True)
     return len(once)
@@ -2306,30 +5201,61 @@ def _uninstall_rule(name: str, rule: dict) -> dict:
     """Reverse every materialization recorded for an installed rule."""
     from . import rules
     removed: list[str] = []
-    plan: list[tuple[Path, str]] = []
+    plan: list[tuple[Path, str | None]] = []
+    kept: list[str] = []
     for m in rule.get("materializations", []):
         path = Path(m.get("path", ""))
         with _refused_removal(name, path):
             if m.get("mode") == rules.MODE_CLAUDE:
                 if _present(path) and path.exists():
-                    text = path.read_text(encoding="utf-8")
+                    text = util.read_user_text(path)
+                    # A damaged block refuses the whole uninstall, before the
+                    # lock is touched: strip_block declines to guess, and
+                    # dropping the row anyway reported the rule removed while
+                    # its text stayed live and no command could reach it.
+                    rules.require_well_formed(text, name, path)
+                    # A block edited since boost wrote it is the user's text
+                    # now, as an edited rules-dir file is below: left in
+                    # place and named. Stripping it deleted their edit with
+                    # no warning, though `verify` had called it modified.
+                    if m.get("sha256") and any(
+                            _text_sha(body) != m["sha256"]
+                            for body in rules.block_bodies(text, name)):
+                        kept.append(str(path))
+                        continue
                     stripped = rules.strip_block(text, name)
                     # No block of ours (a refused write): no rewrite. An
-                    # empty result held only our block: boost created it.
+                    # empty result is deleted only when the row says boost
+                    # created the file; one the user made, even empty, stays.
+                    # A row from before ``created`` was recorded keeps it.
                     if stripped != text:
-                        plan.append((path, stripped))
+                        plan.append((path, None if not stripped
+                                     and m.get("created") is True
+                                     else stripped))
             elif _present(path):
-                plan.append((path, ""))
+                # As for a workflow's file: one edited since boost wrote it
+                # is the user's now. A row with no sha is removed as before.
+                if m.get("sha256") and _file_sha(path) != m["sha256"]:
+                    kept.append(str(path))
+                    continue
+                plan.append((path, None))
         if m.get("agent"):
             removed.append(m["agent"])
-    gone = _remove_all_or_nothing(name, plan)
+    gone = _remove_all_or_nothing(name, plan, base=rule.get("base"))
     lockfile.remove_rule(name)
     journal.log("uninstall", name)
-    return _materialized_result(name, removed, rule, "rule", gone)
+    res = _materialized_result(name, removed, rule, "rule", gone)
+    if kept:
+        res["kept"] = kept
+    return res
 
 
 def quarantine_skill(name: str, entry: dict) -> tuple[list[str], dict[str, Path]]:
-    """Withhold skill ``name`` from every agent that links it; keep the store.
+    """Withhold skill ``name`` from every agent; hold its store copy aside.
+
+    The copy moves out of the canonical store (:func:`hold_store_copy`) so
+    the agents that read it directly lose it too; ``quarantine --release``
+    puts it back byte-for-byte (:func:`release_skill`).
 
     Returns ``(removed, blocked)``: the agents unlinked, and each agent whose
     link is, or may be, still there, mapped to the dir that has to change.
@@ -2350,40 +5276,196 @@ def quarantine_skill(name: str, entry: dict) -> tuple[list[str], dict[str, Path]
     """
     removed: list[str] = []
     blocked: dict[str, Path] = {}
-    for agent, adir in agents.linking_agents().items():
-        link = adir / name
-        try:
-            st = os.lstat(link)
-        except PermissionError:
-            blocked[agent] = refusing_dir(link.parent)
-            continue
-        except OSError:
-            continue
-        if not stat.S_ISLNK(st.st_mode):
-            continue
-        try:
-            link.unlink()
-        except PermissionError:
-            blocked[agent] = refusing_dir(link.parent)
-            continue
-        removed.append(agent)
+    was_held = is_held(entry)
     fresh = not entry.get("quarantined")
-    entry["quarantined"] = True
-    entry["agents"] = []
-    if blocked:
-        entry["refused_agents"] = list(blocked)
-    else:
-        entry.pop("refused_agents", None)
-    lockfile.set_skill(name, entry)
+    try:
+        for agent, adir in agents.linking_agents().items():
+            link = adir / name
+            try:
+                st = os.lstat(link)
+            except PermissionError:
+                blocked[agent] = refusing_dir(link.parent)
+                continue
+            except OSError:
+                continue
+            if not stat.S_ISLNK(st.st_mode):
+                continue
+            try:
+                link.unlink()
+            except PermissionError:
+                blocked[agent] = refusing_dir(link.parent)
+                continue
+            removed.append(agent)
+        # Out of the store too: Gemini CLI and Codex read it with no link.
+        held = hold_store_copy(name)
+        if held:
+            entry[HELD_KEY] = held
+        entry["quarantined"] = True
+        entry["agents"] = []
+        # A skill sidelined by focus/context/profile and then quarantined is
+        # quarantine's now: left set, the sideline's own undo restored the
+        # held copy and relinked a skill the lock still called quarantined.
+        entry.pop("sidelined_by", None)
+        if blocked:
+            entry["refused_agents"] = list(blocked)
+        else:
+            entry.pop("refused_agents", None)
+        lockfile.set_skill(name, entry)
+    except BaseException:
+        # The lock still says linked and not quarantined, so the disk goes
+        # back to match it: the copy, and the links already removed.
+        if not was_held:
+            with contextlib.suppress(OSError):
+                restore_store_copy(name)
+        relink_removed(name, removed)
+        raise
     if fresh:
         journal.log("quarantine", name)
     return removed, blocked
 
 
+def _recorded_policy_entry(kind: str, name: str, entry: dict) -> dict:
+    """The catalog-shaped entry the install policy weighs a recorded item by.
+
+    For an item coming back from boost's own records — a quarantine release,
+    a snapshot restore — rather than from a tap. The description is read
+    from the skill's copy (store or held aside); one that cannot be read, or
+    a rule's or workflow's, which the lock does not record, is *not checked*
+    rather than counted as missing (see :func:`read_skill_meta`): a failed
+    read is not evidence the item declares none.
+    """
+    meta = read_skill_meta(name) if kind == "skill" else None
+    desc = (meta[0].get("description") if meta is not None
+            else entry.get("description") or "(not checked)")
+    return {"name": name, "tap": entry.get("tap", ""),
+            "version": str(entry.get("version") or "0.0.0"),
+            "description": desc}
+
+
+def recorded_policy_violations(kind: str, name: str, entry: dict,
+                               installed: dict | None = None) -> list[str]:
+    """Install-policy violations for bringing back a recorded item.
+
+    The install gate applied when the item went in; a skill or tap
+    blocklisted since must not come back through a side door that skips it —
+    `quarantine --release` and `snapshot restore` re-activated one with exit
+    0 while `replay rollback` refused the same skill. ``installed`` is the
+    skill map ``max_skills`` is weighed against (default: the lock's), and
+    the item is counted as already in it, as for a reinstall.
+    """
+    if installed is None:
+        installed = lockfile.installed()
+    violations = policy.check_install(
+        _recorded_policy_entry(kind, name, entry),
+        _count_others(installed, name, replaces=name in installed
+                      or kind != "skill"))
+    return violations + [m for m in _recorded_capability_violations(
+        kind, name, entry) if m not in violations]
+
+
+def _recorded_capability_violations(kind: str, name: str,
+                                    entry: dict) -> list[str]:
+    """``denied_capabilities`` violations for a recorded item's own content.
+
+    Install runs :func:`_enforce_capability_policy` on the source; a release
+    or restore brings back boost's copy instead, so the copy is what is read:
+    a skill's ``SKILL.md`` (store or held aside), a rule's or workflow's
+    quarantine stash. The stash holds a rule's rendered block, whose
+    frontmatter is gone, so for it only *detected* capabilities can count. A
+    copy that cannot be read is not checked, as in `boost policy check`.
+    """
+    from . import frontmatter
+    if kind == "skill":
+        meta_body = read_skill_meta(name)
+        return ([] if meta_body is None
+                else policy.check_capabilities(*meta_body))
+    found: list[str] = []
+    for m in entry.get("quarantine_stash") or []:
+        content = m.get("content")
+        if not isinstance(content, str):
+            continue
+        meta, body = frontmatter.parse(content)
+        found += [v for v in policy.check_capabilities(meta, body)
+                  if v not in found]
+    return found
+
+
+def refuse_release_by_policy(kind: str, name: str, entry: dict) -> None:
+    """Raise, naming the rule, when policy refuses releasing ``name``.
+
+    Raised before anything moves, so a refused release leaves the item
+    quarantined exactly as it was.
+    """
+    violations = recorded_policy_violations(kind, name, entry)
+    if violations:
+        raise BoostError(
+            "policy blocks releasing %s: %s — it stays quarantined"
+            % (name, "; ".join(violations)),
+            hint="inspect with `boost policy list`; `boost uninstall %s` "
+                 "removes it" % name)
+
+
+def decline_restored_by_policy(pre_skills: Collection[str]) -> list[str]:
+    """Take back every skill a snapshot restore just brought back that the
+    install policy refuses. Returns one line per skill declined.
+
+    Only skills absent before the restore are weighed, as `replay rollback`
+    weighs only the skills it reinstalls: one installed all along is not
+    being installed, and `boost policy check` is what reports it. Called
+    after the swap and before :func:`sync_plan` links anything, so a declined
+    skill never reaches an agent. Its extracted copy and lock row are dropped;
+    the snapshot archive still holds it. ``max_skills`` counts the skills
+    accepted so far, as the installs a rollback runs one by one would.
+    """
+    restored = lockfile.installed()
+    accepted = {n: e for n, e in restored.items() if n in pre_skills}
+    declined: list[str] = []
+    for name in sorted(n for n in restored if n not in pre_skills):
+        entry = restored[name]
+        if entry.get("quarantined") or is_held(entry):
+            # Restored as held: nothing is activated, and its held copy is
+            # not in the archive, so deleting it would lose it for good.
+            accepted[name] = entry
+            continue
+        violations = recorded_policy_violations("skill", name, entry,
+                                                installed=accepted)
+        if not violations:
+            accepted[name] = entry
+            continue
+        with contextlib.suppress(OSError):
+            util.remove_path(skill_store_dir(name))
+        lockfile.remove_skill(name)
+        declined.append("not restored %s: policy blocks installing %s: %s"
+                        % (name, name, "; ".join(violations)))
+    return declined
+
+
+def release_skill(name: str, entry: dict) -> InstallResult:
+    """Undo :func:`quarantine_skill`: restore the held copy, then relink.
+
+    Restored first, because every link points into the store. Persists
+    ``entry`` with the links measured and the hold cleared.
+    """
+    restore_store_copy(name)
+    if not skill_store_dir(name).is_dir():
+        # Neither the held copy nor a store copy: linking now would point
+        # every agent at a directory that does not exist and report it as
+        # released. The row stays quarantined, so nothing changed.
+        raise BoostError("%s has no held copy to release (%s is gone)"
+                         % (name, paths.tilde(held_copy_dir(name))),
+                         hint=lost_held_copy_hint(name), wrap=True)
+    res = link_agents(name, only=entry.get("only_agents"))
+    entry["quarantined"] = False
+    entry.pop(HELD_KEY, None)
+    record_links(entry, res)
+    lockfile.set_skill(name, entry)
+    return res
+
+
 def quarantine_materialized(kind: str, name: str, entry: dict) -> list[str]:
     """Remove every recorded materialization of a rule/workflow, stashing it.
 
-    The counterpart of skill quarantine's "store intact, links removed". These
+    The counterpart of skill quarantine's "store copy held aside". These
     kinds have no store copy — the materialization IS the only artifact — so
     what gets removed is stashed on the lock entry and
     :func:`release_materialized` restores it byte-for-byte. Restoring from the
@@ -2412,8 +5494,19 @@ def quarantine_materialized(kind: str, name: str, entry: dict) -> list[str]:
                 # The whole file, not just the block: release_materialized
                 # needs it to restore the block at its original position
                 # rather than re-appending at end-of-file.
-                full_text = path.read_text(encoding="utf-8")
+                full_text = util.read_user_text(path)
+                # A damaged block reads as no block, so the removal below
+                # skipped it and quarantine reported the rule withheld with
+                # its text still live. Refused here, before the stash is
+                # persisted, as uninstall refuses it.
+                rules.require_well_formed(full_text, name, path)
                 content = rules.read_block(full_text, name)
+                if content is not None:
+                    # A file the removal will rewrite is checked against the
+                    # repo now, before the stash is persisted or any file
+                    # changes: refused by the write itself, it left earlier
+                    # agents' files gone mid-loop.
+                    util.user_file_target(path, entry.get("base"))
         elif path.is_file():
             content = path.read_text(encoding="utf-8")
         if content is None:
@@ -2434,15 +5527,21 @@ def quarantine_materialized(kind: str, name: str, entry: dict) -> list[str]:
         path = Path(m.get("path", ""))
         if m.get("mode") == rules.MODE_CLAUDE:
             if path.exists():
-                text = path.read_text(encoding="utf-8")
+                text = util.read_user_text(path)
                 if rules.read_block(text, name) is not None:
                     stripped = rules.strip_block(text, name)
-                    if stripped:
-                        util.atomic_write_text(path, stripped)
+                    if stripped or path.is_symlink():
+                        util.write_user_file(path, stripped,
+                                             base=entry.get("base"))
                     else:
                         path.unlink()  # file held only our block
         elif path.is_file():
             path.unlink()
+            if lockfile.is_skill_copy(m):
+                _rmdir_quietly(path.parent)
+    # Its links would dangle into the dir just removed; a release relinks.
+    if _copy_row(entry) is not None:
+        unlink_skill_copy(name)
     journal.log("quarantine", name)
     return affected
 
@@ -2462,19 +5561,48 @@ def stale_quarantine_artifacts(name: str, entry: dict) -> bool:
                 if p.exists() and rules.read_block(
                         p.read_text(encoding="utf-8"), name) is not None:
                     return True
-            except OSError:
+            except (OSError, UnicodeDecodeError):
                 continue
         elif p.is_file():
             return True
     return False
 
 
-def release_materialized(kind: str, name: str, entry: dict) -> list[str]:
+def _taken_while_held(path: Path, content: str) -> bool:
+    """Whether ``path`` now holds a file of the user's that a release of
+    ``content`` must not replace.
+
+    :func:`_foreign_target`'s test without its ``owned`` set: at release the
+    stash rows *are* the recorded paths, so every one would read as boost's.
+    Quarantine removed the file, so anything there now was put there since —
+    except the very text stashed, which an interrupted quarantine leaves and
+    rewriting changes nothing. A directory is the write's own refusal.
+    """
+    if not os.path.lexists(path) or occupied(path):
+        return False
+    return path.is_symlink() or _file_sha(path) != _text_sha(content)
+
+
+def release_materialized(kind: str, name: str, entry: dict,
+                         skipped: list[str] | None = None,
+                         foreign: list[str] | None = None,
+                         problems: list[str] | None = None) -> list[str]:
     """Restore what :func:`quarantine_materialized` removed, byte-for-byte.
 
     A stash record whose ``content`` is None (the artifact was already gone at
     quarantine time) is skipped — there is nothing truthful to restore.
-    Persists the entry and returns the agents restored.
+    Persists the entry and returns the agents restored. A skill copy whose
+    store dir something else took meanwhile is not restored, and its path is
+    appended to ``skipped`` for the caller to name.
+
+    A rule or command file the user wrote at the path while it was held is
+    theirs (:func:`_taken_while_held`): left alone and moved from
+    ``materializations`` to the entry's ``foreign`` record, exactly as an
+    install records it, so uninstall never deletes it and `boost sync` writes
+    the item once the path is free. Its path is appended to ``foreign``.
+
+    A workflow's skill copy is linked again (:func:`link_skill_copy`), and
+    why a link was not made is appended to ``problems``, in install's words.
     """
     from . import rules
     # The stash names absolute paths under the row's base, so releasing a
@@ -2482,15 +5610,54 @@ def release_materialized(kind: str, name: str, entry: dict) -> list[str]:
     # the way `reinstall` did.
     _refuse_stranded_base(entry.get("scope", scopes.SCOPE_USER),
                           entry.get("base"), kind, name)
+    # A damaged block in any context file refuses the release before the
+    # first restore — merge_block would refuse it mid-loop, after earlier
+    # agents' files were written with the entry still marked quarantined.
+    for m in entry.get("quarantine_stash") or []:
+        if m.get("content") is None or m.get("mode") != rules.MODE_CLAUDE:
+            continue
+        path = Path(m.get("path", ""))
+        # And a link out of the repo, which the write would refuse just as
+        # late.
+        util.user_file_target(path, entry.get("base"))
+        try:
+            text = util.read_user_text(path)
+        except OSError:
+            continue  # absent: the restore writes it fresh
+        rules.require_well_formed(text, name, path)
     restored: list[str] = []
     for m in entry.get("quarantine_stash") or []:
         content = m.get("content")
         if content is None:
             continue
         path = Path(m.get("path", ""))
+        if lockfile.is_skill_copy(m) and not _stashed_copy_is_ours(path,
+                                                                  content):
+            # Something took the store dir while the workflow was held: a
+            # skill installed by that name, or a dir the user made. The copy
+            # is a convenience and never worth their file; the workflow
+            # forgets it, and its next install says why there is none.
+            entry["materializations"] = [
+                r for r in entry.get("materializations") or ()
+                if not lockfile.is_skill_copy(r)]
+            if skipped is not None:
+                skipped.append(str(path.parent))
+            continue
+        if (m.get("mode") != rules.MODE_CLAUDE and not lockfile.is_skill_copy(m)
+                and _taken_while_held(path, content)):
+            entry["materializations"] = [
+                r for r in entry.get("materializations") or ()
+                if r.get("path") != m.get("path")]
+            row = {k: m[k] for k in ("agent", "slot", "mode", "path")
+                   if m.get(k) is not None}
+            entry["foreign"] = [*(r for r in foreign_rows(entry)
+                                  if r["path"] != row["path"]), row]
+            if foreign is not None:
+                foreign.append(str(path))
+            continue
         path.parent.mkdir(parents=True, exist_ok=True)
         if m.get("mode") == rules.MODE_CLAUDE:
-            current = path.read_text(encoding="utf-8") if path.exists() else ""
+            current = util.read_user_text(path) if path.exists() else ""
             full_text = m.get("full_text")
             # Byte-for-byte only holds when the surrounding text is exactly
             # what quarantine left behind — write the stashed file back
@@ -2499,9 +5666,11 @@ def release_materialized(kind: str, name: str, entry: dict) -> list[str]:
             # the file, or the stash predates this field) falls back to
             # merge_block's append.
             if full_text is not None and rules.strip_block(full_text, name) == current:
-                util.atomic_write_text(path, full_text)
+                util.write_user_file(path, full_text, base=entry.get("base"))
             else:
-                util.atomic_write_text(path, rules.merge_block(current, name, content))
+                util.write_user_file(
+                    path, rules.merge_block(current, name, content),
+                    base=entry.get("base"))
         else:
             util.atomic_write_text(path, content)
         if m.get("agent"):
@@ -2509,14 +5678,160 @@ def release_materialized(kind: str, name: str, entry: dict) -> list[str]:
     entry["quarantined"] = False
     entry.pop("quarantine_stash", None)
     lockfile.set_entry(kind, name, entry)
+    # The copy is back (or forgotten, if something took its dir): its links
+    # come back with it.
+    if kind == "workflow":
+        res = link_skill_copy(name, entry)
+        if res is not None and problems is not None:
+            problems += copy_link_problems(res)
     journal.log("release", name)
     return restored
+
+
+def _foreign_target(path: Path, rendered: str, owned: set) -> bool:
+    """Whether ``path`` holds a file boost did not write and must not replace.
+
+    A workflow lands at a fixed name in a dir the user also writes their own
+    slash commands into, so ``~/.claude/commands/<name>.md`` can already be
+    theirs. Writing over it destroyed it, and because the lock then recorded
+    the path, uninstall deleted what was left. A path a lock row records is
+    boost's; a file there with the very text this run would write is adopted,
+    since nothing is lost either way. Anything else is refused.
+
+    ``force`` does not override this: ``update`` and ``reinstall`` always pass
+    it (:func:`preserved_agent_scope`), so honouring it here would let every
+    update overwrite a file that a moved source now collides with. The path
+    is recorded in the entry's ``foreign`` (:func:`foreign_rows`), so once
+    the user moves their file aside `boost sync` writes it. ``owned`` is
+    built from ``materializations`` alone, so that record never makes the
+    path boost's. A directory at the path is not
+    this check's business: the write raises IsADirectoryError and
+    :func:`_refused_target` words it.
+    """
+    if str(path) in owned or not os.path.lexists(path) or occupied(path):
+        return False
+    return path.is_symlink() or _file_sha(path) != _text_sha(rendered)
+
+
+def declined_rows(entry: dict | None) -> list[dict]:
+    """A workflow entry's ``declined`` record, as ``{agent, slot, reason}``:
+    the agents boost rendered it for and did not write, because that agent
+    would reject the file at load (:func:`workflows.render_problem`).
+
+    No path, because there is no file — nothing for uninstall to remove or
+    `boost verify` to hash. The record exists so the agent still reads as
+    decided: without it :func:`unmaterialized_agents` called the workflow
+    "never written for gemini" and sent the user to a `boost sync` that
+    declines again. A reinstall decides each agent afresh.
+    """
+    return [r for r in (entry or {}).get("declined") or ()
+            if isinstance(r, dict) and r.get("agent")]
+
+
+def foreign_rows(entry: dict | None) -> list[dict]:
+    """A workflow entry's ``foreign`` record: the agents it did not write
+    because the user's own file held the path, as ``{agent, slot, path}``.
+
+    Kept apart from ``materializations`` on purpose. Every reader of those
+    rows takes the path for boost's: uninstall deletes it, quarantine stashes
+    it, ``boost info`` and the update risk diff read it as the installed text,
+    and the next install treats it as owned and writes over it. None of that
+    may happen to the user's file. The record exists for three readers only:
+    :func:`preserved_agent_scope` keeps the agent in re-install scope,
+    :func:`sync_plan` asks for a write once the path is free, and ``boost
+    doctor`` says so.
+    """
+    return [r for r in (entry or {}).get("foreign") or ()
+            if isinstance(r, dict) and r.get("agent") and r.get("path")]
+
+
+def _freed_foreign(entry: dict, kind: str = "workflow") -> list[dict]:
+    """The ``foreign`` rows whose path no longer holds anything: free to write.
+
+    ``lexists``, not ``isfile``: a dangling symlink of the user's is still
+    theirs, and the install refuses it again, so flagging it would turn every
+    `boost sync` into a repair that never lands. Rows for an agent boost no
+    longer writes are left out, as for materializations.
+    """
+    return [r for r in foreign_rows(entry)
+            if not os.path.lexists(r["path"])
+            and materialization_is_written(kind, entry, r)]
+
+
+def _retire_moved(name: str, existing: dict | None, linked: list[str],
+                  materializations: list[dict], base=None) -> list[dict]:
+    """Remove the files a re-install stopped writing; the rows to keep.
+
+    For an agent this run wrote to, an old row at a path the new run did not
+    write (a slot change) names a file nothing will record once the list is
+    rebuilt. It is removed while it is still what boost wrote. An edited one
+    is the user's now and stays, and its row is returned so uninstall still
+    reaches it and ``boost verify`` still reports the edit. An agent this run
+    did *not* write keeps its rows through :func:`_untouched_materializations`,
+    so its old command survives a refused new write.
+    """
+    from . import rules
+    new_paths = {m["path"] for m in materializations}
+    # Resolved too: two agents' dirs can lead to one file, and the old row of
+    # one is then the new row of the other.
+    new_real = {os.path.realpath(p) for p in new_paths}
+    kept: list[dict] = []
+    for m in (existing or {}).get("materializations") or ():
+        if (lockfile.is_skill_copy(m) or m.get("agent") not in linked
+                or m.get("path") in new_paths
+                or os.path.realpath(m.get("path", "")) in new_real):
+            continue
+        path = Path(m.get("path", ""))
+        with _refused_removal(name, path):
+            if not _present(path):
+                continue
+            if m.get("mode") == rules.MODE_CLAUDE:
+                # A context file is the user's: only boost's block comes out.
+                if not _retire_block(name, path, m, base):
+                    kept.append(m)
+                continue
+            if m.get("sha256") and _file_sha(path) != m["sha256"]:
+                kept.append(m)
+                continue
+            path.unlink()
+    return kept
+
+
+def _retire_block(name: str, path: Path, m: dict, base) -> bool:
+    """Strip rule ``name``'s block from the context file a moved row names.
+
+    False -- keep the row -- when the block was edited since boost wrote it,
+    or is damaged and :func:`rules.strip_block` would have to guess. The file
+    is deleted only when the row says boost created it and nothing else is
+    left, as :func:`_uninstall_rule` does.
+    """
+    from . import rules
+    try:
+        text = util.read_user_text(path)
+    except FileNotFoundError:
+        return True  # a dangling link: no block of ours to strip
+    try:
+        rules.require_well_formed(text, name, path)
+    except BoostError:
+        return False
+    body = rules.read_block(text, name)
+    if body is None:
+        return True  # nothing of ours there
+    if m.get("sha256") and _text_sha(body) != m["sha256"]:
+        return False
+    stripped = rules.strip_block(text, name)
+    if not stripped and m.get("created") is True:
+        path.unlink()
+    else:
+        util.write_user_file(path, stripped, base=base)
+    return True
 
 
 def _install_workflow(entry: dict, force: bool = False,
                       only_agents: list[str] | None = None,
                       scope: str = "user", base=None,
-                      via: str | None = None) -> InstallResult:
+                      via: str | None = None,
+                      as_skill: bool | None = None) -> InstallResult:
     """Materialize a workflow (slash command / subagent) into each enabled agent.
 
     A verbatim Markdown drop into the agent's ``commands/`` or ``agents/`` dir —
@@ -2529,23 +5844,21 @@ def _install_workflow(entry: dict, force: bool = False,
     from . import gitutil, workflows
     name = entry["name"]
     resolved_base = _require_project_base(scope, base, "workflow %s" % name)
-    _refuse_stranded_base(scope, base, "workflow", name)
-    existing = lockfile.get_workflow(name)
-    _check_scope_conflict(name, existing, scope, resolved_base, force)
+    existing = check_existing(entry, force=force, scope=scope, base=base,
+                              kind="workflow")
     explicit_agents = only_agents is not None
     only_agents = preserved_agent_scope(only_agents, existing)
 
-    violations = policy.check_install(entry, len(lockfile.installed()))
-    if violations:
-        raise BoostError("policy blocks installing %s: %s" % (name, "; ".join(violations)),
-                        hint="inspect with `boost policy list`")
+    refuse_by_policy(entry, lockfile.installed(),
+                     replaces=existing is not None)
 
     tap = registry.get(entry["tap"])
     source_rel = entry.get("skill_md", "")
     src = tap.path / source_rel
     if not src.is_file():
         raise BoostError("source for workflow %s vanished from tap %s" % (name, tap.name),
-                        hint="run `boost update %s`" % tap.name)
+                        hint="run `boost update %s`" % util.shell_arg(tap.name))
+    refuse_escape(tap, src, name)
     _enforce_capability_policy(name, src)
     raw = src.read_text(encoding="utf-8", errors="replace")
     slot = workflows.detect_slot(source_rel)
@@ -2559,6 +5872,14 @@ def _install_workflow(entry: dict, force: bool = False,
     blocked: list[tuple[str, str]] = []
     conflicts: list[str] = []
     refused: list[dict] = []
+    foreign: list[str] = []
+    foreign_record: list[dict] = []
+    declined: list[tuple[str, str]] = []
+    render_notes: list[str] = []
+    invocation: list[str] = []
+    # From ``materializations`` only: a ``foreign`` row names the user's file.
+    owned = {m.get("path") for m in (existing or {}).get("materializations")
+             or () if not lockfile.is_skill_copy(m)}
     # workflow_agents, not materializing_agents: an agent can have a verified
     # rules surface and no slash-command format at all (Codex), and installing
     # into a directory it never reads would report a command that does not
@@ -2566,54 +5887,163 @@ def _install_workflow(entry: dict, force: bool = False,
     targets = narrow_materializing(agents.workflow_agents(resolved_base),
                                     only_agents, name, "workflow",
                                     explicit=explicit_agents)
-    for agent, skills_dir in targets.items():
-        path = workflows.workflow_target(
-            skills_dir, slot, name, base=resolved_base, agent=agent,
-            dotdir=agents.project_dotdir(agent, skills_dir))
-        # Project scope writes into the repo; a committed agent dir could be a
-        # symlink escaping it (see scopes.ensure_in_base). User scope writes into
-        # the user's own ~/.claude, which they control — nothing to guard.
-        if resolved_base is not None:
-            scopes.ensure_in_base(resolved_base, path)
-        rendered = workflows.render(agent, slot, name, raw)
-        try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            util.atomic_write_text(path, rendered)
-        except OSError as err:
-            if not _refused_target(err, path, unwritable, blocked,
-                                   conflicts):
-                raise
-            refused.append({"agent": agent, "slot": slot, "path": str(path),
-                            "unwritable": True})
-            continue
-        materializations.append({
-            "agent": agent, "slot": slot, "path": str(path),
-            "sha256": hashlib.sha256(rendered.encode("utf-8")).hexdigest()})
-        linked.append(agent)
+    # Every file this run writes, with what it held before: an interrupt
+    # or a failed lock write puts them back, as a skill install removes
+    # its copy, rather than leaving every agent's file with no row that
+    # `uninstall` could act on.
+    undo: list[tuple[Path, str | None, bool]] = []
+    record: dict | None = None
+    # A namespaced command (`frontend/test`) has no store dir: a skill name
+    # is one path component, and `_skill_copy` says so.
+    copy_dir = (skill_store_dir(name) if util.is_safe_component(name)
+                else None)
+    copy_dir_existed = copy_dir is not None and os.path.lexists(copy_dir)
+    try:
+        for agent, skills_dir in targets.items():
+            path = workflows.workflow_target(
+                skills_dir, slot, name, base=resolved_base, agent=agent,
+                dotdir=agents.project_dotdir(agent, skills_dir))
+            # Project scope writes into the repo; a committed agent dir could be a
+            # symlink escaping it (see scopes.ensure_in_base). User scope writes into
+            # the user's own ~/.claude, which they control — nothing to guard.
+            if resolved_base is not None:
+                scopes.ensure_in_base(resolved_base, path)
+            rendered = workflows.render(agent, slot, name, raw)
+            problem = workflows.render_problem(agent, slot, rendered)
+            if problem is not None:
+                # Written, it was a load error at every session for a file
+                # install, verify and doctor all called fine. A copy an
+                # earlier install wrote is ours to take back with it.
+                declined.append((agent, problem))
+                if str(path) in owned and path.is_file():
+                    _note_prior(undo, path)
+                    path.unlink()
+                continue
+            if _foreign_target(path, rendered, owned):
+                foreign.append(str(path))
+                foreign_record.append({"agent": agent, "slot": slot,
+                                       "path": str(path)})
+                continue
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                _note_prior(undo, path)
+                util.atomic_write_text(path, rendered)
+            except OSError as err:
+                if not _refused_target(err, path, unwritable, blocked,
+                                       conflicts):
+                    raise
+                refused.append({"agent": agent, "slot": slot, "path": str(path),
+                                "unwritable": True})
+                continue
+            materializations.append({
+                "agent": agent, "slot": slot, "path": str(path),
+                "sha256": hashlib.sha256(rendered.encode("utf-8")).hexdigest()})
+            linked.append(agent)
+            render_notes += ["%s: %s" % (agent, note) for note in
+                             workflows.render_notes(agent, slot, raw)]
+            hint = workflows.invocation_hint(agent, slot, name, raw)
+            if hint is not None:
+                invocation.append("%s: %s" % (agent, hint))
 
-    # As for rules: an unrecorded materialization is a live slash command that
-    # `_uninstall_workflow` — driven by this list — can never remove.
-    materializations.extend(_refused_materializations(existing, linked, refused))
+        # A path this run no longer writes for an agent it did write (the source
+        # moved from commands/ to agents/): the old file is a live slash command
+        # that no row would claim once the list is rebuilt.
+        materializations.extend(_retire_moved(name, existing, linked,
+                                              materializations,
+                                              base=resolved_base))
+        # As for rules: an unrecorded materialization is a live slash command that
+        # `_uninstall_workflow` — driven by this list — can never remove.
+        # A declined agent was decided this run, so its old row goes too.
+        materializations.extend(_refused_materializations(
+            existing, linked + [agent for agent, _why in declined], refused,
+            source_sha=hashlib.sha256(raw.encode("utf-8")).hexdigest(),
+            declared=declared_agent_scope(
+                only_agents if explicit_agents else None, existing)))
+        # An agent this run did not try (a narrowed `--agent`) keeps its foreign
+        # row, as it keeps its materialization; one it tried is decided afresh.
+        tried = {*linked, *(r["agent"] for r in refused),
+                 *(r["agent"] for r in foreign_record),
+                 *(agent for agent, _why in declined)}
+        foreign_record += [r for r in foreign_rows(existing)
+                           if r["agent"] not in tried]
+        declined_record = [{"agent": agent, "slot": slot, "reason": why}
+                           for agent, why in declined]
+        declined_record += [r for r in declined_rows(existing)
+                            if r["agent"] not in tried]
+        # Last, always: `boost info` and update's risk diff read the first
+        # readable row as "the" installed text, and that is an agent's file.
+        if copy_dir is not None and copy_dir_existed:
+            _note_prior(undo, copy_dir / "SKILL.md")
+        copy_row, copy_note = _skill_copy(name, slot, raw, existing, as_skill,
+                                          scope)
+        if copy_row is not None:
+            materializations.append(copy_row)
 
-    now = util.now_iso()
-    lockfile.set_workflow(name, {
-        "kind": "workflow",
-        "slot": slot,
-        "version": entry.get("version", "0.0.0"),
-        "tap": entry["tap"],
-        "source_file": source_rel,
-        "commit": gitutil.head_commit(tap.path),
-        "sha256": hashlib.sha256(raw.encode("utf-8")).hexdigest(),
-        "scope": scope,
-        "base": str(resolved_base) if resolved_base is not None else None,
-        "installed_at": (existing or {}).get("installed_at", now),
-        "updated_at": now,
-        # Same governance contract as a skill entry: a pin survives a forced
-        # reinstall, quarantine does not.
-        "pinned": bool((existing or {}).get("pinned")),
-        "quarantined": False,
-        "materializations": materializations,
-    })
+        now = util.now_iso()
+        record = {
+            "kind": "workflow",
+            "slot": slot,
+            "version": entry.get("version", "0.0.0"),
+            # What the installed copy says it is. The catalog moves with the
+            # tap's HEAD, so after `update --taps-only` it describes the next
+            # version; `boost info` reads this instead (core.installedview).
+            "description": str(entry.get("description") or ""),
+            "tap": entry["tap"],
+            "tap_url": tap.url,
+            "source_file": source_rel,
+            "commit": gitutil.head_commit(tap.path),
+            "sha256": hashlib.sha256(raw.encode("utf-8")).hexdigest(),
+            "scope": scope,
+            "base": str(resolved_base) if resolved_base is not None else None,
+            "installed_at": (existing or {}).get("installed_at", now),
+            "updated_at": now,
+            # Same governance contract as a skill entry: a pin survives a forced
+            # reinstall, quarantine does not.
+            "pinned": bool((existing or {}).get("pinned")),
+            "quarantined": False,
+            **carried_user_state(existing),
+            "materializations": materializations,
+            # What the user asked for, beside what was written: the rows above
+            # cannot say which, and :func:`preserved_agent_scope` replays this.
+            **_declared_field(only_agents if explicit_agents else None, existing),
+            # Only an explicit `--as-skill`/`--no-as-skill` is recorded, and then
+            # it sticks through update, reinstall and sync. Absent means "follow
+            # `workflows_as_skills`", so turning the config off reaches entries
+            # installed while it was on — recording the resolved value would
+            # have frozen every one of them at True.
+            **({"as_skill": as_skill} if as_skill is not None
+               else {"as_skill": existing["as_skill"]}
+               if existing and isinstance(existing.get("as_skill"), bool)
+               else {}),
+            **({"foreign": foreign_record} if foreign_record else {}),
+            **({"declined": declined_record} if declined_record else {}),
+        }
+        # Before the row, so a run that fails to record it takes a fresh
+        # copy's links back with the copy.
+        copy_links = (link_skill_copy(name, record) if copy_row is not None
+                      else None)
+        lockfile.set_workflow(name, record)
+    except BaseException:
+        if not _row_landed(lockfile.get_workflow, name, record):
+            _undo_writes(undo)
+            if copy_dir is not None and not copy_dir_existed:
+                with contextlib.suppress(OSError):
+                    unlink_skill_copy(name)
+                with contextlib.suppress(OSError):
+                    util.remove_path(copy_dir)
+        raise
+    # After it: a link to a copy this run kept goes only from an agent that
+    # now holds the workflow's own file, and every link to one it retired
+    # goes. A copy kept because it was edited keeps its links. A declared
+    # narrowing links nowhere, so it takes every link a wider install made,
+    # a disabled agent's too: nothing else would name or remove those.
+    if copy_row is not None and not record.get("only_agents"):
+        copy_unlinked = unlink_skill_copy(name,
+                                          only=stale_copy_links(name, record))
+    elif copy_row is not None or _copy_row(existing) is not None:
+        copy_unlinked = unlink_skill_copy(name)
+    else:
+        copy_unlinked = []
     journal.log("install", name, tap=entry["tap"], version=entry.get("version"), via=via)
 
     res = InstallResult(
@@ -2624,26 +6054,1106 @@ def _install_workflow(entry: dict, force: bool = False,
     res.unwritable = unwritable
     res.blocked = blocked
     res.conflicts = conflicts
+    res.foreign = foreign
+    res.declined = declined
+    res.render_notes = render_notes
+    res.invocation = invocation
+    res.skipped_agents = skipped_agents("workflow", record)
     res.upgraded = existing is not None
     res.scope = scope
+    res.skill_copy = Path(copy_row["path"]).parent if copy_row else None
+    res.skill_note = copy_note
+    if copy_links is not None:
+        res.copy_linked = copy_links.linked
+        res.copy_blocked = copy_link_problems(copy_links)
+    res.copy_unlinked = copy_unlinked
     return res
 
 
-def _uninstall_workflow(name: str, workflow: dict) -> dict:
-    """Remove every file dropped for an installed workflow."""
+# --------------------------------------------------------------------------
+# A workflow's skill copy: the same procedure, reachable from the store
+# --------------------------------------------------------------------------
+# A subagent rendered into ~/.claude/agents is invisible to an agent that reads
+# only skills — Codex has no workflow format at all (config.DEFAULTS) and reads
+# ~/.agents/skills directly. So a workflow also gets
+# ``<store>/<name>/SKILL.md``, recorded as one more materialization row
+# (``slot: "skill"``, ``agent: None``) on the workflow's own lock entry. Being
+# a row is what makes update refresh it, uninstall and quarantine remove it,
+# `boost verify` hash it and `boost sync` rewrite it when it goes missing,
+# with no second code path for any of them.
+#
+# It is linked into each linking agent that got no file of the workflow's
+# own: a ``skills_only`` agent (antigravity, a Claude Code profile added that
+# way) or one with no slash-command format (windsurf). Those agents got the
+# procedure in no form while the copy sat unlinked in the store. The agents
+# that hold the workflow's own file (claude-code, cursor) get no link, which
+# would show them the procedure twice. Gemini reads the store natively and
+# gets its own agent file too; nothing boost writes can hide a store dir from
+# it. The set is derived from the lock row each time, never recorded
+# (:func:`copy_link_targets`); see "Copy links" below.
+#
+# User scope only. Project scope has no canonical store — a project skill is
+# a real dir per agent (`_install_project_skill`) — so the equivalent would be
+# a per-agent design of its own, and is not attempted.
+#
+# Recognised through the lock, and with the lock lost through the disk
+# (:func:`workflow_copy_evidence`): a store dir whose SKILL.md is exactly what
+# a workflow file in an agent's dir renders to. Without that, a lost lock made
+# `boost heal` adopt the copy as a local skill and link it into every agent,
+# beside the workflow's own file. Known limit: a Gemini-only workflow's TOML
+# command cannot be rendered back, so it is no evidence.
+
+
+def _copy_row(entry: dict | None) -> dict | None:
+    """The skill-copy row on a workflow's lock ``entry``, or None."""
+    return next((m for m in (entry or {}).get("materializations") or ()
+                 if lockfile.is_skill_copy(m)), None)
+
+
+def workflow_owned_store_names() -> set[str]:
+    """Store dirs that are a workflow's skill copy, by name.
+
+    Recorded on the workflow, not in the ``skills`` section, so every check
+    that asks "does the lock record this store dir?" with the skills section
+    alone would call it a hand-added skill — and `boost sync` would adopt it
+    and link it into every agent, the duplicate the copy exists to avoid.
+    This reads the lock; :func:`workflow_copy_evidence` asks the disk, for
+    when the lock is gone.
+    """
+    return {Path(m["path"]).parent.name
+            for entry in lockfile.installed_workflows().values()
+            if (m := _copy_row(entry)) is not None and m.get("path")}
+
+
+def workflow_copy_evidence(name: str) -> Path | None:
+    """The workflow file store/``name`` is the skill copy of, or None.
+
+    The on-disk answer to :func:`workflow_owned_store_names`, for a lock that
+    no longer records the workflow: an agent's ``agents/<name>.md`` or
+    ``commands/<name>.md`` that renders (:func:`workflows.render`, the skill
+    slot) to exactly the store dir's ``SKILL.md``. Exactly, not by name: a
+    real skill named like a workflow is the user's, and is recorded as one.
+    """
+    from . import workflows
+    if not util.is_safe_component(name):
+        return None
+    try:
+        have = (skill_store_dir(name) / "SKILL.md").read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    for agent, skills_dir in agents.enabled_agents().items():
+        for slot in (workflows.SLOT_AGENTS, workflows.SLOT_COMMANDS):
+            target = workflows.workflow_target(skills_dir, slot, name,
+                                               agent=agent)
+            if target.suffix != workflows.DEFAULT_EXT:
+                continue
+            try:
+                raw = target.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+            if workflows.render(None, workflows.SLOT_SKILL, name, raw) == have:
+                return target
+    return None
+
+
+def orphaned_workflow_copies(lock: dict) -> list[tuple[str, str]]:
+    """``(name, workflow file)`` for each store dir that is a workflow's
+    skill copy no lock entry records (:func:`workflow_copy_evidence`)."""
+    owned = workflow_owned_store_names()
+    return [(n, str(p)) for n in _store_dirs()
+            if n not in lock and n not in owned
+            and (p := workflow_copy_evidence(n)) is not None]
+
+
+def workflow_copy_lines(rows: list[tuple[str, str]]) -> list[str]:
+    """One line per :func:`orphaned_workflow_copies` row, with its remedy."""
+    return ["%s is the skill copy of the workflow at %s, which the lock does "
+            "not record — `boost install %s` re-records both; it is not "
+            "adopted as a skill" % (paths.tilde(skill_store_dir(n)),
+                                    paths.tilde(p), n) for n, p in rows]
+
+
+def orphaned_rule_blocks(recorded: dict | None = None
+                         ) -> list[tuple[str, str]]:
+    """``(rule, context file)`` for each managed rule block in an enabled
+    agent's user-scope context file (``~/.claude/CLAUDE.md`` and the like)
+    that no rule lock entry by that name records.
+
+    The marker is boost's own (:data:`rules.BLOCK_START`), so a block is
+    evidence on disk the way a workflow's skill copy is
+    (:func:`orphaned_workflow_copies`). Without a record no command removes
+    it — `boost uninstall` answers "not installed" — and the agent reads it
+    every session, so an all-clear over one is false. ``recorded`` is the
+    rules half of the lock; a file drop into a rules dir carries no marker
+    and is not looked for.
+    """
+    from . import rules
+    if recorded is None:
+        recorded = lockfile.installed_rules()
+    found: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for agent, skills_dir in agents.enabled_agents().items():
+        if agent not in rules.CONTEXT_FILES:
+            continue
+        target = rules.rule_target(agent, skills_dir, "x")[1]
+        key = os.path.realpath(target)
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            text = target.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        found.extend((n, str(target)) for n in rules.block_names(text)
+                     if n not in recorded)
+    return found
+
+
+def rule_block_lines(rows: list[tuple[str, str]]) -> list[str]:
+    """One line per :func:`orphaned_rule_blocks` row, with its remedy."""
+    return ["%s carries the block of rule %s, which the lock does not record "
+            "— no boost command removes it until `boost install %s` "
+            "re-records it, or delete the block by hand"
+            % (paths.tilde(Path(p)), n, n) for n, p in rows]
+
+
+def duplicate_rule_blocks() -> list[tuple[str, str, int]]:
+    """``(rule, context file, count)`` for each written context-file row of
+    an installed rule whose file holds that rule's block more than once.
+
+    A dotfiles merge or two concatenated context files make the shape, and
+    the agent reads every copy. doctor, verify and heal all called it
+    healthy, and a refresh or uninstall that touched only the first copy
+    left the other one live (`rules.merge_block` and `rules.strip_block` act
+    on all of them now). Quarantined rows are skipped: their blocks are
+    gone on purpose. Each file once per rule.
+    """
+    from . import rules
+    found: list[tuple[str, str, int]] = []
+    for name, p in _written_context_rows():
+        try:
+            text = util.read_user_text(Path(p))
+        except (OSError, NotUTF8Error):
+            continue
+        n = len(rules.block_spans(text, name))
+        if n > 1:
+            found.append((name, p, n))
+    return found
+
+
+def unreadable_context_files() -> list[tuple[str, str]]:
+    """``(rule, context file)`` for each written context-file row of an
+    installed rule whose file is not UTF-8.
+
+    The rows :func:`duplicate_rule_blocks` reads, and what `boost verify`
+    names: such a file reads as modified, and the reinstall that remedy
+    names refuses it (`util.NotUTF8Error`), so the line has to say why.
+    """
+    found: list[tuple[str, str]] = []
+    for name, p in _written_context_rows():
+        try:
+            util.read_user_text(Path(p))
+        except NotUTF8Error:
+            found.append((name, p))
+        except OSError:
+            continue
+    return found
+
+
+def _written_context_rows() -> Iterator[tuple[str, str]]:
+    """``(rule, path)`` for every written, unquarantined context-file row of
+    an installed rule, each file once per rule."""
+    from . import rules
+    for name, entry in sorted(lockfile.installed_rules().items()):
+        if entry.get("quarantined"):
+            continue
+        seen: set[str] = set()
+        for m in entry.get("materializations") or ():
+            if (not isinstance(m, dict) or m.get("mode") != rules.MODE_CLAUDE
+                    or m.get("unwritable")
+                    or not materialization_is_written("rule", entry, m)):
+                continue
+            p = m.get("path") or ""
+            key = os.path.realpath(p)
+            if not p or key in seen:
+                continue
+            seen.add(key)
+            yield name, p
+
+
+def collapse_rule_block(name: str, path: str) -> bool:
+    """Keep the first of rule ``name``'s blocks in ``path`` and drop the rest.
+
+    The first copy's text is what stays, so a block that still hashes to its
+    lock row keeps doing so. False when there is nothing to collapse any
+    more (one block, or none). Raises what the write raises.
+    """
+    from . import rules
+    p = Path(path)
+    text = util.read_user_text(p)
+    if len(rules.block_spans(text, name)) < 2:
+        return False
+    body = rules.read_block(text, name) or ""
+    # A project row's file stays inside its repo, as at install.
+    entry = lockfile.get_rule(name) or {}
+    base = (entry.get("base") if entry.get("scope") == scopes.SCOPE_PROJECT
+            else None)
+    util.write_user_file(p, rules.merge_block(text, name, body), base=base)
+    return True
+
+
+def duplicate_block_line(name: str, path: str, count: int) -> str:
+    """doctor's, verify's and heal's one wording for a duplicated block."""
+    return ("rule %s's block appears %d times in %s — the agent reads every "
+            "copy; `boost heal` keeps the first" % (name, count,
+                                                    paths.tilde(Path(path))))
+
+
+def skill_copy_owner(name: str) -> str | None:
+    """The workflow whose skill copy is the store dir ``name``, or None."""
+    for wname, entry in lockfile.installed_workflows().items():
+        m = _copy_row(entry)
+        if m is not None and Path(m.get("path", "")).parent.name == name:
+            return wname
+    return None
+
+
+def _drop_skill_copy_row(workflow: str) -> None:
+    """Forget a workflow's skill copy without touching the file.
+
+    From the quarantine stash too: a release replays the stash, and a copy
+    left there would be written back over whatever took the dir meanwhile.
+    """
+    entry = lockfile.get_workflow(workflow)
+    if not entry:
+        return
+    for key in ("materializations", "quarantine_stash"):
+        if key in entry:
+            entry[key] = [m for m in entry.get(key) or ()
+                          if not lockfile.is_skill_copy(m)]
+    lockfile.set_workflow(workflow, entry)
+
+
+def _stashed_copy_is_ours(path: Path, content: str) -> bool:
+    """Whether a release may write a stashed skill copy back to ``path``.
+
+    Not when the lock records a skill by that name, and not over anything in
+    the dir but the very text stashed — an interrupted quarantine leaves
+    that, and rewriting it changes nothing.
+    """
+    if lockfile.get_skill(path.parent.name):
+        return False
+    if not os.path.lexists(path.parent):
+        return True
+    return (not os.path.islink(path.parent)
+            and _file_sha(path) == _text_sha(content)
+            and {c.name for c in path.parent.iterdir()} == {path.name})
+
+
+def wants_skill_copy(as_skill: bool | None, existing: dict | None) -> bool:
+    """Whether a workflow install should write its skill copy.
+
+    The explicit flag, else the one an earlier install recorded, else the
+    ``workflows_as_skills`` config.
+    """
+    if as_skill is not None:
+        return as_skill
+    recorded = (existing or {}).get("as_skill")
+    if isinstance(recorded, bool):
+        return recorded
+    return bool(config.get("workflows_as_skills", True))
+
+
+def _text_sha(text: str) -> str:
+    import hashlib
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _file_sha(path: Path) -> str | None:
+    try:
+        return _text_sha(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
+def skill_copy_blocker(name: str, existing: dict | None,
+                       text: str | None = None) -> str | None:
+    """Why the store dir ``name`` cannot take this workflow's copy, or None.
+
+    A skill the lock records by that name, or anything else already there
+    that is not this workflow's own copy, wins: the copy is a convenience and
+    is never worth a file the user or another tool put there.
+
+    ``text`` is the copy about to be written. A dir holding only a SKILL.md
+    that is already exactly that is this workflow's copy whatever the lock
+    says — the one a lost lock left behind — and is claimed, so the
+    `boost install` doctor names for it re-records it.
+    """
+    if not util.is_safe_component(name):
+        return "%r is not a name the skill store can hold" % name
+    if lockfile.get_skill(name):
+        return ("a skill named %s is already installed — the workflow is "
+                "not written to the skill store" % name)
+    dest = skill_store_dir(name)
+    own = _copy_row(existing)
+    if (os.path.lexists(dest)
+            and (own is None or Path(own.get("path", "")).parent != dest)
+            and not (text is not None and _holds_only(dest, text))):
+        return ("%s is already in the skill store and is not this workflow's "
+                "— left alone" % paths.tilde(dest))
+    return None
+
+
+def _holds_only(sdir: Path, text: str) -> bool:
+    """Whether ``sdir`` is a real dir holding one file, a SKILL.md of ``text``."""
+    try:
+        if sdir.is_symlink() or os.listdir(sdir) != ["SKILL.md"]:
+            return False
+        return (sdir / "SKILL.md").read_text(encoding="utf-8") == text
+    except (OSError, UnicodeDecodeError):
+        return False
+
+
+def _remove_skill_copy(m: dict) -> tuple[bool, str | None]:
+    """Remove one recorded copy if it is still what boost wrote.
+
+    ``(removed, kept)``: an edited copy is the user's now and stays, and
+    ``kept`` names it. The dir goes too once it is empty — leaving it would
+    leave a store dir with no SKILL.md, which sync names as not a skill.
+    """
+    path = Path(m.get("path", ""))
+    if not _present(path):
+        _rmdir_quietly(path.parent)
+        return False, None
+    if _file_sha(path) != m.get("sha256"):
+        return False, str(path)
+    path.unlink(missing_ok=True)
+    _rmdir_quietly(path.parent)
+    return True, None
+
+
+def _rmdir_quietly(d: Path) -> None:
+    """Remove ``d`` if it is an empty store dir; leave anything else."""
+    with contextlib.suppress(OSError):
+        if d.parent == paths.store_dir():
+            d.rmdir()
+
+
+def _skill_copy(name: str, slot: str, raw: str, existing: dict | None,
+                as_skill: bool | None, scope: str
+                ) -> tuple[dict | None, str | None]:
+    """Write (or retire) the workflow's skill copy: ``(row, note)``.
+
+    ``row`` is what to record, None when there is no copy after this run.
+    ``note`` says why there is none, or what happened to an old one, when
+    that is worth telling the user.
+    """
+    from . import frontmatter, workflows
+    own = _copy_row(existing)
+    if not util.is_safe_component(name):
+        # `frontend/test` would nest a dir in the store no skill host reads.
+        return None, ("not written to the skill store: a namespaced command "
+                      "has no single-word skill name"
+                      if existing is None and wants_skill_copy(as_skill, existing)
+                      else None)
+    if scope == scopes.SCOPE_PROJECT:
+        return None, ("not written to the skill store: --as-skill is user "
+                      "scope only" if as_skill else None)
+    if not wants_skill_copy(as_skill, existing):
+        if own is None:
+            return None, None
+        removed, kept = _remove_skill_copy(own)
+        if kept:
+            # Still recorded: unowned, the dir is a hand-added skill to
+            # `boost sync`, which adopts it and links it into every agent —
+            # beside the workflow's own file. A later run retires it once it
+            # is back to what boost wrote; uninstall leaves it either way.
+            return own, ("left %s in place: it was edited since boost wrote "
+                         "it" % paths.tilde(kept))
+        return None, ("removed its copy from the skill store" if removed
+                      else None)
+    meta, _ = frontmatter.parse(raw)
+    desc = workflows.skill_description(slot, meta)
+    if desc is None:
+        no_desc = ("not written to the skill store: it has no description, "
+                   "and a skill host picks skills by theirs")
+        if own is not None:
+            _removed, kept = _remove_skill_copy(own)
+            if kept:
+                return own, "%s; left the edited %s in place" % (
+                    no_desc, paths.tilde(kept))
+        return None, no_desc
+    text = workflows.render_skill(name, desc, raw)
+    blocker = skill_copy_blocker(name, existing, text)
+    if blocker:
+        return None, blocker
+    dest = skill_store_dir(name) / "SKILL.md"
+    try:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        util.atomic_write_text(dest, text)
+    except OSError as err:
+        # The agents' files are written; a store that refuses one file is not
+        # worth failing the install over. A copy already on disk stays
+        # recorded, so uninstall can still remove it.
+        return own, ("not written to the skill store: %s"
+                     % (err.strerror or err))
+    return ({"agent": None, "slot": workflows.SLOT_SKILL, "path": str(dest),
+             "sha256": _text_sha(text)}, None)
+
+
+# --------------------------------------------------------------------------
+# Copy links: the copy reaches the linking agents with no file of their own
+# --------------------------------------------------------------------------
+# Derived, never recorded. The targets are the enabled linking agents less
+# every agent the workflow set writes (:func:`agents.workflow_agents`) and
+# every agent the lock row names -- a file written (or refused), the user's
+# own file at the path (``foreign``). An agent the set writes with no row yet
+# is due its file from the next `boost sync`; in an entry from before
+# ``only_agents`` was recorded it is one an `--agent` narrowing left out,
+# since those rows are the narrowing's only record. Neither is linked. So a
+# config change that moves an agent into the workflow set takes its link back
+# at the reinstall or sync that writes its file. No row per link:
+# :func:`lockfile.is_skill_copy` matches the slot alone, and a ``skill`` row
+# naming an agent would be misread wherever rows are walked.
+#
+# A ``declined`` agent (one that would reject the file) is of the workflow set
+# too, so it gets no link either. Only Gemini declines today
+# (:func:`workflows.render_problem`), and Gemini is no linking agent; should a
+# linking agent ever decline, it would get the procedure in no form, and
+# linking it here is the fix.
+#
+# Removing them is the other way round: a sweep that asks no config at all,
+# over every dir boost may have linked into, taking only boost's link to this
+# copy's own store dir (:func:`unlink_skill_copy`). A link derived from config
+# would be stranded by the next config change.
+#
+# A declared ``--agent`` narrowing links nowhere, and sweeps any link an
+# earlier, wider install made: `--agent` names only agents that take the
+# workflow's file, so no narrowing can name a copy-link agent, and
+# ``link_agents`` reads an empty ``only`` as every agent.
+#
+# "Beside a file of the workflow's own" is decided by the physical skills dir
+# (:func:`agents.dir_identity`), never by agent name alone. A Claude Code
+# profile whose ``~/.claude-personal/skills`` is a symlink to
+# ``~/.claude/skills`` is a second name for claude-code's dir: a copy link made
+# for the profile lands beside claude-code's own file. Decided by name, the
+# targets linked it there and the stale sweep, seeing claude-code's path,
+# removed it in the same run -- every sync linked and unlinked again, and
+# doctor never went green. So such an agent is no target, and a link there is
+# stale.
+
+
+def _holds_its_own(entry: dict) -> set:
+    """The agents ``entry``'s row decided for itself: written or refused,
+    the user's own file at the path, or declined."""
+    return ({m.get("agent") for m in entry.get("materializations") or ()}
+            | {r["agent"] for r in (*foreign_rows(entry),
+                                    *declined_rows(entry))})
+
+
+def _owns_copy(name: str, entry: dict) -> bool:
+    """Whether ``entry`` has a live skill copy at store/``name`` that no skill
+    of that name has taken -- the precondition for linking to it, or taking
+    a link to it as the workflow's."""
+    return (_copy_row(entry) is not None and not entry.get("quarantined")
+            and lockfile.get_skill(name) is None)
+
+
+def _holder_dirs(have: Collection[str]) -> set[object]:
+    """The physical skills dirs (:func:`agents.dir_identity`) of ``have``,
+    the agents with a file of the workflow's own."""
+    known = agents.known_agents()
+    return {agents.dir_identity(known[a]["dir"]) for a in have if a in known}
+
+
+def copy_link_agents(have: Collection[str],
+                     narrowed: bool = False) -> dict[str, Path]:
+    """The linking agents a workflow's copy goes to: all but ``have``, the
+    agents with a file of the workflow's own, and any whose skills dir is
+    physically one of theirs. None when ``narrowed``.
+
+    The dry run (`boost install -n`) and the real one both come here, so they
+    name the same agents."""
+    if narrowed:
+        return {}
+    shared = _holder_dirs(have)
+    return {a: d for a, d in agents.linking_agents().items()
+            if a not in have and agents.dir_identity(d) not in shared}
+
+
+def copy_link_targets(name: str, entry: dict | None) -> dict[str, Path]:
+    """The agents workflow ``name``'s skill copy is linked into, from its row:
+    the linking agents the workflow set does not write and the row does not
+    name (see "Copy links" above).
+
+    None for an entry with no copy, a quarantined one, one whose store dir a
+    skill took, or one that asks for no copy (a copy kept only because it was
+    edited), and none under a declared ``--agent`` narrowing.
+    """
+    entry = entry or {}
+    if not _owns_copy(name, entry) or not wants_skill_copy(None, entry):
+        return {}
+    writes = agents.workflow_agents(entry.get("base"))
+    return copy_link_agents(_holds_its_own(entry) | set(writes),
+                            narrowed=bool(entry.get("only_agents")))
+
+
+def _copy_link_wrong(link: Path, name: str) -> bool:
+    """Whether ``link`` is a copy link sync should make: nothing is there,
+    or boost's link leads elsewhere or nowhere. The user's own link, a file
+    or a dir is theirs."""
+    if not os.path.lexists(link):
+        return True
+    return is_boost_link(link) and not _already_links(link,
+                                                      skill_store_dir(name))
+
+
+def missing_copy_links(name: str, entry: dict) -> list[str]:
+    """The targets whose copy link `boost sync` makes: the copy is on disk,
+    the agent's dir takes writes, and nothing of the user's is in the way.
+
+    A copy that is gone is a missing materialization, whose reinstall links.
+    """
+    copy = _copy_row(entry)
+    if copy is None or not os.path.isfile(copy.get("path", "")):
+        return []
+    return [a for a, adir in copy_link_targets(name, entry).items()
+            if paths.refuses_writes(adir) is None
+            and _copy_link_wrong(adir / name, name)]
+
+
+def stale_copy_links(name: str, entry: dict) -> list[str]:
+    """The linking agents holding boost's link to ``name``'s copy where it
+    does not belong, which `boost sync` removes: beside a file of the
+    workflow's own (the procedure twice) -- in that agent's skills dir, or in
+    one that is physically the same dir under another agent's name -- and
+    anywhere under a declared ``--agent`` narrowing, which links nowhere -- so
+    a link a wider install made does not outlive it. A disabled agent keeps
+    its link, as it keeps a skill's. :func:`stale_copy_reason` says which, per
+    agent.
+
+    One physical link is named once, by the agent with the file of its own
+    where there is one, so doctor's lines and the dry run's match what the
+    sweep removes."""
+    if not _owns_copy(name, entry):
+        return []
+    own = _holds_its_own(entry)
+    shared = _holder_dirs(own)
+    narrowed = bool(entry.get("only_agents"))
+    hits = [(a, agents.dir_identity(adir))
+            for a, adir in agents.linking_agents().items()
+            if (narrowed or a in own or agents.dir_identity(adir) in shared)
+            and is_boost_link(adir / name)
+            and links_to_store_dir(adir / name, name)]
+    speaker: dict[object, str] = {}
+    for a, key in sorted(hits, key=lambda hit: hit[0] not in own):
+        speaker.setdefault(key, a)
+    return [a for a, key in hits if speaker[key] == a]
+
+
+def stale_copy_reason(entry: dict, agent: str) -> str:
+    """Why :func:`stale_copy_links` names ``agent``, as the clause doctor,
+    sync and the MCP doctor all end their line with."""
+    own = _holds_its_own(entry)
+    if agent in own:
+        return "which has the workflow's own file"
+    adir = agents.linking_agents().get(agent)
+    if adir is not None:
+        key = agents.dir_identity(adir)
+        known = agents.known_agents()
+        # `own` holds the copy row's agent too, which is None
+        holder = next((a for a in sorted(a for a in own if a in known)
+                       if agents.dir_identity(known[a]["dir"]) == key), None)
+        if holder is not None:
+            return ("whose skills dir is %s's, which has the workflow's own "
+                    "file" % holder)
+    return "which the workflow's --agent scope leaves out"
+
+
+def link_skill_copy(name: str, entry: dict,
+                    only: Collection[str] | None = None
+                    ) -> InstallResult | None:
+    """Link ``name``'s copy into :func:`copy_link_targets` -- those in
+    ``only``, when given, which is how `boost sync` links just the agents its
+    plan named.
+
+    None when there is no target: ``link_agents`` takes an empty ``only`` as
+    every agent, which would link the copy beside claude-code's own file.
+    None, too, while the copy's file is not on disk -- a release whose stash
+    had nothing to restore, a store that refused the write and kept the old
+    row -- where every link would dangle; the missing copy is a missing
+    materialization, whose repair links. ``keep_theirs``: a symlink of the
+    user's at the path is left, as a conflict, never re-pointed at the store.
+    """
+    targets = [a for a in copy_link_targets(name, entry)
+               if only is None or a in only]
+    copy = _copy_row(entry)
+    if not targets or copy is None or not os.path.isfile(copy["path"]):
+        return None
+    return link_agents(name, only=targets, keep_theirs=True)
+
+
+def unlink_skill_copy(name: str,
+                      only: Collection[str] | None = None) -> list[str]:
+    """Remove boost's links to workflow ``name``'s copy; the agents unlinked.
+
+    Asks no config: every dir boost may have linked into -- each agent's,
+    enabled or not, its former dirs, and a native-store dir it once linked
+    into -- so a link made under an earlier config is found. Only a boost
+    link to this copy's own store dir goes, live or dangling; nothing at all
+    while a skill of that name owns the dir. ``only`` limits it to those
+    agents. A link that refuses removal is left for the stale-link sweep.
+    """
+    if lockfile.get_skill(name) is not None:
+        return []
     removed: list[str] = []
-    plan: list[tuple[Path, str]] = []
+    for agent, adir in (*agents.unlinking_agents().items(),
+                        *agents.former_link_dirs(),
+                        *agents.remembered_native_dirs()):
+        link = adir / name
+        if ((only is None or agent in only) and is_boost_link(link)
+                and links_to_store_dir(link, name)):
+            with contextlib.suppress(OSError):
+                link.unlink()
+                if agent not in removed:
+                    removed.append(agent)
+    return removed
+
+
+def reconcile_copy_links(name: str, entry: dict,
+                         only: Collection[str] | None = None
+                         ) -> tuple[list[str], list[str], list[str]]:
+    """Link ``name``'s copy where its row wants it (within ``only``, as
+    :func:`link_skill_copy`) and unlink it where :func:`stale_copy_links`
+    says: ``(linked, problems, unlinked)``."""
+    res = link_skill_copy(name, entry, only=only)
+    unlinked = unlink_skill_copy(name, only=stale_copy_links(name, entry))
+    if res is None:
+        return [], [], unlinked
+    return res.linked, copy_link_problems(res), unlinked
+
+
+def copy_link_problems(res: InstallResult) -> list[str]:
+    """Why a copy link from ``res`` was not made, one line each."""
+    return [*("%s is in the way and is not boost's — left alone"
+              % paths.tilde(p) for p in res.conflicts),
+            *("%s — %s" % unwritable_refusal(d) for d in res.unwritable),
+            *("%s — %s" % link_refusal(d, b) for d, b in res.blocked),
+            *("%s — %s" % symlink_refusal(d) for d in res.unlinkable)]
+
+
+def _installed_raw(entry: dict) -> str | None:
+    """The source text a workflow was installed from, or None if it is gone.
+
+    Only text whose sha256 is the one the lock recorded, so a backfill writes
+    the procedure that is installed, never a newer one the tap has moved to —
+    which would be the covert update a pin exists to prevent. The tap's file
+    is asked first; then the agents' own files, which are verbatim for every
+    agent but Gemini (:func:`workflows.render`), so a tap that moved still
+    leaves one copy of the installed text on disk.
+    """
+    want = entry.get("sha256")
+    if not want:
+        return None
+    candidates: list[Path] = []
+    with contextlib.suppress(BoostError):
+        candidates.append(registry.get(entry.get("tap") or "").path
+                          / entry.get("source_file", ""))
+    candidates += [Path(m["path"]) for m in entry.get("materializations") or ()
+                   if m.get("path") and not lockfile.is_skill_copy(m)
+                   and not m.get("unwritable")]
+    for path in candidates:
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if _text_sha(text) == want:
+            return text
+    return None
+
+
+#: A rule/workflow file with no recorded hash that :func:`backfill_row_hashes`
+#: could not record: it no longer holds what boost writes, or its source is
+#: gone. Not a repair, so :func:`is_unrepaired` names it.
+_NOT_VOUCHED_MARK = " with no recorded hash that boost cannot vouch for — "
+
+
+def _expected_row_text(kind: str, name: str, entry: dict, m: dict,
+                       raw: str) -> tuple[str, str | None]:
+    """``(what boost writes for row m, what the row's file holds now)``.
+
+    The same text each install hashes: a rule's verbatim file or the stripped
+    body of its managed block (what `rules.read_block` reads back), and a
+    workflow's per-agent render. The second is None when it cannot be read.
+    """
+    from . import frontmatter, rules, workflows
+    try:
+        on_disk: str | None = Path(m.get("path", "")).read_text(
+            encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        on_disk = None
+    if kind == "rule":
+        if m.get("mode") == rules.MODE_CLAUDE:
+            meta, body = frontmatter.parse(raw)
+            want = rules.render_claude_body(str(meta.get("name") or name),
+                                            body).strip("\n")
+            return want, (rules.read_block(on_disk, name)
+                          if on_disk is not None else None)
+        return raw, on_disk
+    slot = m.get("slot") or entry.get("slot") or workflows.detect_slot(
+        entry.get("source_file", ""))
+    return workflows.render(m.get("agent"), slot, name, raw), on_disk
+
+
+def _unhashed_rows(kind: str, entry: dict) -> list[dict]:
+    """The rows of a rule/workflow entry written before rows carried a hash.
+
+    Only rows whose file is there and that name an agent boost still writes:
+    a missing file is re-materialized by sync (which records its hash), and
+    a row for a disabled agent is a record `boost verify` does not grade.
+    """
+    return [m for m in entry.get("materializations") or ()
+            if isinstance(m, dict) and not m.get("sha256")
+            and not m.get("unwritable") and not lockfile.is_skill_copy(m)
+            and agents.materialization_is_written(kind, entry.get("base"),
+                                                  m.get("agent"))
+            and os.path.isfile(m.get("path", ""))]  # noqa: FURB146
+
+
+def backfill_row_hashes(dry: bool = False) -> list[str]:
+    """Record the hash of each rule/workflow file installed before rows had one.
+
+    Rules and workflows installed before per-row hashes recorded
+    ``{agent, mode|slot, path}`` and nothing to compare, so `boost verify`
+    failed them as "missing lock fields: materialization sha256" through
+    every update, sync and heal, and only a reinstall cleared it. A row's
+    hash is stamped only when its file still holds exactly what boost writes
+    for the installed source (:func:`_installed_raw`, the text whose sha256
+    the lock recorded): a file edited since is the user's, and hashing it
+    would bless the edit as boost's. Those, and items whose installed source
+    is gone, are named with the reinstall that records them. One lock write
+    for the lot. Returns one line per item, in the tense of ``dry``.
+    """
+    # Only a lock sync may write: :func:`lockfile.write` stamps the current
+    # schema, so stamping rows into a newer one (which `refuse_corrupt` lets
+    # through) rewrote a v4 lock as v3 under the line saying sync records
+    # nothing. An "older" lock is ok, and is migrated before this runs.
+    if not lockfile.check().ok:
+        return []
+    lines: list[str] = []
+    stamps: dict[tuple[str, str], dict[str, str]] = {}
+    for kind, section in (("rule", "rules"), ("workflow", "workflows")):
+        for name, entry in sorted(lockfile.read()[section].items()):
+            rows = _unhashed_rows(kind, entry)
+            if (not rows or entry.get("quarantined")
+                    or scopes.stranded(entry)):
+                continue
+            raw = _installed_raw(entry)
+            got: dict[str, str] = {}
+            if raw is not None:
+                for m in rows:
+                    want, have = _expected_row_text(kind, name, entry, m, raw)
+                    if have is not None and have == want:
+                        got[m["path"]] = _text_sha(want)
+            if got:
+                stamps[(section, name)] = got
+                lines.append("%s the hash of %s %s's %s" % (
+                    "would record" if dry else "recorded", kind, name,
+                    "file" if len(got) == 1 else "%d files" % len(got)))
+            left = len(rows) - len(got)
+            if left:
+                lines.append(
+                    ("%s %s has %s" + _NOT_VOUCHED_MARK
+                     + "`boost reinstall %s` rewrites and records %s")
+                    % (kind, name,
+                       "a file" if left == 1 else "%d files" % left,
+                       name, "it" if left == 1 else "them"))
+    if dry or not stamps:
+        return lines
+
+    def stamp(lock: dict) -> bool:
+        changed = False
+        for (section, name), got in stamps.items():
+            for m in lock[section].get(name, {}).get("materializations") or ():
+                sha = got.get(m.get("path", "")) if isinstance(m, dict) else None
+                if sha is not None and not m.get("sha256"):
+                    m["sha256"] = sha
+                    changed = True
+        return changed
+    lockfile.mutate(stamp)
+    return lines
+
+
+def unheld_withheld() -> list[str]:
+    """Skills quarantined or sidelined with their copy still in the store.
+
+    What every quarantine and sideline left before either held the copy
+    aside (:func:`hold_store_copy`): the links went, the copy stayed in
+    ``~/.agents/skills``, and Gemini CLI and Codex kept loading it while
+    doctor said healthy and sync and heal found nothing to do.
+    """
+    return [name for name, entry in sorted(lockfile.read()["skills"].items())
+            if isinstance(entry, dict)
+            and (entry.get("quarantined") or entry.get("sidelined_by"))
+            and not is_held(entry) and util.is_safe_component(name)
+            and os.path.lexists(skill_store_dir(name))]
+
+
+def _withheld_why(entry: dict) -> str:
+    if entry.get("quarantined"):
+        return "quarantined"
+    return "sidelined by `boost %s`" % entry.get("sidelined_by")
+
+
+def hold_legacy_copies(dry: bool = False) -> list[str]:
+    """Hold aside each copy :func:`unheld_withheld` names, and record it.
+
+    The one-time migration for quarantines and sidelines an older boost
+    made: the same move :func:`quarantine_skill` and :func:`sideline` make
+    today, recorded in one lock write. A failed write puts every copy back,
+    so the lock never says held over a copy still in the store or the other
+    way round. Returns one line per skill, in the tense of ``dry``.
+    """
+    # As in :func:`backfill_row_hashes`: only a lock sync may write.
+    if not lockfile.check().ok:
+        return []
+    skills = lockfile.read()["skills"]
+    lines: list[str] = []
+    held: dict[str, str] = {}
+    for name in unheld_withheld():
+        if not dry:
+            try:
+                where = hold_store_copy(name)
+            except BaseException:
+                # A move that fails part way through the list must not leave
+                # the earlier copies held aside with no `held_at` to say so.
+                for done in held:
+                    restore_store_copy(done)
+                raise
+            if where is None:
+                continue
+            held[name] = where
+        lines.append("%s %s's store copy out of %s (it is %s, and Gemini CLI "
+                     "and Codex load the store directly)"
+                     % ("would hold" if dry else "held", name,
+                        paths.tilde(paths.store_dir()),
+                        _withheld_why(skills[name])))
+    if not held:
+        return lines
+
+    def record(lock: dict) -> bool:
+        for name, where in held.items():
+            entry = lock["skills"].get(name)
+            if isinstance(entry, dict):
+                entry[HELD_KEY] = where
+        return True
+    try:
+        lockfile.mutate(record)
+    except BaseException:
+        for name in held:
+            restore_store_copy(name)
+        raise
+    return lines
+
+
+def _tap_url_candidates() -> list[tuple[str, str, dict]]:
+    """``(section, name, row)`` for each lock row with no ``tap_url``.
+
+    Only rows installed from a tap: a `boost import` (``tap: local``) records
+    ``source_url`` instead, and a row with no tap names nothing to look up.
+    """
+    lock = lockfile.read()
+    return [(section, name, row)
+            for section in ("skills", "rules", "workflows")
+            for name, row in sorted(lock[section].items())
+            if isinstance(row, dict) and not row.get("tap_url")
+            and row.get("tap") and row.get("tap") != "local"
+            and "source_url" not in row]
+
+
+def backfill_tap_urls(dry: bool = False) -> list[str]:
+    """Record ``tap_url`` on rows installed before it was recorded.
+
+    :func:`registry.source_changed` compares it with the tap's URL now, so a
+    row without one was unprotected: untap a registry, tap an unrelated one
+    under the same name, and `boost update` called its same-named skill an
+    upgrade and installed it. While the row's tap is still configured, its
+    URL is in config.json, so it is recorded from there and never guessed. A
+    row whose tap was added after the row was written came from an earlier
+    tap of that name (:func:`registry.retapped_since`) and is left unstamped.
+    One lock write for the lot. Returns lines in the tense of ``dry``.
+    """
+    if not lockfile.check().ok:
+        return []
+    lines: list[str] = []
+    stamps: dict[tuple[str, str], str] = {}
+    for section, name, row in _tap_url_candidates():
+        try:
+            tap = registry.get(str(row["tap"]))
+        except BoostError:
+            continue
+        if tap.name != row["tap"]:
+            continue
+        # Not this tap's: `boost update` and `outdated` hold it back as a
+        # source change (:func:`registry.source_changed`), and say so.
+        if registry.retapped_since(row, tap):
+            continue
+        stamps[(section, name)] = tap.url
+    if stamps:
+        lines.append("%s the tap URL of %d lock row%s"
+                     % ("would record" if dry else "recorded", len(stamps),
+                        "" if len(stamps) == 1 else "s"))
+    if dry or not stamps:
+        return lines
+
+    def stamp(lock: dict) -> bool:
+        changed = False
+        for (section, name), url in stamps.items():
+            row = lock[section].get(name)
+            if isinstance(row, dict) and not row.get("tap_url"):
+                row["tap_url"] = url
+                changed = True
+        return changed
+    lockfile.mutate(stamp)
+    return lines
+
+
+def _backfill_candidates() -> list[tuple[str, dict, str]]:
+    """``(name, entry, source text)`` for each installed workflow an install
+    would give a skill copy today and that has none.
+
+    The same conditions :func:`_skill_copy` writes under: user scope, live
+    (not quarantined, not stranded), wanted (:func:`wants_skill_copy`), with a
+    description, and with nothing else at its store dir. A workflow whose
+    installed text cannot be found is left out — `boost update` writes its
+    copy from the tap.
+    """
+    from . import frontmatter, workflows
+    out = []
+    for name, entry in sorted(lockfile.installed_workflows().items()):
+        if (entry.get("scope", scopes.SCOPE_USER) == scopes.SCOPE_PROJECT
+                or entry.get("quarantined") or scopes.stranded(entry)
+                or _copy_row(entry) is not None
+                or not wants_skill_copy(None, entry)
+                or skill_copy_blocker(name, entry)):
+            continue
+        raw = _installed_raw(entry)
+        if raw is None:
+            continue
+        slot = entry.get("slot") or workflows.detect_slot(
+            entry.get("source_file", ""))
+        if workflows.skill_description(slot, frontmatter.parse(raw)[0]):
+            out.append((name, entry, raw))
+    return out
+
+
+def workflows_without_skill_copy() -> list[str]:
+    """Installed workflows `boost heal --as-skill` would give a skill copy."""
+    return [name for name, _entry, _raw in _backfill_candidates()]
+
+
+def backfill_skill_copies(dry: bool = False) -> list[str]:
+    """Write the skill copy of every workflow installed without one.
+
+    For workflows installed before the copy existed, or while
+    ``workflows_as_skills`` was off. Writes only the copy and its row: the
+    agents' files are already what the lock says, and reinstalling to get one
+    file would rewrite them from whatever the tap holds now. Returns one line
+    per workflow, in the tense of ``dry``.
+    """
+    from . import workflows
+    lines = []
+    for name, entry, raw in _backfill_candidates():
+        dest = skill_store_dir(name)
+        if dry:
+            # The run's copy row, as far as the targets read one: by its slot
+            # (`lockfile.is_skill_copy`), so the targets are the run's.
+            will = copy_link_targets(name, entry | {"materializations": [
+                *(entry.get("materializations") or ()),
+                {"slot": workflows.SLOT_SKILL}]})
+            lines.append("would write workflow %s's skill copy to %s%s"
+                         % (name, paths.tilde(dest),
+                            " and link it → %s" % " · ".join(will)
+                            if will else ""))
+            continue
+        slot = entry.get("slot") or workflows.detect_slot(
+            entry.get("source_file", ""))
+        row, note = _skill_copy(name, slot, raw, entry, None,
+                                scopes.SCOPE_USER)
+        if row is None:
+            lines.append("workflow %s: %s" % (name, note))
+            continue
+        entry["materializations"] = [*(entry.get("materializations") or ()),
+                                     row]
+        lockfile.set_workflow(name, entry)
+        linked, problems, _gone = reconcile_copy_links(name, entry)
+        lines.append("wrote workflow %s's skill copy to %s%s"
+                     % (name, paths.tilde(dest),
+                        " and linked it → %s" % " · ".join(linked)
+                        if linked else ""))
+        lines += ["workflow %s: skill copy not linked: %s" % (name, why)
+                  for why in problems]
+    return lines
+
+
+def _uninstall_workflow(name: str, workflow: dict) -> dict:
+    """Remove every file dropped for an installed workflow.
+
+    Its skill copy goes only while it is still what boost wrote: the store is
+    where a user edits skills, and an edited copy is theirs now. The result's
+    ``kept`` names any left in place.
+    """
+    removed: list[str] = []
+    plan: list[tuple[Path, str | None]] = []
+    copies: list[dict] = []
+    kept: list[str] = []
     for m in workflow.get("materializations", []):
+        path = Path(m.get("path", ""))
+        if lockfile.is_skill_copy(m):
+            copies.append(m)
+            continue
+        # An agent's file gets the copy's test: one the user edited since
+        # boost wrote it is theirs, and deleting it lost the edit in silence.
+        # A row with no recorded sha (an older lock, a refused write) has
+        # nothing to compare and is removed as before.
+        with _refused_removal(name, path):
+            if _present(path):
+                if m.get("sha256") and _file_sha(path) != m["sha256"]:
+                    kept.append(str(path))
+                    continue
+                plan.append((path, None))
+        if m.get("agent"):
+            removed.append(m["agent"])
+    for m in copies:
         path = Path(m.get("path", ""))
         with _refused_removal(name, path):
             if _present(path):
-                plan.append((path, ""))
-        if m.get("agent"):
-            removed.append(m["agent"])
+                if _file_sha(path) == m.get("sha256"):
+                    plan.append((path, None))
+                else:
+                    kept.append(str(path))
     gone = _remove_all_or_nothing(name, plan)
+    for m in copies:
+        if m.get("path") not in kept:
+            _rmdir_quietly(Path(m.get("path", "")).parent)
+    # A namespaced command's file sat in `commands/<ns>/`, which install made:
+    # an emptied namespace dir goes with it, innermost first. A dir holding
+    # anything else (another namespace's command, the user's file) stays.
+    depth = name.count("/")
+    for path, _text in plan if depth else ():
+        for parent in path.parents[:depth]:
+            with contextlib.suppress(OSError):   # not empty: someone's file
+                parent.rmdir()
     lockfile.remove_workflow(name)
+    # Its links go with a copy that went, and stay with an edited one kept:
+    # they lead to the user's file now.
+    if copies and not any(m.get("path") in kept for m in copies):
+        unlink_skill_copy(name)
     journal.log("uninstall", name)
-    return _materialized_result(name, removed, workflow, "workflow", gone)
+    res = _materialized_result(name, removed, workflow, "workflow", gone)
+    if kept:
+        res["kept"] = kept
+    return res
 
 
 def _materialized_result(name: str, removed: list[str], entry: dict,
@@ -2689,6 +7199,70 @@ def _materialized_result(name: str, removed: list[str], entry: dict,
     return res
 
 
+def _path_policy_entry(name: str, meta: dict, tap_label: str = "local") -> dict:
+    """The catalog-shaped entry the install policy weighs a local install by.
+
+    Shared by :func:`install_from_path` and the `sync` repair that calls it,
+    so the dry run refuses a restore the run would refuse, in the same words.
+    """
+    return {"name": name, "tap": tap_label,
+            "version": str(meta.get("version") or "0.0.0"),
+            "description": meta.get("description")}
+
+
+def _import_meta(src_dir: Path) -> dict:
+    """The frontmatter of the SKILL.md a local install reads its name from."""
+    from . import frontmatter
+    meta, _ = frontmatter.parse((Path(src_dir) / "SKILL.md").read_text(
+        encoding="utf-8", errors="replace"))
+    return meta
+
+
+def import_name(src_dir: Path, name: str | None = None) -> str:
+    """The name :func:`install_from_path` installs ``src_dir`` under."""
+    return name or util.frontmatter_name(_import_meta(src_dir), Path(src_dir).name)
+
+
+def replaces_only_copy(name: str, src_dir: Path) -> bool:
+    """Whether installing ``src_dir`` as ``name`` overwrites the only copy of it.
+
+    A skill :func:`only_copy` describes has nowhere to be put back from, so
+    replacing it with another dir — `boost import` under the same name —
+    loses it as surely as uninstalling it does, and gets the same question
+    first. ``src_dir`` being that store dir replaces nothing:
+    :func:`install_from_path` refuses it on its own.
+    """
+    entry = lockfile.get_skill(name)
+    return (entry is not None and only_copy(name, entry)
+            and not foreign.same_dir(Path(src_dir), skill_store_dir(name)))
+
+
+def _rename_frontmatter(skill_md: Path, name: str, meta: dict) -> bool:
+    """Make the store copy's frontmatter ``name`` agree with the lock name.
+
+    ``boost import DIR --name beta`` of a skill whose frontmatter says
+    ``name: alpha`` used to rename only the store dir and the lock key: the
+    agent still listed it as ``alpha`` (agents go by the frontmatter name) and
+    ``boost adapt beta`` printed a banner command for an ``alpha`` that boost
+    had no record of. Only the one line changes (``frontmatter.splice_field``),
+    and only in the copy — the source is the user's. Returns whether it wrote.
+    """
+    from . import frontmatter
+    if str(meta.get("name") or "") == name:
+        return False
+    # bytes, not text: a text read would translate CRLF on the way in
+    raw = skill_md.read_bytes()
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return False
+    revised = frontmatter.splice_field(text, "name", name)
+    if revised == text:     # no frontmatter block to carry a name
+        return False
+    util.atomic_write_text(skill_md, revised)   # newline="\n": verbatim
+    return True
+
+
 def install_from_path(src_dir: Path, name: str | None = None,
                       tap_label: str = "local",
                       only_agents: list[str] | None = None,
@@ -2714,29 +7288,70 @@ def install_from_path(src_dir: Path, name: str | None = None,
     src_dir = Path(src_dir)
     if not (src_dir / "SKILL.md").exists():
         raise BoostError("%s has no SKILL.md" % src_dir)
-    from . import frontmatter
-    meta, _ = frontmatter.parse((src_dir / "SKILL.md").read_text(
-        encoding="utf-8", errors="replace"))
-    name = name or str(meta.get("name") or src_dir.name)
+    lockfile.refuse_corrupt()       # before the copy, as in `install`
+    meta = _import_meta(src_dir)
+    name = util.check_item_name(name or util.frontmatter_name(meta, src_dir.name))
+    refuse_case_collision(name, lockfile.installed())
+    refuse_copy_case_collision(name)
     existing = lockfile.get_skill(name)
     # Refuse before `dest` is touched, so a rejected install leaves nothing
     # half-copied over an existing skill.
+    if foreign.same_dir(src_dir, skill_store_dir(name)):
+        # Copying a dir onto itself stages it without `.git` and swaps that in,
+        # so the "copy" deletes the history it was made from. `boost reinstall`
+        # of a skill `boost sync` recorded where it found it is the usual way here.
+        raise BoostError(
+            "%s is %s's own dir in the store, so there is nothing to copy it "
+            "from" % (paths.tilde(src_dir), name),
+            hint=("it is installed already, and edits there are live"
+                  if existing else
+                  "`boost sync` records a skill put in the store by hand"))
+    refusal = quarantine_refusal(name, existing)
+    if refusal is not None:
+        raise refusal
     if existing and existing.get("pinned") and not force:
         raise BoostError("%s is pinned" % name, hint="`boost unpin %s` first" % name)
+    disowned = _refuse_unrecorded(name, existing, force)
     violations = policy.check_install(
-        {"name": name, "tap": tap_label,
-         "version": str(meta.get("version") or "0.0.0"),
-         "description": meta.get("description")},
+        _path_policy_entry(name, meta, tap_label),
         # Re-importing a skill that is already counted must not trip max_skills.
-        len(lockfile.installed()) - (1 if existing else 0))
+        _count_others(lockfile.installed(), name))
+    if remote is not None:
+        # A clone names its source, so it gets the gates `boost tap` applies
+        # to that source; the `local` label above is exempt from the allowlist.
+        violations += [m for m in policy.check_source(
+            url_source_name(remote.url), remote.root) if m not in violations]
     if violations:
         raise BoostError("policy blocks installing %s: %s" % (name, "; ".join(violations)),
                         hint="inspect with `boost policy list`")
     _enforce_capability_policy(name, src_dir / "SKILL.md")
     dest = skill_store_dir(name)
     _require_writable(name)
-    _copy_skill(src_dir, dest)
-    res = link_agents(name, only=preserved_agent_scope(only_agents, existing))
+    if disowned:
+        _drop_skill_copy_row(disowned)
+    fresh = not os.path.lexists(dest)
+    try:
+        # A URL import is bounded by its clone, as a tap install is by its
+        # tap; a path import copies what the user's own links lead to.
+        skipped = _copy_skill(src_dir, dest,
+                              within=remote.root if remote else None)
+        _rename_frontmatter(dest / "SKILL.md", name, meta)
+        # An import records no date, so the one a tap install left in the
+        # lock must not stand for these files.
+        res = link_agents(name,
+                          only=preserved_agent_scope(only_agents, existing),
+                          updated_at=None)
+    except BaseException:
+        # As in install(): nothing recorded a fresh copy, so nothing else
+        # would ever clean it up — a refused link left an unrecorded store
+        # dir that the rerun then refused to touch.
+        if fresh and lockfile.get_skill(name) is None:
+            with contextlib.suppress(OSError):
+                unlink_agents(name)
+            with contextlib.suppress(OSError):
+                util.rmtree(dest)
+        raise
+    res.skipped_links = skipped
     res.score, _ = util.score_skill(dest)
     res.mcp_servers = declared_mcp_servers(dest)
     prior_tap = (existing or {}).get("tap")
@@ -2746,7 +7361,7 @@ def install_from_path(src_dir: Path, name: str | None = None,
     if declared:
         res.out_of_scope = [a for a in linked if a not in declared]
     now = util.now_iso()
-    lockfile.set_skill(name, {
+    record_rebuilt(name, {
         "version": str(meta.get("version") or "0.0.0"),
         "tap": tap_label,
         "source_dir": (repo_path(remote, src_dir) if remote
@@ -2754,11 +7369,13 @@ def install_from_path(src_dir: Path, name: str | None = None,
         "source_url": remote.url if remote else "",
         "commit": remote.commit if remote else "",
         "sha256": util.sha256_dir(dest),
-        "installed_at": (existing or {}).get("installed_at", now),
+        # Modes the hash cannot see; `integrity.exec_drifted` reads them.
+        "exec": util.exec_bits(dest),
+        # record_rebuilt carries the held one, with pinned/tags/commit_pin.
+        "installed_at": now,
         "updated_at": now,
-        # Was hardcoded False, which did not merely skip the pin check — a
-        # re-import silently CLEARED an existing pin. install() preserves it.
-        "pinned": bool((existing or {}).get("pinned")),
+        # `pinned` and `tags` are record_rebuilt's: a re-import once wrote a
+        # hardcoded False, which silently CLEARED an existing pin.
         "quarantined": False,
         # What is on disk, not what this run linked — see install().
         "agents": linked,
@@ -2766,7 +7383,6 @@ def install_from_path(src_dir: Path, name: str | None = None,
         # has to record the same declaration — otherwise the links are narrow
         # but sync sees no scope and widens them right back.
         "only_agents": declared,
-        "tags": (existing or {}).get("tags", []),
         **({"refused_agents": refused} if (refused := unrecorded_agents(name, res))
            else {}),
     })
@@ -2791,6 +7407,23 @@ def existing_skill_owner(name: str) -> str | None:
     return existing.get("tap") if existing else None
 
 
+def _check_store_removable(name: str) -> None:
+    """Refuse a skill uninstall the store directory would stop halfway.
+
+    Deleting the copy needs the store itself writable, and so does the lock
+    file that lives in it. Under a read-only ``~/.agents/skills`` the links
+    went, then ``SKILL.md``, then the rmtree failed on the directory and
+    uninstall crashed at exit 70 with the lock row still in place. The same
+    refusal as :func:`_require_writable`, asked before anything is removed.
+    """
+    d = paths.store_dir()
+    block = paths.refuses_writes(d)
+    if block is not None:
+        raise BoostError("cannot uninstall %s: %s"
+                         % (name, paths.not_writable(d, block)),
+                         hint="%s, then re-run" % paths.write_remedy(block))
+
+
 def _check_links_removable(name: str, entry: dict) -> None:
     """Refuse a skill uninstall that would leave one of its links behind.
 
@@ -2802,8 +7435,8 @@ def _check_links_removable(name: str, entry: dict) -> None:
     the store and the lock entry, so uninstalling again after the `chmod`
     finishes the job.
 
-    A link it *can* see is checked whatever the lock says, because
-    :func:`unlink_agents` removes every visible link and would otherwise stop
+    A link of boost's it *can* see is checked whatever the lock says, because
+    :func:`unlink_agents` removes every visible one and would otherwise stop
     on a read-only dir halfway through. A link it cannot see is checked for
     every agent the lock records as linked *or refused*: a forced relink run
     while the dotdir was unsearchable moves that agent into
@@ -2824,8 +7457,8 @@ def _check_links_removable(name: str, entry: dict) -> None:
     """
     linked = entry.get("agents") or ()
     recorded = ({*linked, *(entry.get("refused_agents") or ())} if linked
-                else set(agents.linking_agents()))
-    for agent, adir in agents.linking_agents().items():
+                else set(agents.unlinking_agents()))
+    for agent, adir in agents.unlinking_agents().items():
         link = adir / name
         try:
             os.lstat(link)
@@ -2835,11 +7468,26 @@ def _check_links_removable(name: str, entry: dict) -> None:
             continue
         except OSError:
             continue
-        if os.path.islink(link) and not os.access(adir, os.W_OK | os.X_OK):  # noqa: FURB146
+        # Only a link uninstall will remove can stop it halfway.
+        if is_boost_link(link) and not os.access(adir, os.W_OK | os.X_OK):
             raise _removal_refused(name, link)
 
 
-def uninstall(name: str) -> dict:
+def kinds_phrase(kinds: list[str]) -> str:
+    """``["skill", "rule"]`` -> "a skill and a rule"."""
+    each = ["a %s" % k for k in kinds]
+    return (" and ".join(each) if len(each) < 3
+            else "%s and %s" % (", ".join(each[:-1]), each[-1]))
+
+
+def installed_kinds(name: str) -> list[str]:
+    """The user-lock sections holding ``name``, skill first."""
+    return [k for k, section in lockfile.all_installed().items()
+            if name in section]
+
+
+def uninstall(name: str, *, project_fallback: bool = True,
+              kind: str | None = None) -> dict:
     """Uninstall ``name`` whatever its kind (skill, rule, workflow).
 
     Reverses everything the install wrote and drops the lock entry;
@@ -2849,13 +7497,61 @@ def uninstall(name: str) -> dict:
     (rule/workflow) — those are removed from entirely different places, and a
     caller that assumes "skill" for all three narrates a store directory that
     a rule or workflow never had.
+
+    ``name`` may be tap-qualified (:func:`installed_name`). With
+    ``project_fallback=False`` (``uninstall --global``) nothing in a repo is
+    removed: a skill only the current repo has, and a rule or workflow the
+    user lock records at project scope, are refused rather than removed.
+
+    A name installed as more than one kind is refused unless ``kind`` says
+    which: resolving it skill-first removed the skill and left a same-named
+    rule and workflow live without a word, where `install` refuses the same
+    ambiguity and `pin` names it.
     """
-    entry = lockfile.get_skill(name)
+    name = installed_name(name)
+    held = installed_kinds(name)
+    if (project_fallback and "skill" not in held
+            and (pb := scopes.resolve_base(scopes.SCOPE_PROJECT)) is not None
+            and projectlock.get_skill(pb, name)):
+        # A repo skill is what a user-lock miss falls back to below, so it is
+        # one of the kinds the name means: leaving it out refused `--kind
+        # skill` for it whenever a user rule shared the name.
+        held = ["skill", *held]
+    if kind is None and len(held) > 1:
+        raise BoostError(
+            "%s is installed as %s" % (name, kinds_phrase(held)),
+            hint="say which to remove: %s" % " or ".join(
+                "`boost uninstall %s --kind %s`" % (name, k) for k in held))
+    if kind is not None and held and kind not in held:
+        raise BoostError(
+            "no %s named %s is installed" % (kind, name),
+            hint="it is installed as %s — `boost uninstall %s --kind %s`"
+                 % (kinds_phrase(held), name, held[0]))
+    entry = lockfile.get_skill(name) if kind in (None, "skill") else None
     if not entry:
-        rule = lockfile.get_rule(name)
+        rule = lockfile.get_rule(name) if kind in (None, "rule") else None
+        workflow = (None if rule or kind not in (None, "workflow")
+                    else lockfile.get_workflow(name))
+        rec = rule or workflow
+        if (rec and not project_fallback
+                and rec.get("scope") == scopes.SCOPE_PROJECT):
+            # A rule or workflow `install --local` put in a repo is recorded
+            # in the *user* lock, so the lookup above finds it — but its files
+            # are in that repo, which `--global` said to leave alone.
+            raise BoostError(
+                "%s is not installed in your user config" % name,
+                hint="it was installed into %s — `boost uninstall --local %s` "
+                     "from there" % (paths.tilde(Path(str(rec.get("base") or
+                                                          "a repo"))), name))
+        if rec:
+            # The lock lives in the store dir, and so does a workflow's skill
+            # copy: under a read-only store the files went first and the lock
+            # save failed after, so `list` still showed the item installed
+            # with every file of it gone. The skill branch's refusal, asked
+            # before anything is removed.
+            _check_store_removable(name)
         if rule:
             return _uninstall_rule(name, rule)
-        workflow = lockfile.get_workflow(name)
         if workflow:
             return _uninstall_workflow(name, workflow)
         # Nothing at user scope — but the caller may be standing in a repo that
@@ -2865,16 +7561,86 @@ def uninstall(name: str) -> dict:
         # former, so asking the latter here refused to remove what install had
         # just put in an unmarked directory.
         pbase = scopes.resolve_base(scopes.SCOPE_PROJECT)
-        if pbase is not None and projectlock.get_skill(pbase, name):
+        in_repo = (kind in (None, "skill") and pbase is not None
+                   and bool(projectlock.get_skill(pbase, name)))
+        if in_repo and project_fallback:
             return uninstall_project(name, base=pbase)
         raise BoostError("%s is not installed" % name,
-                        hint="see what is with `boost list`")
+                        hint=("only this repo has it — `boost uninstall "
+                              "--local %s`" % name) if in_repo
+                        else "see what is with `boost list`")
     _check_links_removable(name, entry)
-    removed_links = unlink_agents(name)
-    util.remove_path(skill_store_dir(name))
-    lockfile.remove_skill(name)
+    _check_store_removable(name)
+    # The copy is renamed to a staging name before the row goes, so no moment
+    # leaves the store dir under the skill's own name with no row: a kill
+    # there left one that doctor called "added outside boost" and `boost
+    # sync`/`heal` adopted as a local skill, linked back into every agent the
+    # user had just removed it from. A ``.boost-XXXXXXXX`` dir is never
+    # adopted, and doctor and clean name it a stale staging dir.
+    dest = skill_store_dir(name)
+    staged = _stage_for_removal(dest)
+    # Then the row: a lock that refuses the write (full disk, immutable file)
+    # fails with the copy renamed back, before anything is deleted.
+    try:
+        lockfile.remove_skill(name)
+    except BaseException:
+        _unstage(staged, dest)
+        raise
+    removed_links: list[str] = []
+    try:
+        unlink_agents(name, into=removed_links)
+        if staged is not None:
+            util.remove_path(staged)
+    except BaseException:
+        # The row back, the copy back, and the links back: restoring the row
+        # alone left `list` and `verify` claiming links that were gone.
+        with contextlib.suppress(OSError):
+            _unstage(staged, dest)
+        lockfile.set_skill(name, entry)
+        relink_removed(name, removed_links)
+        raise
+    drop_held_copy(name)
     journal.log("uninstall", name)
     return {"name": name, "unlinked": removed_links, "entry": entry, "kind": "skill"}
+
+
+def _stage_for_removal(dest: Path) -> Path | None:
+    """Rename ``dest`` to a fresh ``.boost-XXXXXXXX`` beside it; the new path.
+
+    The name is reserved the way :func:`_copy_skill` reserves its staging
+    dir, then freed for the rename: ``os.replace`` onto an existing dir fails
+    on Windows. None when there is nothing at ``dest`` (a held-aside copy).
+    """
+    if not os.path.lexists(dest):
+        return None
+    staged = Path(tempfile.mkdtemp(dir=str(dest.parent),
+                                   prefix=util.TEMP_PREFIX))
+    os.rmdir(staged)
+    os.replace(dest, staged)
+    return staged
+
+
+def _unstage(staged: Path | None, dest: Path) -> None:
+    """Undo :func:`_stage_for_removal`, if it moved anything still there."""
+    if (staged is not None and os.path.lexists(staged)
+            and not os.path.lexists(dest)):
+        os.replace(staged, dest)
+
+
+def relink_removed(name: str, removed: list[str]) -> list[str]:
+    """Put back the links a rolled-back removal took; the agents relinked.
+
+    Best-effort, because it runs in an ``except`` on the way out with the
+    original error: a link that cannot be made is what `boost doctor`
+    reports and `boost sync` makes. Nothing to do for an empty list — and
+    :func:`link_agents` reads an empty ``only`` as every agent.
+    """
+    if not removed:
+        return []
+    try:
+        return link_agents(name, only=removed.copy()).linked
+    except Exception:  # never mask the error being unwound
+        return []
 
 
 def strip_extended_prefix(text: str) -> str:
@@ -2926,14 +7692,76 @@ def points_into_store(link: Path) -> bool:
         return False
     if not target.is_absolute():
         target = link.parent / target
-    target_s = normalize_link_target(target)
-    root_s = normalize_link_target(paths.store_dir())
+    store = paths.store_dir()
+    # Spelled form first: a link boost made carries the store's own path, so
+    # this settles the ordinary case without resolving anything.
+    if _contains(normalize_link_target(store), normalize_link_target(target)):
+        return True
+    # Resolved form second, both sides as far as they exist, for a store
+    # reached through a symlinked parent: macOS ``/tmp`` -> ``/private/tmp``,
+    # Silverblue ``/home`` -> ``/var/home``. Comparing only the spelling left
+    # every link made under one spelling of HOME foreign under the other, so
+    # uninstall left them all dangling and clean called it nothing to clean.
+    # The target's own last component is NOT followed: a live link to another
+    # agent's link (``~/.gemini/skills/x -> ~/.claude/skills/x``) is one hop
+    # into someone else's dir, and this predicate gates deletion.
+    target = Path(os.path.abspath(str(target)))
+    real = resolve_as_far_as_it_exists(target.parent) / target.name
+    return _contains(normalize_link_target(resolve_as_far_as_it_exists(store)),
+                     normalize_link_target(real))
+
+
+def _contains(root_s: str, target_s: str) -> bool:
+    """Whether normalised ``target_s`` is ``root_s`` or sits under it."""
     try:
         # ValueError for paths with no common root — on Windows, two different
         # drives — which means "outside", not "crash out of the delete guard".
-        return os.path.commonpath([target_s, root_s]) == root_s
+        # Compare like with like: on Windows `commonpath` hands back
+        # backslashes (and folds nothing), so a forward-slash or mixed-case
+        # root never equalled it and a path was not within itself.
+        common = os.path.commonpath([target_s, root_s])
     except ValueError:
         return False
+    return os.path.normcase(common) == os.path.normcase(
+        os.path.normpath(root_s))
+
+
+def resolve_as_far_as_it_exists(path: Path) -> Path:
+    """Absolute ``path``, symlinks resolved down to its deepest real ancestor.
+
+    Plain ``resolve()`` is wrong on both sides of an ownership comparison. A
+    broken link's target does not exist — that is what makes it broken — and
+    the store dir does, so resolving only the one that can be resolved
+    compares a real path against a nominal one. On macOS ``/tmp`` is itself a
+    symlink to ``/private/tmp``, so a genuine boost link read as foreign.
+    """
+    path = Path(os.path.abspath(str(path)))
+    tail: list[str] = []
+    cur = path
+    while cur != cur.parent and not cur.exists():
+        tail.append(cur.name)
+        cur = cur.parent
+    # RuntimeError is not redundant with OSError here: Python 3.12's
+    # `Path.resolve()` raises RuntimeError("Symlink loop from ...") for a
+    # cycle even in non-strict mode, and RuntimeError is NOT an OSError
+    # subclass — 3.13+ raises OSError for the same input. See
+    # resolves_into_store for the identical split, caught the same way.
+    with contextlib.suppress(OSError, RuntimeError):
+        cur = cur.resolve()
+    return cur.joinpath(*reversed(tail))
+
+
+def is_boost_link(link: Path) -> bool:
+    """True if ``link`` is boost's kind of link: a symlink into the store.
+
+    Dangling or not, boost may replace or remove one. Anything else at a link
+    path — a file, a dir, the user's own link to a checkout or a volume —
+    belongs to whoever put it there. One predicate, so adoption, sync, prune,
+    uninstall and sideline agree on what is boost's: they disagreed, and a
+    link adoption had called "not boost's to replace" was re-pointed by the
+    next sync once it dangled, and removed by `--prune` and `uninstall`.
+    """
+    return os.path.islink(link) and points_into_store(link)  # noqa: FURB146
 
 
 def resolves_into_store(path: Path) -> bool:
@@ -2948,17 +7776,25 @@ def resolves_into_store(path: Path) -> bool:
     second hop reaches the store.
 
     **Both sides are resolved.** Comparing a resolved target against a nominal
-    ``store_dir()`` is the bug `_resolve_as_far_as_it_exists` documents in
-    ``commands/quality.py``: a $HOME under macOS's ``/var/folders`` resolves to
+    ``store_dir()`` is the bug :func:`resolve_as_far_as_it_exists` documents:
+    a $HOME under macOS's ``/var/folders`` resolves to
     ``/private/var/...``, so a genuine hit never prefix-matches. Containment is
     `commonpath`, not `startswith`, so ``~/.agents/skills-backup`` stays out.
 
     Fails closed — a symlink loop, or anything else ``resolve()`` refuses to
     answer, is not in the store as far as this is concerned.
+
+    A path the strings put outside is asked again by inode (:func:`_under`):
+    on a case-insensitive volume a link to ``~/.Agents/skills/x`` leads into
+    the store, and ``resolve()`` keeps the case it was given. Read as another
+    tool's copy, the store's only copy of a skill was a copy of itself, and
+    ``--prune`` deleted it.
     """
     try:
-        target_s = normalize_link_target(path.resolve(strict=True))
-        root_s = normalize_link_target(paths.store_dir().resolve())
+        target = path.resolve(strict=True)
+        root = paths.store_dir().resolve()
+        target_s = normalize_link_target(target)
+        root_s = normalize_link_target(root)
     except (OSError, RuntimeError):
         # RuntimeError is not redundant: on Python 3.12 `resolve(strict=True)`
         # raises RuntimeError("Symlink loop from ...") for a cycle, and
@@ -2967,10 +7803,26 @@ def resolves_into_store(path: Path) -> bool:
         # newer interpreters and false on the oldest supported one — the test
         # passed locally on 3.14 and failed in CI on 3.12.
         return False
+    with contextlib.suppress(ValueError):
+        if os.path.commonpath([target_s, root_s]) == root_s:
+            return True
+    return _under(target, root)
+
+
+def _under(target: Path, root: Path) -> bool:
+    """True if ``target`` or one of its parents is ``root``, by inode."""
     try:
-        return os.path.commonpath([target_s, root_s]) == root_s
-    except ValueError:
+        want = root.stat()
+    except OSError:
         return False
+    for p in (target, *target.parents):
+        try:
+            st = p.stat()
+        except OSError:
+            continue
+        if (st.st_dev, st.st_ino) == (want.st_dev, want.st_ino):
+            return True
+    return False
 
 
 @dataclass(frozen=True)
@@ -3020,7 +7872,9 @@ def duplicate_discovery() -> list[DuplicateDiscovery]:
         # agents.dedupes_by_path.
         if agent in collapses:
             continue
-        if not adir.is_dir():
+        # A dir that *is* the store (agents.aliases_store) lists the store's
+        # own skills: every entry resolves into it and none is a duplicate.
+        if not adir.is_dir() or agents.aliases_store(adir):
             continue
         for entry in sorted(adir.iterdir()):
             if not resolves_into_store(entry):
@@ -3054,49 +7908,116 @@ def remove_duplicate_discovery(dup: DuplicateDiscovery) -> bool:
     return True
 
 
+def snapshot_rehomer(snap_id: str, tar_path: Path):
+    """The ``rehome`` :func:`snapshot.restore` applies to an archived lock.
+
+    Moves its rule/workflow paths onto this ``$HOME`` (:func:`lockfile.rehome`)
+    from the home the snapshot's sidecar records, or — a snapshot saved
+    before it recorded one — from wherever each agent's dotdir appears in
+    the path. A path neither places is refused, before the store is touched:
+    restored as it was, it would point at the other home's files, which
+    `boost uninstall` then deletes.
+    """
+    meta, _err = jsonstate.read_object(
+        tar_path.with_name(snap_id + snapshot.META_SUFFIX))
+    old_home = (meta or {}).get("home")
+    old_home = old_home if isinstance(old_home, str) and old_home else None
+    dirs = {name: spec["dir"] for name, spec in agents.known_agents().items()}
+
+    def rehome(lock: dict) -> bool:
+        moved, unplaced = lockfile.rehome(lock, paths.home(), old_home, dirs)
+        if unplaced:
+            raise BoostError(
+                "snapshot %s cannot be restored: %s %s files outside this "
+                "home that boost cannot place in it"
+                % (snap_id, ", ".join(unplaced),
+                   "records" if len(unplaced) == 1 else "record"),
+                hint=snapshot.UNTOUCHED_HINT)
+        return bool(moved)
+    return rehome
+
+
 def restore_preserve_newer_lock_sections(
         pre_rules: dict, pre_workflows: dict) -> dict[str, list[str]]:
-    """After a lock file has been replaced wholesale (snapshot restore),
-    re-add rule/workflow entries that were installed live but are absent from
-    the just-restored lock.
+    """After a lock file has been replaced wholesale (snapshot restore), put
+    back every rule/workflow row the live lock held before it.
 
     A snapshot only archives the skill store (which is where the lock file
     itself lives), never the agent context files a rule's or workflow's
     materialization writes into (``CLAUDE.md``, a rendered slash command,
-    ...). Restoring an *older* snapshot therefore drops any rule/workflow
-    installed since — its lock entry vanishes with the rest of the archived
-    lock, but its materialized file is untouched on disk, so the block
-    becomes orphaned: still present, no longer traceable, and impossible to
-    ``boost uninstall``.
+    ...). Those files are left as they were, so the rows describing them must
+    be too:
 
-    Filling the gap rather than overwriting the section outright preserves
-    the other, already-correct direction: an entry the snapshot *did* carry
-    that was later uninstalled comes back through the normal archived lock
-    contents, and :func:`sync_plan`/:func:`sync_apply` re-materializes it
-    from its tap same as any other missing materialization. Only names
-    genuinely absent from the restored lock are filled in here.
+    * a rule/workflow installed after the snapshot vanished from the lock
+      while its block stayed on disk — orphaned, untraceable, impossible to
+      ``boost uninstall``;
+    * one upgraded after the snapshot got the snapshot's older row back over
+      the newer block still on disk, and `verify`, `doctor` and `drift`
+      called boost's own content the user's local edits.
+
+    An entry the snapshot carried that was later uninstalled is not in
+    ``pre_*``: it comes back through the archived lock, and
+    :func:`sync_plan`/:func:`sync_apply` re-materializes it from its tap.
 
     ``pre_rules``/``pre_workflows`` must be captured by the caller *before*
-    the store is emptied for extraction. Returns the names actually kept, per
-    section, so the caller can report what changed; writes the lock only when
-    there is something to add back.
+    the store is swapped. Returns, per section, the names that were absent
+    from the restored lock, and under ``"live"`` the names whose restored row
+    differed and was replaced by the live one; writes the lock only when
+    either holds something.
     """
-    lock = lockfile.read()
-    kept: dict[str, list[str]] = {"rules": [], "workflows": []}
-    for name, entry in pre_rules.items():
-        if name not in lock["rules"]:
-            lock["rules"][name] = entry
-            kept["rules"].append(name)
-    for name, entry in pre_workflows.items():
-        if name not in lock["workflows"]:
-            lock["workflows"][name] = entry
-            kept["workflows"].append(name)
-    if kept["rules"] or kept["workflows"]:
-        lockfile.write(lock)
+    kept: dict[str, list[str]] = {"rules": [], "workflows": [], "live": []}
+
+    def keep(lock: dict) -> bool:
+        for section, pre in (("rules", pre_rules), ("workflows", pre_workflows)):
+            for name, entry in pre.items():
+                if name not in lock[section]:
+                    kept[section].append(name)
+                elif lock[section][name] != entry:
+                    kept["live"].append(name)
+                else:
+                    continue
+                lock[section][name] = entry
+        return any(kept.values())
+    lockfile.mutate(keep)
     return kept
 
 
-def lock_vouches() -> bool:
+def restore_carry_names(recorded: Mapping[str, dict]
+                        ) -> tuple[list[str], list[str]]:
+    """The store children a snapshot restore keeps: ``(carry, set_aside)``.
+
+    Everything but the lock file, its ``.lock`` sibling and the skill dirs
+    ``recorded`` (the live lock's skills section, name -> row) — those are
+    what a snapshot replaces. The rest is boost's or the user's, never a
+    snapshot's to drop: the lock's ``.corrupt`` backups `boost list` points
+    the user at, a dir added by hand or by another tool, a workflow's skill
+    copy, an edited copy `boost uninstall` kept. They are carried across the
+    swap. So is a recorded skill that is its own only copy
+    (:func:`only_copy`): a hand-made dir `boost sync` adopted is still the
+    user's, and a restore — whose own sync adopts any carried dir — made the
+    first restore record it and the second delete it.
+
+    While the lock cannot vouch for the store (:func:`lock_vouches`),
+    ``recorded`` is empty and any dir may be one boost installed: carried
+    into the restored store, `boost sync` would record it as a local skill.
+    So dirs are ``set_aside`` instead, for the restore to move to a named
+    backup; dot entries are still carried.
+    """
+    lock = paths.lockfile_path()
+    own = {lock.name, lock.name + ".lock"}
+    try:
+        names = sorted(os.listdir(paths.store_dir()))
+    except OSError:
+        return [], []
+    replaced = {n for n, e in recorded.items() if not only_copy(n, e)}
+    keep = [n for n in names if n not in own and n not in replaced]
+    if lock_vouches():
+        return keep, []
+    return ([n for n in keep if n.startswith(".")],
+            [n for n in keep if not n.startswith(".")])
+
+
+def lock_vouches(integ: lockfile.Integrity | None = None) -> bool:
     """Whether the lock file can say which store dirs and links are boost's.
 
     It can when it parses, and when it is missing over an empty store — that
@@ -3106,27 +8027,488 @@ def lock_vouches() -> bool:
     reading that as "nothing is installed" turned `boost sync` — the command
     `boost doctor` prescribes for exactly this state — into an uninstaller that
     removed every live link of an intact install with green ticks and exit 0.
+    ``integ`` is a :func:`lockfile.check` the caller already made.
+
+    "Empty" is any dir at all, not :func:`has_content`'s skills: with no lock,
+    a link into another tool's bucket in the store (``synced/foo``) is not
+    boost's to call stale, and the narrower test swept it. A store boost
+    cannot list cannot be called empty either.
     """
-    integ = lockfile.check()
-    return integ.ok or (integ.problem == "missing" and not has_content())
+    if integ is None:
+        integ = lockfile.check()
+    if integ.ok:
+        return True
+    if integ.problem != "missing":
+        return False
+    root = paths.store_dir()
+    try:
+        names = os.listdir(root)
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+    return not any(not n.startswith(".")
+                   and os.path.isdir(os.path.join(root, n))  # noqa: FURB146
+                   for n in names)
+
+
+def _store_dirs() -> list[str]:
+    """Every dir in the store, by name, sorted. A dot entry is boost's own
+    (the lock file, ``.trash``) and is never listed."""
+    root = paths.store_dir()
+    try:
+        names = sorted(os.listdir(root))
+    except OSError:
+        return []
+    return [n for n in names if not n.startswith(".")
+            and os.path.isdir(os.path.join(root, n))]
+
+
+def unrecorded_store_dirs(lock: dict) -> list[str]:
+    """The store dirs ``lock`` does not record, by name.
+
+    Candidates, not verdicts: whose each one is depends on what else is on the
+    machine (:func:`classify_unrecorded`), and whether a lock may be read as
+    "none of these are boost's" at all is :func:`lock_vouches`. A name boost
+    could not record is :func:`misnamed_store_dirs`'s, not this list's.
+
+    A workflow's skill copy is recorded too, on the workflow
+    (:func:`workflow_owned_store_names`), and is not a candidate; nor is one
+    the lock has lost, told by the workflow file beside it
+    (:func:`workflow_copy_evidence`, :func:`orphaned_workflow_copies`).
+    """
+    owned = workflow_owned_store_names()
+    return [n for n in _store_dirs()
+            if n not in lock and n not in owned and util.is_safe_component(n)
+            and workflow_copy_evidence(n) is None]
+
+
+def misnamed_store_dirs() -> list[str]:
+    """The store dirs whose name boost cannot record a skill under.
+
+    A name that is not a safe path component (:func:`util.is_safe_component`)
+    can never be a lock key, and every path into the store goes through
+    :func:`skill_store_dir`, which refuses one. Listed with the other store
+    dirs, a Finder duplicate — ``brainstorming copy`` — stopped `boost doctor`
+    three checks in and made `sync`, `heal` and the MCP doctor exit with an
+    error. Kept apart, it is a note: boost records nothing by that name and
+    removes nothing.
+    """
+    return [n for n in _store_dirs() if not util.is_safe_component(n)]
+
+
+def classify_unrecorded(names: list[str]) -> dict[str, list]:
+    """Sort store dirs no lock entry records by whose they are.
+
+    Returns ``{adoptable_store, older_copies, foreign_store, not_skill_store,
+    unreadable_store}``:
+
+    * ``adoptable_store`` — a skill nothing else on this machine claims: one
+      written or copied in by hand, or left by another installer. Plain
+      ``boost sync`` records it as a local skill and links it out.
+    * ``older_copies`` — ``(skill, owner, path)``: a copy in another agent's
+      dir that an adoptable skill is newer than. Named, never touched.
+    * ``foreign_store`` — ``(skill, owner, path, "identical" | "differs")``: a
+      copy of another tool's skill. Only ``boost sync --prune`` removes it.
+    * ``not_skill_store`` — a dir with no ``SKILL.md``. Named, never touched.
+    * ``unreadable_store`` — ``(skill, path)``: a dir holding ``path``, which
+      boost cannot read (:func:`foreign.unreadable`), or one that would be
+      adopted while ``path``, a vendor dir that may hold a skill by its name,
+      cannot be looked in (:func:`foreign.hidden_vendor_skill`). Whose it is
+      cannot be told and it is not recorded; its hash would skip what it
+      cannot list, so it is named with that path and never touched.
+
+    These were one bucket, "orphaned store dirs", and ``sync --prune`` deleted
+    every dir in it. On the machine this was written against that was 28
+    dirs: a skill the user wrote, 26 ports of Cursor's built-in skills, and
+    ``synced`` — another tool's sync bucket, a ``manifest.json`` and nine
+    skills it keeps in step with an account. Only the ports were copies, and
+    16 of those had been rewritten for Codex.
+
+    Ownership is decided before content or time, in :func:`foreign.inventory`
+    order. A vendor's built-in or an enabled plugin's skill owns its name: a
+    store dir named like one is a copy or a port of it whatever its bytes or
+    mtime say, and adopting it would link a Codex port of Cursor's skill into
+    Claude Code. A plugin's skill is matched by the store copy's ``SKILL.md``
+    name as well as its dir name, since a ``cp -r`` keeps the plugin's dir
+    name and Claude Code lists the skill under the other. A copy in an agent's
+    own dir is the user's, so it owns the name only when it holds the same
+    bytes or is at least as new by file times (:func:`foreign.newest_mtime`).
+    That is a heuristic, since a copy that did not preserve times looks new,
+    so all it decides is which of the two plain ``boost sync`` records; the
+    other copy is named, and only ``--prune`` removes a store copy.
+
+    A store entry that is a second path to one of those skills — a link the
+    user made so that the agents reading the store see a skill kept
+    elsewhere — is in no bucket. It is not a copy, so ``--prune`` must not
+    unlink it, and it is that tool's skill, so boost does not record it.
+    "Second path" is decided by inode (:func:`foreign.same_dir`), since a
+    case-insensitive volume spells one dir several ways.
+
+    A dir holding a git repository (:func:`foreign.holds_repo`) is never
+    identical to anything: the hash does not see ``.git``, and the history
+    in it is in no copy. It can still be named like another tool's skill,
+    and ``--prune`` still leaves it (:func:`is_repo_copy`).
+    """
+    buckets: dict[str, list] = {"adoptable_store": [], "older_copies": [],
+                                "foreign_store": [], "not_skill_store": [],
+                                "unreadable_store": []}
+    if not names:
+        return buckets
+    readable = []
+    for name in names:
+        sdir = skill_store_dir(name)
+        # Looked at before anything is read: a dir with no search bit has no
+        # SKILL.md as far as ``os.path.isfile`` can tell, and was called "not
+        # a skill" for it. ``os.path`` throughout because ``Path.is_file``
+        # raises under such a dir on Python 3.12 and 3.13, and doctor runs this.
+        if not os.access(sdir, os.R_OK | os.X_OK):
+            buckets["unreadable_store"].append((name, str(sdir)))
+        elif not os.path.isfile(sdir / "SKILL.md"):  # noqa: FURB146
+            buckets["not_skill_store"].append(name)
+        elif (bad := foreign.unreadable(sdir)) is not None:
+            buckets["unreadable_store"].append((name, str(bad)))
+        else:
+            readable.append(name)
+    if not readable:
+        return buckets
+    named = {n: foreign.skill_name(skill_store_dir(n), n) for n in readable}
+    found = foreign.inventory([*readable, *named.values()])
+    for name in readable:
+        sdir = skill_store_dir(name)
+        theirs = found.get(name, [])
+        if named[name] != name:
+            theirs = theirs + [c for c in found.get(named[name], [])
+                               if c.kind == foreign.PLUGIN]
+        if any(foreign.same_dir(c.path, sdir) for c in theirs):
+            continue
+        repo = foreign.holds_repo(sdir)
+        owned = [c for c in theirs if c.kind != foreign.AGENT]
+        if owned:
+            # The identical one when there is one: removing the store copy
+            # then loses nothing, and the confirm says what it costs.
+            same_owner = None if repo else next(
+                (c for c in owned if foreign.same_content(sdir, c.path)), None)
+            c = same_owner or owned[0]
+            buckets["foreign_store"].append(
+                (name, c.owner, str(c.path),
+                 foreign.IDENTICAL if same_owner else foreign.DIFFERS))
+            continue
+        same = [] if repo else [c for c in theirs
+                                if foreign.same_content(sdir, c.path)]
+        if same:
+            buckets["foreign_store"].append(
+                (name, same[0].owner, str(same[0].path), foreign.IDENTICAL))
+            continue
+        mine = foreign.newest_mtime(sdir)
+        times = {c.path: foreign.newest_mtime(c.path) for c in theirs}
+        newer = [c for c in theirs if times[c.path] >= mine]
+        if newer:
+            c = max(newer, key=lambda c: times[c.path])
+            buckets["foreign_store"].append(
+                (name, c.owner, str(c.path), foreign.DIFFERS))
+            continue
+        hidden = foreign.hidden_vendor_skill(name)
+        if hidden is not None:
+            buckets["unreadable_store"].append((name, str(hidden)))
+            continue
+        buckets["older_copies"].extend((name, c.owner, str(c.path)) for c in theirs)
+        buckets["adoptable_store"].append(name)
+    return buckets
+
+
+def _plugin_hits(name: str, index: dict) -> list[tuple[foreign.Plugin, Path]]:
+    """The enabled plugins' skills store/``name`` may be another copy of.
+
+    Looked up by the dir name, then by the store copy's ``SKILL.md`` name,
+    which is what :func:`foreign.plugin_skills` keys a skill by: a ``cp -r``
+    of a plugin's skill keeps the plugin's dir name, while Claude Code lists
+    the skill under its frontmatter name.
+    """
+    hits: list[tuple[foreign.Plugin, Path]] = []
+    for key in dict.fromkeys((name, foreign.skill_name(skill_store_dir(name), name))):
+        hits.extend(index.get(key, ()))
+    return hits
+
+
+def covering_plugin(name: str, index: dict | None = None
+                    ) -> tuple[foreign.Plugin, Path] | None:
+    """The enabled plugin that ships the same files as store/``name``, or None.
+
+    Claude Code loads a plugin's skill as ``/<plugin>:<skill>`` and a linked
+    one as ``/<skill>`` (sources in :mod:`foreign`), so a link to a skill a
+    plugin already ships makes Claude Code list it twice, and the model reads
+    the same description twice. Only the same bytes count: two skills that
+    share a name are both worth having. ``index`` is a
+    :func:`foreign.plugin_index` the caller already read.
+    """
+    if index is None:
+        index = foreign.plugin_index()
+    if not index:
+        return None
+    sdir = skill_store_dir(name)
+    return next((hit for hit in _plugin_hits(name, index)
+                 if foreign.same_content(sdir, hit[1])), None)
+
+
+def plugin_serves(how: str) -> bool:
+    """True when the plugin's copy is the one Claude Code should list.
+
+    ``how`` is a :func:`plugin_coverage` verdict: the same files, or a copy
+    the dates show is newer than boost's. Then boost makes no Claude Code
+    link, `sync` and `doctor` count none missing, and ``sync --prune`` drops
+    the one boost has. Every other verdict keeps boost's link.
+    """
+    return how == foreign.IDENTICAL or foreign.split_how(how)[0] == foreign.NEWER_IN_PLUGIN
+
+
+def _weigh(sdir: Path, hits: list[tuple[foreign.Plugin, Path]],
+           updated_at: str | None) -> tuple[foreign.Plugin, Path, str]:
+    """``(plugin, its copy, how)``: which of ``hits`` to weigh store copy ``sdir`` against.
+
+    The one with the same files, whichever comes first. Otherwise, with a
+    date for boost's copy, the newest copy a plugin ships that is newer than
+    it, else the first plugin, by id, with the verdict
+    :func:`foreign.newest_copy` gives it (:func:`foreign.dated_how`). With
+    no date for boost's copy nothing is dated, and it reads
+    :data:`foreign.DIFFERS` as before.
+    """
+    same = next((h for h in hits if foreign.same_content(sdir, h[1])), None)
+    if same is not None:
+        return (*same, foreign.IDENTICAL)
+    boost_at = util.epoch_from_iso(updated_at)
+    if boost_at is None:
+        return (*hits[0], foreign.DIFFERS)
+    weighed = []
+    for plugin, theirs in hits:
+        when, source = foreign.plugin_skill_updated_at(plugin, theirs)
+        how = foreign.dated_how(foreign.newest_copy(boost_at, when, source), source)
+        weighed.append((plugin, theirs, how, when or 0.0))
+    newer = [w for w in weighed if plugin_serves(w[2])]
+    plugin, theirs, how, _when = (max(newer, key=operator.itemgetter(3)) if newer
+                                  else weighed[0])
+    return plugin, theirs, how
+
+
+def serving_plugin(name: str, updated_at: str | None, index: dict | None = None
+                   ) -> tuple[foreign.Plugin, Path, str] | None:
+    """The enabled plugin whose copy of ``name`` Claude Code should list, or None.
+
+    :func:`covering_plugin`'s, or one whose copy is newer than boost's, which
+    changed last at ``updated_at`` (:func:`source_updated_at`). The third
+    value is the verdict (:func:`plugin_serves`). Boost cannot turn a plugin
+    off — Claude Code's settings are never written — so when two copies
+    differ, the way to show only the newer is to withhold boost's link when
+    it is the older.
+    """
+    if index is None:
+        index = foreign.plugin_index()
+    hits = _plugin_hits(name, index) if index else []
+    if not hits:
+        return None
+    found = _weigh(skill_store_dir(name), hits, updated_at)
+    return found if plugin_serves(found[2]) else None
+
+
+def plugin_coverage(lock: dict, index: dict | None = None
+                    ) -> dict[str, tuple[str, str, str]]:
+    """``{skill: (plugin id, plugin's copy, how)}`` for each skill in ``lock``
+    whose scope takes in Claude Code that a plugin also ships.
+
+    ``how`` is "identical", "differs", or for a different skill whose dates
+    say which copy is newer a :func:`foreign.dated_how` verdict (:func:`_weigh`
+    picks the plugin). The ones :func:`plugin_serves` accepts keep boost from
+    linking the skill into Claude Code: `sync` creates no such link and
+    reports none missing or blocked. The rest are notes. Left out: a
+    quarantined or sidelined skill, which has no link to weigh, and a store
+    copy without its ``SKILL.md``, which has nothing to compare.
+    """
+    linking = agents.linking_agents()
+    if foreign.CLAUDE not in linking:
+        return {}
+    if index is None:
+        index = foreign.plugin_index()
+    if not index:
+        return {}
+    found = {}
+    for name in sorted(lock):
+        entry = lock[name]
+        if (entry.get("quarantined") or entry.get("sidelined_by")
+                or foreign.CLAUDE not in scoped_agents(entry, linking)):
+            continue
+        sdir = skill_store_dir(name)
+        if not os.path.isfile(sdir / "SKILL.md"):  # noqa: FURB146
+            continue
+        hits = _plugin_hits(name, index)
+        if not hits:
+            continue
+        plugin, theirs, how = _weigh(sdir, hits, entry.get("source_updated_at"))
+        found[name] = (plugin.id, str(theirs), how)
+    return found
+
+
+def covered_skills(coverage: dict[str, tuple[str, str, str]]) -> set[str]:
+    """The skills in ``coverage`` (:func:`plugin_coverage`) whose plugin's copy
+    Claude Code should list (:func:`plugin_serves`): the ones boost makes no
+    Claude Code link for."""
+    return {n for n, (_p, _t, how) in coverage.items() if plugin_serves(how)}
+
+
+def left_to_plugin(name: str, agent: str, link: Path, covered: set[str]) -> bool:
+    """True when ``agent``'s missing or blocked ``link`` to ``name`` is no fault.
+
+    It is Claude Code's, for a skill an enabled plugin ships with the same
+    files (``covered``, :func:`covered_skills`), and boost's link is not
+    already there: :func:`link_agents` makes none, so `sync` must not offer to
+    and `doctor` must not report one missing. A link already there is
+    :func:`plugin_duplicates`' to report.
+    """
+    return (agent == foreign.CLAUDE and name in covered
+            and not (os.path.islink(link)  # noqa: FURB146
+                     and _already_links(link, skill_store_dir(name))))
+
+
+def plugin_duplicates(lock: dict | None = None,
+                      coverage: dict | None = None) -> list[tuple[str, str, str, str]]:
+    """``(skill, plugin id, plugin's copy, "identical" | "differs")`` for each
+    skill boost links into Claude Code that an enabled plugin also loads.
+
+    Only while boost's link is there and leads to the store copy: that link is
+    what makes Claude Code list the skill twice, and the one thing ``sync
+    --prune`` may remove (:func:`drop_plugin_link`). A covered skill gets no
+    new link (:func:`link_agents`), so a row is a link made before the plugin
+    shipped the skill, or before boost looked. ``coverage`` is a
+    :func:`plugin_coverage` the caller already read.
+    """
+    if lock is None:
+        lock = lockfile.installed()
+    if coverage is None:
+        coverage = plugin_coverage(lock)
+    adir = agents.linking_agents().get(foreign.CLAUDE)
+    if adir is None:
+        return []
+    found = []
+    for name, (plugin_id, theirs, how) in coverage.items():
+        link = adir / name
+        if (os.path.islink(link)  # noqa: FURB146
+                and _already_links(link, skill_store_dir(name))):
+            found.append((name, plugin_id, theirs, how))
+    return found
+
+
+def sort_unrecorded(lock: dict, integ: lockfile.Integrity | None = None
+                    ) -> dict[str, list]:
+    """The :func:`sync_plan` buckets for the store dirs ``lock`` does not record.
+
+    What they can mean depends on the lock file (``integ``, a
+    :func:`lockfile.check` the caller already made):
+
+    * it parses — :func:`classify_unrecorded` says whose each one is;
+    * it is missing — the same, except that a dir boost may have installed is
+      queued in ``unrecorded_store`` for :func:`recover_unrecorded`: one
+      nothing else claims, and a copy of another tool's skill that an agent's
+      link into the store still leads to, since boost links only what it
+      installed. Every dir used to be queued, so a lost lock re-recorded a
+      copy of Cursor's built-in as boost's and the next sync linked it into
+      every agent, beside Cursor's own. With a lock, the same dir is a copy;
+    * it is corrupt or in another schema — nothing it says can be read, so
+      every dir is ``unrecorded_store``, which sync never writes over.
+
+    ``misnamed_store`` (:func:`misnamed_store_dirs`) is answered whatever the
+    lock says. ``rule_blocks`` (:func:`orphaned_rule_blocks`) is answered
+    unless the lock is unreadable, when every block would look unrecorded.
+    """
+    if integ is None:
+        integ = lockfile.check()
+    names = unrecorded_store_dirs(lock)
+    out: dict[str, list] = {"adoptable_store": [], "older_copies": [],
+                            "foreign_store": [], "not_skill_store": [],
+                            "unreadable_store": [], "unrecorded_store": [],
+                            "misnamed_store": misnamed_store_dirs(),
+                            "workflow_copies": orphaned_workflow_copies(lock),
+                            "rule_blocks": []}
+    if not integ.ok and integ.problem != "missing":
+        out["unrecorded_store"] = names
+        return out
+    out["rule_blocks"] = orphaned_rule_blocks()
+    out.update(classify_unrecorded(names))
+    if integ.ok:
+        return out
+    linking = agents.linking_agents()
+    linked = [r for r in out["foreign_store"]
+              if any(os.path.islink(d / r[0])
+                     and _already_links(d / r[0], skill_store_dir(r[0]))
+                     for d in linking.values())]
+    out["unrecorded_store"] = sorted([*out["adoptable_store"], *(r[0] for r in linked)])
+    out["foreign_store"] = [r for r in out["foreign_store"] if r not in linked]
+    out["adoptable_store"] = []
+    return out
+
+
+#: Plan buckets that name something boost leaves alone by design. They are
+#: reported and never counted as issues: counting them would hold every health
+#: surface red on a state no boost command will change.
+INFORMATIONAL = ("older_copies", "not_skill_store", "misnamed_store")
+
+
+def plan_issues(plan: dict[str, list]) -> int:
+    """How many problems a :func:`sync_plan` holds: one per item.
+
+    That is the MCP doctor's count. `boost doctor` raises one issue per check
+    line instead, and one line can name several items, so the two totals
+    differ whenever a line does.
+
+    A plugin duplicate is one only when the plugin's copy is the one to list
+    (:func:`plugin_serves`): identical, or newer than boost's. Then boost's
+    link adds nothing current and ``sync --prune`` can drop it. Otherwise
+    boost's link is kept, so that one is a note.
+    """
+    return sum(len(v) for k, v in plan.items()
+               if k not in (*INFORMATIONAL, "plugin_duplicates")) + sum(
+        1 for d in plan.get("plugin_duplicates", ()) if plugin_serves(d[3]))
 
 
 def sync_plan() -> dict[str, list]:
     """Compare lock file <-> store <-> agent symlinks.
 
-    Returns {missing_store, missing_links, stale_links, orphaned_store}
+    Returns {missing_store, missing_links, blocked_links, stale_links, ...}
       missing_store:  lock entries whose store dir is gone
       missing_links:  (skill, agent) pairs that should be linked but aren't,
-                      and that sync *can* create
+                      and that sync *can* create — including a live boost
+                      link into another skill's store dir (:func:`misdirected`)
       blocked_links:  (skill, agent, path) where something that is not a boost
                       symlink occupies the link path — sync will not clobber it
       stale_links:    paths in agent dirs that are broken/unmanaged symlinks
-      orphaned_store: store dirs not present in the lock file
-      unrecorded_store: the same, while the lock cannot vouch for anything
-                      (:func:`lock_vouches`) — never pruned, re-recorded by
-                      :func:`sync_apply` when the lock is merely missing
+      adoptable_store, older_copies, foreign_store, not_skill_store,
+      unreadable_store:
+                      store dirs not present in the lock file, sorted by whose
+                      they are (:func:`classify_unrecorded`)
+      misnamed_store: store dirs whose name boost cannot record a skill under
+                      (:func:`misnamed_store_dirs`) — reported, never touched
+      workflow_copies: (name, workflow file) for a workflow's skill copy no
+                      lock entry records (:func:`orphaned_workflow_copies`) —
+                      never adopted as a skill; `boost install` re-records
+      rule_blocks:    (rule, context file) for a managed rule block no lock
+                      entry records (:func:`orphaned_rule_blocks`) — never
+                      stripped; `boost install` re-records
+      plugin_duplicates: skills boost links into Claude Code that an enabled
+                      plugin also loads (:func:`plugin_duplicates`)
+      unrecorded_store: store dirs the lock file has lost, or cannot be read
+                      about (:func:`sort_unrecorded`) — never pruned,
+                      re-recorded by :func:`sync_apply` when the lock is
+                      merely missing
       out_of_scope_links: (skill, agent) pairs linked outside a declared
                       ``--agent`` narrowing — reported, never auto-removed
+      missing_copy_links: (workflow, agent) pairs whose link to the
+                      workflow's skill copy sync can make
+                      (:func:`missing_copy_links`)
+      stale_copy_links: (workflow, agent) pairs where that link sits beside
+                      the workflow's own file, or outside a declared
+                      ``--agent`` narrowing (:func:`stale_copy_links`)
+
+    The copy links are a workflow's, so they have keys of their own:
+    ``missing_links`` is repaired through the skills section of the lock,
+    which records no workflow.
 
     ``blocked_links`` exists because lumping it into ``missing_links`` made
     ``boost sync`` promise a repair it could never perform. ``link_agents``
@@ -3138,7 +8520,13 @@ def sync_plan() -> dict[str, list]:
     as a directory: a closed loop with no exit.
     """
     lock = lockfile.installed()
-    vouches = lock_vouches()
+    integ = lockfile.check()
+    vouches = lock_vouches(integ)
+    # A skill an enabled plugin ships with the same files gets no Claude Code
+    # link (`link_agents`), so a missing or blocked one is no repair to make:
+    # reporting it had `boost sync` recreate the duplicate `--prune` dropped.
+    coverage = plugin_coverage(lock)
+    covered = covered_skills(coverage)
     # An agent whose skills dir has a file or a dangling link in the way:
     # `link_agents` skips it, so listing its links as missing made `boost
     # sync` print "everything in sync" over the repair it had just skipped.
@@ -3147,9 +8535,13 @@ def sync_plan() -> dict[str, list]:
                   if (b := paths.refuses_writes(d)) is not None
                   and paths.in_the_way(b)}
     plan: dict[str, list] = {"missing_store": [], "missing_links": [],
-            "blocked_links": [], "stale_links": [], "orphaned_store": [],
-            "unrecorded_store": [], "missing_materializations": [],
-            "out_of_scope_links": []}
+            "blocked_links": [], "stale_links": [], "adoptable_store": [],
+            "older_copies": [], "foreign_store": [], "not_skill_store": [],
+            "unreadable_store": [], "misnamed_store": [],
+            "workflow_copies": [], "rule_blocks": [],
+            "plugin_duplicates": [], "unrecorded_store": [],
+            "missing_materializations": [], "out_of_scope_links": [],
+            "missing_copy_links": [], "stale_copy_links": []}
     for name, entry in lock.items():
         sdir = skill_store_dir(name)
         # A directory with no SKILL.md counts as missing, not as healthy. The
@@ -3177,7 +8569,10 @@ def sync_plan() -> dict[str, list]:
         # agent as one step, and that reinstall runs *after* this plan is
         # built, so a `missing_links` entry here would have `sync_apply` try
         # to link a store directory that does not exist yet.
-        missing_store = not sdir.is_dir() or not (sdir / "SKILL.md").is_file()
+        # A held copy is out of the store on purpose (`hold_store_copy`):
+        # reinstalling it would hand it back to Gemini CLI and Codex.
+        missing_store = not is_held(entry) and (
+            not sdir.is_dir() or not (sdir / "SKILL.md").is_file())
         if missing_store:
             plan["missing_store"].append(name)
         if entry.get("quarantined"):
@@ -3200,20 +8595,29 @@ def sync_plan() -> dict[str, list]:
         linking = agents.linking_agents()
         in_scope = scoped_agents(entry, linking)
         for agent, adir in in_scope.items():
+            link = adir / name
+            if left_to_plugin(name, agent, link, covered):
+                continue
             if agent in in_the_way:
                 plan["blocked_links"].append(
                     (name, agent, str(in_the_way[agent])))
                 continue
-            link = adir / name
-            # A symlink is boost's to replace even when it dangles; anything
-            # else that exists is someone else's file and stays put.
+            # boost's kind of link is boost's to replace even when it
+            # dangles. A live link leads somewhere, whoever's it is. Anything
+            # else is someone else's and stays put: a dangling link of the
+            # user's — a checkout on an unmounted volume — counted as boost's,
+            # and sync swapped it for a link to the store copy.
             # ``os.path``: under a dotdir with no search bit ``Path.is_symlink``
             # raises on Python 3.12 and 3.13, and `boost sync`, `heal` and
             # `doctor` all exited 70 on it.
-            if os.path.islink(link):
-                if not os.path.exists(link) and not missing_store:  # noqa: FURB141
+            # A live link into another skill's store dir is boost's, and
+            # wrong: the agent loads that skill under this one's name. It is
+            # a missing link, which `link_agents` repairs by replacing it.
+            if os.path.islink(link) and os.path.exists(link):  # noqa: FURB141
+                if not missing_store and misdirected(name, link) is not None:
                     plan["missing_links"].append((name, agent))
-            elif os.path.lexists(link):
+                continue
+            if os.path.lexists(link) and not is_boost_link(link):
                 plan["blocked_links"].append((name, agent, str(link)))
             elif not missing_store:
                 plan["missing_links"].append((name, agent))
@@ -3224,39 +8628,85 @@ def sync_plan() -> dict[str, list]:
         # narrowing fell between the two and no command could see it. Only
         # meaningful when a narrowing was declared; without one `scoped_agents`
         # fails open and every agent is in scope by definition.
-        if entry.get("only_agents"):
-            for agent, adir in linking.items():
-                if agent not in in_scope and os.path.islink(adir / name):
-                    plan["out_of_scope_links"].append((name, agent))
-    store_root = paths.store_dir()
-    if store_root.is_dir():
-        for child in sorted(store_root.iterdir()):
-            if (child.is_dir() and not child.name.startswith(".")
-                    and child.name not in lock):
-                plan["orphaned_store" if vouches else "unrecorded_store"].append(
-                    child.name)
+        # boost's links only: the user's own link where adoption left it is
+        # the user's, and `--prune` removed it as out of scope.
+        plan["out_of_scope_links"].extend(
+            (name, agent) for agent in out_of_scope_agents(name, entry, linking))
+    plan.update(sort_unrecorded(lock, integ))
+    plan["plugin_duplicates"] = plugin_duplicates(lock, coverage)
+    plan["stale_links"] = stale_links(lock, vouches)
+    return _plan_copy_links(_plan_materializations(plan))
+
+
+def _plan_copy_links(plan: dict[str, list]) -> dict[str, list]:
+    """Fill the plan's copy-link keys from each workflow's row, and return it."""
+    for name, entry in sorted(lockfile.installed_workflows().items()):
+        plan["missing_copy_links"] += [(name, a)
+                                       for a in missing_copy_links(name, entry)]
+        plan["stale_copy_links"] += [(name, a)
+                                     for a in stale_copy_links(name, entry)]
+    return plan
+
+
+def stale_links(lock: dict, vouches: bool) -> list[str]:
+    """Paths in agent dirs that ``boost sync`` and ``heal`` remove as stale.
+
+    A boost link (:func:`points_into_store`) that dangles, or — while the lock
+    can vouch — one named for no installed skill. One function so ``doctor``
+    reports exactly what heal will remove: it counted the dangling ones only,
+    called a live ``~/.claude/skills/ghost -> ~/.agents/skills/x`` healthy,
+    and the next heal deleted it.
+    """
+    found: list[str] = []
+    # A live link into a store dir the lock does not record leads to that
+    # dir, whoever's it is, so it is not stale: the sweep used to exempt only
+    # the skills sync was about to record, and removed the links into a copy
+    # of Cursor's skill, another tool's bucket or a misnamed dir one line
+    # above the lines saying those dirs were left alone. One into a dir
+    # `--prune` deletes dangles afterwards, and the next sync sweeps it.
+    unrecorded = {n for n in _store_dirs() if n not in lock}
     # linking_agents, not enabled_agents: boost only ever creates a symlink in
     # an agent it links for, so a link in a native-store agent's skills dir was
     # put there by something else — and the sweep's only ownership test is
     # `points_into_store`, which such a link passes. `boost sync` would have
     # deleted another tool's files without `--prune-duplicates` ever being
     # typed. Same "topology, not ownership" line as duplicate_discovery, which
-    # reports those entries and removes nothing.
-    for adir in agents.linking_agents().values():
+    # reports those entries and removes nothing. Disabled agents are swept
+    # too (`unlinking_agents`): boost linked there while they were enabled.
+    # Former dirs too: an agent whose dir was repointed left its old links.
+    # A native-store dir boost once linked into gives up its dangling links
+    # into the store only: a live one there is duplicate discovery's to
+    # report, whoever made it (`agents.remembered_native_dirs`).
+    sweep = agents.sweep_dirs()
+    swept = {agents.dir_identity(d) for d in sweep}
+    for _agent, adir in agents.remembered_native_dirs():
+        # One the sweep below walks too, through another spelling, once.
+        if (os.path.isdir(adir)  # noqa: FURB146
+                and agents.dir_identity(adir) not in swept):
+            found.extend(str(link) for link in adir.iterdir()
+                         if link.is_symlink() and points_into_store(link)
+                         and _dangles(link))
+    for adir in sweep:
         if not os.path.isdir(adir):  # noqa: FURB146
             continue
-        for link in adir.iterdir():
-            # Ownership first, for broken links too: the old test short-circuited
-            # on `not link.exists()`, so any dangling symlink a user happened to
-            # keep in ~/.claude/skills was swept up by `boost sync`.
-            #
-            # "Not in the lock" means "not installed" only while the lock can
-            # vouch. Without that guard a missing lock made every live link
-            # into an intact store look stale, and sync removed them all.
+        # Ownership first, for broken links too: the old test short-circuited
+        # on `not link.exists()`, so any dangling symlink a user happened to
+        # keep in ~/.claude/skills was swept up by `boost sync`.
+        #
+        # "Not in the lock" means "not installed" only while the lock can
+        # vouch. Without that guard a missing lock made every live link
+        # into an intact store look stale, and sync removed them all.
+        found.extend(
+            str(link) for link in adir.iterdir()
             if (link.is_symlink() and points_into_store(link)
-                    and (not link.exists()
-                         or (vouches and link.name not in lock))):
-                plan["stale_links"].append(str(link))
+                and (_dangles(link)
+                     or (vouches and link.name not in lock
+                         and _store_entry(link) not in unrecorded))))
+    return found
+
+
+def _plan_materializations(plan: dict[str, list]) -> dict[str, list]:
+    """Fill ``plan["missing_materializations"]`` and return ``plan``."""
     # Rules/workflows don't live in the store — they materialize into agent dirs.
     # A materialization whose file (or CLAUDE.md block) is gone can be repaired
     # by re-materializing from the tap, same as a missing skill store dir.
@@ -3271,18 +8721,56 @@ def sync_plan() -> dict[str, list]:
         # `boost sync` into a failure line; doctor names it with its remedy.
         if entry.get("quarantined") or scopes.stranded(entry):
             continue
-        if any(m.get("unwritable") or not _rule_materialization_ok(name, m)
+        if any(m.get("unwritable") or m.get("stale")
+               or not _rule_materialization_ok(name, m)
+               or agents.relocated_to("rule", name, entry, m) is not None
                for m in entry.get("materializations") or []
-               if materialization_is_written("rule", entry, m)):
+               if materialization_is_written("rule", entry, m)) \
+                or _freed_foreign(entry, "rule") \
+                or unmaterialized_agents("rule", entry):
             plan["missing_materializations"].append(("rule", name))
     for name, entry in lockfile.installed_workflows().items():
         if entry.get("quarantined") or scopes.stranded(entry):
             continue
-        if any(m.get("unwritable") or not os.path.isfile(m.get("path", ""))
+        if any(m.get("unwritable") or m.get("stale")
+               or not os.path.isfile(m.get("path", ""))
+               or agents.relocated_to("workflow", name, entry, m) is not None
                for m in entry.get("materializations") or []
-               if materialization_is_written("workflow", entry, m)):
+               if materialization_is_written("workflow", entry, m)) \
+                or _freed_foreign(entry) \
+                or unmaterialized_agents("workflow", entry):
             plan["missing_materializations"].append(("workflow", name))
     return plan
+
+
+def _dangles(link: Path) -> bool:
+    """True when the symlink ``link`` is known to lead nowhere.
+
+    Known, not presumed: ``exists()`` answers False for a target boost may not
+    look at, and under a store with no search bit every live link read as a
+    broken one for the sweep to remove. A loop leads nowhere too: ``ELOOP``,
+    or on Windows ERROR_CANT_RESOLVE_FILENAME (1921), which Python does not
+    map to ``ELOOP``.
+    """
+    try:
+        link.stat()
+    except (FileNotFoundError, NotADirectoryError):
+        return True
+    except OSError as err:
+        return (err.errno == errno.ELOOP
+                or getattr(err, "winerror", None) == 1921)
+    return False
+
+
+def _store_entry(link: Path) -> str | None:
+    """The store dir ``link`` leads into, by name, or None if none."""
+    try:
+        rel = os.path.relpath(os.path.realpath(link),
+                              os.path.realpath(paths.store_dir()))
+    except ValueError:
+        return None
+    head = rel.split(os.sep, 1)[0]
+    return None if head in (os.curdir, os.pardir) else head
 
 
 def _rule_materialization_ok(name: str, m: dict) -> bool:
@@ -3309,7 +8797,8 @@ def prune_out_of_scope_links(plan: dict[str, list]) -> list[str]:
     `boost heal` are safe to run blind. These links are neither broken nor
     unowned — they work, and an agent is using them — so deleting one changes
     which agents can run a skill. That is a decision, and it belongs behind the
-    same explicit opt-in as deleting an orphaned store dir (`--prune`).
+    same explicit opt-in as deleting a store dir that copies another tool's
+    skill (`--prune`).
     """
     removed = []
     linking = agents.linking_agents()
@@ -3318,7 +8807,8 @@ def prune_out_of_scope_links(plan: dict[str, list]) -> list[str]:
         if adir is None:      # disabled between plan and prune
             continue
         link = adir / name
-        if link.is_symlink():
+        # Asked again: the confirm before this can wait as long as it likes.
+        if is_boost_link(link):
             link.unlink()
             entry = lockfile.get_skill(name)
             if entry:
@@ -3335,7 +8825,7 @@ def prune_out_of_scope_links(plan: dict[str, list]) -> list[str]:
 def _skill_source_sha(cat_entry: dict) -> str | None:
     """sha256 of a catalog entry's tap source directory, or None if unreadable."""
     try:
-        return util.sha256_dir(source_dir_for(cat_entry))
+        return skill_source_sha(cat_entry)
     except BoostError:
         return None
 
@@ -3377,9 +8867,96 @@ def _pin_blocks_repair(entry: dict, source_sha) -> bool:
     a clone's cone. An unpinned entry can never be blocked, so it never needs
     the answer.
     """
-    if not entry.get("pinned"):
+    if not entry.get("pinned") and not entry.get("commit_pin"):
         return False
-    return _pinned_repair_blocked(entry, source_sha())
+    if moved_off_commit_pin(entry, entry.get("tap")) is not None:
+        return True
+    return bool(entry.get("pinned")) and _pinned_repair_blocked(
+        entry, source_sha())
+
+
+def moved_off_commit_pin(entry: dict, tap_name: str | None) -> str | None:
+    """The tap HEAD a re-install would record over ``entry``'s commit pin.
+
+    ``None`` when there is no commit pin, or the tap still sits on it. A
+    re-install records the tap's *current* commit, so installing anything
+    else would move the item off the commit ``boost pin --commit`` froze —
+    even with byte-identical content, `boost verify` then fails. An unreadable
+    tap answers ``""``, which still blocks: fail closed, as the sha guard does.
+    """
+    pin = entry.get("commit_pin")
+    if not pin:
+        return None
+    try:
+        head = gitutil.head_commit(registry.get(str(tap_name)).path)
+    except BoostError:
+        head = ""
+    return None if head == pin else head
+
+
+def reinstall_candidates(scope: str | None,
+                         base=None) -> list[tuple[str, str, dict]]:
+    """What ``boost reinstall`` addresses at ``scope``, as ``(kind, name, entry)``.
+
+    ``None`` is the user lock as recorded, whatever scope each row names (the
+    behaviour before ``reinstall`` took a scope flag). ``"user"`` keeps only
+    the rows recorded at user scope. ``"project"`` is the repo at ``base``: its
+    own lock's skills, plus the rules and workflows the user lock records as
+    installed into that repo. Kinds come in lock-section order and names
+    sorted within each, so ``--all`` output is stable.
+    """
+    found: list[tuple[str, str, dict]] = []
+    for kind, section in lockfile.all_installed().items():
+        if kind == "skill" and scope == scopes.SCOPE_PROJECT:
+            # A repo's skills live in its own lock, never in the user one.
+            if base is not None:
+                found.extend(("skill", name, {**entry,
+                                              "scope": scopes.SCOPE_PROJECT})
+                             for name, entry in sorted(
+                                 projectlock.installed(base).items()))
+            continue
+        for name, entry in sorted(section.items()):
+            at = entry.get("scope", scopes.SCOPE_USER)
+            # scopes.owns, not a local resolve(): it is the predicate
+            # `uninstall --local` and `list --local` use, and it refuses a
+            # relative `base`, which resolve() would read against the cwd and
+            # so hand every repo the same row.
+            if (scope is None or scope == at == scopes.SCOPE_USER
+                    or (scope == scopes.SCOPE_PROJECT
+                        and scopes.owns(entry, base))):
+                found.append((kind, name, entry))
+    return found
+
+
+def reinstall_pin_hold(kind: str, lk: dict, cat_entry: dict | None = None,
+                       src: Path | None = None) -> str | None:
+    """Why ``boost reinstall`` must not touch ``lk``, or ``None`` if it may.
+
+    Reinstall exists to put the *same* content back, which a pin allows. What
+    a pin forbids is the move: re-installing a pinned item whose source has
+    changed since (the tap moved, `boost update` skipped it) used to install
+    the new version under the old pin, and a commit-pinned one recorded a
+    commit nobody pinned. The same guard `boost sync` applies to repair.
+    ``cat_entry`` is the tap source, ``src`` a local one.
+    """
+    if not lk.get("pinned") and not lk.get("commit_pin"):
+        return None
+    if cat_entry is not None:
+        head = moved_off_commit_pin(lk, cat_entry.get("tap"))
+        if head is not None:
+            return ("commit-pinned at %s, and %s is now at %s"
+                    % (str(lk["commit_pin"])[:12], cat_entry.get("tap"),
+                       head[:12] or "an unreadable commit"))
+        sha = (_skill_source_sha(cat_entry) if kind == "skill"
+               else _source_text_sha(str(cat_entry.get("tap")), cat_entry))
+    elif src is not None:
+        sha = _local_source_sha(src)
+    else:
+        return None
+    if lk.get("pinned") and _pinned_repair_blocked(lk, sha):
+        return ("pinned at v%s, and its source has changed since"
+                % lk.get("version", "0.0.0"))
+    return None
 
 
 @dataclass(frozen=True)
@@ -3393,9 +8970,11 @@ class StoreRepair:
     that never fired. Tense is still each caller's business; the decision is not.
 
     ``preview`` is a prediction, not a promise: an install can still fail (a
-    tap clone removed between the two calls), and a failed install falls
-    through to the drop. That residue is the honest kind — it names the branch
-    the run will *attempt*, rather than listing both and committing to neither.
+    tap clone removed between the two calls). A failed install falls through
+    to the drop only when its source is in fact gone; any other refusal keeps
+    the lock row and is reported as not restored. That residue is the honest
+    kind — it names the branch the run will *attempt*, rather than listing
+    both and committing to neither.
     """
 
     action: str                     #: local | tap | declined | drop
@@ -3414,7 +8993,26 @@ _NOT_REMATERIALIZED = " was not re-materialized: "
 def is_unrepaired(action: str) -> bool:
     """True for a :func:`sync_apply` line that reports a repair it did *not*
     make, so callers print it as a warning rather than under a check mark."""
-    return _NOT_REMATERIALIZED in action
+    return any(mark in action for mark in (
+        _NOT_REMATERIALIZED, _NOT_LINKED_MARK, _NOT_RECORDED_MARK,
+        _DECLINED_MARK, _NOT_CLONED_MARK, _PROJECT_GONE_MARK,
+        _NOT_VOUCHED_MARK, _NOT_RESTORED_MARK))
+
+
+#: A pin that blocks a repair. Missing from :func:`is_unrepaired` until it was
+#: added, so `heal` printed the decline under a ✓ and exited 0 over a skill
+#: still missing, and `doctor` went on prescribing `heal`.
+_DECLINED_MARK = " — repair declined "
+#: A project skill :func:`project_sync_apply` could not re-materialize. `heal`
+#: repairs project copies through it now, and must not exit 0 over one.
+_PROJECT_GONE_MARK = " is missing from the project but its source is gone"
+#: A URL import's store dir, which sync never re-clones -- also a decline.
+_NOT_CLONED_MARK = "'s store dir is missing — `boost reinstall "
+#: A missing skill the source is still there for, whose reinstall was refused
+#: (a policy, a capability, a store that refuses the write). Its lock row is
+#: kept: dropping it, as sync did, discarded the record of a skill a policy
+#: change had only paused, and reported "source gone" over a source in place.
+_NOT_RESTORED_MARK = " not restored: "
 
 
 _DROPPED = "dropped %s from lock (store dir missing, source gone)"
@@ -3423,9 +9021,54 @@ _GONE = ("%s %s has a missing materialization but its source is gone — "
 
 
 def _declined(label: str, where: str, name: str) -> str:
-    return ("%s is pinned and its %s source has moved — repair declined "
-            "(unpin, or `boost reinstall %s` to accept the new content)"
-            % (label, where, name))
+    return ("%s is pinned and its %s source has moved%s"
+            "(`boost unpin %s`, then `boost reinstall %s` to accept the new "
+            "content)" % (label, where, _DECLINED_MARK, name, name))
+
+
+def _not_restored(name: str, why: str, hint: str | None = None) -> str:
+    """A missing skill sync leaves missing, with its lock row kept."""
+    return "%s%s%s%s (its lock row is kept)" % (
+        name, _NOT_RESTORED_MARK, why, " — %s" % hint if hint else "")
+
+
+def _policy_declined(name: str, policy_entry: dict,
+                     warning: str | None = None) -> StoreRepair | None:
+    """The decline for restoring ``name`` when the install policy refuses it.
+
+    The install a repair replaces applied the policy, so a skill or tap
+    blocklisted since then must not come back through `sync` or `heal` --
+    and the dry run asks the same question, so it does not promise a
+    reinstall the run then refuses. ``name`` is still in the lock, so the
+    count is the others' (`_count_others`): a plain ``len`` would refuse every
+    restore at exactly ``max_skills``.
+    """
+    violations = policy.check_install(
+        policy_entry, _count_others(lockfile.installed(), name))
+    if not violations:
+        return None
+    msg = _not_restored(
+        name, "policy blocks installing %s: %s" % (name, "; ".join(violations)),
+        "inspect with `boost policy list`")
+    return StoreRepair("declined", msg, msg, warning=warning)
+
+
+def _repair_source_present(repair: StoreRepair) -> bool:
+    """Whether the source a failed repair reinstalls from is still there.
+
+    Decides drop vs. keep after an install refused: only a source that has
+    gone justifies dropping the lock row. SKILL.md sits inside every tap's
+    sparse cone, so its presence needs no materialization.
+    """
+    if repair.src is not None:
+        return (repair.src / "SKILL.md").is_file()
+    if repair.cat_entry is None:
+        return False
+    try:
+        tap = registry.get(repair.cat_entry["tap"])
+    except BoostError:
+        return False
+    return (tap.path / repair.cat_entry.get("skill_md", "")).is_file()
 
 
 def _lock_source(name: str, tap_name: str, entry: dict,
@@ -3453,8 +9096,8 @@ def plan_missing_store(name: str) -> StoreRepair:
         # never touches the network. Dropping the entry instead would throw
         # away the one record of where the skill came from, so keep it and
         # name the command that can.
-        msg = ("%s's store dir is missing — `boost reinstall %s` clones it "
-               "again from %s" % (name, name, entry["source_url"]))
+        msg = ("%s%s%s` clones it again from %s"
+               % (name, _NOT_CLONED_MARK, name, entry["source_url"]))
         return StoreRepair("declined", msg, msg)
     if tap_name == "local":
         src = local_source_dir(entry)
@@ -3462,6 +9105,10 @@ def plan_missing_store(name: str) -> StoreRepair:
             if _pin_blocks_repair(entry, lambda: _local_source_sha(src)):
                 msg = _declined(name, "local", name)
                 return StoreRepair("declined", msg, msg)
+            blocked = _policy_declined(
+                name, _path_policy_entry(name, _import_meta(src)))
+            if blocked is not None:
+                return blocked
             return StoreRepair(
                 "local", src=src,
                 preview="would reinstall %s from local source %s" % (name, src),
@@ -3472,6 +9119,9 @@ def plan_missing_store(name: str) -> StoreRepair:
             if _pin_blocks_repair(entry, lambda: _skill_source_sha(cat_entry)):
                 msg = _declined(name, "tap", name)
                 return StoreRepair("declined", msg, msg, warning=warning)
+            blocked = _policy_declined(name, cat_entry, warning)
+            if blocked is not None:
+                return blocked
             return StoreRepair(
                 "tap", cat_entry=cat_entry, warning=warning,
                 preview="would reinstall %s from %s" % (name, tap_name),
@@ -3520,9 +9170,14 @@ def sync_preview(plan: dict[str, list]) -> list[str]:
 
     Only the buckets whose repair *branches* live here; `missing_links` and
     `stale_links` do one unconditional thing each and stay with their caller,
-    which filters them against the links it has already reported.
+    which filters them against the links it has already reported. A
+    workflow's copy links are worded here, in the run's own words, since
+    `heal --dry-run` has no other line for them.
     """
     lines = []
+    integ = lockfile.check()
+    if integ.problem == "older":
+        lines.append(lockfile.older_line(integ, dry=True))
     # `sync_apply` re-records only while the lock file is *missing* — a corrupt
     # one is left for `boost replay` — and only a dir that still has a
     # SKILL.md. The preview used to say "would re-record" either way.
@@ -3534,6 +9189,7 @@ def sync_preview(plan: dict[str, list]) -> list[str]:
             else:
                 lines.append("would leave %s unrecorded (no SKILL.md to record)"
                              % name)
+    lines += [adoption_preview(name) for name in plan.get("adoptable_store", [])]
     repairs = [plan_missing_store(name) for name in plan.get("missing_store", [])]
     for kind, name in plan.get("missing_materializations", []):
         repair = plan_missing_materialization(kind, name)
@@ -3549,17 +9205,63 @@ def sync_preview(plan: dict[str, list]) -> list[str]:
         if repair.warning:
             lines.append(repair.warning)
         lines.append(repair.preview)
+    lines += hold_legacy_copies(dry=True)
+    lines += backfill_tap_urls(dry=True)
+    lines += backfill_row_hashes(dry=True)
+    lines += [_COPY_WOULD_LINK % pair
+              for pair in plan.get("missing_copy_links", ())]
+    lines += [_COPY_WOULD_UNLINK % (n, a, stale_copy_reason(
+                  lockfile.get_workflow(n) or {}, a))
+              for n, a in plan.get("stale_copy_links", ())]
     return lines
+
+
+def adoption_preview(name: str) -> str:
+    """What :func:`adopt_unrecorded` will do with ``name``, worded ahead of it.
+
+    Built from the decisions the run makes. The scope is
+    :func:`_adoption_scope`'s: a skill already linked into fewer agents than
+    link is kept to those, and saying only "and link it" read as a promise of
+    every agent. An agent boost already links it into needs nothing, so a
+    link is promised only into the agents left over; one whose link something
+    else is in the way of is named, since the run leaves it unlinked.
+    """
+    linked, _unseen, narrowed = _adoption_scope(name)
+    scope = scoped_agents({"only_agents": narrowed}, agents.linking_agents())
+    blocked = _in_the_way(name, scope)
+    todo = [a for a in scope if a not in blocked and a not in linked]
+    head = "would record %s, which boost did not install" % name
+    keep = "" if narrowed is None else ", ".join(narrowed)
+    if todo:
+        # Named once anything is linked or kept to: "and link it" alone,
+        # over a skill linked into Cursor, reads as relinking Cursor too.
+        act = ("link it into %s" % ", ".join(todo) if linked or keep
+               else "link it")
+        if keep:
+            act = "keep it to %s, and %s" % (keep, act)
+    elif linked and keep:
+        act = "keep it to %s, where it is already linked (nothing to link)" \
+            % keep
+    elif linked:
+        act = "leave its links as they are (already linked into %s, " \
+              "nothing to link)" % ", ".join(linked)
+    else:
+        act = "leave it unlinked"
+    line = "%s, and %s" % (head, act)
+    if blocked:
+        line += " (%s)" % "; ".join(
+            "not into %s: %s is in the way" % (a, paths.tilde(p))
+            for a, p in blocked.items())
+    return line
 
 
 def recover_unrecorded(name: str) -> str | None:
     """Re-record one store dir the lock has lost; return how, or None.
 
-    Only ever called while the lock file is missing over a populated store, so
-    writing a record cannot overwrite a newer or merely unreadable lock. The
-    store copy is authoritative and is never replaced: re-installing would
-    have been the obvious repair, and it silently discards any edits made to
-    the store copy.
+    Called while the lock file is missing over a populated store, so writing a
+    record cannot overwrite a newer or merely unreadable lock. The store copy
+    is authoritative and is never replaced: re-installing would have been the
+    obvious repair, and it silently discards any edits made to the store copy.
 
     A dir whose content is byte-identical to exactly one tapped source is
     recorded as installed from that tap, the record a fresh install would have
@@ -3568,54 +9270,545 @@ def recover_unrecorded(name: str) -> str | None:
     is lost and nothing is left unrecorded: a dir left out would read as an
     orphan the moment this pass creates a lock, and the next sync would remove
     its links, the defect this function exists to close.
+
+    A dir holding a file boost may not read is left unrecorded, and the line
+    returned says which file (:func:`is_unrepaired`). So is a workflow's skill
+    copy (:func:`workflow_copy_evidence`): it is the workflow's, not a skill.
     """
-    sdir = skill_store_dir(name)
-    if not (sdir / "SKILL.md").is_file():
-        return None
-    from . import catalog, gitutil
-    have = util.sha256_dir(sdir)
-    matches = [e for e in catalog.find(name)
-               if e.get("kind", "skill") == "skill"
-               and _skill_source_sha(e) == have]
-    linked = linked_agents(name)
+    if (wf := workflow_copy_evidence(name)) is not None:
+        return _workflow_copy_refusal(name, wf)
+    try:
+        how = _record_unrecorded(name, "recover")
+    except OSError as err:
+        return _not_recorded(name, err)
+    return None if how is None else "re-recorded %s %s" % (name, how)
+
+
+def adopt_unrecorded(name: str) -> list[str]:
+    """Record a skill nothing else claims and link it out; return the lines.
+
+    The plain-`sync` answer for a skill put in ``~/.agents/skills`` by hand
+    (:func:`classify_unrecorded`). It used to be an "orphaned store dir" that
+    only ``sync --prune`` acted on, by deleting it — the user's own work, for
+    the price of answering yes. Recorded as a local skill whose source is its
+    store dir (:func:`_record_unrecorded`), then linked into the agents its
+    scope takes in.
+
+    Linked only where nothing is in the way. Whatever already holds the name
+    in an agent's dir — a real dir, a file, or a symlink that does not lead
+    into the store, such as one to the user's own checkout — is not boost's,
+    so it is named and left exactly as it is. Any symlink used to count as
+    boost's to replace, which re-pointed Claude Code from the user's checkout
+    to the store copy while the line beside it said that copy was left alone.
+
+    A skill the lock has recorded since the plan was made is not recorded
+    again: something installed it in the meantime, and that record wins. One
+    holding a file boost may not read is not recorded, and says so, so the
+    rest of the sync still runs.
+    """
+    if lockfile.get_skill(name) is not None:
+        return []
+    if (wf := workflow_copy_evidence(name)) is not None:
+        return [_workflow_copy_refusal(name, wf)]
+    try:
+        how = _record_unrecorded(name, "adopt")
+    except OSError as err:
+        return [_not_recorded(name, err)]
+    entry = lockfile.get_skill(name)
+    if how is None or entry is None:
+        return []
+    lines = ["recorded %s %s" % (name, how)]
+    scope = scoped_agents(entry, agents.linking_agents())
+    blocked = _in_the_way(name, scope)
+    todo = [a for a in scope if a not in blocked]
+    # Never `only=[]`: `link_agents` reads an empty list as every agent.
+    if todo:
+        before = set(entry.get("agents") or ())
+        res = link_agents(name, only=todo)
+        lockfile.set_skill(name, record_links(entry, res))
+        lines += ["linked %s → %s" % (name, a) for a in res.linked if a not in before]
+        lines += [_NOT_LINKED % (name, paths.tilde(c)) for c in res.conflicts]
+    lines += [_NOT_LINKED % (name, paths.tilde(p)) for p in blocked.values()]
+    return lines
+
+
+#: An adoption's link that something not boost's is in the way of, worded
+#: around a marker ``is_unrepaired`` recognises so it prints as a warning.
+_NOT_LINKED_MARK = " was not linked: "
+_NOT_LINKED = ("%s" + _NOT_LINKED_MARK + "%s is in the way and is not boost's "
+               "to replace — to link boost's copy, move or delete it, then "
+               "re-run `boost sync`")
+
+#: A store dir sync could not record, worded the same way.
+_NOT_RECORDED_MARK = " was not recorded: "
+
+
+def _workflow_copy_refusal(name: str, wf: Path) -> str:
+    """The line for a store dir left unrecorded as a workflow's skill copy."""
+    return ("%s%sit is the skill copy of the workflow at %s — `boost install "
+            "%s` re-records both" % (name, _NOT_RECORDED_MARK, paths.tilde(wf),
+                                    name))
+
+
+def _not_recorded(name: str, err: OSError) -> str:
+    """The line for a store dir boost could not read all of."""
+    return ("%s%s%s is unreadable — make it readable, then re-run `boost sync`"
+            % (name, _NOT_RECORDED_MARK,
+               paths.tilde(err.filename or skill_store_dir(name))))
+
+
+def _in_the_way(name: str, scope: dict[str, Path]) -> dict[str, Path]:
+    """``{agent: path}`` for each of ``scope``'s ``name`` links something
+    other than boost's kind of link holds.
+
+    Boost's kind is a symlink into the store, dangling or not, and boost may
+    replace it. Anything else there belongs to whoever put it there.
+    """
+    found = {}
+    for agent, adir in scope.items():
+        link = adir / name
+        if os.path.lexists(link) and not is_boost_link(link):
+            found[agent] = link
+    return found
+
+
+def _adoption_scope(name: str) -> tuple[list[str], list[str], list[str] | None]:
+    """``(linked, unseen, only_agents)`` for a store dir about to be recorded.
+
+    What is on disk is the scope: a skill linked into fewer agents than link
+    was narrowed, and recording no narrowing would have the next sync link it
+    everywhere behind the user's back. Only boost's kind of link counts,
+    a symlink into the store: a user's link to their own checkout says which
+    copy that agent runs, not which agents this one is for. An agent whose
+    link could not be looked at is not evidence of a narrowing, so it counts
+    as in scope.
+    """
+    linking = agents.linking_agents()
+    linked = [a for a, d in linking.items()
+              if os.path.islink(d / name) and points_into_store(d / name)]  # noqa: FURB146
     unseen = unseen_agents(name)
-    linking = list(agents.linking_agents())
-    # Record what is on disk: a skill linked into fewer agents than are enabled
-    # was narrowed, and recording no narrowing would have the next sync link it
-    # everywhere behind the user's back. An agent whose link could not be
-    # looked at is not evidence of a narrowing, so it counts as in scope.
     seen = {*linked, *unseen}
     narrowed = sorted(seen) if linked and seen != set(linking) else None
+    return linked, unseen, narrowed
+
+
+def _record_unrecorded(name: str, why: str) -> str | None:
+    """Write a lock record for one unrecorded store dir; return how, or None.
+
+    ``why`` is ``"recover"`` for a lock that lost the skill and ``"adopt"`` for
+    one that never had it. A lost skill came from some tap, so a copy that is
+    byte-identical to exactly one tapped source gets that tap's record, the
+    one a fresh install would have written. A copy matching several gets
+    the local record, and its line names the `boost install <tap>:` that
+    picks one; one matching none is just a local skill.
+
+    An adopted skill is always a local one. Matching it means hashing every
+    same-named catalogue entry's source, and each hash materializes that entry
+    in its clone — a `sparse-checkout add`, often a fetch — so plain `boost
+    sync` widened 87 clones' cones over a skill named like a popular one, and
+    left them widened. Offering `boost reinstall` there would be a trap
+    besides: it overwrites the user's own skill.
+
+    None when the dir no longer holds a ``SKILL.md``. An ``OSError`` — a file
+    in it boost may not read — reaches the caller, which words it.
+    """
+    sdir = skill_store_dir(name)
+    if not os.path.isfile(sdir / "SKILL.md"):  # noqa: FURB146
+        return None
+    have = util.sha256_dir(sdir)
+    matches = [] if why == "adopt" else [
+        e for e in catalog.find(name)
+        if e.get("kind", "skill") == "skill" and _skill_source_sha(e) == have]
+    linked, unseen, narrowed = _adoption_scope(name)
     now = util.now_iso()
     record: dict[str, object]
     if len(matches) == 1:
         cat = matches[0]
         tap = registry.get(cat["tap"])
         record = {"version": cat.get("version", "0.0.0"), "tap": cat["tap"],
+                  "tap_url": tap.url,
                   "source_dir": cat.get("rel_dir", "."),
                   "commit": gitutil.head_commit(tap.path)}
+        # Dated as install dates it: the store copy is that tap's files.
+        if dated := source_updated_at(cat["tap"], cat.get("rel_dir", ".")):
+            record["source_updated_at"] = dated
         how = "from %s" % cat["tap"]
     else:
         # The shape `import_local` writes for a skill with no tap behind it.
         record = {"version": "0.0.0", "tap": "local", "source_dir": str(sdir),
                   "commit": ""}
-        how = ("as a local skill (its content matches %s tapped source; "
-               "`boost reinstall %s` replaces it with a tap's copy)"
-               % ("no" if not matches else "more than one", name))
-    record.update({"sha256": have, "installed_at": now, "updated_at": now,
+        # A reinstall would re-read the store dir itself, so the way back to
+        # a tap's copy is naming the tap.
+        how = ("as a local skill (its content matches more than one tapped "
+               "source; `boost install <tap>:%s --force` replaces it with "
+               "that tap's copy)" % name
+               if why == "recover" and matches else "as a local skill")
+    record.update({"sha256": have, "exec": util.exec_bits(sdir),
+                   "installed_at": now, "updated_at": now,
                    "pinned": False, "quarantined": False, "agents": linked,
                    "only_agents": narrowed, "tags": []})
     if unseen:
         # Recorded so uninstall refuses rather than strands a link it cannot see.
         record["refused_agents"] = unseen
     lockfile.set_skill(name, record)
-    journal.log("recover", name, how=record["tap"])
-    return "re-recorded %s %s" % (name, how)
+    journal.log(why, name, how=record["tap"])
+    return how
+
+
+def only_copy(name: str, entry: dict) -> bool:
+    """True when uninstalling skill ``name`` would delete the skill itself.
+
+    A local skill whose recorded source is its own store dir — what `boost
+    sync` writes for a skill put in ``~/.agents/skills`` by hand, or for one a
+    lost lock had — or whose source is gone. Every other skill can be put
+    back from a tap, a URL or a directory; this one has no copy anywhere else.
+    The commands that uninstall as a side effect of something else (`replay
+    rollback`, `profile use --prune`) leave it, and the ones that ask say so.
+    """
+    if entry.get("tap") != "local" or entry.get("source_url"):
+        return False
+    src = local_source_dir(entry)
+    return src is None or os.path.realpath(src) == os.path.realpath(skill_store_dir(name))
+
+
+def _still_a_copy(row: tuple, lock: dict, fresh: dict[str, list]) -> str | None:
+    """Why ``row``'s store dir must stay, or None if it is still a copy.
+
+    ``fresh`` is :func:`classify_unrecorded` asked again, just now.
+    """
+    name, _owner, other, how = row
+    sdir, theirs = skill_store_dir(name), Path(other)
+    if not os.path.lexists(sdir):
+        return "it is already gone"
+    if name in lock:
+        return "boost has recorded it since"
+    if foreign.holds_repo(sdir):
+        return REPO_KEPT
+    if not os.path.isfile(theirs / "SKILL.md"):  # noqa: FURB146
+        return "the copy it duplicates, %s, is gone" % paths.tilde(other)
+    if resolves_into_store(theirs):
+        return ("%s now leads back into the store, so it is not a second copy"
+                % paths.tilde(other))
+    if foreign.leans_on_store(theirs):
+        return ("%s links into the store file by file, so deleting this would "
+                "empty it" % paths.tilde(other))
+    if any(r[0] == name for r in fresh["unreadable_store"]):
+        return "part of it cannot be read now, so what it holds cannot be told"
+    if name in fresh["not_skill_store"]:
+        return "it no longer holds a SKILL.md"
+    if name in fresh["adoptable_store"]:
+        return "it is now newer than %s" % paths.tilde(other)
+    now = next((r for r in fresh["foreign_store"] if r[0] == name), None)
+    if now is None:
+        return "it is no longer a copy of %s" % paths.tilde(other)
+    if now[2] != other:
+        return "it is now a copy of %s instead" % paths.tilde(now[2])
+    if how == foreign.IDENTICAL and now[3] != foreign.IDENTICAL:
+        return "it has changed since it matched %s" % paths.tilde(other)
+    # Last, so every reason above keeps its own words, and by inode: the same
+    # dir under another spelling (a case alias on APFS, a firmlink) is
+    # trivially "identical" to itself, and deleting "the copy" deleted the
+    # only one.
+    if foreign.same_dir(sdir, theirs):
+        return "%s is this same dir under another name" % paths.tilde(other)
+    return None
+
+
+def quarantine_stamp() -> str:
+    """One folder name per `--prune` run, so a run's moves can be undone together."""
+    import time
+    return time.strftime("%Y%m%dT%H%M%S")
+
+
+def remove_foreign_copies(rows: list,
+                          stamp: str | None = None) -> list[str | None]:
+    """Move the store dirs ``rows`` called other tools' copies to quarantine.
+
+    Moved under ``quarantine_dir()/stamp`` rather than deleted: the checks
+    below decide "copy" by name and content, and a yes given in bulk once
+    took 26 hand-edited ports with it. A move costs nothing to undo.
+
+    ``rows`` are :func:`classify_unrecorded`'s ``foreign_store``. Returns, row
+    by row, None for a dir that is gone or why it was kept. What made each one
+    a copy is decided again at the point of deletion, because a confirm can
+    sit unanswered for as long as the user likes, and a wrong answer here
+    deletes the last copy of something:
+
+    * the lock still does not record it, and can still be read — an install
+      in another shell would have made it boost's, and a lock that no longer
+      parses cannot say either way;
+    * the other copy is still a skill, and neither is nor leans on the store
+      copy, where deleting this would delete it too. A vendor that dropped
+      the skill on update leaves this as the only copy;
+    * asked afresh, it is still a copy of that same skill: not a dir that has
+      lost its ``SKILL.md``, and not one edited since into the newest copy —
+      the mtime rule that made an agent's copy the owner holds no longer;
+    * a copy the confirm called identical still is, so an edit made since is
+      not lost under the word "identical". One that differed and has come to
+      match is a copy all the same.
+    """
+    integ = lockfile.check()
+    if not integ.ok and integ.problem != "missing":
+        unreadable = ("boost cannot tell whether this is boost's, because "
+                      "the lock file cannot be read — %s"
+                      % lockfile.remedy(integ))
+        return [unreadable for _row in rows]
+    lock = lockfile.installed()
+    fresh = classify_unrecorded([r[0] for r in rows if r[0] not in lock
+                                 and os.path.lexists(skill_store_dir(r[0]))])
+    held_root = paths.quarantine_dir() / (stamp or quarantine_stamp())
+    kept: list[str | None] = []
+    for row in rows:
+        why = _still_a_copy(row, lock, fresh)
+        held = held_root / row[0]
+        if why is None and os.path.lexists(held):
+            # Moving onto it would nest the dir or replace an earlier copy;
+            # either loses track of one of the two.
+            why = "a quarantined copy already sits at %s" % paths.tilde(held)
+        if why is None:
+            # Per row, because the result is: one dir that refuses the delete
+            # (a subdir made unreadable since the check) used to end the run
+            # at exit 70 with no word on the rows already removed.
+            try:
+                held_root.mkdir(parents=True, exist_ok=True)
+                # shutil.move renames a symlinked entry as the link, so the
+                # tree it points at is left where it is.
+                shutil.move(str(skill_store_dir(row[0])), str(held))
+            except OSError as err:
+                why = ("moving it to quarantine stopped at %s: %s — what is "
+                       "left is still there"
+                       % (paths.tilde(err.filename or row[0]),
+                          err.strerror or err))
+            else:
+                journal.log("prune", row[0], copy_of=row[2],
+                            quarantined=str(held))
+        kept.append(why)
+    return kept
+
+
+#: Why ``--prune`` leaves a store dir holding a git repository.
+REPO_KEPT = ("it is a git repository, and its history is in no copy — move "
+             "or delete it yourself")
+
+
+def is_repo_copy(row: tuple) -> bool:
+    """True when a ``foreign_store`` row's store dir holds a git repository.
+
+    Such a row is still named — the dir shares a name with another tool's
+    skill — but ``--prune`` never offers it (:func:`foreign.holds_repo`).
+    """
+    return foreign.holds_repo(skill_store_dir(row[0]))
+
+
+def remove_foreign_copy(row: tuple) -> str | None:
+    """:func:`remove_foreign_copies` for one row."""
+    return remove_foreign_copies([row])[0]
+
+
+def drop_plugin_link(row: tuple) -> tuple[bool, str]:
+    """Remove boost's Claude Code link to a skill a plugin ships the same files of.
+
+    Returns ``(dropped, line)``. Only that link goes: the skill stays
+    installed, linked into the other agents in its scope, and in the store
+    for the agents that read it there. The lock needs no word that the link is
+    not coming back, because :func:`link_agents` makes no Claude Code link
+    while an enabled plugin ships the same files, so the scope is left as it
+    was — and if the plugin is disabled, or changes the skill, the next `boost
+    sync` links it again. Narrowing ``only_agents`` instead, as this once did,
+    froze the skill out of every agent enabled later, and had no answer for a
+    skill scoped to Claude Code alone: an empty scope means every agent.
+
+    All of it is checked again here, because a confirm can sit unanswered for
+    as long as the user likes: the skill is still installed, an enabled plugin
+    still ships the same files — one that has updated may have changed the
+    skill, and then they are two skills sharing a name — and the link is still
+    boost's, one leading to the store copy. Claude Code's settings are never
+    written, so disabling the plugin stays the user's other way out.
+    """
+    name, plugin_id, _theirs, how = row
+    entry = lockfile.get_skill(name)
+    linking = agents.linking_agents()
+    if entry is None or foreign.CLAUDE not in linking:
+        return False, "kept %s: it is no longer linked into Claude Code" % name
+    hit = serving_plugin(name, entry.get("source_updated_at"))
+    if hit is None:
+        enabled = any(p.id == plugin_id for p in foreign.enabled_plugins())
+        return False, ("kept %s → %s: %s" % (
+            name, foreign.CLAUDE,
+            "plugin %s is no longer enabled" % plugin_id if not enabled
+            else "it no longer matches the copy in plugin %s" % plugin_id
+            if how == foreign.IDENTICAL
+            else "plugin %s's copy is no longer the newer one" % plugin_id))
+    link = linking[foreign.CLAUDE] / name
+    if not (os.path.islink(link) and _already_links(link, skill_store_dir(name))):
+        return False, ("left %s alone: %s is no longer boost's link"
+                       % (name, paths.tilde(link)))
+    try:
+        link.unlink()
+    except OSError:
+        return False, ("kept %s → %s: %s refuses the unlink"
+                       % (name, foreign.CLAUDE, paths.tilde(link.parent)))
+    entry["agents"] = [a for a in entry.get("agents") or () if a != foreign.CLAUDE]
+    refused = [a for a in entry.get("refused_agents") or () if a != foreign.CLAUDE]
+    if refused:
+        entry["refused_agents"] = refused
+    else:
+        entry.pop("refused_agents", None)
+    lockfile.set_skill(name, entry)
+    journal.log("sync-prune", name, plugin=hit[0].id, how=hit[2])
+    if hit[2] == foreign.IDENTICAL:
+        return True, ("unlinked %s → %s (Claude Code loads the same files from "
+                      "plugin %s)" % (name, foreign.CLAUDE, hit[0].id))
+    return True, ("unlinked %s → %s (Claude Code loads plugin %s's newer copy, "
+                  "by %s)" % (name, foreign.CLAUDE, hit[0].id,
+                              foreign.date_words(foreign.split_how(hit[2])[1])))
+
+
+def _names(items: list[str], limit: int = 5) -> str:
+    return ", ".join(items[:limit]) + (", …" if len(items) > limit else "")
+
+
+def foreign_store_lines(rows: list) -> list[str]:
+    """One line per owner for `sync` and `heal`: whose copies these are.
+
+    A dir holding a git repository gets its own line, since `--prune`, which
+    the others name, leaves it (:func:`is_repo_copy`).
+    """
+    repos = [r for r in rows if is_repo_copy(r)]
+    by_owner: dict[tuple[str, str], list] = {}
+    for name, owner, other, how in rows:
+        if (name, owner, other, how) in repos:
+            continue
+        by_owner.setdefault((owner, str(Path(other).parent)), []).append((name, how))
+    lines = []
+    for (owner, where), items in by_owner.items():
+        differ = sum(1 for _n, how in items if how == foreign.DIFFERS)
+        lines.append("%s %s from %s (%s), not boost's%s — remove with "
+                     "`boost sync --prune`"
+                     % (_names([n for n, _h in items], 8),
+                        "copies a skill" if len(items) == 1 else "copy skills",
+                        owner, paths.tilde(where),
+                        "" if not differ else " (%s from the original)"
+                        % ("changed" if len(items) == 1
+                           else "%d of them changed" % differ)))
+    lines += ["%s is named like a skill from %s (%s), but it is a git "
+              "repository, so `boost sync --prune` leaves it — move or delete "
+              "it yourself if it is a copy"
+              % (name, owner, paths.tilde(other)) for name, owner, other, _h in repos]
+    return lines
+
+
+def unreadable_line(rows: list) -> str:
+    """One line for store dirs holding something boost cannot read.
+
+    ``rows`` are ``(skill, path)`` (``unreadable_store``). Each names the path
+    that could not be read, which is what the user has to fix: the dir
+    itself, or one file or subdir deep inside it.
+    """
+    if len(rows) == 1:
+        name, where = rows[0]
+        return ("%s: %s cannot be read, so boost cannot tell whose it is or "
+                "record it — make it readable, then re-run `boost sync`"
+                % (name, paths.tilde(where)))
+    return ("%d store dirs cannot be recorded: boost cannot read what says whose "
+            "they are (%s) — make those readable, then re-run `boost sync`"
+            % (len(rows), _names(["%s: %s" % (n, paths.tilde(w)) for n, w in rows])))
+
+
+def plugin_duplicate_lines(rows: list) -> list[str]:
+    """Lines for the ``rows`` whose plugin's copy Claude Code should list
+    (:func:`plugin_serves`): one per plugin for identical copies, then one per
+    skill a plugin ships a newer copy of, naming how that is known."""
+    by_plugin: dict[str, list[str]] = {}
+    for name, plugin_id, _p, how in rows:
+        if how == foreign.IDENTICAL:
+            by_plugin.setdefault(plugin_id, []).append(name)
+    return ["%s %s twice in Claude Code — plugin %s ships the same files; "
+            "`boost sync --prune` drops boost's Claude Code link"
+            % (_names(names, 8), "shows" if len(names) == 1 else "show", plugin_id)
+            for plugin_id, names in by_plugin.items()] + plugin_newer_lines(rows)
+
+
+def plugin_newer_lines(rows: list) -> list[str]:
+    """A line for each of ``rows`` whose plugin ships a newer copy than boost's."""
+    return ["%s shows twice in Claude Code — plugin %s ships a newer copy "
+            "(by %s); `boost sync --prune` drops boost's older Claude Code link"
+            % (name, plugin_id, foreign.date_words(foreign.split_how(how)[1]))
+            for name, plugin_id, _p, how in rows
+            if how != foreign.IDENTICAL and plugin_serves(how)]
+
+
+def plugin_variant_lines(rows: list) -> list[str]:
+    """A line for each of ``rows`` whose plugin ships a different skill that
+    boost keeps its link beside: one boost's copy is newer than, or one whose
+    dates decide nothing.
+
+    Boost never writes Claude Code's settings, so for an older plugin copy it
+    names the way the user can turn it off rather than doing it.
+    """
+    lines = []
+    for name, plugin_id, _p, how in rows:
+        verdict, source = foreign.split_how(how)
+        if how == foreign.IDENTICAL or plugin_serves(how):
+            continue
+        if verdict == foreign.NEWER_IN_BOOST:
+            lines.append("%s shows twice in Claude Code — boost's copy is newer "
+                         "than plugin %s's (by %s), which still loads; boost "
+                         "leaves Claude Code's plugin settings alone — to list "
+                         "only boost's, disable %s with `/plugin` in Claude "
+                         "Code, which turns off all of its skills"
+                         % (name, plugin_id, foreign.date_words(source), plugin_id))
+        else:
+            lines.append("%s shows twice in Claude Code — plugin %s ships a "
+                         "different skill by that name; both left as they are"
+                         % (name, plugin_id))
+    return lines
+
+
+def older_copy_lines(rows: list) -> list[str]:
+    """Lines naming the copies an adopted skill was newer than."""
+    return ["%s: the copy in %s (%s) is older by file times — left alone"
+            % (name, paths.tilde(other), owner) for name, owner, other in rows]
+
+
+def misnamed_line(names: list[str]) -> str:
+    """One line for store dirs whose name boost cannot record a skill under.
+
+    Built from the store root, never :func:`skill_store_dir`, which refuses
+    exactly these names.
+    """
+    if len(names) == 1:
+        return ("%s: boost cannot record a skill by that name (only letters, "
+                "digits, '.', '_' and '-') — left alone"
+                % paths.tilde(paths.store_dir() / names[0]))
+    return ("%d dirs in %s have names boost cannot record a skill by (%s) — "
+            "left alone" % (len(names), paths.tilde(paths.store_dir()),
+                            _names(names)))
+
+
+def not_skill_line(names: list[str]) -> str:
+    """One line for store dirs that hold no ``SKILL.md``."""
+    if len(names) == 1:
+        return ("%s holds no SKILL.md, so it is not a skill — left alone"
+                % paths.tilde(skill_store_dir(names[0])))
+    return ("%d dirs in %s hold no SKILL.md, so they are not skills (%s) — "
+            "left alone" % (len(names), paths.tilde(paths.store_dir()),
+                            _names(names)))
 
 
 def sync_apply(plan: dict[str, list]) -> list[str]:
     """Fix what sync_plan found. Returns human-readable actions taken."""
     actions = []
+    # A lock with no schema version, or an earlier one, still says what is
+    # installed: it is recorded as the current schema here, so the command
+    # doctor prescribes for it is the one that clears it.
+    migrated = lockfile.migrate()
+    if migrated:
+        actions.append(migrated)
+    # Then what older boosts recorded too little of: a quarantine or sideline
+    # whose copy stayed in the store, and rows with no tap URL.
+    actions.extend(hold_legacy_copies())
+    actions.extend(backfill_tap_urls())
     # First, so every re-recorded skill is in the lock before anything else
     # runs; and only when the lock is *missing* — a corrupt or other-schema
     # lock is left for `boost replay`, never overwritten.
@@ -3623,10 +9816,23 @@ def sync_apply(plan: dict[str, list]) -> list[str]:
         for name in plan["unrecorded_store"]:
             how = recover_unrecorded(name)
             actions.append(how or "left %s unrecorded (no SKILL.md to record)" % name)
+    for name in plan.get("adoptable_store", []):
+        actions.extend(adopt_unrecorded(name))
+    relinked: set[str] = set()
     for name, agent in plan["missing_links"]:
         res = link_agents(name, only=[agent])
         if agent in res.linked:
             actions.append("linked %s → %s" % (name, agent))
+            relinked.add(name)
+    # `agents` is what IS linked (`_copy_link_record`), so a link made here
+    # is recorded here. Left alone, list, info and `list --json` went on
+    # naming the agents linked at install time while sync had linked another.
+    for name in sorted(relinked):
+        now_linked = linked_agents(name)
+
+        def rerecord(row: dict, now: list[str] = now_linked) -> None:
+            row["agents"] = now
+        lockfile.update_skill(name, rerecord)
     for path in plan["stale_links"]:
         p = Path(path)
         if p.is_symlink():
@@ -3654,11 +9860,16 @@ def sync_apply(plan: dict[str, list]) -> list[str]:
                 install(repair.cat_entry, force=True)
                 actions.append(repair.applied)
                 continue
-        except BoostError:
+        except BoostError as err:
             # The one place the preview can be wrong, and deliberately: a
-            # source readable a moment ago is gone now, so the run falls
-            # through to the drop.
-            pass
+            # source readable a moment ago may be gone now, and only then
+            # does the run fall through to the drop. Any other refusal (a
+            # capability policy, a store refusing the write) keeps the row:
+            # dropping it reported "source gone" over a source in place and
+            # threw away the version, scope and tags the row recorded.
+            if _repair_source_present(repair):
+                actions.append(_not_restored(name, err.message, err.hint))
+                continue
         lockfile.remove_skill(name)
         actions.append(_DROPPED % name)
     for kind, name in plan.get("missing_materializations", []):
@@ -3687,6 +9898,40 @@ def sync_apply(plan: dict[str, list]) -> list[str]:
         # (`unwritable_agent_dirs`, `blocked_agent_dirs`), with its remedy.
         if not res.unwritable and not res.blocked and not res.conflicts:
             actions.append(mat.applied)
+    # After the re-materializations above: the reinstall of a workflow whose
+    # copy went missing links it, and one that wrote an agent's file takes
+    # that agent's copy link. Asked again of the lock, so a link the plan
+    # named and a run since made unwanted is not made.
+    missing = plan.get("missing_copy_links", [])
+    stale = plan.get("stale_copy_links", [])
+    for name in dict.fromkeys(n for n, _a in (*missing, *stale)):
+        entry = lockfile.get_workflow(name)
+        if entry is None:
+            continue
+        # Only the links the plan named: a target whose path the user's own
+        # link or file holds is not a fault doctor counts, and linking every
+        # target reported it, and failed the run, whenever another agent's
+        # link needed repair.
+        linked, problems, unlinked = reconcile_copy_links(
+            name, entry, only=[a for n, a in missing if n == name])
+        actions += [_COPY_LINKED % (name, a) for a in linked]
+        # A planned link refused since: a repair not made, so a warning, and
+        # `sync` and `heal` exit 1 over it (`is_unrepaired`).
+        actions += [_COPY_NOT_LINKED % (name, why) for why in problems]
+        # Every link taken, planned or not: one a narrowing since the plan
+        # made stale goes too, and is not taken silently.
+        actions += [_COPY_UNLINKED % (name, a, stale_copy_reason(entry, a))
+                    for a in unlinked]
+    # After the re-materializations above, which record their own hashes.
+    actions.extend(backfill_row_hashes())
     if actions:
         journal.log("sync", "%d fixes" % len(actions))
     return actions
+
+
+_COPY_LINKED = "linked workflow %s's skill copy → %s"
+_COPY_WOULD_LINK = "would link workflow %s's skill copy → %s"
+_COPY_NOT_LINKED = "workflow %s's skill copy" + _NOT_LINKED_MARK + "%s"
+#: The last ``%s`` is :func:`stale_copy_reason`'s clause.
+_COPY_UNLINKED = "unlinked workflow %s's skill copy from %s, %s"
+_COPY_WOULD_UNLINK = "would unlink workflow %s's skill copy from %s, %s"

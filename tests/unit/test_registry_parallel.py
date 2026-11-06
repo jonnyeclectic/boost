@@ -49,6 +49,17 @@ def fake_clone(monkeypatch):
 
 
 class TestAddMany:
+    def test_curated_names_star_only_those_taps(self, sandbox, fake_clone):
+        res = registry.add_many(["o/a", "o/b", "o/c"], curated_names={"o/b"})
+        assert [r["tap"].curated for r in res] == [False, True, False]
+        rows = {t["name"]: t["curated"] for t in config.load()["taps"]}
+        assert rows == {"o/a": False, "o/b": True, "o/c": False}
+
+    def test_curated_flag_still_stars_the_whole_batch(self, sandbox,
+                                                      fake_clone):
+        registry.add_many(["o/a", "o/b"], curated=True, curated_names={"o/b"})
+        assert all(t["curated"] for t in config.load()["taps"])
+
     def test_every_tap_lands_in_one_config_write(self, sandbox, fake_clone,
                                                  monkeypatch):
         writes = []

@@ -103,3 +103,37 @@ class TestErrors:
     def test_unknown_host_is_rejected(self, boost, sandbox):
         r = boost("hooks", "list", "--host", "emacs", expect=2)
         assert "emacs" in r.err
+
+
+class TestCommentedSettings:
+    """Gemini reads settings.json as JSONC; boost must not replace it."""
+
+    TEXT = ('{\n  // my theme\n  "ui": {"theme": "GitHub"},\n'
+            '  "mcpServers": {"pg": {"command": "pg-mcp"}}\n}\n')
+
+    def test_add_is_refused_and_the_file_is_left_alone(self, boost, sandbox):
+        p = sandbox / ".gemini" / "settings.json"
+        p.parent.mkdir()
+        p.write_text(self.TEXT, encoding="utf-8")
+        r = boost("hooks", "add", "SessionStart", "--host", "gemini",
+                  "-c", "echo hi", "-n", "greet", "-s", "global", expect=1)
+        err = " ".join(r.err.split())     # the pane wraps the message
+        assert ("%s has comments, which Gemini CLI reads but boost cannot "
+                "write back" % p) in err
+        assert ("remove the comments from %s and run this again, or make "
+                "the change by hand" % p) in err
+        assert "added" not in r.out
+        assert "invalid JSON" not in r.err
+        assert p.read_text(encoding="utf-8") == self.TEXT
+        assert not (sandbox / ".boost" / "state"
+                    / "claude-settings-history").exists()
+
+    def test_list_reads_a_commented_file(self, boost, sandbox):
+        p = sandbox / ".gemini" / "settings.json"
+        p.parent.mkdir()
+        p.write_text('{\n  // c\n  "hooks": {"SessionStart": [{"hooks": '
+                     '[{"type": "command", "command": "echo hi # boost:g"}]}]}'
+                     '\n}\n', encoding="utf-8")
+        r = boost("hooks", "list", "--host", "gemini")
+        assert "invalid JSON" not in r.err
+        assert "g" in r.out and "SessionStart" in r.out

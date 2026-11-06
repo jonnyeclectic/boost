@@ -45,6 +45,17 @@ def test_no_color_is_silent(monkeypatch):
     assert s.getvalue() == ""
 
 
+def test_term_dumb_tty_is_silent(monkeypatch):
+    # A dumb terminal renders \r redraws as a smear of frames.
+    monkeypatch.delenv("CLICOLOR_FORCE", raising=False)
+    monkeypatch.setenv("TERM", "dumb")
+    s = FakeStream(tty=True)
+    with spin.Spinner("working", stream=s) as sp:
+        pass
+    assert sp.active() is False
+    assert s.getvalue() == ""
+
+
 def test_active_on_color_tty():
     assert spin.Spinner("x", stream=FakeStream(tty=True)).active() is True
 

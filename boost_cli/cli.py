@@ -16,7 +16,7 @@ import sys
 import time
 
 from . import PRODUCT, TAGLINE, __version__
-from .core import logs, nethttp
+from .core import interrupt, logs, nethttp, paths
 from .core import output as out
 from .errors import BoostError
 
@@ -307,7 +307,8 @@ def _complete_candidates(argv: list[str]) -> int:
     errors and a traceback here would land in the line the user is typing.
     """
     from .core import complete
-    for candidate in complete.candidates(argv.copy(), COMMANDS):
+    for candidate in complete.candidates(argv.copy(), COMMANDS,
+                                         frozenset(_GLOBAL_FLAGS)):
         print(candidate)
     return 0
 
@@ -368,6 +369,10 @@ def _seal_broken_stdout() -> None:
 def _route(argv: list[str]) -> int:
     try:
         if not argv or argv[0] in ("-h", "--help"):
+            # `boost --help install` is `boost help install`, as in git and
+            # brew — it used to print the index and drop the command unsaid.
+            if len(argv) > 1:
+                return print_command_help(argv[1])
             print_help()
             return 0
         if argv[0] in ("-V", "--version", "version"):
@@ -397,10 +402,15 @@ def _route(argv: list[str]) -> int:
             rc = 1
             out.err(e.message, hint=e.hint, wrap=getattr(e, "wrap", False))
             return rc
-        except KeyboardInterrupt:
-            logs.get_logger().debug("interrupted by user")
-            rc = 130
-            print()
+        except KeyboardInterrupt as e:
+            # A SIGTERM/SIGHUP arrives as interrupt.Terminated, a subclass,
+            # so it reaches here having run the same rollbacks as Ctrl-C.
+            rc = interrupt.exit_code(e)
+            if isinstance(e, interrupt.Terminated):
+                logs.get_logger().debug("terminated by signal %d", e.signum)
+            else:
+                logs.get_logger().debug("interrupted by user")
+                print()
             return rc
         except BrokenPipeError:
             # Reclassify before `except Exception` below can mistake a
@@ -447,10 +457,26 @@ def main(argv: list[str] | None = None) -> int:
     # Seed the guard for every invocation before any code path can trip it.
     nethttp.harden_fork_safety()
     opts, argv = _extract_globals(argv)
-    logs.configure(verbose=opts["verbose"], debug=opts["debug"],
-                   quiet=opts["quiet"])
+    # Not for plumbing: `__complete` runs on every TAB and logs nothing (see
+    # `_route`), and configuring the file handler creates ~/.boost/logs — so
+    # one TAB on a machine where boost never ran would create boost's state.
+    if not (argv and argv[0] in _PLUMBING):
+        # Before logs.configure: the log and the config both live under
+        # BOOST_HOME, and this runs outside `_route`'s BoostError handler, so
+        # a relative override would otherwise surface as a traceback.
+        try:
+            paths.check_env()
+        except BoostError as e:
+            out.err(e.message, hint=e.hint, wrap=True)
+            return 1
+        logs.configure(verbose=opts["verbose"], debug=opts["debug"],
+                       quiet=opts["quiet"])
     try:
-        return _route(argv)
+        # SIGTERM/SIGHUP raise like Ctrl-C for the whole run, so `timeout`, a
+        # cancelled CI job or a closed terminal rolls a half-done install back
+        # instead of killing it mid-write (core.interrupt).
+        with interrupt.raising_on_termination():
+            return _route(argv)
     except BrokenPipeError:
         # Covers the early-return paths above (`--help`, `--version`,
         # `help`, `__complete`) that have no try/except of their own, plus
@@ -458,3 +484,7 @@ def main(argv: list[str] | None = None) -> int:
         # the dispatch path's flush-free writes didn't.
         _seal_broken_stdout()
         return 0
+    except interrupt.Terminated as e:
+        # One that landed outside the dispatch handler (`--help`, plumbing):
+        # nothing is mid-write there, so only the exit status is owed.
+        return e.exit_code

@@ -102,11 +102,54 @@ def test_version_floor_matches_the_extra_pin():
     # extra's pin) satisfies every import this package makes and then fails
     # subtly at runtime — BaseMessage.text is a method in 0.3, a property
     # from 1.0 — so __init__ enforces the declared >=1,<2 major at import
-    # time via this pure, base-venv-testable rule.
-    from boost_langchain._compat import supported_langchain_core
+    # time via this pure, base-venv-testable rule. It is imported from
+    # boost_cli.core because that is the only place it CAN be imported from
+    # without langchain — `boost_langchain._compat` runs the package __init__
+    # first, and this test used to pass only when an earlier test had left
+    # that module in sys.modules.
+    from boost_cli.core.langchain_compat import supported_langchain_core
     assert supported_langchain_core("1.0.0")
     assert supported_langchain_core("1.5.3")
     assert not supported_langchain_core("0.3.79")   # the [eval] stack
     assert not supported_langchain_core("2.0.0")    # contract moves on majors
     assert not supported_langchain_core("")
     assert not supported_langchain_core("garbage")
+
+
+# Run in a child whose import system refuses langchain_core and pydantic, so
+# the answer does not depend on which venv runs the suite or on what an
+# earlier test left in sys.modules.
+_BLOCKED_CHILD = r"""
+import importlib.abc, sys
+
+class _Block(importlib.abc.MetaPathFinder):
+    def find_spec(self, name, path=None, target=None):
+        if name.partition(".")[0] in ("langchain_core", "pydantic"):
+            raise ModuleNotFoundError("blocked: %s" % name, name=name)
+        return None
+
+sys.meta_path.insert(0, _Block())
+from boost_cli.core.langchain_compat import supported_langchain_core as rule
+print([rule(v) for v in ("1.0.0", "1.9", "0.3.79", "2.0.0", "", "x")])
+try:
+    import boost_langchain._compat  # noqa: F401
+except ModuleNotFoundError as exc:
+    print("package:", exc.name, "boost-skill-cli[langchain]" in str(exc))
+else:
+    print("package: imported")
+"""
+
+
+def test_the_version_rule_imports_with_langchain_blocked():
+    import subprocess
+    # cwd=ROOT: under mutmut the trampoline reads setup.cfg from the cwd.
+    proc = subprocess.run([sys.executable, "-c", _BLOCKED_CHILD], cwd=ROOT,
+                          capture_output=True, text=True, encoding="utf-8",
+                          timeout=60, check=False)
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.splitlines() == [
+        "[True, True, False, False, False, False]",
+        # The package guard still names the fix — which is exactly why the
+        # rule cannot live behind it.
+        "package: langchain_core True",
+    ]

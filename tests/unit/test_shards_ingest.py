@@ -262,7 +262,7 @@ class TestRetarget:
         name = registry.list_taps()[0].name
         order = []
         monkeypatch.setattr(gitutil, "checkout_commit",
-                            lambda repo, sha: order.append(("checkout", sha)))
+                            lambda repo, sha, verify=None: order.append(("checkout", sha)))
         real_pin = registry.pin
         monkeypatch.setattr(registry, "pin",
                             lambda n, c: (order.append(("pin", c)),
@@ -280,7 +280,7 @@ class TestRetarget:
         registry.add(str(fixture_tap_src))
         name = registry.list_taps()[0].name
 
-        def refuse(repo, sha):
+        def refuse(repo, sha, verify=None):
             raise BoostError("no such commit")
 
         monkeypatch.setattr(gitutil, "checkout_commit", refuse)

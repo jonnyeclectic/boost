@@ -108,6 +108,45 @@ jobs:
           fi
           echo "matrix=$json" >> "$GITHUB_OUTPUT"
           python3 -c 'import json,sys; m=json.loads(sys.argv[1]); print("planned %d job(s), %d registries" % (len(m), sum(len(x.split()) for x in m)))' "$json"
+      - name: check both releases have room for this plan
+        # A release holds at most 1,000 assets, and `shards-latest` reached
+        # 999: every run after 2026-10-11 embedded for an hour and then lost
+        # its upload to HTTP 422. This is the earliest job that knows how many
+        # registries the run will publish, so the count is checked here,
+        # against what each release already holds, before a build job starts.
+        #
+        # It fails closed. A release that does not exist yet (the keyword one,
+        # before the first run after the split) reads as empty, and only an
+        # HTTP 404 says that: a 5xx, a secondary rate limit or a dropped
+        # connection is an unknown count, and reading one as an empty release
+        # is exactly how a release a few assets from full would pass this
+        # check and fail an hour later. Likewise the live manifest, which says which keyword
+        # rows stay on `shards-latest` (a registry outside this run is carried
+        # forward with its asset where it is): `capacity` refuses if the
+        # listing holds a manifest.json that this fetch did not deliver.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          MATRIX: ${{ steps.pick.outputs.matrix }}
+        run: |
+          for tag in shards-latest shards-keyword-latest; do
+            if ! gh api "repos/$REPO/releases/tags/$tag" > "$tag.json" 2> "$tag.err"; then
+              if ! grep -q 'HTTP 404' "$tag.err"; then
+                cat "$tag.err" >&2
+                echo "::error::could not list $tag, so its asset count is unknown"
+                exit 1
+              fi
+              echo "no $tag release to count yet"
+              echo '{"assets": []}' > "$tag.json"
+            fi
+          done
+          curl -fsSL --max-time 60 -o live-manifest.json \
+            "https://github.com/$REPO/releases/download/shards-latest/manifest.json" \
+            || echo "no live manifest fetched; capacity decides whether that is allowed"
+          python3 scripts/publish_shards.py capacity --matrix "$MATRIX" \
+            --release shards-latest=shards-latest.json \
+            --release shards-keyword-latest=shards-keyword-latest.json \
+            --live-manifest live-manifest.json
 
   build:
     needs: plan
@@ -125,7 +164,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
       - name: install boost + the [rag] extra
@@ -154,8 +193,13 @@ jobs:
           # contract as the vectors — a registry whose keyword row already
           # names its HEAD (at this boost's index version) is listed, not
           # re-exported, and the publish job keeps last week's row for it.
+          # `--hosted-on`: a row whose asset is still on `shards-latest`, from
+          # before keyword shards got their own release, is not current for
+          # this run, so the registry is re-exported onto the new release and
+          # its old asset becomes prunable. That is the whole migration.
           .venv/bin/python scripts/publish_shards.py unchanged --kind keyword \
             --manifest-url "https://github.com/$REPO/releases/download/shards-latest/manifest.json" \
+            --hosted-on shards-keyword-latest \
             --out "keyword-unchanged-$JOB.txt"
           # A crash here must not cost this chunk its dense work: the step is
           # `set -e`. A registry with no fresh shard and no unchanged line is
@@ -260,20 +304,33 @@ jobs:
     # shields badge excludes prereleases too. The tag carries no digit, so
     # setuptools-scm's `--match *[0-9]*` never sees it as a version either.
     #
+    # WHY TWO OF THEM. A release holds at most 1,000 assets and one asset per
+    # registry per kind is ~2 x 512, so `shards-latest` reached 999 and every
+    # run after 2026-10-11 lost its upload to HTTP 422 ("file_count limited
+    # to 1000 assets per release"). The keyword shards now live on
+    # `shards-keyword-latest`, created exactly like `shards-latest` and for
+    # the same reasons; the manifest stays where every boost already looks.
+    # Clients accept the second tag unchanged: `core.shards.download` only
+    # requires a shard URL to share the manifest's scheme and host.
+    #
     # `fail-fast: false` above means some registries can fail while others
     # succeed; publishing the ones that worked is the point, so this job runs
     # on `success() || failure()` and simply publishes whatever arrived.
     needs: build
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 30 was enough for one upload. The first run after the split also moves
+    # the keyword shards of the 511 registries in today's matrix to their new
+    # release and prunes up to the 473 left on `shards-latest`, at a paced one
+    # per second: eight minutes of deletes at the very least.
+    timeout-minutes: 60
     permissions:
       contents: write        # create/update the rolling release + its assets
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -311,25 +368,166 @@ jobs:
           fi
           python3 scripts/publish_shards.py manifest \
             --shard-dir shards --repo "$REPO" --tag shards-latest \
+            --keyword-tag shards-keyword-latest \
             --out shards/manifest.json "${carry[@]}" \
             --unchanged shards/unchanged-*.txt \
             --keyword-unchanged shards/keyword-unchanged-*.txt
           cat shards/manifest.json
-      - name: publish to the rolling release
+      - name: publish to the rolling releases
+        # THE ORDER IS THE CONTRACT: wherever this step stops — a failed
+        # upload, the 1,000-asset cap, the API rate limit, the timeout — the
+        # live manifest names only assets that exist. Nothing is pruned while
+        # a published manifest names it, and a manifest is published only
+        # after `verify` has checked every row against the release listings.
+        # One gap is `gh`'s, not this order's: `--clobber` replaces an asset
+        # by deleting it first, so a dense shard the interim manifest names
+        # is absent for the length of its own upload — and until the next run
+        # if that upload dies, which is how the 2026-10-11 manifest came to
+        # name 4 keyword assets that no longer exist. `verify` drops such a
+        # row on the next run; closing the gap needs content-addressed names.
+        #
+        #   1. keyword shards onto their own release, where they cost
+        #      `shards-latest` nothing
+        #   2. an INTERIM manifest: the live dense rows, exactly as they are
+        #      live, + this run's keyword section, verified. Once it is
+        #      published, the only keyword rows naming `shards-latest` are
+        #      the ones carried for registries no job reported on (a failed
+        #      build or export, or a scoped run), which stay where their
+        #      asset is; every other keyword asset there is free to go...
+        #   3. ...and only as many go now as this run's NEW dense names need
+        #      room for (usually none); the rest wait for the prune step
+        #   4. dense shards onto `shards-latest`
+        #   5. the final manifest, verified
+        #
+        # Verify drops rows rather than failing on them: a row whose asset is
+        # gone or was replaced by a failed run's `--clobber` is refused by
+        # every client anyway (the 2026-10-11 manifest has 162 dense and 149
+        # keyword rows like that), and a registry with no row is rebuilt next
+        # week. It refuses outright if a listing would cost over half a
+        # section, which is a wrong listing rather than a broken release. The
+        # interim checks only its keyword section: its dense rows are already
+        # live, so re-publishing them as they are changes nothing for a
+        # client, and checking them would let a release broken past half —
+        # more failed weeks of `--clobber` — refuse the interim, and with it
+        # the room this run needs, every week from then on.
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
         run: |
-          if ! gh release view shards-latest --repo "$REPO" >/dev/null 2>&1; then
-            gh release create shards-latest --repo "$REPO" \
-              --prerelease --latest=false \
-              --title "dense vector shards" \
-              --notes "Prebuilt keyless embeddings for tapped registries. Consumed by \`boost quickstart\` and \`boost reindex --fetch-shards\` via manifest.json; not a boost release."
-          fi
-          # --clobber: this release is a mutable index of the current shards,
-          # so a re-run replaces an asset rather than failing on it — and never
-          # deletes one, which is what lets a carried-forward row keep pointing
-          # at last week's file. A quiet week uploads only the manifest.
           shopt -s nullglob
-          gh release upload shards-latest --repo "$REPO" --clobber \
-            shards/*.shard.json shards/*.keyword.json.gz shards/manifest.json
+          ensure_release() {
+            if ! gh release view "$1" --repo "$REPO" >/dev/null 2>&1; then
+              gh release create "$1" --repo "$REPO" \
+                --prerelease --latest=false --title "$2" --notes "$3"
+            fi
+          }
+          listing() { gh api "repos/$REPO/releases/tags/$1" > "$1.json"; }
+          verify() {
+            python3 scripts/publish_shards.py verify --manifest "$1" \
+              --release shards-latest=shards-latest.json \
+              --release shards-keyword-latest=shards-keyword-latest.json \
+              "${@:2}"
+          }
+          delete_listed() {
+            # Paced: deletes are mutations, and GitHub's secondary rate limit
+            # allows ~80 a minute. A failure is reported, not fatal — the
+            # asset is unnamed either way, and the next run lists it again.
+            while read -r id name; do
+              if gh api -X DELETE "repos/$REPO/releases/assets/$id" >/dev/null; then
+                echo "pruned $name"
+              else
+                echo "::warning::could not delete $name ($id); the next run retries"
+              fi
+              sleep 1
+            done < "$1"
+          }
+          ensure_release shards-latest "dense vector shards" \
+            "Prebuilt keyless embeddings for tapped registries. Consumed by \`boost quickstart\` and \`boost reindex --fetch-shards\` via manifest.json; not a boost release."
+          ensure_release shards-keyword-latest "keyword index shards" \
+            "Prebuilt BM25 keyword index shards for tapped registries, named by the manifest.json on the shards-latest release. Consumed by \`boost reindex --fetch-index\`; not a boost release."
+
+          # --clobber: these releases are mutable indexes of the current
+          # shards, so a re-run replaces an asset rather than failing on it —
+          # and never deletes one it does not replace, which is what lets a
+          # carried-forward row keep pointing at last week's file.
+          keyword=(shards/*.keyword.json.gz)
+          if [ "${#keyword[@]}" -gt 0 ]; then
+            gh release upload shards-keyword-latest --repo "$REPO" --clobber "${keyword[@]}"
+          fi
+
+          if [ -f previous-manifest.json ]; then
+            listing shards-latest
+            listing shards-keyword-latest
+            if python3 scripts/publish_shards.py splice \
+                 --dense previous-manifest.json --keyword shards/manifest.json \
+                 --out interim/manifest.json \
+               && verify interim/manifest.json --only keyword; then
+              gh release upload shards-latest --repo "$REPO" --clobber interim/manifest.json
+              listing shards-latest
+              python3 scripts/publish_shards.py prune \
+                --manifest interim/manifest.json --tag shards-latest \
+                --release-json shards-latest.json --suffix .keyword.json.gz \
+                --room-for shards/*.shard.json --out room.txt
+              delete_listed room.txt
+            else
+              echo "::warning::no interim manifest this run; the dense upload gets only the room shards-latest already has"
+            fi
+          fi
+
+          dense=(shards/*.shard.json)
+          if [ "${#dense[@]}" -gt 0 ]; then
+            gh release upload shards-latest --repo "$REPO" --clobber "${dense[@]}"
+          fi
+          listing shards-latest
+          listing shards-keyword-latest
+          verify shards/manifest.json
+          gh release upload shards-latest --repo "$REPO" --clobber shards/manifest.json
+      - name: prune what the published manifest does not name
+        # Last, and allowed to fail: the manifest is already published, and
+        # an asset it does not name is one no client reading it can reach, so
+        # a run cut short here (rate limit, timeout) costs only slots, and the
+        # next run lists the rest again. Without this, nothing ever left
+        # either release but the keyword shards on `shards-latest`, while
+        # `capacity` counts every asset there: a registry that leaves the
+        # catalogue loses its rows and keeps its assets for good. Measured on
+        # 2026-11-04, 11 registries the live manifest names have left it
+        # (loulanyue/awesome-claude-notes is this commit's), each with a
+        # dense and a keyword asset on `shards-latest`, so each release crept
+        # towards the tripwire with nothing to bring it back.
+        #
+        # Three passes, each on a fresh listing. Keyword shards on
+        # `shards-latest` go without limit: the first run after the split
+        # deletes up to all 473 of them, and a keyword shard is seconds to
+        # re-export. The other two are `--bounded`, because "build the
+        # manifest" reads a failed fetch of last week's manifest as a first
+        # run and carries nothing forward — a manifest naming only this
+        # week's rebuilds, which unbounded would cost every other dense
+        # shard on the release. A pass that fails or refuses does not stop
+        # the next one.
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          prune_unnamed() {
+            # $1 tag, $2 suffix, then any extra `prune` flags. Called under
+            # `||`, where `set -e` does not reach, so each failure returns.
+            gh api "repos/$REPO/releases/tags/$1" > "$1.json" || return 1
+            python3 scripts/publish_shards.py prune \
+              --manifest shards/manifest.json --tag "$1" \
+              --release-json "$1.json" --suffix "$2" "${@:3}" \
+              --out prune.txt || return 1
+            while read -r id name; do
+              if gh api -X DELETE "repos/$REPO/releases/assets/$id" >/dev/null; then
+                echo "pruned $name"
+              else
+                echo "::warning::could not delete $name ($id); the next run retries"
+              fi
+              sleep 1
+            done < prune.txt
+          }
+          status=0
+          prune_unnamed shards-latest .keyword.json.gz || status=1
+          prune_unnamed shards-latest .shard.json --bounded || status=1
+          prune_unnamed shards-keyword-latest .keyword.json.gz --bounded || status=1
+          exit "$status"

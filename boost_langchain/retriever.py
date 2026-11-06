@@ -10,7 +10,7 @@ from langchain_core.documents import Document
 from langchain_core.retrievers import BaseRetriever
 from pydantic import ConfigDict, Field
 
-from boost_cli.core import rag
+from boost_cli.core import catalog, rag
 
 
 class BoostRetriever(BaseRetriever):
@@ -54,24 +54,26 @@ class BoostRetriever(BaseRetriever):
     def _get_relevant_documents(
         self, query: str, *, run_manager: CallbackManagerForRetrieverRun
     ) -> list[Document]:
-        # ensure() is what makes first use behave like `boost search`: it
-        # builds the BM25 index from the tapped catalog on demand and is
-        # incremental after that. Without it, a freshly tapped HOME would
-        # answer [] until the user happened to run a CLI search first.
-        rag.ensure()
-        hits, engine = rag.retrieve_any(query, k=self.k, kind=self.kind)
-        if hits is None:
-            # No index of any kind could be built — nothing is tapped. Mirror
-            # the CLI's degrade-cleanly rule: an empty shelf is an answer, not
-            # an error, and a chain should keep running without boost context.
-            return []
+        # retrieve_or_fallback is `boost search`'s engine choice as one call:
+        # ensure() builds the BM25 index on demand (so a freshly tapped HOME
+        # answers without a CLI search first), and when the index cannot be
+        # built it ranks the catalog the way the CLI does rather than
+        # answering [] — ensure() swallows build failures, so "no index" is
+        # not "nothing tapped", and [] there told a chain nothing matched
+        # about items `boost search` found. An empty list is still an answer,
+        # not an error: a chain keeps running without boost context.
+        hits, engine = rag.retrieve_or_fallback(query, k=self.k, kind=self.kind)
         docs: list[Document] = []
         for hit in hits:
             entry = hit["entry"]
             if self.full_content:
-                content = rag.read_body(entry)
+                # read_body_full, not read_body: a missing file degrades to
+                # name + description, and a chain stuffing this as a
+                # "procedure" must be able to tell that it got no procedure.
+                content, has_body = rag.read_body_full(entry)
             else:
                 content = entry.get("description") or rag.surface(entry)
+                has_body = False
             # Two paths, because they answer different questions and conflating
             # them is a silent failure. ``path`` is tap-relative: stable across
             # machines, and what a provenance line should quote (see
@@ -80,18 +82,26 @@ class BoostRetriever(BaseRetriever):
             # is that ``source`` locates the bytes. Advertising the relative
             # path as ``source`` gave chains something that reads as openable,
             # is not, and resolves against whatever the process CWD happens to
-            # be. ``rag.entry_path`` returns None only for an entry with no
-            # defining file, which no live catalog row has.
+            # be. It is "" when the file is not there to locate — a tap whose
+            # clone is gone (`boost catalog --import`) still ranks — because a
+            # ``source`` naming a missing file reads as bytes that were read.
             src = rag.entry_path(entry)
+            located = src is not None and src.is_file()
             docs.append(Document(
                 page_content=content,
                 metadata={
                     "name": entry.get("name", ""),
                     "kind": entry.get("kind", "skill"),
                     "tap": entry.get("tap", ""),
-                    "version": entry.get("version", ""),
+                    # What the file declares, or "" — never the catalog's
+                    # 0.0.0 placeholder, which provenance would quote as fact.
+                    "version": catalog.declared_version(entry),
                     "path": entry.get("skill_md", ""),
-                    "source": str(src) if src is not None else "",
+                    "source": str(src) if located else "",
+                    # True only when page_content carries the item's body.
+                    # False for full_content=False by construction, and for a
+                    # full_content hit whose file could not be read.
+                    "has_body": has_body,
                     # Which engine actually answered (BM25 / dense / hybrid
                     # RRF). Carried per-document because it is the first thing
                     # to check when result quality surprises — see rag.rerank

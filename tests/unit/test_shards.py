@@ -16,6 +16,7 @@ real — it is the function with a digest, a size ceiling and an origin check in
 it, and mocking urlopen would test none of them.
 """
 import contextlib
+import http.client
 import json
 import sqlite3
 
@@ -764,6 +765,96 @@ class TestTruncatedManifest:
         _served(monkeypatch, chunk=16)
         with pytest.raises(BoostError, match="implausibly large"):
             shards.fetch_manifest("https://example.test/m.json")
+
+
+class _BrokenBody:
+    """A response that connected and then failed reading its body."""
+
+    def __init__(self, exc: BaseException):
+        self._exc = exc
+        self.headers: dict = {}
+
+    def read(self, amt=None):
+        raise self._exc
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+#: What a dropped chunked stream and a stalled one raise from ``read``.
+#: IncompleteRead is only an HTTPException on CPython 3.14+, not an OSError.
+_BODY_FAILURES = [
+    (http.client.IncompleteRead(b""), "IncompleteRead(0 bytes read)"),
+    (TimeoutError("The read operation timed out"),
+     "The read operation timed out"),
+    (ConnectionResetError(54, "Connection reset by peer"),
+     "[Errno 54] Connection reset by peer"),
+    (TimeoutError(), "TimeoutError"),
+]
+
+
+class TestBodyReadFailures:
+    """A body that fails mid-read is one BoostError, never exit 70."""
+
+    @pytest.mark.parametrize(("exc", "said"), _BODY_FAILURES)
+    def test_manifest(self, monkeypatch, exc, said):
+        monkeypatch.setattr(shards, "_open",
+                            lambda url, timeout: _BrokenBody(exc))
+        with pytest.raises(BoostError) as err:
+            shards.fetch_manifest("https://example.test/m.json")
+        assert err.value.message == (
+            "cannot read https://example.test/m.json: %s" % said)
+        assert err.value.hint == shards.transport_hint()
+        assert err.value.__cause__ is exc
+
+    @pytest.mark.parametrize(("exc", "said"), _BODY_FAILURES[:2])
+    def test_shard_leaves_nothing_on_disk(self, tmp_path, monkeypatch, exc,
+                                          said):
+        _, row = _shard_file(tmp_path, "a/b", "1" * 40)
+        manifest = shards.fetch_manifest(_manifest(tmp_path, [row]).as_uri())
+        monkeypatch.setattr(shards, "_open",
+                            lambda url, timeout: _BrokenBody(exc))
+        dest = tmp_path / "out" / "a__b.shard.json"
+        with pytest.raises(BoostError) as err:
+            shards.download(row, dest, manifest)
+        assert err.value.message == "cannot read %s: %s" % (row["url"], said)
+        assert not dest.exists()
+        assert not dest.with_suffix(dest.suffix + ".part").exists()
+
+    def test_an_http_error_while_connecting_is_unreachable(self, monkeypatch):
+        def boom(url, timeout):
+            raise http.client.RemoteDisconnected("closed")
+        monkeypatch.setattr(shards.urllib.request, "urlopen", boom)
+        with pytest.raises(BoostError) as err:
+            shards.fetch_manifest("https://example.test/m.json")
+        assert err.value.message == (
+            "cannot reach https://example.test/m.json: closed")
+
+    @pytest.mark.usefixtures("sandbox")
+    def test_sync_records_the_cut_tap_and_carries_on(self, tmp_path,
+                                                     monkeypatch):
+        monkeypatch.setattr(shards.embed, "provider", lambda: "local")
+        monkeypatch.setattr(shards.embed, "model", lambda: SPACE["model"])
+        monkeypatch.setattr(shards.embed, "dimension", lambda: 384)
+        rows = [_shard_file(tmp_path, t, c)[1]
+                for t, c in (("a/b", "1" * 40), ("c/d", "2" * 40))]
+        manifest = shards.fetch_manifest(_manifest(tmp_path, rows).as_uri())
+        from boost_cli.core import dense
+        monkeypatch.setattr(dense, "import_shard",
+                            lambda shard, commit: (True, "ok"))
+        real = shards._open
+        cut = http.client.IncompleteRead(b"")
+        monkeypatch.setattr(shards, "_open", lambda url, timeout: (
+            _BrokenBody(cut) if "a__b" in url else real(url, timeout)))
+        res = shards.sync(["a/b", "c/d"], {"a/b": "1" * 40, "c/d": "2" * 40},
+                          manifest=manifest, cache_dir=tmp_path / "cache")
+        assert res[0] == {"tap": "a/b", "status": "failed",
+                          "detail": "cannot read %s: IncompleteRead(0 bytes "
+                                    "read)" % rows[0]["url"]}
+        assert res[1]["status"] == "imported"
 
 
 class TestStaleVersionStore:

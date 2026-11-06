@@ -93,6 +93,16 @@ class TestRelTime:
     def test_30_seconds(self):
         assert util.rel_time(iso_ago(30)) == "30s ago"
 
+    def test_a_stamp_seconds_ahead_is_just_now(self):
+        # Clock skew between machines sharing the feed: floored, a negative
+        # age read "1s ago" however far ahead the stamp was.
+        assert util.rel_time(iso_ago(-1)) == "just now"
+        assert util.rel_time(iso_ago(-59)) == "just now"
+
+    def test_a_stamp_a_minute_or_more_ahead_is_in_the_future(self):
+        assert util.rel_time(iso_ago(-60)) == "in the future"
+        assert util.rel_time(iso_ago(-2 * 86400)) == "in the future"
+
     def test_59_seconds_still_seconds_bucket(self):
         assert util.rel_time(iso_ago(59)) == "59s ago"
 
@@ -221,6 +231,20 @@ class TestSlugify:
     def test_digits_and_dashes_kept(self):
         assert util.slugify("tdd-workflow-3") == "tdd-workflow-3"
 
+    def test_nfc_and_nfd_spellings_give_one_slug(self):
+        # Precomposed é (NFC) was dropped -> `caf`, while e + U+0301 (NFD,
+        # what a macOS paste often produces) kept its e -> `cafe`: one typed
+        # name saved a profile under one file and looked it up under another.
+        nfc, nfd = "caf\u00e9", "cafe\u0301"
+        assert util.slugify(nfc) == util.slugify(nfd) == "cafe"
+        assert util.slugify("Cr\u00e8me Br\u00fbl\u00e9e") == "creme-brulee"
+
+    def test_compatibility_forms_fold_to_ascii(self):
+        assert util.slugify("\ufb01le \u2460") == "file-1"
+
+    def test_letters_with_no_ascii_fold_still_fall_back(self):
+        assert util.slugify("\u540d\u524d") == "skill"
+
 
 class TestResolveSlug:
     """The shared helper for a user-typed name: slugify, refuse when there is
@@ -228,25 +252,55 @@ class TestResolveSlug:
 
     def test_already_a_slug_is_returned_unchanged_and_silent(self, capsys):
         assert util.resolve_slug("tdd-workflow-3") == "tdd-workflow-3"
-        assert capsys.readouterr().out == ""
+        assert capsys.readouterr() == ("", "")
 
-    def test_differing_slug_is_printed_as_a_note(self, capsys):
+    def test_differing_slug_is_noted_on_stderr_not_stdout(self, capsys):
+        # stdout may be carrying --json; the note there broke `boost profile
+        # save "My Team" --json`, whose output no longer parsed.
         assert util.resolve_slug("My Great Skill") == "my-great-skill"
-        out = capsys.readouterr().out
-        assert "my-great-skill" in out
-        assert "My Great Skill" in out
+        cap = capsys.readouterr()
+        assert cap.out == ""
+        assert cap.err == "  using name 'my-great-skill' (from 'My Great Skill')\n"
 
     def test_what_names_the_field_in_the_note_and_the_error(self, capsys):
         util.resolve_slug("Bad Name!!", what="profile name")
-        assert "profile name" in capsys.readouterr().out
+        assert "profile name" in capsys.readouterr().err
         with pytest.raises(BoostError) as exc:
             util.resolve_slug("!!!", what="profile name")
         assert "profile name" in exc.value.message
 
+    def test_a_slug_longer_than_one_path_component_is_refused(self):
+        # The slug becomes a directory or file name; past 255 bytes the OS
+        # raises ENAMETOOLONG from the first `exists()` that touches it.
+        with pytest.raises(BoostError) as exc:
+            util.resolve_slug("a" * 256, what="skill name")
+        assert "skill name is too long (256 bytes, limit 255)" in exc.value.message
+
+    def test_a_slug_at_the_limit_is_accepted(self):
+        assert util.resolve_slug("a" * 255) == "a" * 255
+
+    def test_the_limit_is_on_the_slug_not_the_raw_input(self):
+        # Punctuation slugify drops does not count against the limit.
+        assert util.resolve_slug("a" * 255 + "!" * 10) == "a" * 255
+
     def test_empty_raises_instead_of_falling_back_to_skill(self):
         with pytest.raises(BoostError) as exc:
             util.resolve_slug("")
-        assert "no letters or digits" in exc.value.message
+        assert exc.value.message == "name has no letters or digits: ''"
+
+    def test_nfd_input_is_noted_with_the_folded_slug(self, capsys):
+        assert util.resolve_slug("cafe\u0301", what="profile name") == "cafe"
+        assert util.resolve_slug("caf\u00e9", what="profile name") == "cafe"
+        assert capsys.readouterr().err.count("using profile name 'cafe'") == 2
+
+    def test_non_ascii_letters_are_not_called_no_letters(self):
+        # `名前` is all letters; "has no letters or digits" told the user
+        # their input was empty.
+        with pytest.raises(BoostError) as exc:
+            util.resolve_slug("\u540d\u524d", what="skill name")
+        assert exc.value.message == "skill name needs ASCII letters or digits: " \
+            "'\u540d\u524d'"
+        assert exc.value.hint == "a name becomes a file name made of a-z, 0-9 and '-'"
 
     def test_punctuation_only_raises_instead_of_falling_back_to_skill(self):
         # Unlike slugify("!!!") == "skill", a user-typed name with nothing to
@@ -309,6 +363,75 @@ class TestSha256Dir:
             ".DS_Store": "junk",
         })
         assert util.sha256_dir(noisy) == util.sha256_dir(clean)
+
+
+class TestLineEndingBlindHash:
+    """A CRLF checkout (core.autocrlf) of a copy is not an edit to it."""
+
+    @staticmethod
+    def _tree(root, data: bytes):
+        root.mkdir()
+        (root / "SKILL.md").write_bytes(data)
+        return root
+
+    def test_hashed_bytes_folds_crlf_in_text_only(self):
+        assert util.hashed_bytes(b"a\r\nb\r\n") == b"a\nb\n"
+        assert util.hashed_bytes(b"a\nb") == b"a\nb"
+        # A lone CR is not a line-ending conversion git makes.
+        assert util.hashed_bytes(b"a\rb") == b"a\rb"
+        assert util.hashed_bytes(b"\0a\r\n") == b"\0a\r\n"
+
+    def test_the_binary_sniff_window_is_exact(self):
+        assert util.BINARY_SNIFF == 8000
+        inside = b"x" * (util.BINARY_SNIFF - 1) + b"\0\r\n"
+        past = b"x" * util.BINARY_SNIFF + b"\0\r\n"
+        assert util.hashed_bytes(inside) == inside
+        assert util.hashed_bytes(past) == past[:-2] + b"\n"
+
+    def test_updatediff_sniffs_the_same_window(self):
+        from boost_cli.core import updatediff
+        assert updatediff._SNIFF == util.BINARY_SNIFF
+
+    def test_crlf_and_lf_trees_hash_alike(self, tmp_path):
+        lf = self._tree(tmp_path / "lf", b"---\nname: x\n---\nbody\n")
+        crlf = self._tree(tmp_path / "crlf", b"---\r\nname: x\r\n---\r\nbody\r\n")
+        assert util.sha256_dir(crlf) == util.sha256_dir(lf)
+        assert util.sha256_dir(crlf, raw=True) != util.sha256_dir(lf, raw=True)
+
+    def test_an_lf_tree_hashes_as_the_raw_bytes_did(self, tmp_path):
+        # Why most existing lock rows need nothing: no CRLF, same digest.
+        lf = self._tree(tmp_path / "lf", b"body\n")
+        want = hashlib.sha256(b"SKILL.md\0body\n\0").hexdigest()
+        assert util.sha256_dir(lf) == want
+        assert util.sha256_dir(lf, raw=True) == want
+
+    def test_raw_hashes_crlf_as_written(self, tmp_path):
+        crlf = self._tree(tmp_path / "c", b"body\r\n")
+        assert util.sha256_dir(crlf, raw=True) == hashlib.sha256(
+            b"SKILL.md\0body\r\n\0").hexdigest()
+        assert util.sha256_dir(crlf) == hashlib.sha256(
+            b"SKILL.md\0body\n\0").hexdigest()
+
+    def test_a_binary_file_keeps_its_bytes(self, tmp_path):
+        a = self._tree(tmp_path / "a", b"\0bin\r\n")
+        b = self._tree(tmp_path / "b", b"\0bin\n")
+        assert util.sha256_dir(a) != util.sha256_dir(b)
+
+    def test_matches_a_normalised_or_a_raw_digest(self, tmp_path):
+        crlf = self._tree(tmp_path / "c", b"body\r\n")
+        assert util.sha256_matches(crlf, util.sha256_dir(crlf)) is True
+        # A row recorded from these CRLF bytes before the hash folded them.
+        assert util.sha256_matches(crlf, util.sha256_dir(crlf, raw=True)) is True
+        lf = self._tree(tmp_path / "l", b"body\n")
+        assert util.sha256_matches(crlf, util.sha256_dir(lf)) is True
+
+    def test_matches_rejects_an_edit_and_an_empty_digest(self, tmp_path):
+        a = self._tree(tmp_path / "a", b"body\r\n")
+        recorded = util.sha256_dir(a)
+        (a / "SKILL.md").write_bytes(b"bodY\r\n")
+        assert util.sha256_matches(a, recorded) is False
+        assert util.sha256_matches(a, "") is False
+        assert util.sha256_matches(a, None) is False
 
 
 class TestDirSize:
@@ -751,6 +874,33 @@ class TestAtomicWriteText:
         leftovers = [q.name for q in tmp_path.iterdir() if q.name != "f.txt"]
         assert leftovers == []
 
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="a 255-byte name under tmp_path passes MAX_PATH")
+    def test_temp_name_fits_the_component_limit(self, tmp_path, monkeypatch):
+        # A legal 255-byte target used to get a 269-byte temp name and fail
+        # ENAMETOOLONG; the cut must not split a multi-byte character either.
+        import tempfile
+        seen = []
+        real = tempfile.mkstemp
+
+        def spy(*a, **k):
+            fd, tmp = real(*a, **k)
+            seen.append(Path(tmp).name.encode("utf-8"))
+            return fd, tmp
+        monkeypatch.setattr(tempfile, "mkstemp", spy)
+        short, ascii_, wide = "a" * 200, "b" * 255, "\u00e9" * 127 + "x"
+        for name in (short, ascii_, wide):
+            util.atomic_write_text(tmp_path / name, name)
+            assert (tmp_path / name).read_text(encoding="utf-8") == name
+        # The temp is named for boost, not for the target, so its length does
+        # not grow with the name beside it.
+        assert len(seen) == 3
+        assert len(set(map(len, seen))) == 1
+        for tmp in seen:
+            assert tmp.startswith(util.TEMP_PREFIX.encode())
+            assert tmp.endswith(b".tmp")
+            assert len(tmp) < 32
+
     def test_honours_encoding(self, tmp_path):
         p = tmp_path / "f.txt"
         util.atomic_write_text(p, "café", encoding="utf-8")
@@ -897,6 +1047,21 @@ class TestPositiveInt:
         with pytest.raises(argparse.ArgumentTypeError) as exc:
             util.positive_int("abc")
         assert str(exc.value) == "invalid int value: 'abc'"
+
+
+class TestNonemptyStr:
+    """`util.nonempty_str` — the argparse type behind every NAME/path flag."""
+
+    def test_a_real_value_round_trips_unchanged(self):
+        assert util.nonempty_str("brainstorming") == "brainstorming"
+        # Inner and edge whitespace is the caller's business, not stripped.
+        assert util.nonempty_str(" a b ") == " a b "
+
+    @pytest.mark.parametrize("value", ["", " ", "\t\n"])
+    def test_empty_or_blank_rejected_with_exact_message(self, value):
+        with pytest.raises(argparse.ArgumentTypeError) as exc:
+            util.nonempty_str(value)
+        assert str(exc.value) == "must not be empty"
 
 
 class TestScoreInt:
@@ -1062,7 +1227,8 @@ class TestRmtreeRetryHook:
         This is the case the hook was written for, and it is what keeps the
         fix from being "stop retrying": the chmod still happens, and it is
         observable because chmod needs ownership plus search on the parent,
-        not write on it.
+        not write on it. Called with no ``root``, so the sealed parent stays
+        sealed and the retry fails where the chmod can be read back.
         """
         stubborn = tmp_path / "tree2"
         stubborn.mkdir()
@@ -1070,16 +1236,115 @@ class TestRmtreeRetryHook:
         target.write_text("x", encoding="utf-8")
         target.chmod(0o400)
         sealed(stubborn)
+        planted = PermissionError(13, "planted")
+
+        with pytest.raises(PermissionError) as caught:
+            util._clear_readonly_and_retry(os.unlink, str(target), planted)
+
+        assert caught.value is not planted      # the retry's own failure
+        assert stat.S_IMODE(stubborn.stat().st_mode) == 0o500
+        # The write bit is ORed in, not the whole mode replaced by it.
+        assert stat.S_IMODE(target.stat().st_mode) == 0o600
+
+    def test_a_read_only_directory_inside_the_tree_is_unlocked(
+            self, tmp_path, sealed):
+        """A skill copied from a read-only package: a 0o555 ``assets/``.
+
+        Unlinking is gated by the parent's write bit, so chmod-ing the file
+        alone retried into the same refusal and `boost uninstall` crashed
+        rc 70 with the lock row kept. The parent is inside the tree, so it
+        is the delete's to unlock.
+        """
+        tree = tmp_path / "skill"
+        sub = tree / "assets"
+        sub.mkdir(parents=True)
+        (sub / "a.txt").write_text("x", encoding="utf-8")
+        (tree / "SKILL.md").write_text("x", encoding="utf-8")
+        sealed(sub)
+        sealed(tree)
+
+        util.rmtree(tree)
+
+        assert not tree.exists()
+
+    def test_the_root_s_own_parent_is_never_unlocked(self, tmp_path, sealed):
+        """The directory holding the tree is outside it: not this delete's.
+
+        A read-only skill store is a refusal `doctor` reports; unlocking it
+        to finish one uninstall would quietly undo the user's own chmod.
+        """
+        holder = tmp_path / "store"
+        tree = holder / "skill"
+        tree.mkdir(parents=True)
+        (tree / "f.txt").write_text("x", encoding="utf-8")
+        sealed(holder)
+
+        with pytest.raises(PermissionError):
+            util.rmtree(tree)
+
+        assert stat.S_IMODE(holder.stat().st_mode) == 0o500
+
+    def test_a_parent_that_is_a_link_is_never_chmodded(self, tmp_path, sealed):
+        """`os.chmod` follows links, so a linked parent's target would change."""
+        real = tmp_path / "real"
+        real.mkdir()
+        f = real / "f.txt"
+        f.write_text("x", encoding="utf-8")
+        sealed(real)
+        link = tmp_path / "link"
+        link.symlink_to(real, target_is_directory=True)
+        planted = PermissionError(13, "planted")
+
+        with pytest.raises(PermissionError):
+            util._clear_readonly_and_retry(
+                os.unlink, str(link / "f.txt"), planted, root=str(tmp_path))
+
+        assert stat.S_IMODE(real.stat().st_mode) == 0o500
+        assert f.exists()
+
+    def test_inside_tree_is_lexical_and_bounded(self):
+        assert util._inside_tree("/a/b", "/a/b") is True
+        assert util._inside_tree("/a/b/c", "/a/b/") is True
+        assert util._inside_tree("/a/bc", "/a/b") is False
+        assert util._inside_tree("/a", "/a/b") is False
+
+    def test_a_failed_retry_keeps_a_directory_listable(self, tmp_path, sealed):
+        """A dir under a read-only parent keeps its read and search bits.
+
+        Its contents go and its own ``rmdir`` fails on the parent. Setting the
+        mode to exactly ``S_IWRITE`` left it ``d-w-------``, and every later
+        walk of the store (`boost snapshot save`) crashed on it.
+        """
+        parent = tmp_path / "store"
+        child = parent / "skill"
+        child.mkdir(parents=True)
+        (child / "SKILL.md").write_text("x", encoding="utf-8")
+        child.chmod(0o755)
+        sealed(parent)
 
         with pytest.raises(OSError):
-            util.rmtree(stubborn)
+            util.rmtree(child)
 
-        # Reading the child's mode needs search on the parent, and the hook
-        # took that away on its way past: `scandir` fails too, so the
-        # directory is chmodded to S_IWRITE as well and loses its x bit.
-        stubborn.chmod(0o700)
-        assert stat.S_IMODE(target.stat().st_mode) == stat.S_IMODE(
-            stat.S_IWRITE)
+        assert stat.S_IMODE(child.stat().st_mode) == 0o755
+        assert list(child.iterdir()) == []
+
+    def test_a_failed_listing_is_raised_not_retried(self, tmp_path):
+        """Only a removal is retried.
+
+        `shutil.rmtree` reports a dir it could not open or list through the
+        same hook, and calling `os.open(path)` again raised TypeError (it
+        needs flags), which no caller catches: `boost sync --prune` exited 70
+        halfway through a delete.
+        """
+        d = tmp_path / "d"
+        d.mkdir()
+        before = stat.S_IMODE(d.stat().st_mode)
+        planted = PermissionError(13, "planted")
+        for func in (os.open, os.scandir, os.lstat):
+            with pytest.raises(PermissionError) as caught:
+                util._clear_readonly_and_retry(func, str(d), planted)
+            assert caught.value is planted
+        assert stat.S_IMODE(d.stat().st_mode) == before
 
     def test_rmtree_of_a_symlink_refuses_instead_of_reporting_success(
             self, tmp_path):
@@ -1305,3 +1570,81 @@ class TestRemoveItemsUsesRemovePath:
         assert (removed, freed) == (1, 7)
         assert [p for p, _ in failures] == [stuck]
         assert not ok.exists()
+
+
+class TestCheckPathLength:
+    """Every component of a path must fit the 255-byte ceiling, or the OS
+    refuses to stat it and `Path.exists()` raises instead of answering."""
+
+    def test_a_normal_path_is_returned_unchanged(self, tmp_path):
+        p = tmp_path / "out.md"
+        assert util.check_path_length(p) is p
+
+    def test_the_last_component_is_checked(self, tmp_path):
+        with pytest.raises(BoostError) as exc:
+            util.check_path_length(tmp_path / ("a" * 256), what="output path")
+        assert exc.value.message.startswith(
+            "output path is too long (256 bytes, limit 255)")
+
+    def test_a_parent_component_is_checked(self, tmp_path):
+        with pytest.raises(BoostError):
+            util.check_path_length(tmp_path / ("a" * 300) / "x.md")
+
+    def test_exactly_255_bytes_is_fine(self, tmp_path):
+        util.check_path_length(tmp_path / ("a" * 255))
+
+    def test_bytes_not_characters_are_counted(self, tmp_path):
+        # 128 two-byte characters are 256 bytes, which APFS and ext4 refuse.
+        with pytest.raises(BoostError) as exc:
+            util.check_path_length(tmp_path / ("é" * 128))
+        assert "256 bytes" in exc.value.message
+
+    def test_the_echo_is_exactly_forty_characters_and_an_ellipsis(self, tmp_path):
+        # Any component over 255 bytes is at least 64 characters (UTF-8 is at
+        # most 4 bytes a character), so the echo is always truncated; pin
+        # where, so the cut cannot drift a character either way.
+        with pytest.raises(BoostError) as exc:
+            util.check_path_length(tmp_path / ("a" * 256))
+        assert exc.value.message.endswith(": %r" % ("a" * 40 + "…"))
+
+    def test_the_hint_names_the_filesystems_it_is_true_of(self, tmp_path):
+        with pytest.raises(BoostError) as exc:
+            util.check_path_length(tmp_path / ("a" * 256))
+        assert exc.value.hint == ("APFS and ext4 refuse a file or directory "
+                                  "name over 255 bytes")
+
+    def test_the_message_does_not_echo_the_whole_component(self, tmp_path):
+        with pytest.raises(BoostError) as exc:
+            util.check_path_length(tmp_path / ("a" * 1000))
+        assert len(exc.value.message) < 200
+
+
+class TestWriteUnclaimed:
+    """`write_unclaimed` never replaces a file it finds at the guessed name."""
+
+    def test_writes_the_plain_name_when_free(self, tmp_path):
+        dest = util.write_unclaimed(tmp_path, "evil", ".SKILL.md", "gen\n")
+        assert dest == tmp_path / "evil.SKILL.md"
+        assert dest.read_bytes() == b"gen\n"
+
+    def test_an_existing_file_is_left_and_the_next_free_name_taken(self, tmp_path):
+        (tmp_path / "evil.SKILL.md").write_bytes(b"precious notes\n")
+        (tmp_path / "evil.1.SKILL.md").write_bytes(b"older\n")
+        dest = util.write_unclaimed(tmp_path, "evil", ".SKILL.md", "gen\n")
+        assert dest == tmp_path / "evil.2.SKILL.md"
+        assert dest.read_bytes() == b"gen\n"
+        assert (tmp_path / "evil.SKILL.md").read_bytes() == b"precious notes\n"
+        assert (tmp_path / "evil.1.SKILL.md").read_bytes() == b"older\n"
+        assert sorted(p.name for p in tmp_path.iterdir()) == [
+            "evil.1.SKILL.md", "evil.2.SKILL.md", "evil.SKILL.md"]
+
+    def test_first_collision_takes_suffix_one(self, tmp_path):
+        (tmp_path / "x.md").write_text("mine", encoding="utf-8")
+        assert util.write_unclaimed(tmp_path, "x", ".md", "t") == tmp_path / "x.1.md"
+
+    def test_an_unwritable_directory_is_framed_as_a_boost_error(self, tmp_path):
+        missing = tmp_path / "no" / "such"
+        with pytest.raises(BoostError) as exc:
+            util.write_unclaimed(missing, "x", ".md", "t")
+        assert exc.value.message.startswith("cannot write ")
+        assert str(missing / "x.md") in exc.value.message

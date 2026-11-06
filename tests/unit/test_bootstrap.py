@@ -231,6 +231,27 @@ class TestSeedDecidesPerRegistryNotPerMachine:
         assert bootstrap.will_seed() is False
         assert bootstrap.will_seed(force=True) is True
 
+    def test_seed_plan_names_exactly_what_seed_catalog_taps(self, sandbox,
+                                                            monkeypatch):
+        # `mcp register --dry-run` prints this list's length, so under
+        # --seed on a part-seeded machine it must count the missing ones only.
+        from boost_cli.core import config
+        names = [str(t["name"]) for t in config.DEFAULT_TAPS]
+        for existing, force in (((), False), (("someone/theirs",), False),
+                                (tuple(names[:2]), True), (tuple(names), True)):
+            _stub(monkeypatch, existing=existing)
+            plan = bootstrap.seed_plan(force=force)
+            assert plan == [name for name, _n in
+                            bootstrap.seed_catalog(force=force).tapped]
+        _stub(monkeypatch, existing=tuple(names[:2]))
+        assert bootstrap.seed_plan(force=True) == names[2:]
+        assert bootstrap.seed_plan() == []
+        _stub(monkeypatch)
+        assert bootstrap.seed_plan() == names
+        monkeypatch.setenv(bootstrap.NO_SEED_ENV, "1")
+        assert bootstrap.seed_plan() == []
+        assert bootstrap.seed_plan(force=True) == names
+
 
 class TestSeedRecordsAndReportsFaithfully:
     def test_each_added_tap_is_journalled(self, sandbox, monkeypatch):

@@ -103,6 +103,34 @@ class TestSelection:
         pools = m.candidates([_reg("dup/repo", "skill", 100)], ["dup/repo"])
         assert m.select(pools, 100) == []
 
+    def test_a_registry_over_the_cap_is_skipped_for_the_next_largest(self):
+        # One giant must not become most of the corpus on its own.
+        m = _load()
+        pools = m.candidates([_reg("s/giant", "skill", 900),
+                              _reg("s/next", "skill", 50)], [])
+        assert [n for n, _e in m.select(pools, 100, cap=60)] == ["s/next"]
+        assert m.oversized(pools, 60) == [("s/giant", 900)]
+
+    def test_a_registry_at_the_cap_is_kept(self):
+        m = _load()
+        pools = m.candidates([_reg("s/edge", "skill", 60)], [])
+        assert m.select(pools, 100, cap=60) == [("s/edge", 60)]
+
+    def test_no_cap_skips_nothing(self):
+        m = _load()
+        pools = m.candidates([_reg("s/giant", "skill", 900)], [])
+        assert m.oversized(pools, None) == []
+        assert m.select(pools, 100) == [("s/giant", 900)]
+
+    def test_the_header_names_what_the_cap_skipped(self):
+        # A cap that drops a registry silently reads as "covered everything".
+        m = _load()
+        text = m.render([], [("s/next", 50)], 1000, skipped=[("s/giant", 4253)],
+                        cap=50)
+        assert "#   s/giant (4,253)" in text
+        assert "more than 50 est items (5% of the" in text
+        assert "\ns/giant\n" not in text
+
     def test_the_output_is_deterministic(self):
         # Two runs over the same committed data must agree, or --check is noise.
         m = _load()
@@ -148,6 +176,20 @@ class TestTheShippedList:
         required = _rows(_REQUIRED.read_text(encoding="utf-8"))
         scale = _rows(_OUT.read_text(encoding="utf-8"))
         assert len(scale) > 5 * len(required)
+
+    @pytest.mark.skipif(
+        not (_OUT.exists() and (_ROOT / "boost_cli/data/registries.json").exists()),
+        reason="registries not reachable")
+    def test_no_distractor_exceeds_the_cap(self):
+        m = _load()
+        cap = int(m.DEFAULT_TARGET * m.MAX_SHARE)
+        est = {r["name"]: int(r.get("est_items") or 0) for r in json.loads(
+            (_ROOT / "boost_cli/data/registries.json").read_text(
+                encoding="utf-8"))["registries"]}
+        required = set(_rows(_REQUIRED.read_text(encoding="utf-8")))
+        over = [r for r in _rows(_OUT.read_text(encoding="utf-8"))
+                if r not in required and est.get(r, 0) > cap]
+        assert not over, "distractors over the %d-item cap: %s" % (cap, over)
 
     @pytest.mark.skipif(not _OUT.exists(), reason="scale list not generated")
     def test_no_repository_appears_twice(self):

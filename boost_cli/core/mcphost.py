@@ -107,7 +107,11 @@ a time, which is what the ``--`` bullet above cost.
 from __future__ import annotations
 
 import os.path
+import re
+import shlex
 from collections.abc import Mapping
+
+from . import paths
 
 # The MCP server name boost registers itself under. Deliberately free of
 # underscores: Gemini CLI assigns every MCP tool the fully-qualified name
@@ -333,6 +337,20 @@ def escapes_home(host: str, env: Mapping[str, str], home,
 ENV_FLAG: dict[str, str] = {CODEX: "--env"}
 
 
+def shell_line(argv: list[str]) -> str:
+    """``argv`` as one line a user can paste into a POSIX shell and have run.
+
+    Every argv this module builds is *printed* as well as run — by
+    ``--dry-run``, and as the "run it yourself" fallback whenever a host is
+    missing, refused or failed — and :data:`LAUNCH_ENV` carries
+    ``no_proxy=*``. Joined with spaces, that printed a line zsh rejects
+    outright (``no matches found: no_proxy=*``: an unmatched glob is an
+    error there, not a literal) and bash would expand against the current
+    directory. Running it was never affected: the subprocess gets the list.
+    """
+    return shlex.join(argv)
+
+
 def _env_flags(env: dict[str, str] | None, flag: str = "-e") -> list[str]:
     """``<flag> KEY=VALUE`` pairs, sorted so the argv is deterministic."""
     if not env:
@@ -435,11 +453,22 @@ def register_argv(host: str, launcher: str, *, scope: str = "user",
     """The argv that registers boost as an MCP server with ``host``.
 
     ``launcher`` is the absolute path other processes should use to invoke
-    boost (:func:`paths.launcher`). ``env`` defaults to :data:`LAUNCH_ENV`;
+    boost (:func:`paths.launcher`). ``env`` defaults to :func:`launch_env`;
     pass ``{}`` for none. Raises KeyError for an unknown host.
     """
     return add_argv(host, name, launcher, ["mcp", "--stdio"], scope=scope,
-                    env=LAUNCH_ENV if env is None else env)
+                    env=launch_env() if env is None else env)
+
+
+def launch_env() -> dict[str, str]:
+    """:data:`LAUNCH_ENV` plus the ``BOOST_HOME`` / ``BOOST_AGENTS_STORE``
+    this process runs under, each only when set (:func:`paths.override_env`).
+
+    The host starts the server with its own environment, so a registration
+    made under a relocated state dir served ``~/.boost`` and
+    ``~/.agents/skills`` to the agent instead.
+    """
+    return LAUNCH_ENV | paths.override_env()
 
 
 def unregister_argv(host: str, *, scope: str = "user",
@@ -534,6 +563,14 @@ _ALREADY = ("already exists", "already registered", "already configured")
 #: against nothing registered would be reported as a removal that happened.
 _NOT_REGISTERED = ("not found", "no mcp server named")
 
+#: Antigravity CLI's "nothing to remove": ``agy mcp remove boost`` against
+#: nothing registered prints ``Error: MCP server "boost" not found`` and exits
+#: **1**, unlike Gemini and Codex which exit 0. The rc-0 rule above therefore
+#: cannot see it, and the generic ``"not found"`` must not be widened to any
+#: rc (a nonzero ``config file not found`` is a real failure). This exact
+#: wording is specific enough to count at any exit code.
+_AGY_NOT_REGISTERED = re.compile(r'mcp server "[^"\n]*" not found')
+
 
 def classify_result(action: str, returncode: int, stdout: str, stderr: str) -> tuple[str, str]:
     """Classify a finished (un)register subprocess into ``(status, detail)``.
@@ -555,6 +592,8 @@ def classify_result(action: str, returncode: int, stdout: str, stderr: str) -> t
     blob = (stderr + stdout).lower()
     if action == "unregister" and returncode == 0 and any(
             k in blob for k in _NOT_REGISTERED):
+        return "not_registered", ""
+    if action == "unregister" and _AGY_NOT_REGISTERED.search(blob):
         return "not_registered", ""
     if returncode == 0:
         return "ran", ""

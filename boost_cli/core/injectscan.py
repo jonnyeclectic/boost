@@ -17,6 +17,7 @@ the worst first.
 from __future__ import annotations
 
 import re
+import unicodedata
 from pathlib import Path
 from typing import NamedTuple
 
@@ -51,6 +52,27 @@ class Finding(NamedTuple):
 def _rx(pattern: str) -> re.Pattern[str]:
     return re.compile(pattern, re.IGNORECASE)
 
+
+# Building blocks for curl-pipe-shell. Real installers rarely write the bare
+# `curl … | sh` form: Homebrew's is `/bin/bash -c "$(curl …)"`, others use
+# `bash <(curl …)` or `| sudo -E bash`. Each fragment absorbs one of the
+# spellings that used to slip past: an absolute path to the shell or to sudo,
+# `env` with flags, and sudo with flags (`-E`, `-u root`).
+#
+# The directory prefix may only START where a path cannot continue leftwards
+# (the lookbehind), and its segments exclude "/". An unanchored ``\S*/`` here
+# made the search quadratic in line length (re tried it from every offset): a
+# 20 KB line of minified JS took 2-10 s, and install now scans .js files.
+_DIR = r"(?:(?<![\w./~-])[\w.~-]*(?:/[\w.+-]*)*/)?"
+# Flag runs are bounded ({0,4}) for the same reason: `-u\s+\S+` can eat the
+# next "sudo", so an unbounded run re-walked the rest of the line from every
+# occurrence of "sudo -u ".
+_SUDO = r"(?:" + _DIR + r"sudo(?:\s+(?:-u\s+\S+|-\S+)){0,4}\s+)?"
+_ENV = r"(?:" + _DIR + r"env(?:\s+-\S+){0,4}\s+)?"
+_SHELL = _DIR + r"\b(?:sh|bash|zsh|dash|ksh)\b"
+_INTERP = (_ENV + _DIR + r"(?:sh|bash|zsh|dash|ksh|python[23]?|node|ruby|"
+           r"perl)\b")
+_FETCH = r"(?:curl|wget)\b"
 
 # Curated rules. Kept small and high-precision on purpose: a noisy scanner that
 # cries wolf gets ignored. Grouped by the three attack shapes the card names.
@@ -91,12 +113,17 @@ RULES: tuple = (
          "reads a credential store, likely to exfiltrate"),
     # ── risky shell smuggled into instructions ───────────────────────────
     Rule("curl-pipe-shell", "high",
-         _rx(r"\b(?:curl|wget|fetch)\b[^\n|]*\|\s*(?:sudo\s+)?"
-             r"(?:sh|bash|zsh|python[23]?|node|ruby|perl)\b"),
+         _rx(r"\b(?:curl|wget|fetch)\b[^\n|]*\|\s*" + _SUDO + _INTERP
+             + r"|" + _SUDO + _SHELL + r"(?:\s+-\S+){0,4}\s+[\"']?(?:\$\(|`)\s*"
+             + _FETCH
+             + r"|(?:" + _SUDO + _SHELL + r"|\bsource|(?<!\S)\.)"
+             + r"(?:\s+-\S+){0,4}\s+(?:<\s*)?<\(\s*" + _FETCH),
          "pipes a downloaded script straight into a shell"),
     Rule("base64-pipe-shell", "high",
-         _rx(r"\bbase64\s+(?:-{1,2}\w+\s+)*-?[dD]\b[^\n|]*\|\s*"
-             r"(?:sudo\s+)?(?:sh|bash|zsh)\b"),
+         # `--decode` and a pipe anywhere later on the line are the spellings
+         # `boost audit`'s own row caught before it deferred to this rule.
+         _rx(r"\bbase64\s+(?:-{1,2}\w+\s+)*(?:-?d|--decode)\b[^\n]*\|\s*"
+             + _SUDO + _SHELL),
          "decodes an obfuscated blob and runs it"),
     Rule("eval-subshell", "medium",
          _rx(r"\beval\s+[\"']?\$\("),
@@ -133,11 +160,14 @@ RULES: tuple = (
          # contains none, so it cannot rot back.
          re.compile(
              "["
-             "\u200b-\u200f"          # zero-width space/joiners, LRM, RLM
+             # zero-width space/joiners, LRM, RLM. ZWNJ/ZWJ between two
+             # letters or emoji are spelling, not smuggling — scan_text drops
+             # those occurrences first (_benign_joiners_removed).
+             "\u200b-\u200f"
              "\u202a-\u202e"          # bidi embedding/override (Trojan Source)
              "\u2060-\u2064"          # word joiner, invisible operators
              "\u2066-\u2069"          # bidi isolates
-             "\ufeff"                  # BOM appearing mid-file
+             "\ufeff"                  # BOM mid-file (a leading one is dropped)
              "\U000e0000-\U000e007f"  # Unicode tag block: renders as nothing
              "]"),
          "contains invisible or bidirectional characters"),
@@ -171,9 +201,17 @@ def _html_comments(text: str):
     comments — enough edge case that a filtering regex reliably gets one wrong,
     which is the whole subject of CodeQL's `bad-tag-filter` query. Scanning for
     the delimiters directly has no such corners and cannot backtrack.
+
+    Bounded by the number of openers rather than ``while True``: each comment
+    consumes at least one ``<!--`` the next search starts past, so the count is
+    an exact cap, not a guess. It is there for the mutant ``i = end + 3`` ->
+    ``i = None``, which restarts every search at 0: unbounded, it yielded the
+    first comment forever into a caller's list (4.9 GB in seconds on a local
+    mutation run, the runner-killing shape seen on #1189); capped, it yields
+    at most one entry per opener and is killed like any other mutant.
     """
     i = 0
-    while True:
+    for _opener in range(text.count("<!--")):
         start = text.find("<!--", i)
         if start == -1:
             return
@@ -187,6 +225,38 @@ def _html_comments(text: str):
         i = end + 3
 
 
+#: Zero-width non-joiner / joiner. Required for correct rendering between
+#: letters of joining scripts (Persian words, Indic conjuncts after a virama)
+#: and inside emoji sequences (man + ZWJ + laptop = the developer emoji).
+_JOINERS = frozenset("\u200c\u200d")
+
+
+def _joinable(ch: str) -> bool:
+    """True for a non-ASCII letter, combining mark or emoji-ish symbol.
+
+    ASCII is excluded on purpose: a joiner between two Latin letters has no
+    rendering job to do, so ``ignore`` split by a ZWNJ stays a finding.
+    """
+    if ord(ch) < 0x80:
+        return False
+    cat = unicodedata.category(ch)
+    return cat[0] in "LM" or cat in {"So", "Sk"}
+
+
+def _benign_joiners_removed(line: str) -> str:
+    """``line`` minus every ZWNJ/ZWJ that sits between two joinable chars."""
+    if not _JOINERS.intersection(line):
+        return line
+    kept = []
+    last = len(line) - 1
+    for i, ch in enumerate(line):
+        if (ch in _JOINERS and 0 < i < last
+                and _joinable(line[i - 1]) and _joinable(line[i + 1])):
+            continue
+        kept.append(ch)
+    return "".join(kept)
+
+
 def scan_text(text: str) -> list[Finding]:
     """Return findings for every rule that matches a line of ``text``.
 
@@ -195,13 +265,17 @@ def scan_text(text: str) -> list[Finding]:
     is reported. Results are ordered worst-first: descending severity, then by
     line number, then rule id — a stable order tests can rely on.
     """
+    # One leading BOM is how Windows editors save UTF-8, not a hidden
+    # character; a second one, or one mid-file, is still reported.
+    text = text.removeprefix("\ufeff")
     findings: list[Finding] = []
     for lineno, raw in enumerate(text.splitlines(), start=1):
+        line = _benign_joiners_removed(raw)
         findings.extend(
             Finding(rule.id, rule.severity, lineno,
                     raw.strip()[:200], rule.description)
             for rule in RULES
-            if rule.pattern.search(raw)
+            if rule.pattern.search(line)
         )
     # Comments are scanned over the whole text, not per line — see
     # HTML_COMMENT_DIRECTIVE. Reported at the line the comment OPENS on, which

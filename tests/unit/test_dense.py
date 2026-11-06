@@ -221,9 +221,12 @@ class TestIncremental:
                                                       monkeypatch):
         # The tap commit is unchanged, so only the model check can stop the
         # reuse path from serving vectors from the previous embedding space.
+        # A plain build refuses to wipe a store in another space; the forced
+        # one is the rebuild, and it must still re-embed rather than reuse.
         dense.build(entries=_ENTRIES, force=True)
         monkeypatch.setattr(embed, "model", lambda: "toy-4")
-        stats = dense.build(entries=_ENTRIES)
+        assert dense.build(entries=_ENTRIES)["refused"] == "model-changed"
+        stats = dense.build(entries=_ENTRIES, force=True)
         assert stats["reused"] == []
         assert stats["model"] == "toy-4"
         assert stats["added"] == len(_ENTRIES)

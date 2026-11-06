@@ -467,9 +467,10 @@ class TestReclonePredictsTheRecloneItWillDo:
 
 # ── 3. heal previews the branch `sync_apply` will take ───────────────────
 
-def _heal_both(boost):
+def _heal_both(boost, expect=0):
     """`heal --dry-run`, then `heal`, over one state: (preview, applied)."""
-    return boost("heal", "--dry-run").out, boost("heal").out
+    return (boost("heal", "--dry-run", expect=expect).out,
+            boost("heal", expect=expect).out)
 
 
 def _local_skill(tmp_path, name="local-skill"):
@@ -544,7 +545,9 @@ class TestHealPreviewsTheBranchItWillTake:
             "---\nname: local-skill\nversion: 2.0.0\n---\n\nBody v2\n",
             encoding="utf-8")
 
-        preview, applied = _heal_both(boost)
+        # Both exit 1: the repair is one heal will not make, so neither run
+        # may report success over it.
+        preview, applied = _heal_both(boost, expect=1)
 
         declined = "local-skill is pinned and its local source has moved"
         assert declined in preview
@@ -580,10 +583,13 @@ class TestHealPreviewsTheBranchItWillTake:
         run never keeps."""
         paths.lockfile_path().write_text("{oops", encoding="utf-8")
 
-        preview, applied = _heal_both(boost)
+        # Both say why nothing is recorded, and neither calls that healed.
+        preview, applied = _heal_both(boost, expect=1)
 
         assert "re-record" not in preview
         assert "re-record" not in applied
+        assert "the lock file is corrupt" in preview
+        assert "the lock file is corrupt" in applied
 
     def test_a_store_dir_with_nothing_to_record_is_previewed_as_left(
             self, boost, installed):
@@ -592,10 +598,12 @@ class TestHealPreviewsTheBranchItWillTake:
 
         preview, applied = _heal_both(boost)
 
+        left = "~/.agents/skills/husk holds no SKILL.md, so it is not a skill"
         assert "would re-record brainstorming" in preview
-        assert "would leave husk unrecorded (no SKILL.md to record)" in preview
         assert "would re-record husk" not in preview
-        assert "left husk unrecorded (no SKILL.md to record)" in applied
+        assert left in preview
+        assert left in applied
+        assert "re-recorded husk" not in applied
 
     def test_the_preview_and_the_repair_share_one_decision(self, boost,
                                                            installed):
@@ -1047,12 +1055,11 @@ class TestOneRefusedEntryDoesNotSilenceTheRestOfThePreview:
         # The entry that survives the narrowing is still planned — the plan
         # line itself, not just the name, which a warning would also carry.
         assert "would install brainstorming" in dry.out
-        # …the one that does not is a warning, not an abort. `out.warn`
-        # writes to stdout, which is also where the live run's
-        # per-entry warning lands, so the two are compared there.
+        # …the one that does not is a warning, not an abort. It is the reason
+        # for rc 1, so both modes put it on stderr, and compare it there.
         msg = "no agent left to install workflow ship-it into"
-        assert msg in dry.out
-        assert msg in live.out
+        assert msg in dry.err and msg not in dry.out
+        assert msg in live.err and msg not in live.out
         # …and the marker that makes the exit code readable is still printed.
         assert "dry run — nothing was changed" in dry.out
         assert lockfile.get_workflow("ship-it") is None
@@ -1089,3 +1096,187 @@ class TestAReinstallPreviewsTheLinkScopeItWillReplay:
         for a in others:
             assert a not in link_line[0], "preview widens the recorded scope"
             assert a not in live_line[0], "run widens the recorded scope"
+
+
+@pytest.fixture()
+def own_tap(boost, fixture_tap_src, tmp_path, request):
+    """The fixture tap under a name unique to this test, tapped."""
+    slug = "own-" + request.node.name.replace("[", "-").replace("]", "")[-40:]
+    tap_dir = tmp_path / slug
+    shutil.copytree(fixture_tap_src, tap_dir)
+    boost("tap", tap_dir)
+    return tap_dir
+
+
+class TestAnInstalledItemIsRefusedInBothModes:
+    """`install x --dry-run` over an installed ``x`` said "would upgrade" and
+    exited 0, while the run refused with "already installed" and exited 1:
+    the preview chose its verb from whether the lock held the name and never
+    asked the run's question. Both now ask `store.check_existing`."""
+
+    def _both(self, boost, *argv):
+        dry = boost(*argv, "--dry-run", expect=None)
+        live = boost(*argv, expect=None)
+        return dry, live
+
+    def test_an_installed_skill_without_force(self, boost, own_tap):
+        boost("install", "brainstorming")
+        dry, live = self._both(boost, "install", "brainstorming")
+        assert live.rc == 1 and dry.rc == 1
+        assert "brainstorming is already installed (v1.4.0)" in live.err
+        assert dry.err == live.err
+        assert "would" not in dry.out
+
+    def test_a_pinned_skill_without_force(self, boost, own_tap):
+        boost("install", "brainstorming")
+        boost("pin", "brainstorming")
+        dry, live = self._both(boost, "install", "brainstorming")
+        assert live.rc == 1 and dry.rc == 1
+        assert "brainstorming is pinned" in live.err
+        assert dry.err == live.err
+
+    def test_a_forced_reinstall_previews_a_reinstall(self, boost, own_tap):
+        boost("install", "brainstorming")
+        dry = boost("install", "brainstorming", "--force", "--dry-run")
+        assert "would reinstall brainstorming v1.4.0" in dry.out
+        assert "would upgrade" not in dry.out
+        boost("install", "brainstorming", "--force")
+
+    def test_a_fresh_install_still_previews_an_install(self, boost, own_tap):
+        dry = boost("install", "brainstorming", "--dry-run")
+        assert "would install brainstorming v1.4.0" in dry.out
+        assert lockfile.get_skill("brainstorming") is None
+
+    def test_an_installed_project_skill_without_force(
+            self, boost, own_tap, tmp_path, monkeypatch):
+        repo = tmp_path / "proj"
+        (repo / ".git").mkdir(parents=True)
+        monkeypatch.chdir(repo)
+        boost("install", "brainstorming", "--local")
+        dry, live = self._both(boost, "install", "brainstorming", "--local")
+        assert live.rc == 1 and dry.rc == 1
+        assert "already installed in this project" in live.err
+        assert dry.err == live.err
+        forced = boost("install", "brainstorming", "--local", "--force",
+                       "--dry-run")
+        assert "would reinstall brainstorming" in forced.out
+
+    def test_one_installed_name_among_several_is_a_per_entry_warning(
+            self, boost, own_tap):
+        boost("install", "brainstorming")
+        names = sorted(e["name"] for e in store_catalog_skills()
+                       if e["name"] != "brainstorming")[:1]
+        assert names, "fixture tap ships only one skill"
+        dry, live = self._both(boost, "install", "brainstorming", *names)
+        assert live.rc == 1 and dry.rc == 1
+        warn = "brainstorming: brainstorming is already installed (v1.4.0)"
+        assert warn in live.err and warn in dry.err
+        assert warn not in live.out and warn not in dry.out
+        assert "would install %s" % names[0] in dry.out
+        assert lockfile.get_skill(names[0]) is not None
+
+
+def store_catalog_skills():
+    from boost_cli.core import catalog
+    return [e for e in catalog.all_entries() if e.get("kind", "skill") == "skill"]
+
+
+class TestDryRunAsksThePolicy:
+    """`install --dry-run` and `bundle --dry-run install` promised a
+    blocklisted skill with rc 0; the run refused it with rc 1."""
+
+    BLOCKED = ("policy blocks installing cowboy-coding: skill 'cowboy-coding' "
+               "is on the blocklist")
+
+    @pytest.fixture()
+    def blocked(self, boost, tapped):
+        boost("policy", "set", "blocked_skills", "cowboy-coding")
+
+    def test_install_preview_refuses_like_the_run(self, boost, blocked):
+        preview = boost("install", "--dry-run", "cowboy-coding", expect=1)
+        assert self.BLOCKED in preview.err
+        assert "would install" not in preview.out
+        run = boost("install", "cowboy-coding", expect=1)
+        assert self.BLOCKED in run.err
+
+    def test_install_preview_carries_on_past_a_refused_name(self, boost,
+                                                            blocked):
+        r = boost("install", "--dry-run", "brainstorming", "cowboy-coding",
+                  expect=1)
+        assert "would install brainstorming" in r.out
+        assert "cowboy-coding: " + self.BLOCKED in " ".join(r.err.split())
+
+    def test_bundle_preview_counts_the_refusal_like_the_run(
+            self, boost, blocked, tmp_path):
+        bf = tmp_path / "bf-block"
+        bf.write_text("skill cowboy-coding\n", encoding="utf-8")
+        preview = boost("bundle", "--dry-run", "install", bf, expect=1)
+        flat = " ".join(preview.out.split())
+        assert "bf-block:1: cowboy-coding: " + self.BLOCKED in flat
+        assert "would install 0 skills, 1 would fail" in flat
+        assert "would install cowboy-coding" not in flat
+        run = boost("bundle", "install", bf, expect=1)
+        assert ("bf-block:1: cowboy-coding: " + self.BLOCKED
+                in " ".join(run.out.split()))
+
+    def test_bundle_preview_refuses_a_blocked_dependency(self, boost, tapped,
+                                                         tmp_path):
+        # jira-integration requires commit-messages; the run fails the
+        # dependency, so the preview must count it too.
+        boost("policy", "set", "blocked_skills", "commit-messages")
+        bf = tmp_path / "bf-dep"
+        bf.write_text("skill jira-integration\n", encoding="utf-8")
+        r = boost("bundle", "--dry-run", "install", bf, expect=1)
+        flat = " ".join(r.out.split())
+        assert ("required skill commit-messages would not be installed: "
+                "policy blocks installing commit-messages: skill "
+                "'commit-messages' is on the blocklist") in flat
+        assert "would install 1 skill, 1 would fail" in flat
+        boost("bundle", "install", bf, expect=1)
+
+
+class TestPolicyRefusal:
+    def test_allowed_is_none(self, sandbox):
+        assert store.policy_refusal({"name": "x", "tap": "t"}, {}) is None
+
+    def test_blocked_names_the_violation(self, sandbox):
+        from boost_cli.core import policy
+        policy.save({**policy.load(), "blocked_skills": ["x"]})
+        assert store.policy_refusal({"name": "x", "tap": "t"}, {}) == (
+            "policy blocks installing x: skill 'x' is on the blocklist")
+        with pytest.raises(BoostError) as exc:
+            store.refuse_by_policy({"name": "x", "tap": "t"}, {})
+        assert exc.value.message == (
+            "policy blocks installing x: skill 'x' is on the blocklist")
+        assert exc.value.hint == "inspect with `boost policy list`"
+
+    def test_a_reinstall_does_not_count_against_max_skills(self, sandbox):
+        from boost_cli.core import policy
+        policy.save({**policy.load(), "max_skills": 1})
+        have = {"x": {}}
+        assert store.policy_refusal({"name": "x", "tap": "t"}, have) is None
+        assert store.policy_refusal({"name": "y", "tap": "t"}, have) == (
+            "policy blocks installing y: max_skills limit (1) reached")
+        assert store.policy_refusal({"name": "x", "tap": "t"}, have,
+                                    replaces=False) == (
+            "policy blocks installing x: max_skills limit (1) reached")
+
+    def test_install_policy_refusal_weighs_the_lock_the_run_weighs(
+            self, sandbox, monkeypatch, tmp_path):
+        from boost_cli.core import policy, projectlock
+        policy.save({**policy.load(), "max_skills": 1})
+        monkeypatch.setattr(lockfile, "installed", lambda: {"a": {}})
+        monkeypatch.setattr(projectlock, "installed",
+                            lambda base: {} if base == tmp_path else {"b": {}})
+        skill = {"name": "s", "tap": "t"}
+        full = "policy blocks installing s: max_skills limit (1) reached"
+        assert store.install_policy_refusal(skill) == full
+        assert store.install_policy_refusal(
+            skill, scope="project", base=tmp_path) is None
+        assert store.install_policy_refusal(
+            skill, scope="project", base=tmp_path / "other") == full
+        rule = {"name": "r", "tap": "t", "kind": "rule"}
+        assert store.install_policy_refusal(rule, scope="project",
+                                            base=tmp_path) == (
+            "policy blocks installing r: max_skills limit (1) reached")
+        assert store.install_policy_refusal(rule, existing={"r": 1}) is None

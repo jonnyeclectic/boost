@@ -137,3 +137,41 @@ class TestParityWithOldBehavior:
             "never write production code without a failing test",
             "always run the full suite before committing",
             "follow: write a failing test first. Watch it fail"]
+
+
+class TestProseLines:
+    def test_a_backtick_block_and_its_fences_are_dropped(self):
+        body = "# Title\n```bash\n# comment\n1. heredoc\n```\n- Always x.\n"
+        assert imperative.prose_lines(body) == ["# Title", "- Always x."]
+
+    def test_a_tilde_block_ignores_backtick_fences_inside(self):
+        body = "a\n~~~\n```\nin\n~~~\nb"
+        assert imperative.prose_lines(body) == ["a", "b"]
+
+    def test_a_block_closes_only_on_a_run_at_least_as_long(self):
+        body = "a\n````\n```\nin\n`````\nb"
+        assert imperative.prose_lines(body) == ["a", "b"]
+
+    def test_a_fence_with_an_info_string_does_not_close(self):
+        body = "a\n```\n```py\nin\n```\nb"
+        assert imperative.prose_lines(body) == ["a", "b"]
+
+    def test_an_unclosed_block_runs_to_the_end(self):
+        assert imperative.prose_lines("a\n```\nNever x.\n# h") == ["a"]
+
+    def test_up_to_three_spaces_of_indent_is_still_a_fence(self):
+        body = "a\n   ```\nin\n   ```\n    ```\nb"
+        assert imperative.prose_lines(body) == ["a", "    ```", "b"]
+
+    def test_inline_backticks_are_prose(self):
+        assert imperative.prose_lines("``x``\nb") == ["``x``", "b"]
+
+    def test_no_fences_keeps_every_line(self):
+        assert imperative.prose_lines("a\n\nb") == ["a", "", "b"]
+
+    def test_imperative_rules_skip_fenced_lines(self):
+        body = ("```bash\nnever mind this comment\n"
+                "1. not a step, a heredoc line\n```\n"
+                "- Always run the smoke test after deploy.\n")
+        assert imperative.imperative_rules(body) == [
+            "always run the smoke test after deploy"]

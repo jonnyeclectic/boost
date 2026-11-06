@@ -9,10 +9,16 @@ so the command modules count toward coverage.
 from __future__ import annotations
 
 import os
+import shutil
+import sqlite3
+import stat
 import subprocess
 import sys
+import tempfile
+import threading
 from pathlib import Path
 
+import _tapped_support
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -28,6 +34,9 @@ _START_DIR = Path.cwd()
 # `scopes.project_root` does, and by the time the guard first runs the `sandbox`
 # fixture has already pointed `$HOME` at a tempdir.
 _REAL_HOME = Path(os.environ.get("HOME") or Path.home())
+
+# Whether this Python's sqlite3 can load extensions at all; see `sandbox`.
+SQLITE_LOADS_EXTENSIONS = hasattr(sqlite3.Connection, "enable_load_extension")
 
 # A name joined into probe paths that are never read, only stat-ed. It has to
 # satisfy `util.is_safe_component` and the skill-name rule, so it cannot be a
@@ -389,6 +398,216 @@ def absolutize_source_paths(config) -> list:
     return config.source_paths
 
 
+#: Address space a mutant's test run may add on top of what it forked with.
+#: A worker forks from mutmut's ~2.3 GB parent (VmHWM, measured in a
+#: python:3.13-bookworm container) and ran at ~140 MB RSS on a local shard-5
+#: run, so 3 GiB is ample -- and four workers each capped at it still fit a
+#: 16 GB ubuntu-latest runner beside that parent.
+MUTANT_HEADROOM = 3 << 30
+
+
+def mutant_address_cap(mutant: str | None, mapped: int | None,
+                       headroom: int = MUTANT_HEADROOM) -> int | None:
+    """The ``RLIMIT_AS`` to set in a mutmut worker, or ``None`` for no cap.
+
+    mutmut bounds a mutant by CPU and wall time only. A mutant that turns a
+    loop's step into an assignment (``i += 1`` -> ``i = 1``) and appends as it
+    spins grows ~0.45 GB/s, which fills a 16 GB runner well inside the ~70 s
+    wall timeout its tests earn; GitHub then kills the whole job ("The runner
+    has received a shutdown signal") and the shard reports nothing. Capped, the
+    allocation raises ``MemoryError``, the test fails, and the mutant is
+    recorded killed like any other.
+
+    Only a run with a *mutant* active is capped -- mutmut's ``stats`` and
+    clean-test passes and an ordinary ``pytest`` are not -- and the cap is
+    relative to ``mapped``, the address space the worker already holds, since
+    a fork inherits the parent's whole mapping. ``mapped`` is ``None`` where it
+    cannot be read (no ``/proc``: macOS, which does not enforce
+    ``RLIMIT_AS`` anyway).
+    """
+    if not mutant or "__mutmut_" not in mutant or mapped is None:
+        return None
+    return mapped + headroom
+
+
+def _mapped_bytes() -> int | None:
+    """This process's virtual size from ``/proc/self/statm``, or ``None``."""
+    try:
+        pages = int(Path("/proc/self/statm").read_text(encoding="ascii").split()[0])
+    except (OSError, ValueError, IndexError):
+        return None
+    return pages * os.sysconf("SC_PAGE_SIZE")
+
+
+def _cap_mutant_memory() -> None:
+    cap = mutant_address_cap(os.environ.get("MUTANT_UNDER_TEST"),
+                             _mapped_bytes())
+    if cap is None:
+        return
+    import resource
+    _soft, hard = resource.getrlimit(resource.RLIMIT_AS)
+    if hard != resource.RLIM_INFINITY:
+        cap = min(cap, hard)
+    resource.setrlimit(resource.RLIMIT_AS, (cap, hard))
+
+
+#: Resident memory a mutant's test run may add on top of what it forked with.
+#: :data:`MUTANT_HEADROOM` alone did not keep the runner up. mutmut runs four
+#: workers, and a function's mutants sit next to each other in its run order,
+#: so the ones that make one loop endless run *together*: ``rules.block_spans``
+#: has four (its ``find`` stops advancing, or ``pos`` steps backwards) and each
+#: appends at ~0.87 GB/s. Four workers at the 3 GiB cap are 12 GiB on a 16 GB
+#: runner already holding mutmut's ~2.3 GB parent: shard 18 lost its runner as
+#: those mutants came up, on both attempts of run 41251356192, and main's run
+#: 41148140704 lost the same shard. A worker runs at ~140 MB, so 1 GiB is
+#: ample, and four of them add 4 GiB. It is a *resident* bound, not a second
+#: address-space one: a thread's malloc arena reserves 64 MB it never touches,
+#: which is why the address-space cap had to stay loose.
+MUTANT_RSS_HEADROOM = 1 << 30
+
+#: Seconds between the watchdog's reads. At 0.87 GB/s a runaway overshoots
+#: the limit by ~90 MB at most.
+MUTANT_RSS_INTERVAL = 0.1
+
+_RSS_WATCH: list[threading.Event] = []
+
+
+def mutant_rss_limit(mutant: str | None, resident: int | None,
+                     headroom: int = MUTANT_RSS_HEADROOM) -> int | None:
+    """The resident size past which a mutmut worker stops, or ``None``.
+
+    Gated exactly as :func:`mutant_address_cap` is: only a run with a mutant
+    active, never mutmut's ``stats``/clean/forced-fail passes or a plain
+    ``pytest``, and nothing where ``/proc`` cannot be read.
+    """
+    if not mutant or "__mutmut_" not in mutant or resident is None:
+        return None
+    return resident + headroom
+
+
+def _resident_bytes() -> int | None:
+    """This process's resident size from ``/proc/self/statm``, or ``None``."""
+    try:
+        pages = int(Path("/proc/self/statm").read_text(encoding="ascii").split()[1])
+    except (OSError, ValueError, IndexError):
+        return None
+    return pages * os.sysconf("SC_PAGE_SIZE")
+
+
+def watch_resident(limit: int, stop: threading.Event, mutant: str, *,
+                   read=_resident_bytes, interval: float = MUTANT_RSS_INTERVAL,
+                   end=os._exit) -> None:
+    """Poll ``read()`` until ``stop`` is set; past ``limit``, end with exit 1.
+
+    Exit 1 is what pytest returns for a failed test, so mutmut records the
+    mutant *killed* -- a mutant that cannot finish its tests without eating
+    the runner is one the tests caught. The OOM killer's SIGKILL would read as
+    ``segfault`` instead, which the mutation score does not count as killed.
+    ``os._exit`` because the main thread is the one spinning: nothing can be
+    raised into it, and the process is a throwaway fork either way.
+    """
+    while not stop.wait(interval):
+        resident = read()
+        if resident is not None and resident > limit:
+            os.write(2, ("mutant %s: resident memory %d MiB passed its %d MiB"
+                         " limit; stopping it as killed\n"
+                         % (mutant, resident >> 20, limit >> 20)).encode())
+            end(1)
+            return
+
+
+def _watch_mutant_memory() -> None:
+    mutant = os.environ.get("MUTANT_UNDER_TEST")
+    limit = mutant_rss_limit(mutant, _resident_bytes())
+    if limit is None or mutant is None:
+        return
+    stop = threading.Event()
+    _RSS_WATCH.append(stop)
+    threading.Thread(target=watch_resident, args=(limit, stop, mutant),
+                     name="mutant-rss-watch", daemon=True).start()
+
+
+# Variables that move boost's state, or an agent's, somewhere other than
+# under ``$HOME``. The `sandbox` fixture drops them per test; the session
+# backstop below drops them for the tests that never ask for it.
+_RELOCATING_ENV = ("BOOST_HOME", "BOOST_AGENTS_STORE", "CODEX_HOME",
+                   "CLAUDE_CONFIG_DIR", "CLAUDE_CODE_PLUGIN_CACHE_DIR")
+
+# Terminal geometry a test never chose. pytest imports `readline` before any
+# conftest loads (`_pytest.capture._readline_workaround`), and GNU readline,
+# which is what Linux builds link, `setenv`s LINES and COLUMNS as it starts --
+# 80x24 when there is no terminal at all. The controller's `os.environ` was
+# copied at interpreter start and never sees that, so a serial run is clean;
+# every pytest-xdist worker it spawns inherits the C environment and starts
+# with COLUMNS=80. `out.pane_width` honours an exported COLUMNS by design, so
+# each worker fitted every table to 80 columns: `list` clipped a `project:`
+# path to "project:/tmp/pytest-of…", `drift` dropped NAME, and five
+# functional tests failed on ubuntu only (macOS links libedit, which leaves
+# the environment alone). A test that wants a width sets one.
+_GEOMETRY_ENV = ("COLUMNS", "LINES")
+
+
+def _drop_inherited_geometry() -> None:
+    """Remove the :data:`_GEOMETRY_ENV` variables, from the C environment too.
+
+    ``os.environ.pop`` alone is not enough in the process readline ran in:
+    the variables were set below ``os.environ``, which never held them, so
+    the pop is a no-op and every child process still inherited LINES=24
+    (seen in the serial free-threaded canary).
+    """
+    for name in _GEOMETRY_ENV:
+        os.environ.pop(name, None)
+        os.unsetenv(name)
+
+
+_SESSION_HOME: list[Path] = []
+
+#: ``os.environ`` as ``pytest_configure`` leaves it -- the session HOME in, the
+#: git auto-maintenance setting in, no test run yet. Filled there, once per
+#: process (an xdist worker configures for itself).
+_SESSION_ENV: dict[str, str] = {}
+
+
+def _isolate_home() -> Path:
+    """Point ``$HOME`` at a throwaway directory for the whole session.
+
+    The `sandbox` fixture gives each test that asks for it a fresh home, and
+    nothing gave one to a test that does not ask. Such a test ran against the
+    developer's real ``~/.boost``: a restore test with no `sandbox` that
+    reached `lockfile` history wrote 33 throwaway snapshots into the real
+    ``~/.boost/state/lock-history``, and `_prune_history`, which keeps 50,
+    deleted as many of the oldest real ones to make room. Nothing failed, because the damage
+    landed somewhere no assertion looks.
+
+    So the floor is now a home that belongs to the run. `sandbox` still
+    replaces it per test; this only decides what a test that forgot gets. It
+    runs from `pytest_configure`, before collection imports anything, so
+    every child process inherits it too. ``USERPROFILE`` is set as well,
+    because that is what `Path.home` reads on Windows. `_REAL_HOME` was
+    captured at import, so `checkout_root` still stops at the real home.
+    """
+    if _SESSION_HOME:
+        return _SESSION_HOME[0]
+    home = Path(tempfile.mkdtemp(prefix="boost-test-home-"))
+    os.environ["HOME"] = str(home)
+    if sys.platform == "win32":
+        os.environ["USERPROFILE"] = str(home)
+    for name in _RELOCATING_ENV:
+        os.environ.pop(name, None)
+    _SESSION_HOME.append(home)
+    return home
+
+
+def pytest_unconfigure(config):
+    """Remove the session home `_isolate_home` made, if it made one."""
+    del config
+    for stop in _RSS_WATCH:
+        stop.set()
+    _RSS_WATCH.clear()
+    for home in _SESSION_HOME:
+        shutil.rmtree(home, ignore_errors=True)
+
+
 def pytest_configure(config):
     """Make mutmut's ``source_paths`` absolute before any test can chdir.
 
@@ -424,6 +643,14 @@ def pytest_configure(config):
     see its docstring.
     """
     del config
+    _isolate_home()
+    _drop_inherited_geometry()
+    _tapped_support.disable_git_auto_maintenance()
+    # What a test starts from, before any test has patched anything: the child
+    # that builds the tapped-HOME template is given this, not the live environ.
+    _SESSION_ENV.update(os.environ)
+    _cap_mutant_memory()
+    _watch_mutant_memory()
     if not os.environ.get("MUTANT_UNDER_TEST"):
         return          # not a mutmut run — nothing to normalize
     cfg = _mutmut_config()
@@ -513,6 +740,22 @@ def _repo_root_guard(request):
 
 
 @pytest.fixture(autouse=True)
+def _no_dumb_term():
+    """TERM=dumb turns color and the spinner off (output.use_color), so a
+    developer running the suite from an Emacs buffer would see every
+    fake-TTY color test fail. A test about TERM sets it itself.
+
+    Its own `MonkeyPatch`, not the `monkeypatch` fixture: requesting that
+    here moves its setup ahead of the test's, so a test's patched
+    `Path.stat` is still live when `_repo_root_guard` fingerprints in
+    teardown, and the guard crashes on it."""
+    with pytest.MonkeyPatch.context() as mp:
+        if os.environ.get("TERM") == "dumb":
+            mp.delenv("TERM")
+        yield
+
+
+@pytest.fixture(autouse=True)
 def _reset_logging():
     """Rebind the diagnostic logger to each test's sandbox HOME."""
     from boost_cli.core import logs
@@ -527,12 +770,15 @@ def _reset_ai_last_failure():
     next. Most tests never touch it (`sandbox` sets BOOST_NO_AI=1, which
     `unavailable_reason()` checks before ever reading it), but any test using
     `ai_on` that exercises a failing `ai.ask()` sets this module global with
-    nothing to unset it afterward.
+    nothing to unset it afterward. `ai._last_route` leaks the same way, and
+    would name a route in a ranking label no stubbed reply came from.
     """
     from boost_cli.core import ai
     ai._last_failure = None
+    ai._last_route = None
     yield
     ai._last_failure = None
+    ai._last_route = None
 
 
 @pytest.fixture(autouse=True)
@@ -552,9 +798,50 @@ def _reset_localembed_failure():
     localembed._fetch_error = ""
 
 
+@pytest.fixture(autouse=True)
+def _no_interpreter_ceiling():
+    """Make every interpreter one onnxruntime has a wheel for, by default.
+
+    `dense.status()` reports `no-local-wheel` instead of `no-key` on a Python
+    at or past `localembed.ONNX_WHEEL_CEILING` that lacks onnxruntime — which
+    is every leg of CI's 3.15 cell. Without this, the tests that pin the
+    `no-key` ladder and the `install_extra` wording would pass on 3.14 and
+    fail on 3.15 for the same code, turning the runner's version into an
+    input. The ceiling's own behaviour is tested by patching it back
+    (`tests/unit/test_rag_python_ceiling.py`), which is the one place the
+    interpreter is meant to matter.
+
+    Set and restored by hand, not through ``monkeypatch``: an autouse fixture
+    that requests it instantiates it ahead of the test's own patches, so its
+    undo then runs after `_repo_root_guard`'s teardown — and a test that
+    patches ``Path.stat`` has the guard fingerprinting through the patch.
+    """
+    from boost_cli.core import localembed
+    shipped = localembed.ONNX_WHEEL_CEILING
+    localembed.ONNX_WHEEL_CEILING = (99, 0)
+    yield
+    localembed.ONNX_WHEEL_CEILING = shipped
+
+
 @pytest.fixture()
 def sandbox(tmp_path, monkeypatch):
     """A fresh fake $HOME; returns its Path."""
+    return _sandbox_home(tmp_path, monkeypatch)
+
+
+def _sandbox_home(tmp_path, monkeypatch):
+    """Everything `sandbox` does, for a caller that holds its own MonkeyPatch.
+
+    A function rather than the fixture body so `sandbox_env_delta` can run it
+    and record exactly what it changes. `tapped_template` builds its HOME in a
+    child process from a hand-kept second copy of that list
+    (`_tapped_support.SANDBOX_ENV` / `SANDBOX_UNSET`), and that copy is the
+    thing that would drift: a template tapped under a looser environment than
+    the tests would hand every one of them a HOME no test-time `boost tap`
+    could produce. So `test_tapped_template.py`'s
+    `test_the_child_environment_is_what_the_sandbox_gives_a_test` compares the
+    copy with `sandbox_env_delta`, the ground truth taken from this function.
+    """
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
@@ -619,6 +906,18 @@ def sandbox(tmp_path, monkeypatch):
     # judged against their real config dir — refused locally, fine in CI.
     # Tests that mean to exercise the escape set it themselves.
     monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    # The third of the kind: `sync` and `doctor` read Claude Code's plugin
+    # records from here when it is set (core/foreign.py), so an exported one
+    # would judge every sync test against the developer's real plugins.
+    monkeypatch.delenv("CLAUDE_CODE_PLUGIN_CACHE_DIR", raising=False)
+    # ...and the one input there that no variable moves: managed settings sit
+    # at a system path, so a machine whose organization blocks or forces a
+    # plugin would judge every plugin test against that policy. A dir that
+    # does not exist reads as no policy; a test that means to exercise one
+    # points this at its own.
+    from boost_cli.core import foreign
+    monkeypatch.setattr(foreign, "managed_settings_dir",
+                        lambda: tmp_path / "no-managed-settings")
     monkeypatch.setenv("BOOST_NO_AI", "1")       # deterministic: no AI calls
     # `boost mcp` seeds the default registries on an empty machine. That is
     # seven network clones, which no test may perform as a side effect of
@@ -648,9 +947,30 @@ def sandbox(tmp_path, monkeypatch):
     # Once-per-process warnings for a cache boost could not save. A flag one
     # test left set would silence the warning in the next, so an assertion
     # that it is absent would pass for the wrong reason.
-    from boost_cli.core import catalog, complete
+    from boost_cli.core import (
+        catalog,
+        complete,
+        journal,
+        lockfile,
+        policy,
+        projectlock,
+    )
     monkeypatch.setattr(complete, "_WARNED_UNSAVED", False)
+    monkeypatch.setattr(journal, "_WARNED_UNSAVED", False)
+    monkeypatch.setattr(journal, "_WARNED_UNREADABLE", False)
+    monkeypatch.setattr(lockfile, "_WARNED_CORRUPT", False)
+    monkeypatch.setattr(lockfile, "_WARNED_UNREADABLE", False)
+    monkeypatch.setattr(policy, "_WARNED_CORRUPT", False)
+    monkeypatch.setattr(projectlock, "_WARNED_CORRUPT", set())
     monkeypatch.setattr(catalog, "_UNSAVED", set())
+    # The suite describes a machine whose sqlite3 can load extensions. A
+    # runner's Python that cannot (the macOS one) would otherwise answer
+    # every dense status with `no-extension-load` and every hint after it
+    # with that rung's, so tests that fake a backend would be judging the
+    # runner rather than the code. The probe's own tests restore it.
+    if not SQLITE_LOADS_EXTENSIONS:
+        from boost_cli.core import dense
+        monkeypatch.setattr(dense, "extension_error", lambda: None)
     return home
 
 
@@ -737,7 +1057,28 @@ def fixture_tap_src(tmp_path_factory):
     subprocess.run(
         [sys.executable, str(ROOT / "tests" / "make_fixture.py"), str(dest)],
         check=True, capture_output=True)
+    _make_objects_writable(dest)
     return dest
+
+
+def _make_objects_writable(repo: Path) -> None:
+    """Clear the read-only bit git puts on every file under ``.git/objects``.
+
+    `boost tap` of this repo is a local `git clone`, which hardlinks those
+    files, so every clone in the session shares their read-only inodes, and a
+    `copytree` of the repo copies the mode. Windows will not unlink a
+    read-only file, so a test's `shutil.rmtree(tap.path)` (an upstream or clone
+    "deleted out from under us") raised PermissionError. Run serially, test
+    order hid it: the first test whose clone went through `util.rmtree`
+    (`untap`, `update`'s cleanup) had its read-only retry chmod the shared
+    inodes, and every clone after that in the process could be deleted. Under
+    pytest-xdist each worker has its own fixture repo and its own order, and
+    seventeen tests failed across the Windows cells. Clearing the bit once here
+    gives every clone the state those tests used to inherit by luck.
+    """
+    for path in (repo / ".git" / "objects").rglob("*"):
+        if path.is_file():
+            path.chmod(path.stat().st_mode | stat.S_IWRITE)
 
 
 class _MinisignSigner:
@@ -819,10 +1160,122 @@ def signer():
     return _MinisignSigner()
 
 
+@pytest.fixture(scope="session")
+def pristine_env():
+    """A copy of the environment the session started from (see ``_SESSION_ENV``)."""
+    return dict(_SESSION_ENV)
+
+
 @pytest.fixture()
-def tapped(boost, fixture_tap_src):
-    """Sandbox with the fixture tap added. Returns the tap's source path."""
-    boost("tap", fixture_tap_src)
+def sandbox_env_delta(tmp_path, monkeypatch):
+    """What `_sandbox_home` changes in ``os.environ``: ``{name: new value or None}``.
+
+    The template's build environment (:data:`_tapped_support.SANDBOX_ENV`) is a
+    second copy of what `sandbox` sets; this is the ground truth it is compared
+    with, taken by running `_sandbox_home` itself.
+    """
+    before = dict(os.environ)
+    _sandbox_home(tmp_path, monkeypatch)
+    return {k: os.environ.get(k) for k in {*before, *os.environ}
+            if before.get(k) != os.environ.get(k)}
+
+
+@pytest.fixture(scope="session")
+def tapped_template(tmp_path_factory, fixture_tap_src, pristine_env):
+    """A HOME as ``boost tap fixture_tap_src`` leaves it, built once per worker.
+
+    ``tapped`` ran that command for every test that asked: a ``git clone``, a
+    catalog scan and a config write. Over the 1,474 tests that use it (setup
+    only, serial, two interleaved before/after pairs) the fixture body went
+    from 0.12-0.15 s to 0.032 s, and a test's whole setup, for the 882 that do
+    not also ``install``, from a 0.124 s median (0.161 mean) to 0.035 s (0.05
+    mean). The result is the same every time -- the source is a session-scoped
+    repo no test edits -- so it is built once and each test copies it
+    (:func:`restore_tapped_home`). ``installed`` still runs its ``install`` per
+    test: that is a write the test may then change, not a shared starting point.
+
+    The HOME is made by the real command in a **child process** with an
+    environment spelled out in :mod:`_tapped_support` (the sandbox's variables
+    over the session's starting environment), not in this process. This fixture
+    is first requested from inside whichever test reaches ``tapped`` first
+    (``tapped`` asks for it lazily, so mutmut never builds one), and it is then
+    cached for the worker: built in-process it saw that test's live patches --
+    a fixture stubbing ``catalog.scan_dir`` ahead of ``tapped`` cached an empty
+    catalog, and an unrelated later test failed ``0 > 0`` depending on which
+    test the scheduler dealt a worker first. A child process cannot see them.
+    There is no mutmut reason left for building in-process: mutmut never uses
+    this fixture (``tapped`` taps per test while it drives), and the clean pass
+    that does records nothing.
+
+    The result is checked before it is returned -- the tap row in
+    ``config.json``, a non-empty catalog cache, a clone whose HEAD is the commit
+    the cache describes -- and a fixture that raises is not cached as a value, so
+    a bad template fails loudly everywhere it is asked for.
+
+    Nothing in the HOME names its own location. Checked against a real tap:
+    ``config.json`` and the catalog cache carry the *source* repo's path (this
+    worker's ``fixture_tap_src``, which is why the template must be per worker),
+    and the clone's ``.git/config`` its origin URL -- no alternates, no
+    worktree paths, no symlinks, no reference to the HOME it was cloned into.
+    A change that makes the HOME self-referential fails
+    ``tests/unit/test_tapped_template.py``, not a distant test.
+
+    ``tmp_path_factory`` is per xdist worker (``.../popen-gwN``), so workers
+    never share or race on a template; each builds its own on first use.
+    """
+    return _tapped_support.build_tapped_home(
+        tmp_path_factory.mktemp("tapped-template"), fixture_tap_src,
+        pristine_env, ROOT)
+
+
+@pytest.fixture()
+def restore_tapped_home(tapped_template):
+    """A function copying the tapped template into a directory; returns it.
+
+    See :func:`_tapped_support.copy_template` for what the copy keeps (links,
+    file times) and what it cannot (git's index stat data).
+    """
+    def restore(dest):
+        return _tapped_support.copy_template(tapped_template, dest)
+    return restore
+
+
+@pytest.fixture()
+def tapped(request, boost, sandbox, fixture_tap_src):
+    """Sandbox with the fixture tap added. Returns the tap's source path.
+
+    A copy of ``tapped_template`` rather than a ``boost tap`` per test -- except
+    in two cases that run the real command, as this fixture did before the
+    template existed:
+
+    * **mutmut is driving the run** (:func:`_tapped_support.under_mutmut`).
+      mutmut maps a mutant to the tests that reached its function in the stats
+      pass, and hands a pass's hits to the one test whose teardown comes next.
+      A copy reaches none of ``registry.add``, ``catalog.rebuild_tap`` or
+      ``gitutil.clone_shallow``, so behind the template those mutants would
+      keep one ``tapped`` test instead of ~117 unit ones, and any a downstream
+      reader (search, list, info) alone caught could survive. The mutation gate
+      is a kill-count floor, so the speed-up stays out of its way.
+    * **the HOME already holds something.** ``boost tap`` *adds a row* to
+      whatever ``config.json`` is there, and a copy would overwrite it, so a
+      test that seeds the HOME before asking for ``tapped`` keeps the old
+      behaviour.
+
+    The template is requested from inside the branch that uses it, not named in
+    the signature: a fixture in the signature is built whether or not the body
+    reaches for it, and under mutmut that would tap a template nothing reads,
+    in a run where the tap is the code under mutation.
+    """
+    if _tapped_support.under_mutmut() or any(sandbox.iterdir()):
+        boost("tap", fixture_tap_src)
+        return fixture_tap_src
+    from boost_cli.core import paths
+    # Only the copy lands files at a place it chose, so only it can miss: the
+    # real tap goes wherever boost resolves, as it always did.
+    assert paths.boost_home() == sandbox / ".boost", (
+        "a copied tap lands under the sandbox HOME, but boost state resolves"
+        " to %s -- BOOST_HOME was set before `tapped` ran" % paths.boost_home())
+    request.getfixturevalue("restore_tapped_home")(sandbox)
     return fixture_tap_src
 
 
@@ -856,6 +1309,43 @@ def rival_tap(boost, tapped, tmp_path):
     run("git", "commit", "-qm", "rival skills")
     boost("tap", root)
     return "rival-tap"
+
+
+@pytest.fixture()
+def claude_plugin(sandbox):
+    """Make an enabled Claude Code plugin ship a skill: ``claude_plugin(name)``.
+
+    A copy of the store's ``name`` unless ``body`` is given, laid out the way
+    Claude Code installs a user-scope plugin: enabled in ``settings.json``,
+    listed in ``installed_plugins.json`` (v2), and with no ``plugin.json``, so
+    the default ``skills/`` scan applies. Returns the plugin's skill dir.
+    Calls with different plugin ids install the plugins side by side.
+    """
+    import json
+    import shutil
+
+    from boost_cli.core import paths
+
+    def make(skill="brainstorming", body=None, pid="eight-backend@eight"):
+        name, market = pid.split("@")
+        claude = paths.home() / ".claude"
+        inst = claude / "plugins" / "cache" / market / name / "abc"
+        where = inst / "skills" / skill
+        if body is None:
+            shutil.copytree(paths.store_dir() / skill, where)
+        else:
+            where.mkdir(parents=True)
+            (where / "SKILL.md").write_text(body, encoding="utf-8")
+        for f, key, value, empty in (
+                (claude / "settings.json", "enabledPlugins", True, {}),
+                (claude / "plugins" / "installed_plugins.json", "plugins",
+                 [{"scope": "user", "installPath": str(inst)}], {"version": 2})):
+            data = json.loads(f.read_text(encoding="utf-8")) if f.exists() else empty
+            data.setdefault(key, {})[pid] = value
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_text(json.dumps(data), encoding="utf-8")
+        return where
+    return make
 
 
 @pytest.fixture()

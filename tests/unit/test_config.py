@@ -6,8 +6,10 @@ from __future__ import annotations
 import copy
 import json
 import os
+import re
 import shutil
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -35,7 +37,7 @@ class TestLoadDefaults:
         assert cfg["ai"]["author_model"] == "claude-sonnet-5"
         assert cfg["serve"]["port"] == 8787
         assert cfg["policy_enforce"] is True
-        assert cfg["telemetry"] is False
+        assert "telemetry" not in cfg   # retired: nothing read it
         assert cfg["taps"] == []
         # Order is load-bearing: agents are iterated (and linked/reported) in
         # declaration order, and each new agent is appended so an existing
@@ -201,9 +203,9 @@ class TestCaching:
         assert config.get("serve.port") == 22222
 
     def test_save_visible_to_get(self, sandbox):
-        assert config.get("telemetry") is False  # warm the cache
-        config.save({"telemetry": True})
-        assert config.get("telemetry") is True
+        assert config.get("policy_enforce") is True  # warm the cache
+        config.save({"policy_enforce": False})
+        assert config.get("policy_enforce") is False
 
     def test_get_returns_isolated_container(self, sandbox):
         agents = config.get("agents")
@@ -249,9 +251,32 @@ class TestSetValue:
         config.set_value("serve.port", "3")
         assert config.get("serve.port") == 3
 
-    def test_json_list(self, sandbox):
-        config.set_value("taps", "[1, 2]")
-        assert config.get("taps") == [1, 2]
+    @pytest.mark.parametrize("key", ["taps", "taps.0.pin"])
+    def test_managed_key_refused_before_write(self, sandbox, key):
+        # `config set taps foo` once replaced the tap registry with a value
+        # `_read_file` rejects, so every tap vanished behind a check mark.
+        config.save({"taps": [{"name": "a/b", "url": "x", "curated": False}]})
+        before = paths.config_path().read_bytes()
+        with pytest.raises(BoostError) as exc:
+            config.set_value(key, "foo")
+        assert str(exc.value) == (
+            "config key %r is managed by `boost tap` — `config set` would "
+            "rewrite the tap registry" % key)
+        assert exc.value.hint == ("add or remove registries with `boost tap "
+                                  "<spec>` / `boost untap <name>`")
+        assert paths.config_path().read_bytes() == before
+
+    @pytest.mark.parametrize("key", ["taps", "taps.0"])
+    def test_managed_key_unset_refused(self, sandbox, key):
+        config.save({"taps": [{"name": "a/b", "url": "x", "curated": False}]})
+        with pytest.raises(BoostError, match="`config unset` would"):
+            config.unset(key)
+        assert config.get("taps") == [{"name": "a/b", "url": "x",
+                                       "curated": False}]
+
+    def test_key_merely_starting_with_taps_is_not_managed(self, sandbox):
+        config.set_value("tapsx", "1")
+        assert config.get("tapsx") == 1
 
     def test_plain_string(self, sandbox):
         config.set_value("ai.model", "plain")
@@ -272,6 +297,97 @@ class TestSetValue:
             config.set_value("ai.model.sub", "1")
         assert "'model'" in str(e.value)
         assert "not a section" in str(e.value)
+
+
+class TestUnknownKeyWarning:
+    """`config set` saves a key boost does not know (integrations invent
+    their own), but a typo under a section boost owns used to print a check
+    mark and change nothing. The warning keeps the write and names the key
+    that was probably meant."""
+
+    def test_a_known_key_draws_no_warning(self, sandbox):
+        assert config.unknown_key_warning("agents.claude-code.enabled") is None
+        assert config.unknown_key_warning("serve.port") is None
+
+    def test_an_invented_top_level_key_draws_no_warning(self, sandbox):
+        # The documented lenient path: integrations write their own sections.
+        assert config.unknown_key_warning("brand.new.key") is None
+        assert config.unknown_key_warning("myplugin") is None
+
+    @pytest.mark.parametrize("key", ["telemetry", "telemetry.x"])
+    def test_a_retired_key_says_it_does_nothing(self, sandbox, key):
+        assert config.unknown_key_warning(key) == (
+            "%r has no effect — boost collects no telemetry, so nothing "
+            "reads this key (saved anyway)" % key)
+        assert "telemetry" not in config.DEFAULTS
+        assert config.spec_for(key) == typedvalue.ANY
+
+    def test_an_old_file_holding_a_retired_key_still_loads(self, sandbox):
+        paths.ensure_dirs()
+        paths.config_path().write_text('{"telemetry": false}',
+                                       encoding="utf-8")
+        assert config.check() is None
+        assert config.get("telemetry") is False
+        assert config.get("ai.enabled") is True
+
+    def test_every_default_section_has_a_reader(self):
+        # A DEFAULTS key nothing reads is a setting that reports success and
+        # does nothing — `telemetry` was one for releases.
+        pkg = Path(config.__file__).resolve().parents[1]
+        text = "\n".join(p.read_text(encoding="utf-8")
+                         for p in pkg.rglob("*.py") if p.name != "config.py")
+        for key in config.DEFAULTS:
+            pat = r"""get(?:_int)?\(\s*["']%s[."']|\[\s*["']%s["']\s*\]""" % (
+                re.escape(key), re.escape(key))
+            assert re.search(pat, text), "nothing reads config key %r" % key
+
+    def test_a_typo_under_a_known_section_names_the_close_key(self, sandbox):
+        w = config.unknown_key_warning("serve.prot")
+        assert w is not None
+        assert "'serve.prot'" in w
+        assert "did you mean 'serve.port'?" in w
+
+    def test_an_unknown_key_with_no_close_match_still_warns(self, sandbox):
+        w = config.unknown_key_warning("logging.zzzzzz")
+        assert w is not None
+        assert "'logging.zzzzzz'" in w
+        assert "did you mean" not in w
+
+    def test_a_typo_in_an_agent_setting(self, sandbox):
+        w = config.unknown_key_warning("agents.claude-code.enable")
+        assert w is not None
+        assert "did you mean 'agents.claude-code.enabled'?" in w
+
+    def test_an_agent_setting_another_agent_declares_is_known(self, sandbox):
+        # known_agents reads links_skills for every agent, though DEFAULTS
+        # only spells it out for some — so it is not a typo on claude-code.
+        assert config.unknown_key_warning(
+            "agents.claude-code.links_skills") is None
+
+    def test_a_typo_in_an_agent_name(self, sandbox):
+        w = config.unknown_key_warning("agents.claud-code.enabled")
+        assert w is not None
+        assert "did you mean 'agents.claude-code.enabled'?" in w
+
+    def test_a_new_agent_without_a_dir_is_named(self, sandbox):
+        config.set_value("agents.zed.enabled", "true")
+        w = config.unknown_key_warning("agents.zed.enabled")
+        assert w is not None
+        assert "agents.zed.dir" in w
+
+    def test_a_new_agent_with_a_dir_draws_no_warning(self, sandbox):
+        config.set_value("agents.zed.dir", "~/.zed/skills")
+        assert config.unknown_key_warning("agents.zed.dir") is None
+        config.set_value("agents.zed.enabled", "false")
+        assert config.unknown_key_warning("agents.zed.enabled") is None
+
+    def test_agent_keys_match_what_known_agents_reads(self, sandbox):
+        # The list the warning checks against must be the one agents.py
+        # actually consumes, or a real setting would be called a typo.
+        # `store_alias` is derived from the filesystem, not a setting.
+        assert set(config.AGENT_KEYS) == set(
+            agents.known_agents()["claude-code"]) - set(agents.DERIVED_KEYS)
+        assert set(agents.FLAG_DEFAULTS) < set(config.AGENT_KEYS)
 
 
 class TestUnset:
@@ -441,7 +557,7 @@ class TestRegistryCategories:
 
 class TestSpecFor:
     def test_a_key_is_typed_by_its_default(self, sandbox):
-        assert config.spec_for("telemetry") == typedvalue.BOOL
+        assert config.spec_for("workflows_as_skills") == typedvalue.BOOL
         assert config.spec_for("policy_enforce") == typedvalue.BOOL
         assert config.spec_for("serve.port") == typedvalue.INT
         assert config.spec_for("taps") == typedvalue.LIST
@@ -465,16 +581,16 @@ class TestSpecFor:
 
 class TestSetValueIsTyped:
     def test_a_boolean_key_reads_the_word_the_user_typed(self, sandbox):
-        config.set_value("telemetry", "no")
-        assert config.get("telemetry") is False
-        config.set_value("telemetry", "on")
-        assert config.get("telemetry") is True
+        config.set_value("policy_enforce", "no")
+        assert config.get("policy_enforce") is False
+        config.set_value("policy_enforce", "on")
+        assert config.get("policy_enforce") is True
 
     def test_a_bad_boolean_is_refused_and_nothing_is_written(self, sandbox):
         with pytest.raises(typedvalue.ValueTypeError):
-            config.set_value("telemetry", "maybe")
+            config.set_value("policy_enforce", "maybe")
         assert not paths.config_path().exists()
-        assert config.get("telemetry") is False   # still the default
+        assert config.get("policy_enforce") is True   # still the default
 
     def test_a_bad_number_is_refused(self, sandbox):
         with pytest.raises(typedvalue.ValueTypeError) as e:
@@ -610,14 +726,6 @@ class TestCheckReportsTheRawState:
         err = config.check()
         assert err.startswith(str(paths.config_path()) + ": not valid UTF-8")
 
-    def test_unlisted_clones_are_the_directories_under_repos(self, sandbox):
-        assert config.unlisted_clones() == []           # no repos/ at all
-        paths.ensure_dirs()
-        for name in ("b__two", "a__one"):
-            (paths.repos_dir() / name).mkdir()
-        (paths.repos_dir() / "stray.txt").write_text("x", encoding="utf-8")
-        assert config.unlisted_clones() == ["a__one", "b__two"]
-
 
 # `boost tap` appends to `taps`, and crashed with AttributeError on every one of
 # these. Meanwhile `first_run` read the truthy ones as a configured machine and
@@ -678,10 +786,13 @@ class TestTapsThatIsNotAList:
         quarantined = paths.config_path().with_name("config.json.corrupt")
         assert quarantined.read_text(encoding="utf-8") == original
         fresh = json.loads(paths.config_path().read_text(encoding="utf-8"))
-        assert fresh["taps"] == [] and fresh["ai"]["enabled"] is False
+        # Overrides only: the fresh file holds the one key that was set, not
+        # a `taps: []` (or any other default) copied in from DEFAULTS.
+        assert fresh == {"ai": {"enabled": False}}
         assert config.check() is None
 
     def test_unset_reads_no_overrides_from_it(self, sandbox):
-        self._write('{"taps": "x"}')
-        assert config.unset("taps") is False
-        assert paths.config_path().read_text(encoding="utf-8") == '{"taps": "x"}'
+        self._write('{"taps": "x", "custom": 1}')
+        assert config.unset("custom") is False
+        assert (paths.config_path().read_text(encoding="utf-8")
+                == '{"taps": "x", "custom": 1}')

@@ -29,10 +29,12 @@ path. Old git without `--sparse` is, and falls back to a plain shallow clone.
 from __future__ import annotations
 
 import subprocess
+import sys
 
 import pytest
 
 from boost_cli.core import catalog, gitutil
+from boost_cli.errors import BoostError
 
 
 def _repo_with_asset(dest, extra: str | None = None):
@@ -53,7 +55,7 @@ def _repo_with_asset(dest, extra: str | None = None):
 
 
 def _clone_argv(monkeypatch) -> dict:
-    """Run clone_shallow with subprocess.run stubbed; return the argv it built."""
+    """Run clone_shallow with gitutil._exec stubbed; return the argv it built."""
     seen: dict = {}
 
     def fake_run(argv, **kwargs):
@@ -62,7 +64,7 @@ def _clone_argv(monkeypatch) -> dict:
         return subprocess.CompletedProcess(argv, 0, "", "")
 
     monkeypatch.setattr(gitutil, "has_git", lambda: True)
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(gitutil, "_exec", fake_run)
     return seen
 
 
@@ -160,7 +162,7 @@ class TestOldGitFallsBackToAFullClone:
             return subprocess.CompletedProcess(argv, 0, "", "")
 
         monkeypatch.setattr(gitutil, "has_git", lambda: True)
-        monkeypatch.setattr(subprocess, "run", fake_run)
+        monkeypatch.setattr(gitutil, "_exec", fake_run)
 
         gitutil.clone_shallow("https://example.test/r.git", tmp_path / "d")
 
@@ -219,19 +221,63 @@ class TestMaterialize:
         gitutil.materialize(tmp_path / "repo", "skills/foo")
 
         argv = seen["argv"]
-        assert "sparse-checkout" in argv
-        assert "add" in argv, "materialize must not clobber the existing cone"
-        assert "/skills/foo/*" in argv
+        add = next(c for c in seen["calls"] if "sparse-checkout" in c)
+        assert "add" in add, "materialize must not clobber the existing cone"
+        assert "/skills/foo/*" in add
+        assert argv[-3:] == ["ls-files", "-t", "-z"], (
+            "the widened dir must be checked before anything copies it")
 
-    def test_materializing_the_repo_root_is_a_noop(self, monkeypatch, tmp_path):
-        """rel_dir "." means the whole repo is the skill; nothing to narrow."""
+    @pytest.mark.parametrize("rel", [".", "", "/"])
+    def test_materializing_the_repo_root_widens_to_everything(
+            self, monkeypatch, tmp_path, rel):
+        """rel_dir "." means the whole repo is the skill, so the whole repo is
+        checked out. This was a no-op, and a sparse clone's root holds only
+        Markdown: the skill's scripts/ installed as nothing."""
         seen = _clone_argv(monkeypatch)
         monkeypatch.setattr(gitutil, "is_sparse", lambda repo: True)
-        (tmp_path / "repo" / ".git").mkdir(parents=True)
+        repo = tmp_path / "repo"
+        (repo / ".git").mkdir(parents=True)
+
+        gitutil.materialize(repo, rel)
+
+        assert seen["calls"] == [
+            ["git", "-c", "core.precomposeunicode=false", "-C", str(repo),
+             "sparse-checkout", "add", "/*"],
+            ["git", "-c", "core.precomposeunicode=false", "-C", str(repo),
+             "ls-files", "-t", "-z"]]
+
+    def test_a_root_already_widened_costs_no_subprocess(self, monkeypatch,
+                                                        tmp_path):
+        seen = _clone_argv(monkeypatch)
+        monkeypatch.setattr(gitutil, "is_sparse", lambda repo: True)
+        info = tmp_path / "repo" / ".git" / "info"
+        info.mkdir(parents=True)
+        (info / "sparse-checkout").write_text("*.md\n/*\n", encoding="utf-8")
 
         gitutil.materialize(tmp_path / "repo", ".")
 
-        assert not [c for c in seen.get("calls", []) if "sparse-checkout" in c]
+        assert "calls" not in seen
+
+    def test_a_root_left_partly_skip_worktree_is_refused(self, monkeypatch,
+                                                         tmp_path):
+        """Every path belongs to the root, so any one left out fails it."""
+        monkeypatch.setattr(gitutil, "is_sparse", lambda repo: True)
+        monkeypatch.setattr(gitutil, "has_git", lambda: True)
+        repo = tmp_path / "tap"
+        (repo / ".git").mkdir(parents=True)
+
+        def fake(argv, **_k):
+            out = "H SKILL.md\0S scripts/run.sh\0S z/deep.py\0" \
+                if "ls-files" in argv else ""
+            return subprocess.CompletedProcess(argv, 0, out, "")
+        monkeypatch.setattr(gitutil, "_exec", fake)
+
+        with pytest.raises(BoostError) as err:
+            gitutil.materialize(repo, ".")
+        assert err.value.message == (
+            "could not check out 2 files of the repo root from the tap tap "
+            "(scripts/run.sh, z/deep.py), so installing it would copy a "
+            "partial skill")
 
     def test_materialize_is_a_noop_on_a_non_sparse_clone(self, monkeypatch, tmp_path):
         """Clones made before this change have every file already."""
@@ -285,6 +331,40 @@ class TestSparseCloneAgainstARealRepo:
 
         assert not (clone / "skills" / "other" / "scripts" / "run.js").exists()
 
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="Windows forbids * ? \\ in file names")
+    def test_a_dir_named_with_glob_characters_is_fetched_whole(self, tmp_path):
+        """``glob[1]`` added verbatim is a character class matching ``glob1``:
+        the real dir never checked out and its scripts installed as nothing."""
+        src = tmp_path / "src"
+        for name in ("glob[1]", "a*b?c\\d"):
+            d = src / "skills" / name
+            (d / "scripts").mkdir(parents=True)
+            (d / "SKILL.md").write_text("---\nname: g\ndescription: g\n---\n",
+                                        encoding="utf-8")
+            (d / "scripts" / "run.sh").write_text("echo\n", encoding="utf-8")
+        (src / "skills" / "glob1" / "scripts").mkdir(parents=True)
+        (src / "skills" / "glob1" / "scripts" / "decoy.sh").write_text(
+            "echo\n", encoding="utf-8")
+        for argv in (["init", "-q", "-b", "main"], ["add", "-A"],
+                     ["-c", "user.email=t@t", "-c", "user.name=t",
+                      "commit", "-qm", "init"]):
+            subprocess.run(["git", *argv], cwd=src, check=True,
+                           capture_output=True)
+        clone = tmp_path / "c"
+        gitutil.clone_shallow(str(src), clone)
+
+        gitutil.materialize(clone, "skills/glob[1]")
+        gitutil.materialize(clone, "skills/a*b?c\\d/")
+
+        assert (clone / "skills" / "glob[1]" / "scripts" / "run.sh").is_file()
+        assert (clone / "skills" / "a*b?c\\d" / "scripts" / "run.sh").is_file()
+        assert not (clone / "skills" / "glob1" / "scripts" / "decoy.sh").exists()
+        cone = (clone / ".git" / "info" / "sparse-checkout").read_text(
+            encoding="utf-8").splitlines()
+        assert "/skills/glob\\[1\\]/*" in cone
+        assert "/skills/a\\*b\\?c\\\\d/*" in cone
+
     def test_pull_preserves_the_sparse_checkout(self, tmp_path, fixture_tap_src):
         clone = tmp_path / "c"
         gitutil.clone_shallow(str(fixture_tap_src), clone)
@@ -293,3 +373,299 @@ class TestSparseCloneAgainstARealRepo:
 
         assert gitutil.is_sparse(clone)
         assert list(clone.rglob("SKILL.md")), "update must not empty the checkout"
+
+
+class TestSparseEscape:
+    """A literal path spelled in git's no-cone (gitignore) pattern syntax."""
+
+    @pytest.mark.parametrize(("rel", "want"), [
+        ("skills/plain-name", "skills/plain-name"),
+        ("glob[1]", "glob\\[1\\]"),
+        ("a*b?c", "a\\*b\\?c"),
+        ("back\\slash", "back\\\\slash"),
+        ("!bang/#hash", "!bang/#hash"),
+        ("trail  ", "trail\\ \\ "),
+        ("mid dle", "mid dle"),
+    ])
+    def test_escapes_only_what_git_reads_as_special(self, rel, want):
+        assert gitutil.sparse_escape(rel) == want
+
+    def test_an_escaped_trailing_space_survives_reading_the_cone(self,
+                                                                 tmp_path):
+        info = tmp_path / ".git" / "info"
+        info.mkdir(parents=True)
+        (info / "sparse-checkout").write_text(
+            "  /a\\ \n/b  \r\n# note\n\n", encoding="utf-8")
+        assert gitutil._sparse_list(tmp_path) == {"/a\\ ", "/b"}
+
+
+class TestMaterializePaths:
+    """A skill's links into the rest of the tap: each target, as a file and
+    as a dir, in one `add`."""
+
+    def _repo(self, tmp_path, have=""):
+        repo = tmp_path / "repo"
+        (repo / ".git" / "info").mkdir(parents=True)
+        (repo / ".git" / "info" / "sparse-checkout").write_text(
+            have, encoding="utf-8")
+        return repo
+
+    def test_adds_each_path_as_file_and_dir_in_one_call(self, monkeypatch,
+                                                        tmp_path):
+        seen = _clone_argv(monkeypatch)
+        monkeypatch.setattr(gitutil, "is_sparse", lambda repo: True)
+        repo = self._repo(tmp_path)
+        gitutil.materialize_paths(repo, ["/shared/helper.py", "lib", ".", ""])
+        ls = ["git", "-c", "core.precomposeunicode=false", "-C", str(repo),
+              "ls-files", "-t", "-z"]
+        assert seen["calls"] == [[
+            "git", "-c", "core.precomposeunicode=false", "-C", str(repo),
+            "sparse-checkout", "add", "/shared/helper.py", "/shared/helper.py/*", "/lib", "/lib/*"],
+            ls, ls]
+
+    def test_a_target_left_skip_worktree_is_refused(self, monkeypatch,
+                                                    tmp_path):
+        """A file target matches by its own path, a dir by its prefix; a
+        sibling that only shares the prefix's spelling is not it."""
+        monkeypatch.setattr(gitutil, "is_sparse", lambda repo: True)
+        monkeypatch.setattr(gitutil, "has_git", lambda: True)
+
+        def fake(argv, **_k):
+            out = ("S shared/helper.py\0S lib/x.sh\0S library/y.sh\0"
+                   if "ls-files" in argv else "")
+            return subprocess.CompletedProcess(argv, 0, out, "")
+        monkeypatch.setattr(gitutil, "_exec", fake)
+        repo = self._repo(tmp_path)
+
+        with pytest.raises(BoostError) as err:
+            gitutil.materialize_paths(repo, ["shared/helper.py"])
+        assert err.value.message.startswith(
+            "could not check out 1 file of shared/helper.py from the repo tap "
+            "(shared/helper.py)")
+        with pytest.raises(BoostError) as err:
+            gitutil.materialize_paths(repo, ["lib"])
+        assert "1 file of lib from the repo tap (lib/x.sh)" in err.value.message
+
+    def test_patterns_already_present_are_not_added_again(self, monkeypatch,
+                                                          tmp_path):
+        seen = _clone_argv(monkeypatch)
+        monkeypatch.setattr(gitutil, "is_sparse", lambda repo: True)
+        repo = self._repo(tmp_path, "*.md\n/lib\n/lib/*\n")
+        gitutil.materialize_paths(repo, ["lib"])
+        assert "calls" not in seen
+        gitutil.materialize_paths(repo, ["lib", "x"])
+        assert seen["calls"][0][-2:] == ["/x", "/x/*"]
+        assert "/lib" not in seen["calls"][0]
+
+    def test_each_path_is_escaped_as_a_literal(self, monkeypatch, tmp_path):
+        seen = _clone_argv(monkeypatch)
+        monkeypatch.setattr(gitutil, "is_sparse", lambda repo: True)
+        repo = self._repo(tmp_path, "/x\\[1\\]\n/x\\[1\\]/*\n")
+        gitutil.materialize_paths(repo, ["x[1]"])
+        assert "calls" not in seen, "an escaped pattern must count as present"
+        gitutil.materialize_paths(repo, ["s/h?.py"])
+        assert seen["calls"][:1] == [[
+            "git", "-c", "core.precomposeunicode=false", "-C", str(repo),
+            "sparse-checkout", "add", "/s/h\\?.py", "/s/h\\?.py/*"]]
+
+    def test_a_full_clone_is_left_alone(self, monkeypatch, tmp_path):
+        seen = _clone_argv(monkeypatch)
+        monkeypatch.setattr(gitutil, "is_sparse", lambda repo: False)
+        gitutil.materialize_paths(self._repo(tmp_path), ["x"])
+        assert "calls" not in seen
+
+    def test_a_failed_fetch_names_the_paths_and_the_network(self, monkeypatch,
+                                                            tmp_path):
+        monkeypatch.setattr(gitutil, "is_sparse", lambda repo: True)
+
+        def boom(*_a, **_k):
+            raise BoostError("unable to access")
+        monkeypatch.setattr(gitutil, "run", boom)
+        with pytest.raises(BoostError) as err:
+            gitutil.materialize_paths(self._repo(tmp_path), ["a", "b"])
+        assert err.value.message == ("could not fetch a, b from the repo tap: "
+                                     "unable to access")
+        assert err.value.hint == ("this needs network — the tap stores only "
+                                  "Markdown locally")
+
+
+class TestSparseLock:
+    """git fails `sparse-checkout add` outright on its own lock file: 40
+    parallel installs from one tap lost one, and a killed git's leftover
+    lock failed every later install from that tap behind a "needs network"
+    hint, though the tap was a local path."""
+
+    BUSY = ("git sparse-checkout failed: fatal: Unable to create "
+            "'/x/.git/info/sparse-checkout.lock': File exists.")
+
+    def _repo(self, tmp_path):
+        repo = tmp_path / "repo"
+        (repo / ".git" / "info").mkdir(parents=True)
+        (repo / ".git" / "info" / "sparse-checkout").write_text(
+            "*.md\n", encoding="utf-8")
+        return repo
+
+    def _git(self, monkeypatch, *errors):
+        """Stub `run` to raise ``errors`` in turn, then succeed."""
+        calls: list = []
+        queue = list(errors)
+
+        def fake(argv, **_k):
+            calls.append(argv)
+            if queue:
+                raise BoostError(queue.pop(0))
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        monkeypatch.setattr(gitutil, "is_sparse", lambda repo: True)
+        monkeypatch.setattr(gitutil, "run", fake)
+        return calls
+
+    def test_a_stale_git_lock_is_removed_and_the_add_retried(self, monkeypatch,
+                                                             tmp_path):
+        repo = self._repo(tmp_path)
+        stale = repo / ".git" / "info" / "sparse-checkout.lock"
+        stale.write_text("", encoding="utf-8")
+        calls = self._git(monkeypatch, self.BUSY)
+        gitutil.materialize(repo, "skills/a")
+        add = ["-c", "core.precomposeunicode=false", "-C", str(repo),
+               "sparse-checkout", "add", "/skills/a/*"]
+        verify = ["-c", "core.precomposeunicode=false", "-C", str(repo),
+                  "ls-files", "-t", "-z"]
+        assert calls == [add, add, verify]
+        assert not stale.exists()
+
+    def test_a_lock_that_comes_back_says_so_not_network(self, monkeypatch,
+                                                        tmp_path):
+        repo = self._repo(tmp_path)
+        calls = self._git(monkeypatch, self.BUSY, self.BUSY)
+        with pytest.raises(BoostError) as err:
+            gitutil.materialize(repo, "skills/a")
+        assert len(calls) == 2
+        assert err.value.message == ("could not fetch skills/a from the repo "
+                                     "tap: " + self.BUSY)
+        # The lock git names, not one boost reconstructs: git's is the path
+        # that exists (a /var/folders HOME resolves to /private/var).
+        assert err.value.hint == (
+            "another git process is working in this tap's clone; if none is, "
+            "remove /x/.git/info/sparse-checkout.lock")
+
+    def test_a_lock_named_without_file_exists_is_not_retried(self, monkeypatch,
+                                                              tmp_path):
+        repo = self._repo(tmp_path)
+        calls = self._git(monkeypatch, "fatal: could not open "
+                          "'/x/.git/info/sparse-checkout.lock': Permission denied")
+        with pytest.raises(BoostError) as err:
+            gitutil.materialize(repo, "skills/a")
+        assert len(calls) == 1
+        assert err.value.hint is None
+
+    def test_another_failure_is_not_retried(self, monkeypatch, tmp_path):
+        repo = self._repo(tmp_path)
+        calls = self._git(monkeypatch, "git sparse-checkout failed: fatal: "
+                          "Could not read from remote repository.")
+        with pytest.raises(BoostError) as err:
+            gitutil.materialize_paths(repo, ["lib"])
+        assert len(calls) == 1
+        assert err.value.hint == gitutil.NETWORK_HINT
+
+    @pytest.mark.parametrize("text", [
+        "fatal: unable to access 'https://x/': SSL", "Could not resolve host: x",
+        "failed to connect to x", "Connection reset by peer",
+        "git fetch timed out after 300s", "network is unreachable"])
+    def test_transport_failures_name_the_network(self, monkeypatch, tmp_path,
+                                                 text):
+        repo = self._repo(tmp_path)
+        self._git(monkeypatch, text)
+        with pytest.raises(BoostError) as err:
+            gitutil.materialize(repo, "skills/a")
+        assert err.value.hint == gitutil.NETWORK_HINT
+
+    def test_an_unrecognised_failure_blames_nothing(self, monkeypatch, tmp_path):
+        repo = self._repo(tmp_path)
+        self._git(monkeypatch, "fatal: bad object deadbeef")
+        with pytest.raises(BoostError) as err:
+            gitutil.materialize(repo, "skills/a")
+        assert err.value.hint is None
+        assert err.value.message == ("could not fetch skills/a from the repo "
+                                     "tap: fatal: bad object deadbeef")
+
+    def test_the_cone_is_reread_inside_the_lock(self, monkeypatch, tmp_path):
+        repo = self._repo(tmp_path)
+        (repo / ".git" / "info" / "sparse-checkout").write_text(
+            "*.md\n/skills/a/*\n", encoding="utf-8")
+        calls = self._git(monkeypatch)
+        gitutil._sparse_add(repo, ["/skills/a/*", "/skills/b/*"], "x")
+        assert calls == [["-c", "core.precomposeunicode=false", "-C",
+                          str(repo), "sparse-checkout", "add", "/skills/b/*"]]
+        calls.clear()
+        gitutil._sparse_add(repo, ["/skills/a/*"], "x")
+        assert calls == []
+
+    def test_waits_on_boost_s_own_lock(self, monkeypatch, tmp_path):
+        from boost_cli.core import util
+        repo = self._repo(tmp_path)
+        self._git(monkeypatch)
+        monkeypatch.setattr(gitutil, "SPARSE_LOCK_TIMEOUT", 0)
+        with util.file_lock(repo / ".git" / "boost-sparse.lock"), \
+                pytest.raises(BoostError, match=r"^another boost process has "
+                              r"held the repo tap's checkout for over 0s$"):
+            gitutil.materialize(repo, "skills/a")
+
+    def test_set_cone_takes_the_same_lock(self, monkeypatch, tmp_path):
+        # `_sparse_add` deletes a sparse-checkout.lock it finds while holding
+        # boost's lock, so a `set` (boost compact) outside it could lose its
+        # live git lock to a concurrent install.
+        from boost_cli.core import util
+        repo = self._repo(tmp_path)
+        calls = self._git(monkeypatch)
+        monkeypatch.setattr(gitutil, "SPARSE_LOCK_TIMEOUT", 0)
+        with util.file_lock(repo / ".git" / "boost-sparse.lock"), \
+                pytest.raises(BoostError, match=r"^another boost process has "
+                              r"held the repo tap's checkout for over 0s$"):
+            gitutil.set_sparse_cone(repo, ("*.md",))
+        assert calls == []
+        gitutil.set_sparse_cone(repo, ("*.md",))
+        assert calls == [["-C", str(repo), "sparse-checkout", "set",
+                          "--no-cone", "*.md"]]
+
+    def test_a_gitfile_clone_gets_git_s_error_not_a_lock_crash(
+            self, monkeypatch, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").write_text("gitdir: /nowhere\n", encoding="utf-8")
+        monkeypatch.setattr(gitutil, "_sparse_list", lambda r: set())
+        calls = self._git(monkeypatch, "fatal: not a git repository")
+        with pytest.raises(BoostError) as err:
+            gitutil._sparse_add(repo, ["/skills/a/*"], "skills/a")
+        assert len(calls) == 1
+        assert err.value.message == ("could not fetch skills/a from the repo "
+                                     "tap: fatal: not a git repository")
+
+    def test_against_real_git_a_leftover_lock_no_longer_blocks(self, tmp_path):
+        src = _repo_with_asset(tmp_path / "src")
+        clone = tmp_path / "c"
+        gitutil.clone_shallow(str(src), clone)
+        (clone / ".git" / "info" / "sparse-checkout.lock").write_text(
+            "", encoding="utf-8")
+        gitutil.materialize(clone, "skills/demo")
+        assert (clone / "skills" / "demo" / "scripts" / "run.js").exists()
+        assert not (clone / ".git" / "info" / "sparse-checkout.lock").exists()
+
+    def test_against_real_git_parallel_adds_all_land(self, tmp_path):
+        import concurrent.futures
+        src = tmp_path / "src"
+        for i in range(1, 12):
+            _write = src / "skills" / ("s%02d" % i) / "scripts"
+            _write.mkdir(parents=True)
+            (_write.parent / "SKILL.md").write_text(
+                "---\nname: s%02d\ndescription: d\n---\n" % i, encoding="utf-8")
+            (_write / "run.js").write_text("1\n", encoding="utf-8")
+        _repo_with_asset(src)
+        clone = tmp_path / "c"
+        gitutil.clone_shallow(str(src), clone)
+        names = ["s%02d" % i for i in range(1, 12)]
+        with concurrent.futures.ThreadPoolExecutor(len(names)) as ex:
+            list(ex.map(lambda n: gitutil.materialize(clone, "skills/" + n),
+                        names))
+        missing = [n for n in names
+                   if not (clone / "skills" / n / "scripts" / "run.js").exists()]
+        assert missing == []

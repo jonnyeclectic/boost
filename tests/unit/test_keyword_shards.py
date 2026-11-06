@@ -178,6 +178,21 @@ class TestImport:
         assert _hits("otter") == ["keep"]     # its postings came through
         assert _hits("narwhal") == ["new"]
 
+    def test_an_unreadable_store_drops_other_taps_rather_than_emptying_them(
+            self, sandbox):
+        # Their term frequencies live in the store; keeping their docs
+        # without them would keep rows no query can reach. Dropping them
+        # (commits too) is what lets `stale()` re-index them next search.
+        rag.import_shards([
+            (_shard("o/b", B, [_doc("o/b", "keep", ("otter",))]), B)])
+        rag.postings_path().write_bytes(b"garbage\n")
+        rag.import_shards(
+            [(_shard("o/a", A, [_doc("o/a", "new", ("narwhal",))]), A)])
+        raw = rag._load_raw()
+        assert [d["n"] for d in raw["docs"]] == ["new"]
+        assert raw["commits"] == {"o__a": A}
+        assert _hits("narwhal") == ["new"]
+
     def test_a_refused_shard_writes_nothing(self, sandbox):
         rag.import_shards([(_shard(docs=[_doc("o/a", "one", ("zebra",))]), A)])
         before = rag.index_path().read_bytes()
@@ -195,6 +210,61 @@ class TestImport:
         assert [r[1] for r in res] == [True, False]
         assert "second shard" in res[1][2]
         assert len(rag._load_raw()["docs"]) == 1
+
+    def test_an_import_into_no_index_records_no_stamps(self, sandbox):
+        # Nothing vouches for the caches, and an empty map would make
+        # `stale()` call every cached tap changed on every search.
+        rag.import_shards([(_shard(), A)])
+        assert "stamps" not in rag._load_raw()
+
+    def test_an_import_onto_an_unstamped_index_keeps_it_unstamped(
+            self, sandbox):
+        rag._save([], {"o__b": B})
+        rag.import_shards([(_shard(), A)])
+        raw = rag._load_raw()
+        assert raw["commits"] == {"o__a": A, "o__b": B}
+        assert "stamps" not in raw
+
+    def test_an_import_carries_kept_stamps_and_stamps_the_imported_tap(
+            self, sandbox, monkeypatch):
+        rag._save([], {"o__b": B}, {"o__b": [1, 2], "gone": [3, 4]})
+        monkeypatch.setattr(rag, "_tap_stamps",
+                            lambda: {"o__a": [5, 6], "o__b": [9, 9]})
+        rag.import_shards([(_shard(), A)])
+        # o__b keeps the stamp its docs were built against, not today's;
+        # a stamp for a tap the index no longer records is dropped.
+        assert rag._load_raw()["stamps"] == {"o__b": [1, 2], "o__a": [5, 6]}
+
+    def test_an_import_carries_kept_formats_and_records_the_imported_tap(
+            self, sandbox, monkeypatch):
+        rag._save([], {"o__b": B}, None, {"o__b": 8, "gone": 7})
+        monkeypatch.setattr(rag, "_tap_formats",
+                            lambda: {"o__a": 9, "o__b": 9})
+        rag.import_shards([(_shard(), A)])
+        # o__b keeps the format its docs were built against, so the next
+        # build still re-indexes it; the imported tap is recorded at today's
+        # format, so that build does not throw the import away.
+        assert rag._load_raw()["formats"] == {"o__b": 8, "o__a": 9}
+
+    def test_an_import_into_a_pre_format_index_leaves_kept_taps_unvouched(
+            self, sandbox, monkeypatch):
+        rag._save([], {"o__b": B}, None)
+        assert "formats" not in rag._load_raw()
+        monkeypatch.setattr(rag, "_tap_formats",
+                            lambda: {"o__a": 9, "o__b": 9})
+        rag.import_shards([(_shard(), A)])
+        # o__b's docs were built by an unknown scanner: recorded as such, so
+        # the next build re-indexes it rather than reusing it by commit.
+        assert rag._load_raw()["formats"] == {"o__b": rag._UNKNOWN_FORMAT,
+                                              "o__a": 9}
+        assert not rag._reusable("o__b", B, rag._load_raw(), {"o__b": 9})
+        assert rag._reusable("o__a", A, rag._load_raw(), {"o__a": 9})
+
+    def test_an_import_into_no_index_records_only_the_imported_format(
+            self, sandbox, monkeypatch):
+        monkeypatch.setattr(rag, "_tap_formats", lambda: {"o__z": 9})
+        rag.import_shards([(_shard(), A)])
+        assert rag._load_raw()["formats"] == {}
 
     def test_import_shard_is_the_one_shard_form(self, sandbox):
         assert rag.import_shard(_shard(), A) == (True, "1 documents")

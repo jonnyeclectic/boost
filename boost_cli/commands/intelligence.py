@@ -13,6 +13,7 @@ import contextlib
 import difflib
 import fnmatch
 import json
+import os
 import re
 import shlex
 import sys
@@ -28,6 +29,7 @@ from ..core import (
     frontmatter,
     gitutil,
     imperative,
+    integrity,
     journal,
     jsonstate,
     lockfile,
@@ -82,8 +84,8 @@ def _skill_text(name: str) -> tuple[str, str]:
     content, and answering "not installed" (or "vanished from tap") for an
     installed rule would deny what `boost list` shows.
     """
-    if lockfile.get_skill(name):
-        p = store.skill_store_dir(name) / "SKILL.md"
+    if (lk := lockfile.get_skill(name)):
+        p = store.copy_dir(name, lk) / "SKILL.md"
         if p.exists():
             return p.read_text(encoding="utf-8", errors="replace"), "installed"
     found = lockfile.find_any(name)
@@ -120,24 +122,24 @@ def _load_state(fname: str, default: dict) -> dict:
 
 
 def _save_state(fname: str, data: dict) -> None:
-    paths.ensure_dirs()
     p = paths.state_dir() / fname
-    if jsonstate.is_corrupt(p):
-        dest = jsonstate.quarantine(p)
-        out.warn("%s was corrupt and has been moved to %s before writing "
-                 "the new file" % (p, dest), stream=sys.stderr)
-    p.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    jsonstate.save(p, json.dumps(data, indent=2) + "\n",
+                   corrupt=jsonstate.is_corrupt(p))
 
 
 def _save_generated_fallback(name: str, text: str, reason: str) -> None:
-    fallback = Path.cwd() / ("%s.SKILL.md" % name)
-    fallback.write_text(text, encoding="utf-8")
+    # Never over an existing <name>.SKILL.md: that file is the user's, and this
+    # runs on the very path where they just declined a replace.
+    fallback = util.write_unclaimed(Path.cwd(), name, ".SKILL.md", text)
     out.warn("not installed: %s" % reason)
     out.info("generated skill saved to %s" % _tilde(fallback))
 
 
-def _install_generated(name: str, text: str, yes: bool = False) -> None:
+def _install_generated(name: str, text: str, yes: bool = False) -> bool:
     """Write a generated SKILL.md to a tempdir and install it as `name`.
+
+    Returns False when the install did not happen (the generation is saved
+    beside the cwd instead), so the caller can exit non-zero.
 
     The tempdir is the only copy of a just-generated skill, so a refused install
     must not be allowed to propagate out of the ``with`` block and delete it —
@@ -150,36 +152,33 @@ def _install_generated(name: str, text: str, yes: bool = False) -> None:
     ``distill``/``infer``/``absorb --install`` don't quietly destroy an
     existing install and relabel its lock provenance ``local``.
 
-    ``yes`` mirrors each caller's own ``-y``/``--yes`` flag: out.confirm()
-    already honours ``--yes``/``-y`` off ``sys.argv`` for a real invocation,
-    but that check can't see an ``argv`` list handed straight to
-    :func:`boost_cli.cli.main` rather than the process's own argv, so the
-    parsed flag is passed through explicitly rather than relied on twice.
+    ``yes`` mirrors each caller's own ``-y``/``--yes`` flag. out.confirm()
+    does not read ``sys.argv``, so the parsed flag is the only way it lands.
     """
     owner = store.existing_skill_owner(name)
     if owner and not (yes or out.confirm(
             "%s is already installed from %s — replace it?" % (name, owner))):
         _save_generated_fallback(
             name, text, "%s is already installed from %s" % (name, owner))
-        return
+        return False
     with tempfile.TemporaryDirectory(prefix="boost-gen-") as td:
         src = Path(td) / name
         src.mkdir()
         # newline="\n": install_from_path copies this into the canonical
-        # store and records util.sha256_dir over it, which hashes read_bytes.
-        # Every comparison against that hash is local today, so this is
-        # latent rather than live — but the digest it stamps into the lock
-        # would otherwise depend on which OS generated the skill.
+        # store and records util.sha256_dir over it. That hash folds CRLF
+        # now, but the copy itself would still carry whichever line endings
+        # the generating OS wrote.
         (src / "SKILL.md").write_text(text, encoding="utf-8", newline="\n")
         try:
             res = store.install_from_path(src, name=name, tap_label="local")
         except BoostError as err:
             _save_generated_fallback(name, text, err.message)
-            return
+            return False
     out.ok("%s %s → %s" % ("replaced" if owner else "installed", name, _tilde(res.dest)))
     if res.linked:
         out.info(out.role("linked into: %s" % ", ".join(res.linked), "muted"))
     _warn_unwritable(res)
+    return True
 
 
 def _write_generated(dest: Path, text: str, yes: bool = False) -> bool:
@@ -187,6 +186,7 @@ def _write_generated(dest: Path, text: str, yes: bool = False) -> bool:
 
     ``yes`` — see :func:`_install_generated`.
     """
+    util.check_path_length(dest, what="output path")
     if dest.exists() and not (yes or out.confirm("overwrite %s?" % _tilde(dest))):
         out.info("aborted — %s left untouched" % _tilde(dest))
         return False
@@ -210,16 +210,29 @@ def cmd_distill(argv: list[str]) -> int:
     ap = cliparse.parser(
         prog="boost distill",
         description="Merge multiple skills into one deduplicated skill")
-    ap.add_argument("names", nargs="+", metavar="NAME",
+    ap.add_argument("names", type=util.nonempty_str, nargs="+", metavar="NAME",
                     help="two or more skills to merge")
-    ap.add_argument("-o", "--output", metavar="NEWNAME",
-                    help="name for the merged skill (default: <first>-distilled)")
+    name_g = ap.add_mutually_exclusive_group()
+    name_g.add_argument("--name", type=util.nonempty_str, metavar="NEWNAME",
+                        help="name for the merged skill (default: "
+                             "<first>-distilled)")
+    # Every sibling's -o/--output is a FILE; distill's has always been the
+    # skill NAME. Kept, so existing scripts run, but a path is refused rather
+    # than slugified into a directory in the cwd nobody asked for.
+    name_g.add_argument("-o", "--output", type=util.nonempty_str, dest="name", metavar="NEWNAME",
+                        help="older spelling of --name (a name, not a path)")
     ap.add_argument("--install", action="store_true",
                     help="install the merged skill instead of writing a file")
     ap.add_argument("-y", "--yes", action="store_true",
                     help="skip the overwrite/replace confirmation prompt")
     args = ap.parse_args(argv)
 
+    if args.name and ("/" in args.name or os.sep in args.name
+                      or args.name.lower().endswith(".md")):
+        raise BoostError("distill takes a name for the merged skill, not a "
+                         "path: %s" % args.name,
+                         hint="pass `--name NEWNAME`; the skill is written to "
+                              "./NEWNAME/SKILL.md")
     names = list(dict.fromkeys(args.names))
     if len(names) < 2:
         raise BoostError("distill needs at least two distinct skills",
@@ -230,8 +243,12 @@ def cmd_distill(argv: list[str]) -> int:
         meta, body = frontmatter.parse(text)
         sources.append({"name": name, "origin": origin, "text": text,
                         "meta": meta, "body": body})
-    new = util.resolve_slug(args.output, what="output name") if args.output \
-        else names[0] + "-distilled"
+    # The default comes from the *bare* first name: `fx:tdd-workflow` would
+    # otherwise name the output `fx:tdd-workflow-distilled`, which the printed
+    # `boost import` hint then rejects as an invalid skill name.
+    new = util.resolve_slug(
+        args.name or catalog.split_name(names[0])[1] + "-distilled",
+        what="output name")
 
     out.heading("distilling %s → %s" % (", ".join(names), new))
     merged = _distill_ai(new, sources) if ai.available() else None
@@ -240,7 +257,8 @@ def cmd_distill(argv: list[str]) -> int:
         merged = _distill_merge(new, sources)
 
     if args.install:
-        _install_generated(new, merged, yes=args.yes)
+        if not _install_generated(new, merged, yes=args.yes):
+            return 1
     else:
         dest = Path.cwd() / new / "SKILL.md"
         if not _write_generated(dest, merged, yes=args.yes):
@@ -265,11 +283,7 @@ def _distill_ai(new: str, sources: list[dict]) -> str | None:
         % (len(sources), new, blocks),
         system="You are an expert author of SKILL.md files for AI coding "
                "agents. Reply with ONLY the complete merged SKILL.md content.")
-    if not reply:
-        return None
-    text = ai.extract_markdown(reply)
-    meta, _ = frontmatter.parse(text)
-    return text if meta.get("name") else None
+    return ai.authored_skill(reply, new)
 
 
 _FENCE_RE = re.compile(r"^`{3,}")
@@ -291,7 +305,7 @@ def _distill_merge(new: str, sources: list[dict]) -> str:
     """Mechanical merge: union tags, dedupe exact-duplicate body lines."""
     tags: list[str] = []
     for s in sources:
-        for t in s["meta"].get("tags") or []:
+        for t in frontmatter.tags_of(s["meta"]):
             if t not in tags:
                 tags.append(t)
     desc = next((str(s["meta"].get("description") or "").strip()
@@ -335,16 +349,18 @@ def cmd_simulate(argv: list[str]) -> int:
     ap = cliparse.parser(
         prog="boost simulate",
         description="Preview how a skill would change Claude's behavior")
-    ap.add_argument("name", metavar="NAME",
+    ap.add_argument("name", type=util.nonempty_str, metavar="NAME",
                     help="skill, installed or in a tap")
-    ap.add_argument("--task", metavar="TEXT",
+    ap.add_argument("--task", type=util.nonempty_str, metavar="TEXT",
                     help="task to simulate (default: a typical coding task)")
     args = ap.parse_args(argv)
 
     _, bare = catalog.split_name(args.name)
     text, origin = _skill_text(args.name)
     task = args.task or "a typical coding task in this repo"
-    out.heading("simulating %s  %s" % (bare, out.role("(%s)" % origin, "muted")))
+    out.heading("simulating %s  %s" % (out.plain(bare),
+                                       out.role("(%s)" % out.plain(origin),
+                                                "muted")))
 
     if ai.available():
         reply = ai.ask(
@@ -354,7 +370,7 @@ def cmd_simulate(argv: list[str]) -> int:
             "skill on that task. Be concrete and terse." % (text, task))
         if reply:
             for line in reply.splitlines():
-                out.info(line)
+                out.info(out.plain(line))
             return 0
     _note_fallback()
 
@@ -362,15 +378,16 @@ def cmd_simulate(argv: list[str]) -> int:
     out.kv("task", task)
     rules = imperative.imperative_rules(body)
     out.info("Without it: default behavior — none of the rules below are enforced.")
-    out.info(out.c("With %s active, Claude would:" % bare, out.BOLD))
+    out.info(out.c("With %s active, Claude would:" % out.plain(bare), out.BOLD))
     if rules:
         for rule in rules[:8]:
-            out.info("  • " + rule)
+            out.info("  • " + out.plain(rule))
         if len(rules) > 8:
             out.info(out.role("  … and %d more rules" % (len(rules) - 8), "muted"))
     else:
         out.info("  • (no imperative rules found in the skill body)")
-    desc = str(meta.get("description") or "").strip()
+    # Sanitised before the clip, so the 100 counts characters that print.
+    desc = out.plain(meta.get("description") or "").strip()
     if desc:
         # Clipped to 100 characters, which is a length and not a width: at
         # 80 columns the quoted description ran seven past the pane. Wrapping
@@ -396,11 +413,12 @@ def cmd_infer(argv: list[str]) -> int:
     ap = cliparse.parser(
         prog="boost infer",
         description="Generate a SKILL.md from your codebase patterns")
-    ap.add_argument("--path", default=".", metavar="DIR",
+    ap.add_argument("--path", type=util.nonempty_str, default=".", metavar="DIR",
                     help="codebase to analyze (default: current directory)")
-    ap.add_argument("--name", default="project-conventions", metavar="N",
+    ap.add_argument("--name", type=util.nonempty_str, default="project-conventions", metavar="N",
                     help="skill name (default: project-conventions)")
-    ap.add_argument("-o", "--output", metavar="FILE", help="write to a file")
+    ap.add_argument("-o", "--output", "--out", type=util.nonempty_str, dest="output", metavar="FILE",
+                    help="write to a file")
     ap.add_argument("--install", action="store_true",
                     help="install the generated skill")
     ap.add_argument("-y", "--yes", action="store_true",
@@ -410,7 +428,10 @@ def cmd_infer(argv: list[str]) -> int:
     root = paths.expand(args.path).resolve()
     if not root.is_dir():
         raise BoostError("%s is not a directory" % _tilde(root))
-    name = util.slugify(args.name)
+    # resolve_slug, not slugify: the shared validator refuses a name with
+    # nothing to slug rather than quietly naming the skill "skill", and says
+    # so when the slug differs from what was typed.
+    name = util.resolve_slug(args.name, what="skill name")
     facts = _probe_repo(root)
 
     text = _infer_ai(name, root, facts) if ai.available() else None
@@ -419,7 +440,8 @@ def cmd_infer(argv: list[str]) -> int:
         text = _infer_template(name, facts)
 
     if args.install:
-        _install_generated(name, text, yes=args.yes)
+        if not _install_generated(name, text, yes=args.yes):
+            return 1
         journal.log("infer", name, path=str(root))
     elif args.output:
         if not _write_generated(paths.expand(args.output), text, yes=args.yes):
@@ -573,11 +595,7 @@ def _infer_ai(name: str, root: Path, facts: dict) -> str | None:
         % (json.dumps(detected), listing, name),
         system="You are an expert author of SKILL.md files for AI coding "
                "agents. Reply with ONLY the complete SKILL.md content.")
-    if not reply:
-        return None
-    text = ai.extract_markdown(reply)
-    meta, _ = frontmatter.parse(text)
-    return text if meta.get("name") else None
+    return ai.authored_skill(reply, name)
 
 
 def _infer_template(name: str, facts: dict) -> str:
@@ -626,7 +644,7 @@ def cmd_absorb(argv: list[str]) -> int:
     ap = cliparse.parser(
         prog="boost absorb",
         description="Turn recurring chat-history patterns into a skill")
-    ap.add_argument("--history", metavar="PATH",
+    ap.add_argument("--history", type=util.nonempty_str, metavar="PATH",
                     help="history .jsonl file or directory of them")
     ap.add_argument("--limit", type=util.positive_int, default=5, metavar="N",
                     help="max patterns to absorb (default: 5)")
@@ -640,24 +658,34 @@ def cmd_absorb(argv: list[str]) -> int:
         src = paths.expand(args.history)
         if not src.exists():
             raise BoostError("no history at %s" % _tilde(src))
+        sources = [src]
     else:
-        src = paths.home() / ".claude" / "history.jsonl"
-        if not src.exists():
-            src = paths.home() / ".claude" / "projects"
-        if not src.exists():
+        claude = paths.home() / ".claude"
+        # history.jsonl first (one row per typed prompt), then the session
+        # transcripts under projects/ when it yields nothing — a machine with
+        # an unparseable or prompt-free history.jsonl still has transcripts.
+        sources = [p for p in (claude / "history.jsonl", claude / "projects")
+                   if p.exists()]
+        if not sources:
             out.info("no chat history found under ~/.claude — nothing to absorb")
             out.info(out.role("point at a .jsonl file or directory with "
                            "--history PATH", "muted"))
             return 0
-    files = [src] if src.is_file() else sorted(src.rglob("*.jsonl"))
-    if not files:
-        out.info("no .jsonl history files under %s" % _tilde(src))
+    files: list[Path] = []
+    patterns: list[tuple[str, int]] = []
+    read = 0
+    for src in sources:
+        files = [src] if src.is_file() else sorted(src.rglob("*.jsonl"))
+        read += len(files)
+        patterns = _recurring_patterns(files, args.limit)
+        if patterns:
+            break
+    if not read:
+        out.info("no .jsonl history files under %s" % _tilde(sources[-1]))
         return 0
-
-    patterns = _recurring_patterns(files, args.limit)
     if not patterns:
         out.info("no recurring patterns in %d history file(s) — absorb needs "
-                 "the same request 3+ times" % len(files))
+                 "the same request 3+ times" % read)
         return 0
 
     name = "absorbed-patterns"
@@ -675,7 +703,8 @@ def cmd_absorb(argv: list[str]) -> int:
         _note_fallback()
         text = _absorb_template(name, patterns)
     if args.install:
-        _install_generated(name, text, yes=args.yes)
+        if not _install_generated(name, text, yes=args.yes):
+            return 1
     else:
         print(text, end="" if text.endswith("\n") else "\n")
     journal.log("absorb", name, patterns=len(patterns), files=len(files))
@@ -704,20 +733,57 @@ def _recurring_patterns(files: list[Path], limit: int) -> list[tuple[str, int]]:
     return hits[:limit]
 
 
+_PASTE_PLACEHOLDER = re.compile(
+    r"\[(?:Pasted text|Image|\.\.\.Truncated text) #\d+[^\]]*\]")
+
+
+# What Claude Code writes into a transcript's user turns that the user never
+# typed: the wrappers around a slash command and its output, the caveat it
+# prepends to them, a system reminder, and the interrupt placeholder. Counted
+# as requests, three transcripts made "do not respond to these messages ..."
+# the user's most recurring standing instruction.
+_HARNESS_MARKUP = re.compile(
+    r"<(command-name|command-message|command-args|local-command-stdout"
+    r"|local-command-stderr|local-command-caveat|system-reminder)>"
+    r".*?</\1>", re.DOTALL)
+_INTERRUPTED = re.compile(r"\[Request interrupted by user[^\]]*\]")
+
+
+def _typed(texts: list[str]) -> list[str]:
+    """``texts`` without harness markup, dropping any left empty."""
+    kept = (_INTERRUPTED.sub(" ", _HARNESS_MARKUP.sub(" ", t)).strip()
+            for t in texts)
+    return [t for t in kept if t]
+
+
 def _user_texts(obj) -> list[str]:
     """Best-effort user-message text from one history event."""
     if not isinstance(obj, dict):
         return []
     node = obj["message"] if isinstance(obj.get("message"), dict) else obj
+    if obj.get("isMeta") or node.get("isMeta"):
+        return []   # a transcript row Claude Code injected, not a prompt
     role = node.get("role") or node.get("type") or obj.get("type") or obj.get("role")
+    if not role and isinstance(obj.get("display"), str):
+        # Claude Code's ~/.claude/history.jsonl: {display, pastedContents,
+        # project, sessionId, timestamp} — every row is a typed prompt, and
+        # none carries a role. Two shapes in it are not requests: a slash
+        # command (`/clear`, `/loop 5m /babysit`) and the placeholder Claude
+        # Code writes for a paste or an image (`[Pasted text #1 +12 lines]`),
+        # which normalises to "pasted text 1 12 lines" and would otherwise
+        # surface as the user's most recurring "instruction".
+        display = obj["display"].strip()
+        if display.startswith("/"):
+            return []
+        return _typed([_PASTE_PLACEHOLDER.sub(" ", display)])
     if role != "user":
         return []
     content = node.get("content", obj.get("content"))
     if isinstance(content, str):
-        return [content]
+        return _typed([content])
     if isinstance(content, list):
-        return [str(item.get("text") or "") for item in content
-                if isinstance(item, dict) and item.get("type") == "text"]
+        return _typed([str(item.get("text") or "") for item in content
+                       if isinstance(item, dict) and item.get("type") == "text"])
     return []
 
 
@@ -741,11 +807,7 @@ def _absorb_ai(name: str, patterns: list[tuple[str, int]]) -> str | None:
         % (listing, name),
         system="You are an expert author of SKILL.md files for AI coding "
                "agents. Reply with ONLY the complete SKILL.md content.")
-    if not reply:
-        return None
-    text = ai.extract_markdown(reply)
-    meta, _ = frontmatter.parse(text)
-    return text if meta.get("name") else None
+    return ai.authored_skill(reply, name)
 
 
 def _absorb_template(name: str, patterns: list[tuple[str, int]]) -> str:
@@ -768,7 +830,7 @@ def cmd_evolve(argv: list[str]) -> int:
     ap = cliparse.parser(
         prog="boost evolve",
         description="Iteratively improve a skill from feedback")
-    ap.add_argument("name", metavar="NAME", help="installed skill to revise")
+    ap.add_argument("name", type=util.nonempty_str, metavar="NAME", help="installed skill to revise")
     ap.add_argument("--feedback", required=True, metavar="TEXT",
                     help="what should change, in plain English; `-` reads "
                          "it from stdin, `@FILE` from a file")
@@ -786,9 +848,16 @@ def cmd_evolve(argv: list[str]) -> int:
                 % (args.name, found[0]),
                 hint="a %s has no editable store copy; it refreshes from its "
                      "tap via `boost update`" % found[0])
+        # `--apply` writes the store copy and pins the user lock; a project
+        # skill has neither, and the `boost install` hint below would add a
+        # user-scope duplicate of what the repo already holds.
+        integrity.refuse_project_only(args.name, "boost evolve")
         raise BoostError("%s is not installed — evolve works on installed "
                         "skills" % args.name,
                         hint="install it first with `boost install %s`" % args.name)
+    held = store.held_refusal(args.name, lockfile.get_skill(args.name))
+    if held is not None:
+        raise held
     skill_md = store.skill_store_dir(args.name) / "SKILL.md"
     if not skill_md.exists():
         raise BoostError("%s has no SKILL.md in the store" % args.name,
@@ -802,7 +871,8 @@ def cmd_evolve(argv: list[str]) -> int:
     old_ver = str(old_meta.get("version") or "0.0.0")
 
     out.heading("evolving %s  %s" % (args.name, out.role("(v%s)" % old_ver, "muted")))
-    new = _evolve_ai(old, old_ver, feedback) if ai.available() else None
+    new = (_evolve_ai(args.name, old, old_ver, feedback) if ai.available()
+           else None)
     if new is None:
         _note_fallback()
         new = _evolve_append(old, old_ver, feedback)
@@ -818,7 +888,13 @@ def cmd_evolve(argv: list[str]) -> int:
     # the generated-skill write above — nothing compares across machines
     # today, and the recorded digest should not depend on one either way.
     skill_md.write_text(new, encoding="utf-8", newline="\n")
-    entry["sha256"] = util.sha256_dir(store.skill_store_dir(args.name))
+    # Deliberately does NOT rewrite entry["sha256"] to the store's new hash,
+    # for the reason `boost edit` does not: drift compares the store against
+    # that field, and only consults the tap once they match. Rewriting it
+    # made store == lock != tap, which `boost drift` reported as
+    # "upstream-moved — boost update" for a tap that had not moved and an
+    # update that did nothing. Left alone, the revision reads as what it is,
+    # a local edit, and the lock keeps the digest of the tap copy it came from.
     entry["updated_at"] = util.now_iso()
     entry["version"] = new_ver
     # Pinned, because this revision exists nowhere but the store: once the
@@ -837,7 +913,8 @@ def cmd_evolve(argv: list[str]) -> int:
     return 0
 
 
-def _evolve_ai(old: str, old_ver: str, feedback: str) -> str | None:
+def _evolve_ai(name: str, old: str, old_ver: str,
+               feedback: str) -> str | None:
     reply = ai.ask_author(
         "Revise this SKILL.md based on user feedback. Keep everything that "
         "still holds, integrate the feedback as concrete rules, and bump the "
@@ -845,15 +922,18 @@ def _evolve_ai(old: str, old_ver: str, feedback: str) -> str | None:
         % (old_ver, feedback, old),
         system="You are an expert author of SKILL.md files for AI coding "
                "agents. Reply with ONLY the complete revised SKILL.md content.")
-    if not reply:
+    # The installed name, whatever the model wrote: the store dir is named
+    # for it, and a different `name:` renamed the skill under `--apply`.
+    text = ai.authored_skill(reply, name)
+    if text is None:
         return None
-    text = ai.extract_markdown(reply)
-    meta, body = frontmatter.parse(text)
-    if not meta.get("name"):
-        return None
+    meta, _ = frontmatter.parse(text)
     if not util.semver_gt(str(meta.get("version") or ""), old_ver):
-        meta["version"] = _bump_patch(old_ver)
-        text = frontmatter.dump(meta) + "\n\n" + body.strip() + "\n"
+        # Only the version line: a parse -> dump round trip here folded a
+        # `description: |` block to one line and flattened a `hooks:`
+        # list-of-maps to `- "matcher: Edit"`, dropping its `command:`.
+        text = frontmatter.set_field(text, "version", _bump_patch(old_ver))
+        text = text.rstrip("\n") + "\n"
     return text
 
 
@@ -918,15 +998,17 @@ def cmd_context(argv: list[str]) -> int:
     sub.add_parser("enable", help="turn on branch-aware activation (runs apply)")
     sub.add_parser("disable", help="turn it off and relink all mapped skills")
     sp = sub.add_parser("map", help="map a branch pattern to skills")
-    sp.add_argument("pattern", help="fnmatch branch pattern, e.g. 'feature/*'")
-    sp.add_argument("skills", help="comma-separated skill names")
+    sp.add_argument("pattern", type=util.nonempty_str, help="fnmatch branch pattern, e.g. 'feature/*'")
+    sp.add_argument("skills", type=util.nonempty_str, help="comma-separated skill names")
     sp = sub.add_parser("unmap", help="remove a branch pattern rule")
-    sp.add_argument("pattern", help="the pattern exactly as it was mapped")
+    sp.add_argument("pattern", type=util.nonempty_str, help="the pattern exactly as it was mapped")
     sub.add_parser("apply", help="link/unlink mapped skills for this branch")
     args = ap.parse_args(argv)
 
-    state = _load_state(_CONTEXT_STATE, _CONTEXT_DEFAULT)
     action = args.action or "status"
+    if args.top_json and action != "status":
+        ap.error("--json is only supported with `context status`")
+    state = _load_state(_CONTEXT_STATE, _CONTEXT_DEFAULT)
 
     if action == "status":
         # Bare `boost context` means status, so `boost context --json` has to
@@ -935,7 +1017,11 @@ def cmd_context(argv: list[str]) -> int:
         return _context_status(state,
                                getattr(args, "json", False) or args.top_json)
     if action == "map":
-        skills = [s.strip() for s in args.skills.split(",") if s.strip()]
+        # Stored bare: the lock keys by the bare name, and `apply`/`disable`
+        # look rules up in it, so a `tap:name` rule never matched anything.
+        skills = list(dict.fromkeys(
+            store.installed_name(s.strip())
+            for s in args.skills.split(",") if s.strip()))
         if not skills:
             raise BoostError("no skills given",
                             hint="e.g. `boost context map 'feature/*' tdd-workflow`")
@@ -993,7 +1079,8 @@ def cmd_context(argv: list[str]) -> int:
         inst = lockfile.installed()
         for name in sorted(_mentioned_skills(state)):
             entry = inst.get(name)
-            if entry and entry.get("sidelined_by") == "context":
+            if (entry and entry.get("sidelined_by") == "context"
+                    and not entry.get("quarantined")):
                 _warn_unwritable(store.unsideline(name))
                 restored += 1
         state["enabled"] = False
@@ -1008,8 +1095,22 @@ def cmd_context(argv: list[str]) -> int:
     return _context_apply(state)
 
 
+def _rule_skill(name: str) -> str:
+    """The lock key a saved context rule's ``name`` refers to.
+
+    Rules saved before `map` stored bare names may hold ``tap:name``; one
+    whose qualifier no longer matches what is installed stays as written, so
+    it reports as not installed rather than aborting the whole apply.
+    """
+    try:
+        return store.installed_name(name)
+    except BoostError:
+        return name
+
+
 def _mentioned_skills(state: dict) -> set:
-    return {s for r in state.get("rules", []) for s in r.get("skills", [])}
+    return {_rule_skill(s) for r in state.get("rules", [])
+            for s in r.get("skills", [])}
 
 
 def _context_status(state: dict, as_json: bool) -> int:
@@ -1050,7 +1151,7 @@ def _context_apply(state: dict) -> int:
         return 0
     rules = state.get("rules", [])
     matched = [r for r in rules if fnmatch.fnmatch(branch, r.get("pattern", ""))]
-    active = {s for r in matched for s in r.get("skills", [])}
+    active = {_rule_skill(s) for r in matched for s in r.get("skills", [])}
     inst = lockfile.installed()
     linked, unlinked, missing, unswitchable = [], [], [], []
     for name in sorted(_mentioned_skills(state)):
@@ -1102,7 +1203,7 @@ def cmd_focus(argv: list[str]) -> int:
     ap = cliparse.parser(
         prog="boost focus",
         description="Temporarily prioritize skills for a work session")
-    ap.add_argument("skills", nargs="*", metavar="SKILL",
+    ap.add_argument("skills", type=util.nonempty_str, nargs="*", metavar="SKILL",
                     help="skills to focus on")
     ap.add_argument("--clear", action="store_true",
                     help="end the session and relink everything")
@@ -1120,36 +1221,50 @@ def cmd_focus(argv: list[str]) -> int:
         # still reported "N skill(s) restored". `sidelined_by == "focus"` is
         # only true of skills THIS session actually unlinked.
         had_session = state_path.exists()
+        prior = (_load_state(_FOCUS_STATE, {}).get("prior") or {}
+                 if had_session else {})
         restored = 0
         for name, entry in sorted(lockfile.installed().items()):
-            if entry.get("sidelined_by") != "focus":
+            if entry.get("sidelined_by") != "focus" or entry.get("quarantined"):
                 continue
             _warn_unwritable(store.unsideline(name),
                              stream=sys.stderr if args.json else None)
             restored += 1
+        residelined = _focus_put_back(prior)
         if had_session:
             state_path.unlink()
-        journal.log("focus", "clear", restored=restored)
+        journal.log("focus", "clear", restored=restored,
+                    residelined=residelined or None)
         if args.json:
             print(json.dumps({"active": [], "restored": restored,
+                              "residelined": residelined,
                               "had_session": had_session}))
             return 0
         if not had_session and not restored:
             out.info("no focus session")
             return 0
         out.ok("focus cleared — %d skill(s) restored" % restored)
+        if residelined:
+            out.info("sidelined again, as before the focus: %s"
+                     % ", ".join(residelined), wrap=True)
         return 0
 
     if args.status or not args.skills:
         state = _load_state(_FOCUS_STATE, {})
+        displaced = store.focus_displaced(list(state.get("active", [])),
+                                          lockfile.installed())
         if args.json:
             print(json.dumps({"active": state.get("active", []),
-                              "since": state.get("since")}))
+                              "since": state.get("since"),
+                              "displaced": dict(displaced)}))
             return 0
         if state.get("active"):
             out.info("⌁ focus: %s  %s"
                      % (", ".join(state["active"]),
                         out.role("(since %s)" % util.rel_time(state.get("since", "")), "muted")))
+            for name, why in displaced:
+                out.warn("%s is not linked — %s since the focus began"
+                         % (name, why), wrap=True)
             out.info(out.role("end it with `boost focus --clear`", "muted"))
         else:
             print(out.empty_state("no focus session",
@@ -1157,7 +1272,7 @@ def cmd_focus(argv: list[str]) -> int:
                                   wrap=True))
         return 0
 
-    names = list(dict.fromkeys(args.skills))
+    names = list(dict.fromkeys(store.installed_name(n) for n in args.skills))
     inst = lockfile.installed()
     for name in names:
         entry = inst.get(name)
@@ -1169,21 +1284,39 @@ def cmd_focus(argv: list[str]) -> int:
                     % (name, found[0]),
                     hint="rules and workflows have no links to sideline; "
                          "`boost quarantine` suspends one")
+            # Focus sidelines and restores user-scope links; a project skill
+            # is a real directory in the repo, with no link to restore.
+            integrity.refuse_project_only(name, "boost focus")
             raise BoostError("%s is not installed — focus works on installed "
                             "skills" % name, hint="see `boost list`")
         if entry.get("quarantined"):
             raise BoostError("%s is quarantined" % name,
-                            hint="release it first with `boost quarantine`")
+                            hint="release it first with `boost quarantine "
+                                 "--release %s`" % name)
+    # Recorded before anything is sidelined: a state dir that refuses the
+    # write used to crash *after* every other skill had lost its links, and
+    # with no session on file `boost focus` then said there was none.
+    # And the sideline each focused skill had before (context, profile), so
+    # `--clear` can put it back rather than leave it linked.
+    carried = (_load_state(_FOCUS_STATE, {}).get("prior")
+               if state_path.exists() else None)
+    prior = store.sideline_priors(inst, names, carried)
+    _save_state(_FOCUS_STATE, {"active": names, "since": util.now_iso(),
+                               **({"prior": prior} if prior else {})})
     sidelined = 0
     for name, entry in sorted(inst.items()):
         if name in names or entry.get("quarantined"):
+            continue
+        # Already set aside by context or a profile: leave its flag alone.
+        # Restamping it "focus" made `--clear` relink it, undoing that
+        # mechanism, and count a restore this session never sidelined.
+        if entry.get("sidelined_by") not in (None, "focus"):
             continue
         if store.sideline(name, "focus"):
             sidelined += 1
     for name in names:
         _warn_unwritable(store.unsideline(name),
                          stream=sys.stderr if args.json else None)
-    _save_state(_FOCUS_STATE, {"active": names, "since": util.now_iso()})
     journal.log("focus", ",".join(names))
     if args.json:
         print(json.dumps({"active": names, "sidelined": sidelined}))
@@ -1194,13 +1327,35 @@ def cmd_focus(argv: list[str]) -> int:
     return 0
 
 
+def _focus_put_back(prior: dict) -> list[str]:
+    """Re-apply the sidelines focus had lifted off its own skills.
+
+    Only onto a skill still installed, unquarantined and linked: one another
+    command set aside since is that command's now. A ``context`` sideline
+    needs context still enabled — `context disable` mid-session ended it.
+    """
+    if not isinstance(prior, dict):
+        return []
+    context_on = bool(_load_state(_CONTEXT_STATE, _CONTEXT_DEFAULT).get("enabled"))
+    inst = lockfile.installed()
+    put_back = []
+    for name, by in sorted(prior.items()):
+        entry = inst.get(name)
+        if (entry is None or entry.get("quarantined") or entry.get("sidelined_by")
+                or (by == "context" and not context_on)):
+            continue
+        store.sideline(name, str(by))
+        put_back.append(name)
+    return put_back
+
+
 # ---------------------------------------------------------------- impact
 
 def cmd_impact(argv: list[str]) -> int:
     ap = cliparse.parser(
         prog="boost impact",
         description="Correlate a skill's install date with repo activity")
-    ap.add_argument("name", nargs="?", metavar="NAME",
+    ap.add_argument("name", type=util.nonempty_str, nargs="?", metavar="NAME",
                     help="one skill (default: all installed)")
     ap.add_argument("--json", action="store_true", help="machine-readable output")
     args = ap.parse_args(argv)
@@ -1209,8 +1364,13 @@ def cmd_impact(argv: list[str]) -> int:
     in_repo = git.in_repo
     note = _IMPACT_NOTE if in_repo else _IMPACT_NOTE_NO_REPO
 
-    inst = lockfile.installed()
+    # The current project's `--local` skills count as installed — `boost
+    # list` shows them. A name in both scopes is the user row, as everywhere.
+    inst = lockfile.installed().copy()
+    for pname, pentry in integrity.project_skills()[1].items():
+        inst.setdefault(pname, pentry)
     if args.name:
+        args.name = store.installed_name(args.name)
         if args.name not in inst:
             found = lockfile.find_any(args.name)
             if found is not None:
@@ -1315,12 +1475,15 @@ def _print_reply(reply: chat_engine.Reply, show_sources: bool) -> None:
     is the qualified ``owner/repo:name``, which already names the tap, so
     repeating it would be noise.
     """
+    # The extractive answer is built from catalogue descriptions, and a model
+    # reply quotes them — tap text either way, so every line is sanitised.
     for line in reply.text.splitlines():
-        out.info(line)
+        out.info(out.plain(line))
     if show_sources and reply.skills:
         out.info("")
         out.info(out.role("sources · ranked by %s" % reply.engine, "muted"))
-        for n, cite in enumerate(chat_engine.citations(reply.skills), 1):
+        for n, cite in enumerate(out.plain_fields(
+                chat_engine.citations(reply.skills)), 1):
             tail = "" if cite["ref"] != cite["name"] else "  (%s)" % cite["tap"]
             out.info(out.role("  %d. %s  %s%s"
                               % (n, cite["ref"], cite["kind"], tail), "muted"))
@@ -1398,9 +1561,14 @@ def _chat_session(args) -> int:
     # With stdin piped nobody is typing, so the prompt and the typing hint are
     # only chrome in the answers a script captures — the same rule
     # output.confirm applies. A terminal is unchanged.
-    typing = sys.stdin.isatty()
+    typing = out.stdin_is_tty()
     if typing:
         out.info(out.role("ask about skills; blank line or Ctrl-D to exit", "muted"))
+    if sys.stdin is None:
+        # fd 0 closed at launch (`<&-`): input() would raise RuntimeError
+        # ("lost sys.stdin"), but this is just an EOF before the first line.
+        return 0
+    out.tolerate_undecodable_stdin()
     history: list[chat_engine.Turn] = []
     while True:
         try:
@@ -1416,4 +1584,4 @@ def _chat_session(args) -> int:
         _print_reply(reply, not args.no_sources)
         history.append(chat_engine.Turn(question, reply.text, reply.skills))
         for follow in chat_engine.suggest_followups(reply.skills, with_ai=have_ai)[:2]:
-            out.info(out.role("  try: %s" % follow, "muted"))
+            out.info(out.role("  try: %s" % out.plain(follow), "muted"))

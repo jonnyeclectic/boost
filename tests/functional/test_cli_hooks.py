@@ -3,7 +3,10 @@
 """Functional tests for `boost hooks` (in-process CLI)."""
 from __future__ import annotations
 
+import json
+import os
 import re
+import sys
 
 import pytest
 
@@ -111,17 +114,17 @@ class TestHooksAdd:
 class TestHooksErrors:
     def test_add_missing_command(self, boost, sandbox):
         r = boost("hooks", "add", "SessionStart", "-n", "x",
-                  "-s", "global", expect=1)
+                  "-s", "global", expect=2)
         assert "needs --command" in r.err
 
     def test_add_missing_event(self, boost, sandbox):
         r = boost("hooks", "add", "-c", "x", "-n", "y",
-                  "-s", "global", expect=1)
+                  "-s", "global", expect=2)
         assert "needs an EVENT" in r.err
 
     def test_add_missing_name(self, boost, sandbox):
         r = boost("hooks", "add", "SessionStart", "-c", "x",
-                  "-s", "global", expect=1)
+                  "-s", "global", expect=2)
         assert "needs --name" in r.err
 
     def test_list_fits_the_pane_with_a_long_name_and_command(
@@ -237,3 +240,116 @@ class TestListColumnOrder:
         # The band where one column fits beside the command is the one that
         # printed `host` alone before.
         assert name_and_command_only, "name never survived alone"
+
+
+class TestHooksRobustness:
+    """`--name` padding, foreign entry shapes, and the project root."""
+
+    def test_a_padded_name_is_added_once_and_removed_by_the_same_name(
+            self, boost, sandbox):
+        for _ in range(2):
+            r = boost("hooks", "add", "Stop", "-c", "echo a",
+                      "-n", "my hook ", "-s", "global")
+            assert "hook 'my hook' (global)" in r.out
+        assert len(cs.list_hooks("global")) == 1
+        r = boost("hooks", "remove", "-n", "my hook ", "-s", "global")
+        assert "removed 1 hook(s) named 'my hook' (global)" in r.out
+
+    def test_an_all_whitespace_name_is_refused(self, boost, sandbox):
+        r = boost("hooks", "add", "Stop", "-c", "x", "-n", "   ",
+                  "-s", "global", expect=2)
+        # Refused at parse time now, by the shared `util.nonempty_str` type,
+        # before the handler's own "needs --name" check is reached.
+        assert r.err.splitlines()[0] == ("Error: argument -n/--name: "
+                                         "must not be empty")
+        assert not cs.settings_path("global").exists()
+
+    def test_doctor_list_and_remove_survive_a_string_hook_entry(
+            self, boost, sandbox):
+        p = cs.settings_path("global")
+        p.parent.mkdir(parents=True)
+        p.write_text('{"hooks": {"Stop": [{"hooks": ["echo hi"]}]}}',
+                     encoding="utf-8")
+        before = p.read_text(encoding="utf-8")
+        for argv in (("doctor",), ("hooks", "list"),
+                     ("hooks", "remove", "-n", "a", "-s", "global")):
+            r = boost(*argv, expect=None)
+            assert "unexpected error" not in r.out + r.err, argv
+            assert r.rc in (0, 1), argv
+        assert p.read_text(encoding="utf-8") == before
+
+    def test_add_names_a_non_object_hooks_key_instead_of_crashing(
+            self, boost, sandbox):
+        p = cs.settings_path("global")
+        p.parent.mkdir(parents=True)
+        p.write_text('{"hooks": []}', encoding="utf-8")
+        r = boost("hooks", "add", "SessionStart", "-c", "x", "-n", "a",
+                  "-s", "global", expect=None)
+        assert r.rc == 1
+        assert "'hooks' must be an object" in r.out + r.err
+        assert "unexpected error" not in r.out + r.err
+        assert p.read_text(encoding="utf-8") == '{"hooks": []}'
+
+    def test_a_subdirectory_add_lands_at_the_repo_root(
+            self, boost, sandbox, tmp_path, monkeypatch):
+        repo = tmp_path / "proj-cli-subdir"
+        deep = repo / "src" / "deep"
+        deep.mkdir(parents=True)
+        (repo / ".git").mkdir()
+        monkeypatch.chdir(deep)
+        boost("hooks", "add", "SessionStart", "-c", "echo hi", "-n", "h5")
+        assert (repo / ".claude" / "settings.json").is_file()
+        assert not (deep / ".claude").exists()
+        monkeypatch.chdir(repo)
+        assert "h5" in boost("hooks", "list").out
+
+    def test_a_project_add_from_home_is_refused(
+            self, boost, sandbox, monkeypatch):
+        monkeypatch.chdir(sandbox)
+        r = boost("hooks", "add", "SessionStart", "-c", "echo", "-n", "h2",
+                  expect=None)
+        assert r.rc == 1
+        assert "no project here" in r.out + r.err
+        assert not (sandbox / ".claude" / "settings.json").exists()
+
+
+class TestSettingsFileOddities:
+    """`hooks` on a settings.json someone else also edits."""
+
+    @pytest.mark.skipif(
+        sys.platform == "win32" or (hasattr(os, "geteuid") and os.geteuid() == 0),
+        reason="chmod does not refuse writes on Windows or as root")
+    def test_read_only_settings_is_rc_1_not_a_crash(self, boost, sandbox):
+        p = sandbox / ".claude" / "settings.json"
+        p.parent.mkdir()
+        p.write_text('{\n  "model": "opus"\n}\n', encoding="utf-8")
+        p.chmod(0o444)
+        try:
+            r = boost("hooks", "add", "SessionStart", "-c", "echo hi",
+                      "-n", "ro", "--scope", "global", expect=1)
+        finally:
+            p.chmod(0o644)
+        assert "could not save ~/.claude/settings.json (it is read-only)" \
+            in r.err
+        assert "chmod u+w ~/.claude/settings.json" in r.err
+        assert "unexpected error" not in r.err
+
+    def test_list_survives_a_non_numeric_timeout(self, boost, sandbox):
+        p = sandbox / ".claude" / "settings.json"
+        p.parent.mkdir()
+        p.write_text(json.dumps({"hooks": {"Stop": [{"hooks": [
+            {"type": "command", "command": "x # boost:t",
+             "timeout": "ten"}]}]}}), encoding="utf-8")
+        r = boost("hooks", "list", "--host", "claude", "--json")
+        assert json.loads(r.out)["hooks"] == [{
+            "host": "claude", "scope": "global", "event": "Stop",
+            "name": "t", "matcher": None, "command": "x", "timeout": None}]
+
+    def test_gemini_sub_second_timeout_is_not_zero(self, boost, sandbox):
+        p = sandbox / ".gemini" / "settings.json"
+        p.parent.mkdir()
+        p.write_text(json.dumps({"hooks": {"Stop": [{"hooks": [
+            {"type": "command", "command": "x # boost:g",
+             "timeout": 500}]}]}}), encoding="utf-8")
+        r = boost("hooks", "list", "--host", "gemini", "--json")
+        assert [h["timeout"] for h in json.loads(r.out)["hooks"]] == [0.5]

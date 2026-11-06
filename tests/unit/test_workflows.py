@@ -157,6 +157,47 @@ class TestWorkflowTarget:
         ) == Path("/repo/.claude/commands/ship.md")
 
 
+class TestNamespacedCommands:
+    """``commands/frontend/test.md`` is ``/frontend:test`` in Claude Code and
+    Gemini CLI, and Cursor's command loader recurses into subdirectories too
+    (its ``loadCommandsFromDirectory``), so every agent keeps the subdir."""
+
+    @pytest.mark.parametrize("agent, skills, want", [
+        ("claude-code", "/h/.claude/skills", "/h/.claude/commands/frontend/test.md"),
+        ("cursor", "/h/.cursor/skills", "/h/.cursor/commands/frontend/test.md"),
+        ("gemini", "/h/.gemini/skills", "/h/.gemini/commands/frontend/test.toml"),
+    ])
+    def test_the_namespace_is_a_subdir(self, agent, skills, want):
+        p = workflows.workflow_target(Path(skills), "commands", "frontend/test",
+                                      agent=agent)
+        assert p.as_posix() == want
+
+    def test_project_scope_and_depth(self):
+        p = workflows.workflow_target(Path("/h/.claude/skills"), "commands",
+                                      "a/b/c", base=Path("/repo"))
+        assert p.as_posix() == "/repo/.claude/commands/a/b/c.md"
+
+    @pytest.mark.parametrize("rel, want", [
+        ("commands/test.md", ()),
+        ("commands/frontend/test.md", ("frontend",)),
+        ("commands/a/b/t.md", ("a", "b")),
+        ("x/commands/y/commands/z/t.md", ("z",)),
+        ("WORKFLOWS/ci/t.md", ("ci",)),
+        ("loose.md", ()),
+        ("docs/t.md", ()),
+    ])
+    def test_command_namespace(self, rel, want):
+        assert workflows.command_namespace(rel) == want
+
+    def test_name_parts(self):
+        assert workflows.name_parts("a/b", "commands") == ["a", "b"]
+        assert workflows.name_parts("ship", "agents") == ["ship"]
+        with pytest.raises(BoostError, match="invalid workflow name"):
+            workflows.name_parts("a/b", "agents")
+        with pytest.raises(BoostError, match="invalid workflow name"):
+            workflows.name_parts("a/..", "commands")
+
+
 class TestWorkflowNameTraversal:
     """Same tap-controlled-name exposure as rules: workflow_target joins the
     name straight onto the agent's commands/ or agents/ dir."""
@@ -172,10 +213,16 @@ class TestWorkflowNameTraversal:
             workflows.workflow_target(Path("/x/.claude/skills"), "agents", self.EVIL,
                                       base=Path("/home/v/myrepo"))
 
-    @pytest.mark.parametrize("name", ["..", ".", "a/b", "with space", ""])
+    @pytest.mark.parametrize("name", ["..", ".", "with space", "", "a/../b",
+                                      "a//b", "/a", "a/", "../a", "a/.."])
     def test_refuses_other_non_components(self, name):
         with pytest.raises(BoostError):
             workflows.workflow_target(Path("/home/v/.claude/skills"), "commands", name)
+
+    def test_only_a_command_may_be_namespaced(self):
+        # `a/b` is a namespaced command (`/a:b`); a subagent has no namespace.
+        with pytest.raises(BoostError, match="invalid workflow name 'a/b'"):
+            workflows.workflow_target(Path("/home/v/.claude/skills"), "agents", "a/b")
 
     def test_ordinary_name_still_lands_in_the_slot(self):
         p = workflows.workflow_target(Path("/home/v/.claude/skills"), "commands",
@@ -306,8 +353,148 @@ class TestRenderGeminiCommand:
         assert "caf\u00e9 \u2603" in out
         assert "\\u" not in out
 
+    def test_del_is_escaped(self):
+        out = workflows.render_gemini_command(
+            "x", "---\ndescription: a\x7fb\n---\nbody\x7f")
+        assert out == 'description = "a\\u007fb"\nprompt = "body\\u007f"\n'
+        assert _toml_loads(out) == {"description": "a\x7fb",
+                                    "prompt": "body\x7f"}
+
+    def test_every_control_char_round_trips_through_toml_str(self):
+        hostile = "".join(chr(c) for c in [*range(0x20), 0x7F]) + "zé"
+        lit = workflows._toml_str(hostile)
+        assert "\x7f" not in lit
+        assert all(ord(ch) >= 0x20 for ch in lit)
+        assert _toml_loads("k = %s\n" % lit) == {"k": hostile}
+
+    def test_control_chars_in_a_body_round_trip(self):
+        # The ones the frontmatter splitter leaves inside a line.
+        ctl = "".join(chr(c) for c in [*range(0x09), 0x09,
+                                       *range(0x0E, 0x1C), 0x1F, 0x7F])
+        raw = "---\ndescription: d%s\n---\nb%sz\n" % (ctl.strip(), ctl)
+        data = _toml_loads(workflows.render_gemini_command("x", raw))
+        assert data == {"description": "d" + ctl.strip(),
+                        "prompt": "b%sz" % ctl}
+
     def test_name_does_not_leak_into_the_output(self):
         # the filename carries the command name; the TOML body must not repeat
         # it (Gemini derives the slash command from the path).
         out = workflows.render_gemini_command("supersecretname", MARKDOWN)
         assert "supersecretname" not in out
+
+
+# --------------------------------------------------------------------------
+# The skill copy: a workflow reachable from the canonical store
+# --------------------------------------------------------------------------
+SUBAGENT = (
+    "---\n"
+    "name: source-name\n"
+    "description: Reviews a diff for bugs\n"
+    "tools: Read, Grep\n"
+    "model: sonnet\n"
+    "color: blue\n"
+    "isolation: worktree\n"
+    "---\n"
+    "\n"
+    "# Reviewer\n"
+    "\n"
+    "Read the diff.\r\n"
+    "Then report.\n"
+)
+
+
+class TestSkillDescription:
+    def test_a_subagent_with_a_description_qualifies(self):
+        assert workflows.skill_description(
+            "agents", {"description": "  Reviews code  "}) == "Reviews code"
+
+    def test_a_command_with_a_description_qualifies(self):
+        assert workflows.skill_description(
+            "commands", {"description": "Ships it"}) == "Ships it"
+
+    @pytest.mark.parametrize("slot", ["agents", "commands"])
+    @pytest.mark.parametrize("meta", [{}, {"description": ""},
+                                      {"description": "   "},
+                                      {"description": None}])
+    def test_no_description_means_no_copy(self, slot, meta):
+        assert workflows.skill_description(slot, meta) is None
+
+    def test_an_unknown_slot_never_qualifies(self):
+        assert workflows.skill_description(
+            "skill", {"description": "x"}) is None
+        assert workflows.skill_description(
+            "other", {"description": "x"}) is None
+
+
+class TestRenderSkill:
+    def test_exact_output(self):
+        out = workflows.render_skill("reviewer", "Reviews a diff for bugs",
+                                     SUBAGENT)
+        assert out == ("---\nname: reviewer\n"
+                       "description: Reviews a diff for bugs\n---\n\n"
+                       "# Reviewer\n\nRead the diff.\r\nThen report.\n")
+
+    def test_host_only_keys_are_dropped(self):
+        out = workflows.render_skill("reviewer", "d", SUBAGENT)
+        for key in ("tools:", "model:", "color:", "isolation:",
+                    "source-name"):
+            assert key not in out
+
+    def test_the_body_is_byte_identical(self):
+        out = workflows.render_skill("reviewer", "d", SUBAGENT)
+        assert out.endswith(SUBAGENT.split("---\n", 2)[2].lstrip("\n"))
+
+    def test_a_description_that_needs_quoting_is_quoted(self):
+        out = workflows.render_skill("r", "Use when: a # b", "body\n")
+        from boost_cli.core import frontmatter
+        meta, body = frontmatter.parse(out)
+        assert meta == {"name": "r", "description": "Use when: a # b"}
+        assert body == "body"
+        assert 'description: "Use when: a # b"' in out
+
+    def test_no_frontmatter_keeps_the_whole_text(self):
+        assert workflows.render_skill("r", "d", "just text\n") == (
+            "---\nname: r\ndescription: d\n---\n\njust text\n")
+
+    def test_an_unclosed_fence_is_body_not_metadata(self):
+        raw = "---\nname: x\nno close\n"
+        assert workflows.render_skill("r", "d", raw).endswith("\n\n" + raw)
+
+    def test_a_dots_close_is_honoured(self):
+        raw = "---\ndescription: d\n...\nBody\n"
+        assert workflows.render_skill("r", "d", raw).endswith("---\n\nBody\n")
+
+    def test_a_bom_is_dropped_before_the_fence(self):
+        from boost_cli.core import frontmatter
+        raw = "---\nname: x\ndescription: d\n---\nBody\n"
+        assert (workflows.render_skill("r", "d", frontmatter.BOM + raw)
+                == workflows.render_skill("r", "d", raw)
+                == "---\nname: r\ndescription: d\n---\n\nBody\n")
+
+    def test_a_bom_crlf_source_keeps_its_crlf_body_once(self):
+        from boost_cli.core import frontmatter
+        raw = frontmatter.BOM + "---\r\nname: x\r\n---\r\nBody\r\nTwo\r\n"
+        out = workflows.render_skill("r", "d", raw)
+        assert out == "---\nname: r\ndescription: d\n---\n\nBody\r\nTwo\r\n"
+        assert frontmatter.BOM not in out
+
+    def test_a_bom_without_frontmatter_is_not_kept(self):
+        from boost_cli.core import frontmatter
+        assert workflows.render_skill("r", "d", frontmatter.BOM + "text\n") == (
+            "---\nname: r\ndescription: d\n---\n\ntext\n")
+
+    def test_the_body_matches_frontmatter_split_modulo_line_endings(self):
+        from boost_cli.core import frontmatter
+        raw = frontmatter.BOM + "---\r\nname: x\r\n---\r\n\r\nBody\r\nTwo\r\n"
+        body = workflows._skill_body(raw)
+        assert body == "Body\r\nTwo\r\n"
+        assert body.replace("\r\n", "\n").strip() == frontmatter.split(raw)[1].strip()
+
+    def test_render_dispatches_the_skill_slot_for_any_agent(self):
+        want = workflows.render_skill("reviewer", "Reviews a diff for bugs",
+                                      SUBAGENT)
+        assert workflows.render(None, workflows.SLOT_SKILL, "reviewer",
+                                SUBAGENT) == want
+        # Asked before the Gemini branches: a skill row is never TOML.
+        assert workflows.render("gemini", workflows.SLOT_SKILL, "reviewer",
+                                SUBAGENT) == want

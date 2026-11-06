@@ -102,19 +102,19 @@
     <input id="q" type="search" placeholder="Filter 81 commands…" autocomplete="off" aria-label="Filter commands">
     <div class="group" data-group="pkg">
       <div class="group-h">Install &amp; lifecycle</div>
-      <a class="cmd-link" href="#cmd-install" data-search="install install a skill from a tap registry  --force --path p --agent a --scope {user,project} --local --global --dry-run --no-deps --no-mcp name">install</a>
-      <a class="cmd-link" href="#cmd-uninstall" data-search="uninstall remove an installed skill, rule, or workflow  --local -y, --yes name">uninstall</a>
-      <a class="cmd-link" href="#cmd-sync" data-search="sync reconcile installed skills &amp; symlinks against the lock file  --diff --prune --json -y, --yes">sync</a>
-      <a class="cmd-link" href="#cmd-update" data-search="update sync taps or update installed skills  --taps-only -y, --yes --force --shards --json tap">update</a>
-      <a class="cmd-link" href="#cmd-reinstall" data-search="reinstall reinstall a skill, rule or workflow (force) reinstall an installed skill, rule or workflow (force) --all name">reinstall</a>
+      <a class="cmd-link" href="#cmd-install" data-search="install install a skill from a tap registry  --force --path p --agent a --scope {user,project} --local --global --dry-run --no-deps --no-mcp -y, --yes --as-skill --no-as-skill name">install</a>
+      <a class="cmd-link" href="#cmd-uninstall" data-search="uninstall remove an installed skill, rule, or workflow  --scope {user,project} --local --global --kind {skill,rule,workflow} -y, --yes name">uninstall</a>
+      <a class="cmd-link" href="#cmd-sync" data-search="sync reconcile installed skills &amp; symlinks against the lock file  --diff --prune --json -y, --yes --include-changed --rebuild-lock">sync</a>
+      <a class="cmd-link" href="#cmd-update" data-search="update sync taps or update installed skills  --taps-only -y, --yes --force --discard-edits --allow-downgrade --shards --json tap">update</a>
+      <a class="cmd-link" href="#cmd-reinstall" data-search="reinstall reinstall a skill, rule or workflow (force) reinstall an installed skill, rule or workflow (force) --all --scope {user,project} --local --global name">reinstall</a>
       <a class="cmd-link" href="#cmd-bundle" data-search="bundle export/install skill sets via a boostfile  --dry-run {dump,install} file">bundle</a>
-      <a class="cmd-link" href="#cmd-import" data-search="import import skills from a github url or local path  --name n --all --agent a url_or_path">import</a>
-      <a class="cmd-link" href="#cmd-pin" data-search="pin pin a skill, rule or workflow to its current version  --commit name">pin</a>
-      <a class="cmd-link" href="#cmd-unpin" data-search="unpin allow a pinned skill, rule or workflow to update again  name">unpin</a>
+      <a class="cmd-link" href="#cmd-import" data-search="import import skills from a github url or local path  --name n --all --agent a -y, --yes url_or_path">import</a>
+      <a class="cmd-link" href="#cmd-pin" data-search="pin pin a skill, rule or workflow to its current version  --commit --scope {user,project} --local --global name">pin</a>
+      <a class="cmd-link" href="#cmd-unpin" data-search="unpin allow a pinned skill, rule or workflow to update again  --scope {user,project} --local --global name">unpin</a>
       <a class="cmd-link" href="#cmd-snapshot" data-search="snapshot save &amp; restore whole skill environments  --json -y, --yes {save,list,restore} label|id">snapshot</a>
-      <a class="cmd-link" href="#cmd-export" data-search="export package skills as shareable zip/tar archives  -o, --out out --zip --force name">export</a>
-      <a class="cmd-link" href="#cmd-adapt" data-search="adapt render a skill as another framework&#x27;s agent source (crewai, agents sdk, langgraph) render a skill as another agent framework&#x27;s native source --to framework --model m -o, --out file name">adapt</a>
-      <a class="cmd-link" href="#cmd-run" data-search="run adapt a skill, wire tools &amp; run it as a live agent adapt a skill, wire default tools &amp; run it as a live agent. running needs the openai agents sdk (`pip install &quot;openai-agents[litellm]&quot;`) and the model provider&#x27;s api key (anthropic_api_key for a bare model id); --print needs neither. --model m --print -o, --out file name target">run</a>
+      <a class="cmd-link" href="#cmd-export" data-search="export package skills as shareable zip/tar archives  -o, --output, --out out --zip --force name">export</a>
+      <a class="cmd-link" href="#cmd-adapt" data-search="adapt render a skill as another framework&#x27;s agent source (crewai, agents sdk, langgraph) render a skill as another agent framework&#x27;s native source --to framework --model m -o, --output, --out file name">adapt</a>
+      <a class="cmd-link" href="#cmd-run" data-search="run adapt a skill, wire tools &amp; run it as a live agent adapt a skill, wire default tools &amp; run it as a live agent. running needs the openai agents sdk (`pip install &quot;openai-agents[litellm]&quot;`) and the model provider&#x27;s api key (anthropic_api_key for a bare model id); --print needs neither. --model m --print -o, --output, --out file name target">run</a>
     </div>
     <div class="group" data-group="find">
       <div class="group-h">Find &amp; search</div>
@@ -122,7 +122,7 @@
       <a class="cmd-link" href="#cmd-reindex" data-search="reindex build/refresh the full-content search index  --force --dense --export-shard tap --import-shard file --fetch-shards --fetch-index --json">reindex</a>
       <a class="cmd-link" href="#cmd-discover" data-search="discover search github for skill repos you have not tapped yet search github for skill repositories you have not tapped yet --limit limit --json --local query">discover</a>
       <a class="cmd-link" href="#cmd-recommend" data-search="recommend suggest skills based on your project&#x27;s tech stack  --path path --category category --limit limit --json">recommend</a>
-      <a class="cmd-link" href="#cmd-browse" data-search="browse interactive full-screen tui with fuzzy search  --category category">browse</a>
+      <a class="cmd-link" href="#cmd-browse" data-search="browse interactive full-screen tui with fuzzy search  --category category --categories --by-count">browse</a>
       <a class="cmd-link" href="#cmd-index" data-search="index build the discovery registry via github code search  --limit limit --json query">index</a>
       <a class="cmd-link" href="#cmd-trending" data-search="trending show trending items by install count  --limit limit --json">trending</a>
       <a class="cmd-link" href="#cmd-stats" data-search="stats install statistics &amp; trend for a single skill  --json name">stats</a>
@@ -152,9 +152,9 @@
     <div class="group" data-group="ai">
       <div class="group-h">AI-assisted</div>
       <a class="cmd-link" href="#cmd-chat" data-search="chat ask about skills in plain language (rag-grounded) ask about skills in plain language -k, --limit n --no-sources --json question">chat</a>
-      <a class="cmd-link" href="#cmd-distill" data-search="distill merge multiple skills into one deduplicated skill  -o, --output newname --install -y, --yes name">distill</a>
+      <a class="cmd-link" href="#cmd-distill" data-search="distill merge multiple skills into one deduplicated skill  --name newname -o, --output newname --install -y, --yes name">distill</a>
       <a class="cmd-link" href="#cmd-simulate" data-search="simulate preview how a skill would change claude&#x27;s behavior  --task text name">simulate</a>
-      <a class="cmd-link" href="#cmd-infer" data-search="infer generate a skill.md from your codebase patterns  --path dir --name n -o, --output file --install -y, --yes">infer</a>
+      <a class="cmd-link" href="#cmd-infer" data-search="infer generate a skill.md from your codebase patterns  --path dir --name n -o, --output, --out file --install -y, --yes">infer</a>
       <a class="cmd-link" href="#cmd-absorb" data-search="absorb turn recurring chat-history patterns into a skill  --history path --limit n --install -y, --yes">absorb</a>
       <a class="cmd-link" href="#cmd-evolve" data-search="evolve iteratively improve a skill from feedback  --feedback text --apply name">evolve</a>
       <a class="cmd-link" href="#cmd-context" data-search="context branch-aware skill activation  --json action">context</a>
@@ -172,7 +172,7 @@
       <a class="cmd-link" href="#cmd-fingerprint" data-search="fingerprint deterministic hash of the skill environment  --verbose --json">fingerprint</a>
       <a class="cmd-link" href="#cmd-quarantine" data-search="quarantine isolate a problematic skill, rule or workflow without uninstalling  --release name --list --json name">quarantine</a>
       <a class="cmd-link" href="#cmd-decay" data-search="decay flag skills irrelevant to your current stack  --json">decay</a>
-      <a class="cmd-link" href="#cmd-heal" data-search="heal self-diagnose &amp; repair the boost environment  --dry-run --prune-duplicates">heal</a>
+      <a class="cmd-link" href="#cmd-heal" data-search="heal self-diagnose &amp; repair the boost environment  --dry-run --prune-duplicates --as-skill">heal</a>
       <a class="cmd-link" href="#cmd-conflict" data-search="conflict detect contradictory rules between skills detect contradictory rules between skills (exits 1 when any conflict is found) --json">conflict</a>
       <a class="cmd-link" href="#cmd-changelog" data-search="changelog show an item&#x27;s upstream change history  -n n --json name">changelog</a>
       <a class="cmd-link" href="#cmd-attest" data-search="attest display/verify the install record for skills  --verify --json name">attest</a>
@@ -181,28 +181,28 @@
     </div>
     <div class="group" data-group="cfg">
       <div class="group-h">Config &amp; setup</div>
-      <a class="cmd-link" href="#cmd-quickstart" data-search="quickstart tap the starter registries and index them for search tap the starter registries and load prebuilt vectors --catalog --no-vectors --dry-run">quickstart</a>
+      <a class="cmd-link" href="#cmd-quickstart" data-search="quickstart tap the starter registries and index them for search tap the starter registries and load prebuilt vectors --catalog --no-vectors --keep-python --dry-run">quickstart</a>
       <a class="cmd-link" href="#cmd-config" data-search="config display or modify boost configuration  --json {list,get,set,unset} key value">config</a>
       <a class="cmd-link" href="#cmd-clean" data-search="clean clear stale caches &amp; broken symlinks  --dry-run --deep -y, --yes --json">clean</a>
       <a class="cmd-link" href="#cmd-compact" data-search="compact shrink tap clones to the files boost indexes  --dry-run --reclone --json tap">compact</a>
-      <a class="cmd-link" href="#cmd-create" data-search="create scaffold a new skill from a template  --description description --dir dir --install name">create</a>
+      <a class="cmd-link" href="#cmd-create" data-search="create scaffold a new skill from a template  --description description --dir dir --install -y, --yes name">create</a>
       <a class="cmd-link" href="#cmd-policy" data-search="policy manage &amp; enforce skill governance policies  --json {list,set,unset,check} key value">policy</a>
       <a class="cmd-link" href="#cmd-onboard" data-search="onboard add skill-tracker telemetry to a repo (optionally open a pr with --pr)  --repo repo --pr --dry-run -f, --force">onboard</a>
       <a class="cmd-link" href="#cmd-completions" data-search="completions generate shell tab-completion scripts  --eval --dry-run --install --uninstall {bash,zsh,fish}">completions</a>
       <a class="cmd-link" href="#cmd-schedule" data-search="schedule manage automatic skill-sync scheduling  --interval {6h,12h,daily} --json {status,enable,disable}">schedule</a>
       <a class="cmd-link" href="#cmd-serve" data-search="serve browse the catalogue in a browser: search, facets and a tap graph  --port port --host host">serve</a>
-      <a class="cmd-link" href="#cmd-mcp" data-search="mcp register boost as an mcp server (claude code, gemini cli, antigravity cli, codex cli) register boost as an mcp server for your agent clis --host h --stdio --dry-run --force --seed --no-seed {register,unregister}">mcp</a>
+      <a class="cmd-link" href="#cmd-mcp" data-search="mcp register boost as an mcp server (claude code, gemini cli, antigravity cli, codex cli) register boost as an mcp server for your agent clis --host h --stdio --dry-run --force --seed --no-seed -y, --yes {register,unregister}">mcp</a>
       <a class="cmd-link" href="#cmd-hooks" data-search="hooks manage agent hooks (claude code, gemini cli, codex cli) manage agent hooks (scope- and host-aware) in an agent&#x27;s settings --host h -c, --command command -n, --name name -s, --scope {global,project} -m, --matcher matcher --timeout timeout --json --force {add,remove,list} event">hooks</a>
       <a class="cmd-link" href="#cmd-bmad" data-search="bmad bmad method autopilot — `bmad on` routes every task to a persona bmad method autopilot: personas, prompt routing, workflows -s, --scope {project,global} --modules modules -y, --yes --startup --plain --force --host h action value">bmad</a>
-      <a class="cmd-link" href="#cmd-self-update" data-search="self-update update boost itself to the latest version  --dry-run">self-update</a>
+      <a class="cmd-link" href="#cmd-self-update" data-search="self-update update boost itself to the latest version  --dry-run --python version --keep-python">self-update</a>
     </div>
     <div class="group" data-group="team">
       <div class="group-h">Team &amp; sharing</div>
-      <a class="cmd-link" href="#cmd-cohort" data-search="cohort controlled skill rollouts &amp; team a/b testing  --skills skills --percent percent --json {list,create,delete,status,apply} name">cohort</a>
-      <a class="cmd-link" href="#cmd-profile" data-search="profile named skill profiles for context switching  --prune --json {list,save,use,show,diff,delete} name">profile</a>
-      <a class="cmd-link" href="#cmd-protocol" data-search="protocol manage the boost:// one-click-install handler  {status,register,unregister,open} url">protocol</a>
+      <a class="cmd-link" href="#cmd-cohort" data-search="cohort controlled skill rollouts &amp; team a/b testing  --skills skills --percent percent -y, --yes --json {list,create,delete,status,apply} name">cohort</a>
+      <a class="cmd-link" href="#cmd-profile" data-search="profile named skill profiles for context switching  --prune -y, --yes --json {list,save,use,show,diff,delete} name">profile</a>
+      <a class="cmd-link" href="#cmd-protocol" data-search="protocol manage the boost:// one-click-install handler  -y, --yes --gui {status,register,unregister,open} url">protocol</a>
       <a class="cmd-link" href="#cmd-pulse" data-search="pulse team activity feed of skill-management events  -n n --all --action action --json">pulse</a>
-      <a class="cmd-link" href="#cmd-replay" data-search="replay view version history &amp; roll back skills  --json {list,show,rollback} id">replay</a>
+      <a class="cmd-link" href="#cmd-replay" data-search="replay view version history &amp; roll back skills  -y, --yes --discard-edits --json {list,show,rollback} id">replay</a>
       <a class="cmd-link" href="#cmd-who" data-search="who discover who on the team has skill expertise  --json skill">who</a>
     </div>
     <div id="nohits">No commands match.</div>
@@ -212,13 +212,13 @@
     <p class="lead">All <b>81</b> commands, generated from the CLI itself —
        run <code>boost &lt;command&gt; --help</code> for the same in your terminal.</p>
       <h2 class="group-h" id="grp-pkg">Install &amp; lifecycle</h2>
-      <section class="cmd" id="cmd-install" data-search="install install a skill from a tap registry  --force --path p --agent a --scope {user,project} --local --global --dry-run --no-deps --no-mcp name">
+      <section class="cmd" id="cmd-install" data-search="install install a skill from a tap registry  --force --path p --agent a --scope {user,project} --local --global --dry-run --no-deps --no-mcp -y, --yes --as-skill --no-as-skill name">
         <h3><span class="cname">install</span><span class="gtag">pkg</span></h3>
         <p class="summary">Install a skill from a tap registry</p>
-        <pre class="syn">boost install [--force] [--path P] [--agent A] [--scope {user,project} | --local | --global] [--dry-run] [--no-deps] [--no-mcp] NAME [NAME ...]</pre>
+        <pre class="syn">boost install [--force] [--path P] [--agent A] [--scope {user,project} | --local | --global] [--dry-run] [--no-deps] [--no-mcp] [-y] [--as-skill | --no-as-skill] NAME [NAME ...]</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
-          <div class="arg"><code>NAME</code><span>skill name, optionally qualified as tap:skill</span></div>
+          <div class="arg"><code>NAME</code><span>skill name, optionally qualified as tap:skill; a tap&#x27;s own name (owner/repo) installs every skill it ships, after listing them and asking (-y skips the question)</span></div>
         </div>
         <div class="args-h">Options</div>
         <div class="args">
@@ -231,38 +231,46 @@
           <div class="arg"><code>--dry-run</code><span>show what would happen without changing anything</span></div>
           <div class="arg"><code>--no-deps</code><span>install only the named skills, not their `requires:` (the wider spellings are reported, never installed)</span></div>
           <div class="arg"><code>--no-mcp</code><span>don&#x27;t offer to register MCP servers a skill declares</span></div>
+          <div class="arg"><code>-y, --yes</code><span>with a tap as NAME, install its skill list without asking first. Never answers the offer to register the MCP servers a skill declares: a typed y does, or BOOST_ASSUME_YES=1 for the whole command, or running the `mcp add` lines a declined offer prints</span></div>
+          <div class="arg"><code>--as-skill</code><span>also put a workflow in the skill store, for agents that read only skills (default: the workflows_as_skills config); remembered</span></div>
+          <div class="arg"><code>--no-as-skill</code><span>don&#x27;t put a workflow in the skill store; remembered</span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-uninstall" data-search="uninstall remove an installed skill, rule, or workflow  --local -y, --yes name">
+      <section class="cmd" id="cmd-uninstall" data-search="uninstall remove an installed skill, rule, or workflow  --scope {user,project} --local --global --kind {skill,rule,workflow} -y, --yes name">
         <h3><span class="cname">uninstall</span><span class="gtag">pkg</span></h3>
         <p class="summary">Remove an installed skill, rule, or workflow</p>
-        <pre class="syn">boost uninstall [--local] [-y] NAME [NAME ...]</pre>
+        <pre class="syn">boost uninstall [--scope {user,project} | --local | --global] [--kind {skill,rule,workflow}] [-y] NAME [NAME ...]</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
           <div class="arg"><code>NAME</code><span>installed skill, rule or workflow (several allowed)</span></div>
         </div>
         <div class="args-h">Options</div>
         <div class="args">
-          <div class="arg"><code>--local</code><span>remove from this repo rather than your user config</span></div>
+          <div class="arg"><code>--scope {user,project}</code><span>remove from your user config or this repo (default: user config, then this repo for a name only it has)</span></div>
+          <div class="arg"><code>--local</code><span>remove from this repo (= --scope project)</span></div>
+          <div class="arg"><code>--global</code><span>remove from your user config only (= --scope user)</span></div>
+          <div class="arg"><code>--kind {skill,rule,workflow}</code><span>which item to remove when a skill, rule or workflow share NAME</span></div>
           <div class="arg"><code>-y, --yes</code><span>skip the confirmation prompt</span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-sync" data-search="sync reconcile installed skills &amp; symlinks against the lock file  --diff --prune --json -y, --yes">
+      <section class="cmd" id="cmd-sync" data-search="sync reconcile installed skills &amp; symlinks against the lock file  --diff --prune --json -y, --yes --include-changed --rebuild-lock">
         <h3><span class="cname">sync</span><span class="gtag">pkg</span></h3>
         <p class="summary">Reconcile installed skills &amp; symlinks against the lock file</p>
-        <pre class="syn">boost sync [--diff] [--prune] [--json] [-y]</pre>
+        <pre class="syn">boost sync [--diff] [--prune] [--json] [-y] [--include-changed] [--rebuild-lock]</pre>
         <div class="args-h">Options</div>
         <div class="args">
           <div class="arg"><code>--diff</code><span>show the plan without applying it</span></div>
-          <div class="arg"><code>--prune</code><span>also delete orphaned store dirs and links outside a declared --agent scope</span></div>
+          <div class="arg"><code>--prune</code><span>also move store dirs that copy another tool&#x27;s skills to quarantine (~/.agents/.quarantine), drop boost&#x27;s Claude Code link to a skill an enabled plugin ships identically, and remove links outside a declared --agent scope</span></div>
           <div class="arg"><code>--json</code><span>machine-readable output</span></div>
           <div class="arg"><code>-y, --yes</code><span>skip the --prune confirmation prompts</span></div>
+          <div class="arg"><code>--include-changed</code><span>with --prune, also quarantine copies that differ from the original (local edits, such as a port)</span></div>
+          <div class="arg"><code>--rebuild-lock</code><span>set an unreadable lock file aside (its bytes are kept) and re-record the store into a new one</span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-update" data-search="update sync taps or update installed skills  --taps-only -y, --yes --force --shards --json tap">
+      <section class="cmd" id="cmd-update" data-search="update sync taps or update installed skills  --taps-only -y, --yes --force --discard-edits --allow-downgrade --shards --json tap">
         <h3><span class="cname">update</span><span class="gtag">pkg</span></h3>
         <p class="summary">Sync taps or update installed skills</p>
-        <pre class="syn">boost update [--taps-only] [-y] [--force] [--shards] [--json] [TAP]</pre>
+        <pre class="syn">boost update [--taps-only] [-y] [--force] [--discard-edits] [--allow-downgrade] [--shards] [--json] [TAP]</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
           <div class="arg"><code>TAP</code><span>refresh only this tap</span></div>
@@ -272,14 +280,16 @@
           <div class="arg"><code>--taps-only</code><span>refresh tap clones &amp; catalogs without touching skills</span></div>
           <div class="arg"><code>-y, --yes</code><span>skip the confirmation prompt</span></div>
           <div class="arg"><code>--force</code><span>move pinned taps too, clearing their pin</span></div>
+          <div class="arg"><code>--discard-edits</code><span>refresh locally edited skills, rules and workflows too, overwriting the edits</span></div>
+          <div class="arg"><code>--allow-downgrade</code><span>follow a tap whose upstream version is now older than the installed one</span></div>
           <div class="arg"><code>--shards</code><span>refresh prebuilt vectors from the published manifest, moving taps to the commits it names</span></div>
           <div class="arg"><code>--json</code><span>with --shards: print the per-tap result as JSON</span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-reinstall" data-search="reinstall reinstall a skill, rule or workflow (force) reinstall an installed skill, rule or workflow (force) --all name">
+      <section class="cmd" id="cmd-reinstall" data-search="reinstall reinstall a skill, rule or workflow (force) reinstall an installed skill, rule or workflow (force) --all --scope {user,project} --local --global name">
         <h3><span class="cname">reinstall</span><span class="gtag">pkg</span></h3>
         <p class="summary">Reinstall a skill, rule or workflow (force)</p>
-        <pre class="syn">boost reinstall [--all] [NAME ...]</pre>
+        <pre class="syn">boost reinstall [--all] [--scope {user,project} | --local | --global] [NAME ...]</pre>
         <p class="desc">Reinstall an installed skill, rule or workflow (force)</p>
         <div class="args-h">Arguments</div>
         <div class="args">
@@ -288,6 +298,9 @@
         <div class="args-h">Options</div>
         <div class="args">
           <div class="arg"><code>--all</code><span>reinstall every installed skill, rule and workflow</span></div>
+          <div class="arg"><code>--scope {user,project}</code><span>reinstall only what is installed in your user config or in this repo (default: the user lock as recorded)</span></div>
+          <div class="arg"><code>--local</code><span>what is installed in this repo (= --scope project)</span></div>
+          <div class="arg"><code>--global</code><span>what is installed in your user config (= --scope user)</span></div>
         </div>
       </section>
       <section class="cmd" id="cmd-bundle" data-search="bundle export/install skill sets via a boostfile  --dry-run {dump,install} file">
@@ -301,13 +314,14 @@
         </div>
         <div class="args-h">Options</div>
         <div class="args">
-          <div class="arg"><code>--dry-run</code><span>show what install would do, touching nothing</span></div>
+          <div class="arg"><code>--dry-run</code><span>show what install would do, or print what dump would write, touching nothing</span></div>
         </div>
+        <p class="epilog">Boostfile lines: `tap NAME [URL] [--at SHA]` and `skill [TAP:]NAME[@VERSION] [--local] [--agent A]... [--pin] [--commit-pin SHA] [--tag T]...`; `#` starts a comment. `--at` holds the tap at a commit, as `boost tap --at` does; the skill options replay `boost install --local/--agent`, `boost pin [--commit]` and `boost tag +T`. Every option is optional, so older Boostfiles still install.</p>
       </section>
-      <section class="cmd" id="cmd-import" data-search="import import skills from a github url or local path  --name n --all --agent a url_or_path">
+      <section class="cmd" id="cmd-import" data-search="import import skills from a github url or local path  --name n --all --agent a -y, --yes url_or_path">
         <h3><span class="cname">import</span><span class="gtag">pkg</span></h3>
         <p class="summary">Import skills from a GitHub URL or local path</p>
-        <pre class="syn">boost import [--name N | --all] [--agent A] URL_OR_PATH</pre>
+        <pre class="syn">boost import [--name N | --all] [--agent A] [-y] URL_OR_PATH</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
           <div class="arg"><code>URL_OR_PATH</code><span>git URL (http(s)://, git@, ssh://) or a local directory</span></div>
@@ -317,12 +331,13 @@
           <div class="arg"><code>--name N</code><span>skill to pick when several are found (or a rename)</span></div>
           <div class="arg"><code>--all</code><span>import every skill found</span></div>
           <div class="arg"><code>--agent A</code><span>link only into this agent (repeatable)</span></div>
+          <div class="arg"><code>-y, --yes</code><span>skip the replace-the-only-copy confirmation prompt</span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-pin" data-search="pin pin a skill, rule or workflow to its current version  --commit name">
+      <section class="cmd" id="cmd-pin" data-search="pin pin a skill, rule or workflow to its current version  --commit --scope {user,project} --local --global name">
         <h3><span class="cname">pin</span><span class="gtag">pkg</span></h3>
         <p class="summary">Pin a skill, rule or workflow to its current version</p>
-        <pre class="syn">boost pin [--commit] NAME</pre>
+        <pre class="syn">boost pin [--commit] [--scope {user,project} | --local | --global] NAME</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
           <div class="arg"><code>NAME</code><span>installed skill, rule or workflow</span></div>
@@ -330,15 +345,24 @@
         <div class="args-h">Options</div>
         <div class="args">
           <div class="arg"><code>--commit</code><span>also freeze the exact source commit (integrity pin)</span></div>
+          <div class="arg"><code>--scope {user,project}</code><span>pin the copy in your user config or in this repo (needed when both hold the name)</span></div>
+          <div class="arg"><code>--local</code><span>the copy installed in this repo (= --scope project)</span></div>
+          <div class="arg"><code>--global</code><span>the copy in your user config (= --scope user)</span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-unpin" data-search="unpin allow a pinned skill, rule or workflow to update again  name">
+      <section class="cmd" id="cmd-unpin" data-search="unpin allow a pinned skill, rule or workflow to update again  --scope {user,project} --local --global name">
         <h3><span class="cname">unpin</span><span class="gtag">pkg</span></h3>
         <p class="summary">Allow a pinned skill, rule or workflow to update again</p>
-        <pre class="syn">boost unpin NAME</pre>
+        <pre class="syn">boost unpin [--scope {user,project} | --local | --global] NAME</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
           <div class="arg"><code>NAME</code><span>pinned skill, rule or workflow</span></div>
+        </div>
+        <div class="args-h">Options</div>
+        <div class="args">
+          <div class="arg"><code>--scope {user,project}</code><span>unpin the copy in your user config or in this repo (needed when both hold the name)</span></div>
+          <div class="arg"><code>--local</code><span>the copy installed in this repo (= --scope project)</span></div>
+          <div class="arg"><code>--global</code><span>the copy in your user config (= --scope user)</span></div>
         </div>
       </section>
       <section class="cmd" id="cmd-snapshot" data-search="snapshot save &amp; restore whole skill environments  --json -y, --yes {save,list,restore} label|id">
@@ -356,7 +380,7 @@
           <div class="arg"><code>-y, --yes</code><span>skip the restore confirmation prompt</span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-export" data-search="export package skills as shareable zip/tar archives  -o, --out out --zip --force name">
+      <section class="cmd" id="cmd-export" data-search="export package skills as shareable zip/tar archives  -o, --output, --out out --zip --force name">
         <h3><span class="cname">export</span><span class="gtag">pkg</span></h3>
         <p class="summary">Package skills as shareable zip/tar archives</p>
         <pre class="syn">boost export [-o OUT] [--zip] [--force] [NAME ...]</pre>
@@ -366,12 +390,12 @@
         </div>
         <div class="args-h">Options</div>
         <div class="args">
-          <div class="arg"><code>-o, --out OUT</code><span>output archive path</span></div>
+          <div class="arg"><code>-o, --output, --out OUT</code><span>output archive path</span></div>
           <div class="arg"><code>--zip</code><span>build a .zip instead of .tar.gz</span></div>
           <div class="arg"><code>--force</code><span>overwrite OUT if it already exists</span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-adapt" data-search="adapt render a skill as another framework&#x27;s agent source (crewai, agents sdk, langgraph) render a skill as another agent framework&#x27;s native source --to framework --model m -o, --out file name">
+      <section class="cmd" id="cmd-adapt" data-search="adapt render a skill as another framework&#x27;s agent source (crewai, agents sdk, langgraph) render a skill as another agent framework&#x27;s native source --to framework --model m -o, --output, --out file name">
         <h3><span class="cname">adapt</span><span class="gtag">pkg</span></h3>
         <p class="summary">Render a skill as another framework&#x27;s agent source (CrewAI, Agents SDK, LangGraph)</p>
         <pre class="syn">boost adapt --to FRAMEWORK [--model M] [-o FILE] name</pre>
@@ -384,10 +408,10 @@
         <div class="args">
           <div class="arg"><code>--to FRAMEWORK</code><span>target framework: agents-sdk, crewai, langgraph</span></div>
           <div class="arg"><code>--model M</code><span>LLM the exported agent runs on (default: boost&#x27;s ai.model; pass &#x27;none&#x27; for the framework&#x27;s own default)</span></div>
-          <div class="arg"><code>-o, --out FILE</code><span>write to FILE instead of stdout</span></div>
+          <div class="arg"><code>-o, --output, --out FILE</code><span>write to FILE instead of stdout</span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-run" data-search="run adapt a skill, wire tools &amp; run it as a live agent adapt a skill, wire default tools &amp; run it as a live agent. running needs the openai agents sdk (`pip install &quot;openai-agents[litellm]&quot;`) and the model provider&#x27;s api key (anthropic_api_key for a bare model id); --print needs neither. --model m --print -o, --out file name target">
+      <section class="cmd" id="cmd-run" data-search="run adapt a skill, wire tools &amp; run it as a live agent adapt a skill, wire default tools &amp; run it as a live agent. running needs the openai agents sdk (`pip install &quot;openai-agents[litellm]&quot;`) and the model provider&#x27;s api key (anthropic_api_key for a bare model id); --print needs neither. --model m --print -o, --output, --out file name target">
         <h3><span class="cname">run</span><span class="gtag">pkg</span></h3>
         <p class="summary">Adapt a skill, wire tools &amp; run it as a live agent</p>
         <pre class="syn">boost run [--model M] [--print] [-o FILE] name [target]</pre>
@@ -401,7 +425,7 @@
         <div class="args">
           <div class="arg"><code>--model M</code><span>LLM to run on (default: boost&#x27;s ai.model; &#x27;none&#x27; for the SDK&#x27;s own default)</span></div>
           <div class="arg"><code>--print</code><span>print the generated runner script instead of executing it</span></div>
-          <div class="arg"><code>-o, --out FILE</code><span>with --print: write the runner to FILE</span></div>
+          <div class="arg"><code>-o, --output, --out FILE</code><span>with --print: write the runner to FILE</span></div>
         </div>
       </section>
       <h2 class="group-h" id="grp-find">Find &amp; search</h2>
@@ -465,13 +489,15 @@
           <div class="arg"><code>--json</code><span>machine-readable output</span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-browse" data-search="browse interactive full-screen tui with fuzzy search  --category category">
+      <section class="cmd" id="cmd-browse" data-search="browse interactive full-screen tui with fuzzy search  --category category --categories --by-count">
         <h3><span class="cname">browse</span><span class="gtag">find</span></h3>
         <p class="summary">Interactive full-screen TUI with fuzzy search</p>
-        <pre class="syn">boost browse [--category CATEGORY]</pre>
+        <pre class="syn">boost browse [--category CATEGORY] [--categories] [--by-count]</pre>
         <div class="args-h">Options</div>
         <div class="args">
-          <div class="arg"><code>--category CATEGORY</code><span>only browse entries whose category matches (case-insensitive)</span></div>
+          <div class="arg"><code>--category CATEGORY</code><span>open on one category (case-insensitive); ^G switches</span></div>
+          <div class="arg"><code>--categories</code><span>list the categories and how many items each holds, A–Z</span></div>
+          <div class="arg"><code>--by-count</code><span>with --categories: largest first instead of A–Z</span></div>
         </div>
       </section>
       <section class="cmd" id="cmd-index" data-search="index build the discovery registry via github code search  --limit limit --json query">
@@ -726,17 +752,18 @@
           <div class="arg"><code>--json</code><span>machine-readable answer (implies one-shot)</span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-distill" data-search="distill merge multiple skills into one deduplicated skill  -o, --output newname --install -y, --yes name">
+      <section class="cmd" id="cmd-distill" data-search="distill merge multiple skills into one deduplicated skill  --name newname -o, --output newname --install -y, --yes name">
         <h3><span class="cname">distill</span><span class="gtag">ai</span></h3>
         <p class="summary">Merge multiple skills into one deduplicated skill</p>
-        <pre class="syn">boost distill [-o NEWNAME] [--install] [-y] NAME [NAME ...]</pre>
+        <pre class="syn">boost distill [--name NEWNAME | -o NEWNAME] [--install] [-y] NAME [NAME ...]</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
           <div class="arg"><code>NAME</code><span>two or more skills to merge</span></div>
         </div>
         <div class="args-h">Options</div>
         <div class="args">
-          <div class="arg"><code>-o, --output NEWNAME</code><span>name for the merged skill (default: &lt;first&gt;-distilled)</span></div>
+          <div class="arg"><code>--name NEWNAME</code><span>name for the merged skill (default: &lt;first&gt;-distilled)</span></div>
+          <div class="arg"><code>-o, --output NEWNAME</code><span>older spelling of --name (a name, not a path)</span></div>
           <div class="arg"><code>--install</code><span>install the merged skill instead of writing a file</span></div>
           <div class="arg"><code>-y, --yes</code><span>skip the overwrite/replace confirmation prompt</span></div>
         </div>
@@ -754,7 +781,7 @@
           <div class="arg"><code>--task TEXT</code><span>task to simulate (default: a typical coding task)</span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-infer" data-search="infer generate a skill.md from your codebase patterns  --path dir --name n -o, --output file --install -y, --yes">
+      <section class="cmd" id="cmd-infer" data-search="infer generate a skill.md from your codebase patterns  --path dir --name n -o, --output, --out file --install -y, --yes">
         <h3><span class="cname">infer</span><span class="gtag">ai</span></h3>
         <p class="summary">Generate a SKILL.md from your codebase patterns</p>
         <pre class="syn">boost infer [--path DIR] [--name N] [-o FILE] [--install] [-y]</pre>
@@ -762,7 +789,7 @@
         <div class="args">
           <div class="arg"><code>--path DIR</code><span>codebase to analyze (default: current directory)</span></div>
           <div class="arg"><code>--name N</code><span>skill name (default: project-conventions)</span></div>
-          <div class="arg"><code>-o, --output FILE</code><span>write to a file</span></div>
+          <div class="arg"><code>-o, --output, --out FILE</code><span>write to a file</span></div>
           <div class="arg"><code>--install</code><span>install the generated skill</span></div>
           <div class="arg"><code>-y, --yes</code><span>skip the overwrite/replace confirmation prompt</span></div>
         </div>
@@ -945,14 +972,15 @@
           <div class="arg"><code>--json</code><span>machine-readable output</span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-heal" data-search="heal self-diagnose &amp; repair the boost environment  --dry-run --prune-duplicates">
+      <section class="cmd" id="cmd-heal" data-search="heal self-diagnose &amp; repair the boost environment  --dry-run --prune-duplicates --as-skill">
         <h3><span class="cname">heal</span><span class="gtag">chk</span></h3>
         <p class="summary">Self-diagnose &amp; repair the boost environment</p>
-        <pre class="syn">boost heal [--dry-run] [--prune-duplicates]</pre>
+        <pre class="syn">boost heal [--dry-run] [--prune-duplicates] [--as-skill]</pre>
         <div class="args-h">Options</div>
         <div class="args">
           <div class="arg"><code>--dry-run</code><span>show repairs without applying them</span></div>
           <div class="arg"><code>--prune-duplicates</code><span>remove the duplicate-discovery symlinks `boost doctor` reports (an agent that collapses them silently is never reported, so never pruned)</span></div>
+          <div class="arg"><code>--as-skill</code><span>give installed workflows their copy in the skill store, for agents that read only skills</span></div>
         </div>
       </section>
       <section class="cmd" id="cmd-conflict" data-search="conflict detect contradictory rules between skills detect contradictory rules between skills (exits 1 when any conflict is found) --json">
@@ -1018,15 +1046,16 @@
         </div>
       </section>
       <h2 class="group-h" id="grp-cfg">Config &amp; setup</h2>
-      <section class="cmd" id="cmd-quickstart" data-search="quickstart tap the starter registries and index them for search tap the starter registries and load prebuilt vectors --catalog --no-vectors --dry-run">
+      <section class="cmd" id="cmd-quickstart" data-search="quickstart tap the starter registries and index them for search tap the starter registries and load prebuilt vectors --catalog --no-vectors --keep-python --dry-run">
         <h3><span class="cname">quickstart</span><span class="gtag">cfg</span></h3>
         <p class="summary">Tap the starter registries and index them for search</p>
-        <pre class="syn">boost quickstart [--catalog] [--no-vectors] [--dry-run]</pre>
+        <pre class="syn">boost quickstart [--catalog] [--no-vectors] [--keep-python] [--dry-run]</pre>
         <p class="desc">Tap the starter registries and load prebuilt vectors</p>
         <div class="args-h">Options</div>
         <div class="args">
           <div class="arg"><code>--catalog</code><span>tap every catalogued registry, not just the 7 starters, and fetch vectors for all of them</span></div>
           <div class="arg"><code>--no-vectors</code><span>set up taps and keyword search only, skip shards</span></div>
+          <div class="arg"><code>--keep-python</code><span>skip moving to the recommended Python</span></div>
           <div class="arg"><code>--dry-run</code><span>print what would happen, change nothing</span></div>
         </div>
       </section>
@@ -1072,10 +1101,10 @@
           <div class="arg"><code>--json</code><span>machine-readable output</span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-create" data-search="create scaffold a new skill from a template  --description description --dir dir --install name">
+      <section class="cmd" id="cmd-create" data-search="create scaffold a new skill from a template  --description description --dir dir --install -y, --yes name">
         <h3><span class="cname">create</span><span class="gtag">cfg</span></h3>
         <p class="summary">Scaffold a new skill from a template</p>
-        <pre class="syn">boost create [--description DESCRIPTION] [--dir DIR] [--install] name</pre>
+        <pre class="syn">boost create [--description DESCRIPTION] [--dir DIR] [--install] [-y] name</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
           <div class="arg"><code>name</code><span>skill name (slugified)</span></div>
@@ -1085,6 +1114,7 @@
           <div class="arg"><code>--description DESCRIPTION</code><span>one-line trigger description for the frontmatter</span></div>
           <div class="arg"><code>--dir DIR</code><span>parent directory (default: current directory)</span></div>
           <div class="arg"><code>--install</code><span>install the new skill immediately</span></div>
+          <div class="arg"><code>-y, --yes</code><span>with --install, replace an installed skill of the same name without asking</span></div>
         </div>
       </section>
       <section class="cmd" id="cmd-policy" data-search="policy manage &amp; enforce skill governance policies  --json {list,set,unset,check} key value">
@@ -1108,7 +1138,7 @@
         <pre class="syn">boost onboard [--repo REPO] [--pr] [--dry-run] [-f]</pre>
         <div class="args-h">Options</div>
         <div class="args">
-          <div class="arg"><code>--repo REPO</code><span>repository directory (default: .)</span></div>
+          <div class="arg"><code>--repo REPO</code><span>repository directory (default: the enclosing project root)</span></div>
           <div class="arg"><code>--pr</code><span>commit on a branch and open a PR with `gh`</span></div>
           <div class="arg"><code>--dry-run</code><span>preview the files without writing anything</span></div>
           <div class="arg"><code>-f, --force</code><span>overwrite existing files without confirming</span></div>
@@ -1154,10 +1184,10 @@
           <div class="arg"><code>--host HOST</code><span>address to bind (default: 127.0.0.1)</span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-mcp" data-search="mcp register boost as an mcp server (claude code, gemini cli, antigravity cli, codex cli) register boost as an mcp server for your agent clis --host h --stdio --dry-run --force --seed --no-seed {register,unregister}">
+      <section class="cmd" id="cmd-mcp" data-search="mcp register boost as an mcp server (claude code, gemini cli, antigravity cli, codex cli) register boost as an mcp server for your agent clis --host h --stdio --dry-run --force --seed --no-seed -y, --yes {register,unregister}">
         <h3><span class="cname">mcp</span><span class="gtag">cfg</span></h3>
         <p class="summary">Register boost as an MCP server (Claude Code, Gemini CLI, Antigravity CLI, Codex CLI)</p>
-        <pre class="syn">boost mcp [--host H] [--stdio] [--dry-run] [--force] [--seed | --no-seed] [{register,unregister}]</pre>
+        <pre class="syn">boost mcp [--host H] [--stdio] [--dry-run] [--force] [--seed | --no-seed] [-y] [{register,unregister}]</pre>
         <p class="desc">Register boost as an MCP server for your agent CLIs</p>
         <div class="args-h">Arguments</div>
         <div class="args">
@@ -1171,6 +1201,7 @@
           <div class="arg"><code>--force</code><span>(un)register even when the host would write outside this $HOME — for a config home deliberately kept elsewhere</span></div>
           <div class="arg"><code>--seed</code><span>top up any missing recommended registries even if others are already tapped (the repair path)</span></div>
           <div class="arg"><code>--no-seed</code><span>register only; do not tap anything</span></div>
+          <div class="arg"><code>-y, --yes</code><span>install the boost-first rule without asking</span></div>
         </div>
       </section>
       <section class="cmd" id="cmd-hooks" data-search="hooks manage agent hooks (claude code, gemini cli, codex cli) manage agent hooks (scope- and host-aware) in an agent&#x27;s settings --host h -c, --command command -n, --name name -s, --scope {global,project} -m, --matcher matcher --timeout timeout --json --force {add,remove,list} event">
@@ -1216,37 +1247,40 @@
           <div class="arg"><code>--host H</code><span>on/startup: hosts to hook (claude | gemini | codex; default auto: claude + any in use) · route/orient: output format</span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-self-update" data-search="self-update update boost itself to the latest version  --dry-run">
+      <section class="cmd" id="cmd-self-update" data-search="self-update update boost itself to the latest version  --dry-run --python version --keep-python">
         <h3><span class="cname">self-update</span><span class="gtag">cfg</span></h3>
         <p class="summary">Update boost itself to the latest version</p>
-        <pre class="syn">boost self-update [--dry-run]</pre>
+        <pre class="syn">boost self-update [--dry-run] [--python VERSION] [--keep-python]</pre>
         <div class="args-h">Options</div>
         <div class="args">
           <div class="arg"><code>--dry-run</code><span>show how boost would update itself, change nothing</span></div>
+          <div class="arg"><code>--python VERSION</code><span>rebuild boost&#x27;s pipx or uv tool venv on this Python (e.g. 3.13), downloading the manager&#x27;s own build of it, and keep its extras — the way off an interpreter Homebrew removed, or one the [rag] extra has no wheel for</span></div>
+          <div class="arg"><code>--keep-python</code><span>skip moving to the recommended Python</span></div>
         </div>
       </section>
       <h2 class="group-h" id="grp-team">Team &amp; sharing</h2>
-      <section class="cmd" id="cmd-cohort" data-search="cohort controlled skill rollouts &amp; team a/b testing  --skills skills --percent percent --json {list,create,delete,status,apply} name">
+      <section class="cmd" id="cmd-cohort" data-search="cohort controlled skill rollouts &amp; team a/b testing  --skills skills --percent percent -y, --yes --json {list,create,delete,status,apply} name">
         <h3><span class="cname">cohort</span><span class="gtag">team</span></h3>
         <p class="summary">Controlled skill rollouts &amp; team A/B testing</p>
-        <pre class="syn">boost cohort [--skills SKILLS] [--percent PERCENT] [--json] [{list,create,delete,status,apply}] [name]</pre>
+        <pre class="syn">boost cohort [--skills SKILLS] [--percent PERCENT] [-y] [--json] [{list,create,delete,status,apply}] [name]</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
           <div class="arg"><code>{list,create,delete,status,apply}</code><span>what to do (default: list; status is the same as list)</span></div>
-          <div class="arg"><code>name</code><span>cohort name</span></div>
+          <div class="arg"><code>name</code><span>cohort name (list/status: show only that cohort)</span></div>
         </div>
         <div class="args-h">Options</div>
         <div class="args">
-          <div class="arg"><code>--skills SKILLS</code><span>comma-separated skill names (repeatable)</span></div>
-          <div class="arg"><code>--percent PERCENT</code><span>rollout percentage (default 100)</span></div>
+          <div class="arg"><code>--skills SKILLS</code><span>with `create`: comma-separated skill names (repeatable)</span></div>
+          <div class="arg"><code>--percent PERCENT</code><span>with `create`: rollout percentage (default 100)</span></div>
+          <div class="arg"><code>-y, --yes</code><span>`delete` without the confirmation prompt</span></div>
           <div class="arg"><code>--json</code><span>machine-readable output</span></div>
         </div>
         <p class="epilog">Membership is a deterministic hash of user+cohort, so a 50% rollout lands on the same half of the team every time. This machine evaluates its own membership locally.</p>
       </section>
-      <section class="cmd" id="cmd-profile" data-search="profile named skill profiles for context switching  --prune --json {list,save,use,show,diff,delete} name">
+      <section class="cmd" id="cmd-profile" data-search="profile named skill profiles for context switching  --prune -y, --yes --json {list,save,use,show,diff,delete} name">
         <h3><span class="cname">profile</span><span class="gtag">team</span></h3>
         <p class="summary">Named skill profiles for context switching</p>
-        <pre class="syn">boost profile [--prune] [--json] [{list,save,use,show,diff,delete}] [name]</pre>
+        <pre class="syn">boost profile [--prune] [-y] [--json] [{list,save,use,show,diff,delete}] [name]</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
           <div class="arg"><code>{list,save,use,show,diff,delete}</code><span>what to do (default: list)</span></div>
@@ -1255,17 +1289,23 @@
         <div class="args-h">Options</div>
         <div class="args">
           <div class="arg"><code>--prune</code><span>with `use`: fully uninstall skills not in the profile</span></div>
+          <div class="arg"><code>-y, --yes</code><span>`delete` and `use --prune` without the confirmation prompt</span></div>
           <div class="arg"><code>--json</code><span>machine-readable output</span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-protocol" data-search="protocol manage the boost:// one-click-install handler  {status,register,unregister,open} url">
+      <section class="cmd" id="cmd-protocol" data-search="protocol manage the boost:// one-click-install handler  -y, --yes --gui {status,register,unregister,open} url">
         <h3><span class="cname">protocol</span><span class="gtag">team</span></h3>
         <p class="summary">Manage the boost:// one-click-install handler</p>
-        <pre class="syn">boost protocol [{status,register,unregister,open}] [url]</pre>
+        <pre class="syn">boost protocol [-y | --gui] [{status,register,unregister,open}] [url]</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
           <div class="arg"><code>{status,register,unregister,open}</code><span>what to do (default: status)</span></div>
           <div class="arg"><code>url</code><span>a boost:// URL (for `open`)</span></div>
+        </div>
+        <div class="args-h">Options</div>
+        <div class="args">
+          <div class="arg"><code>-y, --yes</code><span>`open` without the confirmation prompt</span></div>
+          <div class="arg"><code>--gui</code><span>`open` asks in a desktop dialog instead of the terminal (what the registered handler passes)</span></div>
         </div>
       </section>
       <section class="cmd" id="cmd-pulse" data-search="pulse team activity feed of skill-management events  -n n --all --action action --json">
@@ -1280,10 +1320,10 @@
           <div class="arg"><code>--json</code><span>machine-readable output</span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-replay" data-search="replay view version history &amp; roll back skills  --json {list,show,rollback} id">
+      <section class="cmd" id="cmd-replay" data-search="replay view version history &amp; roll back skills  -y, --yes --discard-edits --json {list,show,rollback} id">
         <h3><span class="cname">replay</span><span class="gtag">team</span></h3>
         <p class="summary">View version history &amp; roll back skills</p>
-        <pre class="syn">boost replay [--json] [{list,show,rollback}] [id]</pre>
+        <pre class="syn">boost replay [-y] [--discard-edits] [--json] [{list,show,rollback}] [id]</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
           <div class="arg"><code>{list,show,rollback}</code><span>what to do (default: list; rollback restores skills only)</span></div>
@@ -1291,6 +1331,8 @@
         </div>
         <div class="args-h">Options</div>
         <div class="args">
+          <div class="arg"><code>-y, --yes</code><span>`rollback` without the confirmation prompt</span></div>
+          <div class="arg"><code>--discard-edits</code><span>`rollback` even where it uninstalls a skill with local edits, deleting them</span></div>
           <div class="arg"><code>--json</code><span>machine-readable output</span></div>
         </div>
       </section>

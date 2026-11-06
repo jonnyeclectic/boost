@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import io
 import json
+import shlex
 import sys
 import types
 from pathlib import Path
@@ -71,7 +72,7 @@ class TestInstall:
         assert "installed BMAD" in r.out
         # correct installer invocation
         cmd = npx[0]
-        assert cmd[:4] == ["npx", "--yes", "bmad-method@%s" % core_bmad.BMAD_VERSION,
+        assert cmd[:4] == ["/usr/bin/npx", "--yes", "bmad-method@%s" % core_bmad.BMAD_VERSION,
                            "install"]
         assert "--directory" in cmd and str(proj) in cmd
         assert cmd[cmd.index("--tools") + 1] == "claude-code"
@@ -166,6 +167,39 @@ class TestOrient:
         assert r.rc == 0
 
 
+    @pytest.mark.parametrize("raw", [
+        b"[]", b"\xff\xfe", b'{"global": []}', b'{"projects": {"x": 1}}'])
+    def test_an_unusable_state_file_reads_as_off_and_status_still_runs(
+            self, boost, sandbox, proj, raw):
+        # Each of these crashed `bmad status` at exit 70 (setdefault on a
+        # list, a UnicodeDecodeError, `.get` on a non-object).
+        sp = bmad._state_path()
+        sp.parent.mkdir(parents=True, exist_ok=True)
+        sp.write_bytes(raw)
+        assert bmad._state_read() == {"global": {}, "projects": {}}
+        assert bmad._state_load()[1].startswith("%s: " % sp)
+        boost("bmad", "status")
+        assert sp.read_bytes() == raw
+
+    def test_a_write_over_an_unusable_state_file_quarantines_it(
+            self, boost, sandbox, proj, capsys):
+        sp = bmad._state_path()
+        sp.parent.mkdir(parents=True, exist_ok=True)
+        sp.write_bytes(b"[]")
+        bmad._set_scope_state("global", installed=True)
+        moved = sp.with_name("bmad.json.corrupt")
+        assert moved.read_bytes() == b"[]"
+        assert bmad._get_scope_state("global") == {"installed": True}
+        assert "%s was corrupt and has been moved to %s" % (sp, moved) in (
+            capsys.readouterr().err)
+
+    def test_a_write_over_a_good_state_file_keeps_it(self, sandbox, proj):
+        bmad._set_scope_state("global", a=1)
+        bmad._set_scope_state("global", b=2)
+        assert bmad._get_scope_state("global") == {"a": 1, "b": 2}
+        assert not bmad._state_path().with_name("bmad.json.corrupt").exists()
+
+
 class TestDisableEnable:
     def _seed_skills(self, scope_dir):
         skills = scope_dir / ".claude" / "skills"
@@ -217,6 +251,101 @@ class TestUninstall:
         assert not cs.has_hook("project", "SessionStart", "bmad", project_dir=proj)
         assert bmad._get_scope_state("project") == {}
 
+    def test_the_count_is_what_was_removed_not_what_was_tried(
+            self, boost, sandbox):
+        # boost's own install of a skill named bmad-notes: a store dir with a
+        # symlink in ~/.claude/skills. rmtree refuses the link, the refusal
+        # was swallowed, and "removed BMAD (global): 1 item(s)" reported it.
+        store = sandbox / ".agents" / "skills" / "bmad-notes"
+        store.mkdir(parents=True)
+        (store / "SKILL.md").write_text("---\nname: bmad-notes\n---\n",
+                                        encoding="utf-8")
+        link = sandbox / ".claude" / "skills" / "bmad-notes"
+        link.parent.mkdir(parents=True, exist_ok=True)
+        link.symlink_to(store)
+        before = _disk(sandbox)
+        r = boost("bmad", "uninstall", "--scope", "global", "-y")
+        flat = " ".join(r.out.split())
+        assert "removed BMAD" not in flat
+        assert "nothing of BMAD's to remove (global)" in flat
+        assert ("kept ~/.claude/skills/bmad-notes — not a BMAD install (a "
+                "symlink); `boost uninstall bmad-notes` removes one boost "
+                "installed") in flat
+        assert link.is_symlink() and (store / "SKILL.md").is_file()
+        # Nor does a no-op leave BMAD state behind where there was none.
+        assert _disk(sandbox) == before
+        assert not bmad._state_path().exists()
+
+    def test_the_prompt_names_what_it_deletes(self, boost, sandbox,
+                                              monkeypatch):
+        skills = sandbox / ".claude" / "skills"
+        for name in ("bmad-a", "bmad-b"):
+            (skills / name).mkdir(parents=True)
+        asked = []
+        monkeypatch.setattr(bmad.out, "confirm",
+                            lambda q, **kw: asked.append(q) or False)
+        r = boost("bmad", "uninstall", "--scope", "global", expect=1)
+        assert asked == ["Remove BMAD (global)? deletes "
+                         "~/.claude/skills/bmad-a, ~/.claude/skills/bmad-b"]
+        assert "aborted" in r.out
+        assert (skills / "bmad-a").is_dir()
+        r = boost("bmad", "uninstall", "--scope", "global", "-y")
+        assert "removed BMAD (global): 2 item(s)" in r.out
+        assert not list(skills.glob("bmad-*"))
+        assert not bmad._state_path().exists()
+        asked.clear()
+        boost("bmad", "uninstall", "--scope", "global", expect=1)
+        assert asked == ["Remove BMAD (global)? no bmad-* skills to delete"]
+
+    def test_a_symlinked_runtime_dir_is_kept_and_named(
+            self, boost, sandbox, proj, tmp_path, monkeypatch):
+        elsewhere = tmp_path / "shared-bmad"
+        elsewhere.mkdir()
+        (proj / "_bmad").symlink_to(elsewhere)
+        (proj / "_bmad-output").mkdir()
+        asked = []
+        monkeypatch.setattr(bmad.out, "confirm",
+                            lambda q, **kw: asked.append(q) or True)
+        r = boost("bmad", "uninstall")
+        # The confirm lists only what the run deletes.
+        assert asked == ["Remove BMAD (project)? deletes %s"
+                         % bmad.paths.tilde(proj / "_bmad-output")]
+        flat = " ".join(r.out.split())
+        assert "removed BMAD (project): 1 item(s)" in flat
+        assert ("kept %s — a symlink, and uninstall never deletes through "
+                "one" % bmad.paths.tilde(proj / "_bmad")) in flat
+        # Not a skill: the `boost uninstall <name>` hint would not run.
+        assert "boost uninstall _bmad" not in flat
+        assert (proj / "_bmad").is_symlink() and elsewhere.is_dir()
+        assert not (proj / "_bmad-output").exists()
+
+    def test_state_that_existed_is_cleared(self, boost, sandbox):
+        bmad._set_scope_state("global", installed=True)
+        r = boost("bmad", "uninstall", "--scope", "global", "-y")
+        assert "nothing of BMAD's to remove (global)" in r.out
+        assert bmad._get_scope_state("global") == {}
+        assert json.loads(bmad._state_path().read_text(
+            encoding="utf-8"))["global"] == {}
+
+
+def _disk(home):
+    """Every file and link under ``home``, with its bytes or link target.
+
+    The diagnostic log is left out — every run appends to it.
+    """
+    from boost_cli.core import paths
+    logs = str(paths.logs_dir())
+    seen = {}
+    for p in sorted(Path(home).rglob("*")):
+        if str(p).startswith(logs):
+            continue
+        rel = p.relative_to(home).as_posix()
+        if p.is_symlink():
+            seen[rel] = ("link", str(p.readlink()))
+        elif p.is_file():
+            seen[rel] = ("file", p.read_bytes())
+    return seen
+
 
 class TestInit:
     def test_init_provisions_runtime(self, boost, sandbox, npx, proj):
@@ -242,6 +371,78 @@ class TestInstallerFailures:
         monkeypatch.setattr(bmad.subprocess, "run", boom)
         r = boost("bmad", "install", expect=1)
         assert "bmad install failed" in r.err
+
+
+class TestInstallerFailureHint:
+    """The "run it yourself" command pastes as one command that does the job."""
+
+    @staticmethod
+    def _failing_npx(monkeypatch):
+        calls = []
+
+        def fail(cmd, **kw):
+            calls.append(cmd)
+            return types.SimpleNamespace(returncode=1, stdout="",
+                                         stderr="npm ERR! network")
+        monkeypatch.setattr(bmad.shutil, "which", lambda _n: "/usr/bin/npx")
+        monkeypatch.setattr(bmad.subprocess, "run", fail)
+        monkeypatch.setattr(bmad, "_whoami", lambda: "o'b")
+        return calls
+
+    @staticmethod
+    def _hint(err: str) -> str:
+        flat = " ".join(err.split())
+        return flat.split("hint: ", 1)[1]
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX shell quoting")
+    def test_a_project_dir_with_a_space_stays_one_argument(
+            self, boost, sandbox, monkeypatch, tmp_path):
+        p = tmp_path / "my proj"
+        p.mkdir()
+        monkeypatch.chdir(p)
+        self._failing_npx(monkeypatch)
+        r = boost("bmad", "install", expect=1)
+        assert "bmad install failed: npm ERR! network" in r.err
+        hint = self._hint(r.err)
+        want = ["npx", "--yes", "bmad-method@%s" % core_bmad.BMAD_VERSION,
+                "install", "--yes", "--directory", str(p),
+                "--tools", "claude-code", "--modules", "bmm",
+                "--user-name", "o'b"]
+        assert hint == "run it yourself: `%s`" % shlex.join(want)
+        assert shlex.split(hint.split("`")[1]) == want
+        # One span, never folded: the quoted directory stays on one line.
+        assert shlex.quote(str(p)) in r.err
+
+    def test_a_global_failure_does_not_name_the_deleted_stage(
+            self, boost, sandbox, monkeypatch, proj):
+        calls = self._failing_npx(monkeypatch)
+        r = boost("bmad", "install", "--scope", "global", expect=1)
+        stage = calls[0][calls[0].index("--directory") + 1]
+        assert not Path(stage).exists()
+        hint = self._hint(r.err)
+        assert hint == ("once npx works, re-run "
+                        "`boost bmad install --scope global`")
+        assert stage not in r.err
+
+    def test_a_global_failure_keeps_the_modules_asked_for(
+            self, boost, sandbox, monkeypatch, proj):
+        self._failing_npx(monkeypatch)
+        r = boost("bmad", "install", "--scope", "global",
+                  "--modules", "bmm,cis", expect=1)
+        assert self._hint(r.err) == (
+            "once npx works, re-run "
+            "`boost bmad install --scope global --modules bmm,cis`")
+
+    def test_a_global_oserror_gets_the_same_hint(
+            self, boost, sandbox, monkeypatch, proj):
+        def boom(*a, **k):
+            raise OSError("no exec")
+        monkeypatch.setattr(bmad.shutil, "which", lambda _n: "/usr/bin/npx")
+        monkeypatch.setattr(bmad.subprocess, "run", boom)
+        r = boost("bmad", "install", "--scope", "global", expect=1)
+        assert "bmad install failed: no exec" in r.err
+        assert self._hint(r.err) == ("once npx works, re-run "
+                                     "`boost bmad install --scope global`")
 
 
 class TestUninstallGlobalAndAbort:
@@ -729,6 +930,13 @@ class TestRoute:
         r = boost("bmad", "route", expect=None)
         assert called == ["read"]          # it really did go down that path
         assert r.rc == 0 and r.out == ""
+
+    def test_a_closed_stdin_routes_nothing(self, boost, sandbox, monkeypatch,
+                                           proj):
+        # `<&-` leaves sys.stdin None; the hook reads it as "no payload".
+        monkeypatch.setattr(sys, "stdin", None)
+        r = boost("bmad", "route")
+        assert (r.rc, r.out) == (0, "")
 
     def test_an_interactive_stdin_is_not_read(self, boost, sandbox, monkeypatch,
                                               proj):

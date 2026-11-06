@@ -375,3 +375,118 @@ class TestANamedTapIsAnsweredAboutThatTap:
         assert "could not compact bad" in res.out
         assert "every other tap is already compact" in res.out
         assert "every tap is already compact" not in res.out
+
+
+class TestTheWheelTapIsNotACloneToCompact:
+    """boost's own tap (`url: builtin:boost`) is a plain directory copied out
+    of the wheel. compact handled it as a git clone: every sweep warned
+    "not a git repository", `--reclone --dry-run` promised a re-clone, and
+    the real `--reclone` deleted it and then failed to clone `builtin:boost`.
+    """
+
+    @staticmethod
+    def _with_builtin(boost, tmp_path):
+        from boost_cli.core import builtin, catalog
+        tap = builtin.ensure_tap()
+        catalog.rebuild_tap(tap)
+        boost("tap", str(_repo(tmp_path / "src")))
+        assert tap.path.is_dir()
+        return tap
+
+    def test_the_sweep_is_clean(self, boost, sandbox, tmp_path):
+        tap = self._with_builtin(boost, tmp_path)
+        res = boost("compact")
+        assert "could not" not in res.out + res.err
+        assert "boost/builtin" not in res.out
+        assert "✓ every tap is already compact" in res.out
+        assert tap.path.is_dir()
+
+    def test_reclone_dry_run_promises_nothing_for_it(self, boost, sandbox,
+                                                     tmp_path):
+        self._with_builtin(boost, tmp_path)
+        res = boost("compact", "--reclone", "--dry-run")
+        assert "boost/builtin" not in res.out
+        assert "would re-clone src" in res.out
+        assert "1 tap(s) would be re-cloned" in res.out
+
+    def test_reclone_leaves_it_in_place(self, boost, sandbox, tmp_path):
+        tap = self._with_builtin(boost, tmp_path)
+        before = sorted(p.relative_to(tap.path).as_posix()
+                        for p in tap.path.rglob("*"))
+        assert before
+        boost("compact", "--reclone")
+        assert sorted(p.relative_to(tap.path).as_posix()
+                      for p in tap.path.rglob("*")) == before
+
+    def test_named_it_says_there_is_nothing_to_compact(self, boost, sandbox,
+                                                       tmp_path):
+        tap = self._with_builtin(boost, tmp_path)
+        res = boost("compact", "boost/builtin", "--reclone")
+        assert res.out.strip() == (
+            "boost/builtin ships with boost — nothing to compact")
+        assert tap.path.is_dir()
+
+    def test_named_json_is_a_skipped_ok_row(self, boost, sandbox, tmp_path):
+        import json
+        self._with_builtin(boost, tmp_path)
+        d = json.loads(boost("compact", "boost/builtin", "--json").out)
+        assert d == {"taps": [{"tap": "boost/builtin",
+                               "skipped": "ships with boost"}],
+                     "count": 0, "bytes": 0, "dry_run": False, "ok": True}
+
+
+class TestAProjectInstallKeepsItsAssets:
+    """compact's keep list read only the user lock, so a project-scope
+    install's `assets/` were narrowed away, `drift` put them back through
+    `store.source_dir_for`, and each compact "freed" the same bytes again."""
+
+    @staticmethod
+    def _project(boost, tmp_path, monkeypatch):
+        src = _repo(tmp_path / "src")
+        boost("tap", str(src))
+        proj = tmp_path / "proj"
+        (proj / ".git").mkdir(parents=True)
+        monkeypatch.chdir(proj)
+        boost("install", "demo", "--scope", "project")
+        clone = registry.list_taps()[0].path
+        return clone / "skills" / "demo" / "assets" / "blob.bin", proj
+
+    def test_compact_is_a_no_op_and_stays_one_after_drift(
+            self, boost, sandbox, tmp_path, monkeypatch):
+        blob, _proj = self._project(boost, tmp_path, monkeypatch)
+        assert blob.is_file()
+        assert "every tap is already compact" in boost("compact").out
+        assert blob.is_file()
+        boost("drift", expect=None)
+        assert "every tap is already compact" in boost("compact").out
+        assert blob.is_file()
+
+    def test_keep_dirs_merges_both_locks(self, boost, sandbox, tmp_path,
+                                         monkeypatch):
+        from boost_cli.core import compact, lockfile, projectlock
+        _blob, proj = self._project(boost, tmp_path, monkeypatch)
+        lockfile.set_skill("u", {"tap": "other", "source_dir": "skills/u"})
+        lockfile.set_skill("nodir", {"tap": "other"})
+        assert compact.keep_dirs() == {"other": ["skills/u"],
+                                       "src": ["skills/demo"]}
+        # A second record of one dir is kept once.
+        projectlock.set_skill(proj, "twin", {"tap": "src",
+                                             "source_dir": "skills/demo"})
+        assert compact.keep_dirs()["src"] == ["skills/demo"]
+
+    def test_keep_dirs_outside_a_project_is_the_user_lock(self, sandbox,
+                                                           monkeypatch):
+        from boost_cli.core import compact, lockfile
+        monkeypatch.chdir(paths.home())          # $HOME is never a project
+        lockfile.set_skill("u", {"tap": "t", "source_dir": "a"})
+        assert compact.keep_dirs() == {"t": ["a"]}
+
+    def test_keep_dirs_ignores_malformed_records(self, sandbox, tmp_path):
+        from boost_cli.core import compact, projectlock
+        proj = tmp_path / "p"
+        (proj / ".git").mkdir(parents=True)
+        projectlock.write(proj, {"skills": {"a": "junk",
+                                            "b": {"tap": "t", "source_dir": 7},
+                                            "c": {"tap": "t", "source_dir": ""},
+                                            "d": {"source_dir": "x"}}})
+        assert compact.keep_dirs(start=proj) == {"": ["x"]}

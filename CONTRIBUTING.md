@@ -106,7 +106,7 @@ authoritative ones, and a merge should never hinge on a third party's uptime.
 | Dashboard | To enable | Config |
 |---|---|---|
 | **Codecov** — PR diff-coverage comments, file sunburst, trend | add a `CODECOV_TOKEN` repo secret | [`codecov.yml`](codecov.yml) |
-| **SonarCloud** — bugs, smells, security hotspots, duplication | import the repo at [sonarcloud.io](https://sonarcloud.io) (Analysis Method: GitHub Actions), then add the generated token as `SONAR_TOKEN` | [`sonar-project.properties`](sonar-project.properties) |
+| **SonarCloud** — bugs, smells, security hotspots, duplication | import the repo at [sonarcloud.io](https://sonarcloud.io) (Analysis Method: GitHub Actions), then add the generated token as `SONAR_TOKEN` and set the repository variable `SONAR_ENABLED` to `true` (the job does not start without it) | [`sonar-project.properties`](sonar-project.properties) |
 
 Without the secret each step skips itself — the `if:` reads the token through
 `env`, since a secret can't be referenced directly in an `if`. The SonarCloud job

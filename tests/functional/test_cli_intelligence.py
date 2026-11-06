@@ -61,6 +61,9 @@ def ai_on(sandbox, monkeypatch):
     from boost_cli.core import ai
     monkeypatch.delenv("BOOST_NO_AI", raising=False)
     monkeypatch.setattr(ai, "available", lambda: True)
+    # A backend exists, so a degraded reply is blamed on the reply rather
+    # than on PATH -- CI runners have no assistant CLI installed.
+    monkeypatch.setattr(ai, "has_cli", lambda: True)
 
     def set_replies(ask=None, ask_author=None):
         monkeypatch.setattr(ai, "ask", lambda *a, **k: ask)
@@ -143,7 +146,7 @@ class TestDistill:
         monkeypatch.chdir(tmp_path)
         monkeypatch.delenv("BOOST_ASSUME_YES")
         r = boost("distill", "tdd-workflow", "commit-messages", "-o",
-                  "brainstorming", "--install")
+                  "brainstorming", "--install", expect=1)
         assert "not installed: brainstorming is already installed from fixture-tap" in r.out
         assert "generated skill saved to" in r.out
         fallback = tmp_path / "brainstorming.SKILL.md"
@@ -163,8 +166,10 @@ class TestDistill:
         """
         monkeypatch.chdir(tmp_path)
         boost("policy", "set", "blocked_skills", "tdd-workflow-distilled")
+        # rc=1: the install the user asked for did not happen, and a script
+        # must be able to tell (it exited 0 here).
         r = boost("distill", "tdd-workflow", "commit-messages", "--install",
-                  expect=0)
+                  expect=1)
 
         assert "not installed" in (r.out + r.err)
         assert "policy blocks" in (r.out + r.err)
@@ -177,6 +182,47 @@ class TestDistill:
         assert meta["name"] == "tdd-workflow-distilled"
         # and it really was refused, not quietly installed anyway
         assert not (paths.store_dir() / "tdd-workflow-distilled").exists()
+
+    def test_declined_install_never_overwrites_an_existing_fallback_file(
+            self, boost, installed, tmp_path, monkeypatch):
+        # Bug: the fallback wrote <name>.SKILL.md unconditionally, destroying a
+        # user's file of that name on the very path where they declined.
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("BOOST_ASSUME_YES")
+        mine = tmp_path / "brainstorming.SKILL.md"
+        mine.write_bytes(b"precious notes\n")
+        for n in (1, 2):
+            r = boost("distill", "tdd-workflow", "commit-messages", "-o",
+                      "brainstorming", "--install", expect=1)
+            saved = tmp_path / ("brainstorming.%d.SKILL.md" % n)
+            assert "generated skill saved to %s" % paths.tilde(saved) in flat(r.out)
+            meta, _ = frontmatter.parse(saved.read_text(encoding="utf-8"))
+            assert meta["name"] == "brainstorming"
+        assert mine.read_bytes() == b"precious notes\n"
+
+    def test_tap_qualified_sources_name_the_output_by_the_bare_name(
+            self, boost, tapped, tmp_path, monkeypatch):
+        # Bug: `fixture-tap:tdd-workflow` produced `fixture-tap:tdd-workflow-
+        # distilled`, whose printed `boost import` hint then failed.
+        monkeypatch.chdir(tmp_path)
+        r = boost("distill", "fixture-tap:tdd-workflow",
+                  "fixture-tap:commit-messages")
+        assert "install it with `boost import ./tdd-workflow-distilled`" in r.out
+        assert not [p for p in tmp_path.iterdir() if ":" in p.name]
+        skill = tmp_path / "tdd-workflow-distilled" / "SKILL.md"
+        assert frontmatter.parse(skill.read_text(encoding="utf-8"))[0]["name"] \
+            == "tdd-workflow-distilled"
+        boost("import", "./tdd-workflow-distilled")
+        lock = json.loads(paths.lockfile_path().read_text(encoding="utf-8"))
+        assert lock["skills"]["tdd-workflow-distilled"]["tap"] == "local"
+
+    def test_tap_qualified_install_lands_under_the_bare_name(
+            self, boost, tapped, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        r = boost("distill", "fixture-tap:tdd-workflow",
+                  "fixture-tap:commit-messages", "--install")
+        assert "installed tdd-workflow-distilled" in r.out
+        assert (paths.store_dir() / "tdd-workflow-distilled" / "SKILL.md").is_file()
 
     def test_ai_path_uses_reply(self, boost, tapped, tmp_path, monkeypatch, ai_on):
         monkeypatch.chdir(tmp_path)
@@ -228,6 +274,34 @@ class TestDistill:
         assert (tmp_path / "bad-name" / "SKILL.md").is_file()
         assert not (tmp_path / "Bad Name!!").exists()
         assert "install it with `boost import ./bad-name`" in r.out
+
+    @pytest.mark.parametrize("flag", ["--name", "-o", "--output"])
+    def test_name_flag_and_its_older_spellings(self, boost, tapped, tmp_path,
+                                               monkeypatch, flag):
+        monkeypatch.chdir(tmp_path)
+        boost("distill", "tdd-workflow", "cowboy-coding", flag, "combo")
+        text = (tmp_path / "combo" / "SKILL.md").read_text(encoding="utf-8")
+        assert frontmatter.parse(text)[0]["name"] == "combo"
+
+    @pytest.mark.parametrize("value", ["out/merged", "merged.md", "MERGED.MD"])
+    def test_a_path_for_the_name_is_refused_not_slugified(
+            self, boost, tapped, tmp_path, monkeypatch, value):
+        # Every sibling's -o is a FILE; distill's is a NAME. `-o /abs/x.md`
+        # used to exit 0 having written ./abs-x-md/SKILL.md in the cwd.
+        work = tmp_path / "work"
+        work.mkdir()
+        monkeypatch.chdir(work)
+        r = boost("distill", "tdd-workflow", "cowboy-coding", "-o", value,
+                  expect=1)
+        assert ("distill takes a name for the merged skill, not a path: %s"
+                % value) in r.err
+        assert "pass `--name NEWNAME`" in r.err
+        assert not list(work.rglob("*"))
+
+    def test_name_and_o_together_is_a_usage_error(self, boost, tapped):
+        r = boost("distill", "tdd-workflow", "cowboy-coding", "--name", "a",
+                  "-o", "b", expect=2)
+        assert "not allowed with argument" in r.err
 
     def test_output_name_with_nothing_to_slug_is_refused(
             self, boost, tapped, tmp_path, monkeypatch):
@@ -369,6 +443,21 @@ class TestInfer:
         lock = json.loads(paths.lockfile_path().read_text(encoding="utf-8"))
         assert lock["skills"]["project-conventions"]["tap"] == "local"
 
+    def test_refused_install_exits_nonzero_even_with_yes_and_is_not_journaled(
+            self, boost, sandbox, py_project, tmp_path, monkeypatch):
+        # Bug: a pinned name refused the install, yet `--install -y` exited 0
+        # and journaled the infer as if it had happened.
+        monkeypatch.chdir(tmp_path)
+        boost("infer", "--path", py_project, "--name", "pinme", "--install")
+        boost("pin", "pinme")
+        before = journal.events(action="infer")
+        r = boost("infer", "--path", py_project, "--name", "pinme",
+                  "--install", "-y", expect=1)
+        assert "not installed:" in r.out
+        assert (tmp_path / "pinme.SKILL.md").is_file()
+        after = journal.events(action="infer")
+        assert len(after) == len(before)
+
     @pytest.mark.skipif(sys.platform == "win32",
                         reason="chmod can't make a directory unwritable on Windows")
     @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
@@ -417,6 +506,13 @@ def _history_line(text):
     return json.dumps({"message": {"role": "user", "content": text}})
 
 
+def _display_line(text):
+    """One row of Claude Code's ~/.claude/history.jsonl (no role, no type)."""
+    return json.dumps({"display": text, "pastedContents": {},
+                       "project": "/work/repo", "sessionId": "s-1",
+                       "timestamp": 1760000000000})
+
+
 class TestAbsorb:
     def test_no_history_found(self, boost, sandbox):
         r = boost("absorb")
@@ -455,6 +551,94 @@ class TestAbsorb:
         assert "recurring patterns from 1 history file(s)" not in r.out
         assert "- Always run the linter before committing. (seen 4x)" in r.out
         assert "name: absorbed-patterns" in r.out
+
+    def test_pattern_surfaced_from_claude_code_history_jsonl(self, boost,
+                                                             sandbox):
+        # Claude Code's ~/.claude/history.jsonl carries no role/type: each row
+        # is one typed prompt under `display`. Every row used to be dropped.
+        claude = sandbox / ".claude"
+        claude.mkdir()
+        (claude / "history.jsonl").write_text("\n".join(
+            _display_line("always run the full test suite before committing")
+            for _ in range(3)) + "\n", encoding="utf-8")
+        r = boost("absorb")
+        assert "recurring patterns from 1 history file(s)" in r.err
+        assert "always run the full test suite before committing" in r.err
+        assert "3x" in r.err
+        assert ("- Always run the full test suite before committing. "
+                "(seen 3x)") in r.out
+
+    def test_history_jsonl_without_patterns_falls_back_to_projects(
+            self, boost, sandbox):
+        claude = sandbox / ".claude"
+        (claude / "projects" / "p").mkdir(parents=True)
+        (claude / "history.jsonl").write_text(
+            _display_line("a one off request nobody repeats") + "\n",
+            encoding="utf-8")
+        (claude / "projects" / "p" / "a.jsonl").write_text("\n".join(
+            _history_line("always run the linter before committing")
+            for _ in range(3)) + "\n", encoding="utf-8")
+        (claude / "projects" / "p" / "b.jsonl").write_text(
+            _history_line("unrelated") + "\n", encoding="utf-8")
+        r = boost("absorb")
+        assert "recurring patterns from 2 history file(s)" in r.err
+        assert "- Always run the linter before committing. (seen 3x)" in r.out
+
+    def test_no_patterns_anywhere_counts_every_file_read(self, boost, sandbox):
+        claude = sandbox / ".claude"
+        (claude / "projects" / "p").mkdir(parents=True)
+        (claude / "history.jsonl").write_text(
+            _display_line("a one off request nobody repeats") + "\n",
+            encoding="utf-8")
+        (claude / "projects" / "p" / "a.jsonl").write_text(
+            _history_line("another one off request here") + "\n",
+            encoding="utf-8")
+        r = boost("absorb")
+        assert ("no recurring patterns in 2 history file(s) — absorb needs "
+                "the same request 3+ times") in r.out
+
+    def test_display_rows_and_role_rows_are_told_apart(self):
+        from boost_cli.commands.intelligence import _user_texts
+        assert _user_texts({"display": "fix it", "project": "/p"}) == ["fix it"]
+        # A row with a role is judged by it, `display` or not.
+        assert _user_texts({"role": "assistant", "display": "x",
+                            "content": "y"}) == []
+        assert _user_texts({"role": "user", "display": "x",
+                            "content": "y"}) == ["y"]
+        assert _user_texts({"display": {"text": "x"}}) == []
+        assert _user_texts({"project": "/p"}) == []
+
+    def test_display_placeholders_and_slash_commands_are_not_requests(self):
+        from boost_cli.commands.intelligence import _user_texts
+        assert _user_texts({"display": "[Pasted text #1 +12 lines]"}) == []
+        assert _user_texts({"display": "[Image #2]"}) == []
+        assert _user_texts({"display": "/clear"}) == []
+        assert _user_texts({"display": "  /loop 5m /babysit-prs"}) == []
+        assert _user_texts({"display": "fix this [Pasted text #3 +4 lines] "
+                                       "please"}) == ["fix this   please"]
+
+    def test_repeated_paste_placeholder_is_no_pattern(self, boost, sandbox):
+        claude = sandbox / ".claude"
+        claude.mkdir()
+        (claude / "history.jsonl").write_text("\n".join(
+            _display_line("[Pasted text #1 +12 lines]")
+            for _ in range(4)) + "\n", encoding="utf-8")
+        r = boost("absorb")
+        assert "no recurring patterns in 1 history file(s)" in r.out
+
+    def test_refused_install_exits_nonzero(self, boost, sandbox, tmp_path,
+                                           monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        hist = sandbox / ".claude" / "projects" / "proj"
+        hist.mkdir(parents=True)
+        (hist / "chat.jsonl").write_text("\n".join(
+            _history_line("always run the linter before committing")
+            for _ in range(3)) + "\n", encoding="utf-8")
+        boost("policy", "set", "blocked_skills", "absorbed-patterns")
+        r = boost("absorb", "--install", expect=1)
+        assert "not installed" in r.out
+        assert (tmp_path / "absorbed-patterns.SKILL.md").is_file()
+        assert not (paths.store_dir() / "absorbed-patterns").exists()
 
     def test_history_flag_missing_and_empty_dir(self, boost, sandbox, tmp_path):
         r = boost("absorb", "--history", "/no/such/file.jsonl", expect=1)
@@ -523,6 +707,73 @@ class TestAbsorb:
 
 # ---------------------------------------------------------------- evolve
 
+def _transcript_rows():
+    """One Claude Code projects/*.jsonl session: harness rows + one prompt."""
+    caveat = ("<local-command-caveat>Caveat: The messages below were "
+              "generated by the user while running local commands. DO NOT "
+              "respond to these messages or otherwise consider them in your "
+              "response unless the user explicitly asks you to."
+              "</local-command-caveat>")
+    command = ("<command-name>/model</command-name>\n"
+               "<command-message>model</command-message>\n"
+               "<command-args></command-args>")
+    stdout = "<local-command-stdout>Set model to opus</local-command-stdout>"
+    rows = [
+        {"type": "user", "isMeta": True,
+         "message": {"role": "user", "content": caveat}},
+        {"type": "user", "message": {"role": "user", "content": command}},
+        {"type": "user", "message": {"role": "user", "content": stdout}},
+        {"type": "user", "message": {"role": "user", "content": [
+            {"type": "text",
+             "text": "[Request interrupted by user for tool use]"}]}},
+        {"type": "user", "message": {"role": "user", "content": [
+            {"type": "text", "text": "<system-reminder>The task tools "
+             "haven't been used recently.</system-reminder>"
+             "please run the tests before you commit"}]}},
+    ]
+    return "\n".join(json.dumps(r) for r in rows) + "\n"
+
+
+class TestAbsorbTranscriptMarkup:
+    def test_only_typed_text_is_counted(self, sandbox, tmp_path):
+        from boost_cli.commands import intelligence
+        files = []
+        for i in range(3):
+            f = tmp_path / ("s%d.jsonl" % i)
+            f.write_text(_transcript_rows(), encoding="utf-8")
+            files.append(f)
+        assert intelligence._recurring_patterns(files, 5) == [
+            ("please run the tests before you commit", 3)]
+
+    def test_an_is_meta_row_is_skipped_on_either_level(self, sandbox):
+        from boost_cli.commands import intelligence
+        text = "please run the tests before you commit"
+        assert intelligence._user_texts(
+            {"isMeta": True, "message": {"role": "user", "content": text}}) == []
+        assert intelligence._user_texts(
+            {"message": {"role": "user", "content": text, "isMeta": True}}) == []
+        assert intelligence._user_texts(
+            {"message": {"role": "user", "content": text}}) == [text]
+
+    def test_markup_is_stripped_from_a_history_display_row(self, sandbox):
+        from boost_cli.commands import intelligence
+        row = {"display": "fix it <system-reminder>x\ny</system-reminder> now"}
+        assert intelligence._user_texts(row) == ["fix it   now"]
+        assert intelligence._user_texts(
+            {"display": "[Request interrupted by user]"}) == []
+
+    def test_absorb_codifies_the_real_request(self, boost, sandbox, tmp_path):
+        hist = tmp_path / "projects"
+        hist.mkdir()
+        for i in range(3):
+            (hist / ("s%d.jsonl" % i)).write_text(_transcript_rows(),
+                                                  encoding="utf-8")
+        r = boost("absorb", "--history", hist)
+        assert "- Please run the tests before you commit. (seen 3x)" in r.out
+        assert "respond to these messages" not in r.out.lower()
+        assert "command name" not in r.out
+
+
 class TestEvolve:
     def test_not_installed(self, boost, tapped):
         r = boost("evolve", "tdd-workflow", "--feedback", "x", expect=1)
@@ -556,10 +807,23 @@ class TestEvolve:
         entry = json.loads(paths.lockfile_path().read_text(encoding="utf-8"))[
             "skills"]["brainstorming"]
         assert entry["version"] == "1.4.1"
-        assert entry["sha256"] != old_sha
+        # The lock keeps the tap copy's digest (see the drift test below).
+        assert entry["sha256"] == old_sha
         evs = journal.events(action="evolve")
         assert evs[0]["subject"] == "brainstorming"
         assert evs[0]["version"] == "1.4.1"
+
+    def test_applied_revision_drifts_as_local_edits_not_upstream_moved(
+            self, boost, installed):
+        # Bug: --apply rewrote the lock sha to the store's new hash, so drift
+        # read store == lock != tap as "upstream-moved" with a `boost update`
+        # hint, against a tap with no new commits.
+        boost("evolve", "brainstorming", "--apply", "--feedback", "be shorter")
+        r = boost("drift", "--json")
+        rows = {row["name"]: row for row in json.loads(r.out)["skills"]}
+        assert rows["brainstorming"]["status"] == "local-edits"
+        assert rows["brainstorming"]["hint"] == (
+            "boost reinstall brainstorming to discard local edits")
 
     def test_apply_preserves_untouched_frontmatter_lines_byte_for_byte(
             self, boost, installed):
@@ -588,6 +852,24 @@ class TestEvolve:
         text = (paths.store_dir() / "brainstorming" / "SKILL.md").read_text(encoding="utf-8")
         assert "Never exceed 5 ideas." in text
         assert frontmatter.parse(text)[0]["version"] == "1.4.1"
+
+    def test_ai_reply_without_bump_changes_only_the_version_line(
+            self, boost, installed, ai_on):
+        # Bug: the forced bump re-dumped the whole frontmatter, folding the
+        # `|` description to one line and turning the hooks list-of-maps
+        # into `- "matcher: Edit"` with its `command:` gone.
+        front = ("---\nname: brainstorming\ndescription: |\n"
+                 "  Run the linter after edits.\n"
+                 "  Use when touching Python files.\n"
+                 "version: 1.4.0\nhooks:\n  PostToolUse:\n"
+                 "    - matcher: Edit\n      command: ruff check --fix\n---\n")
+        ai_on(ask_author=front + "\n# Lint guard\n\n- Never ignore E501.\n")
+        r = boost("evolve", "brainstorming", "--apply", "--feedback", "E501")
+        assert "evolved brainstorming → v1.4.1" in r.out
+        text = (paths.store_dir() / "brainstorming" / "SKILL.md").read_text(
+            encoding="utf-8")
+        assert text == (front.replace("version: 1.4.0", "version: 1.4.1")
+                        + "\n# Lint guard\n\n- Never ignore E501.\n")
 
     # ---- the 2026-08 CLI audit: feedback input, pin on apply, info wording
 
@@ -735,7 +1017,7 @@ class TestEvolve:
         # outdated still shows the tap moved, marked as held by the pin
         r = boost("outdated")
         assert "1.4.1 (pinned)" in r.out
-        assert "pinned items stay put" in r.out
+        assert "pinned and quarantined items stay put" in r.out
 
     def test_info_after_apply_is_ahead_not_an_update(self, boost, installed):
         boost("evolve", "brainstorming", "--apply", "--feedback", "cap ideas")
@@ -768,6 +1050,41 @@ class TestContext:
         assert "unmapped feature/*" in r.out
         r = boost("context", "unmap", "feature/*", expect=1)
         assert "no rule for pattern 'feature/*'" in r.err
+
+    def test_map_resolves_a_tap_qualified_installed_skill(
+            self, boost, tapped, tmp_path, monkeypatch):
+        boost("install", "commit-messages")
+        boost("install", "tdd-workflow")
+        repo = _git_repo(tmp_path / "repo")
+        monkeypatch.chdir(repo)
+        r = boost("context", "map", "main", "fixture-tap:commit-messages")
+        assert "mapped main → commit-messages" in r.out
+        assert "not installed" not in r.out
+        r = boost("context", "status", "--json")
+        assert json.loads(r.out)["rules"] == [
+            {"pattern": "main", "skills": ["commit-messages"]}]
+        boost("context", "map", "feature/*", "tdd-workflow")
+        r = boost("context", "apply")
+        assert "sidelined: tdd-workflow" in r.out
+        assert "not installed" not in r.out
+        assert (paths.home() / ".claude" / "skills" / "commit-messages").is_symlink()
+
+    def test_apply_resolves_a_rule_saved_tap_qualified(
+            self, boost, tapped, tmp_path, monkeypatch):
+        # Rules written before `map` stored bare names keep working.
+        boost("install", "commit-messages")
+        boost("install", "tdd-workflow")
+        paths.state_dir().mkdir(parents=True, exist_ok=True)
+        (paths.state_dir() / "context.json").write_text(json.dumps(
+            {"enabled": True, "rules": [
+                {"pattern": "main", "skills": ["fixture-tap:commit-messages"]},
+                {"pattern": "feature/*", "skills": ["tdd-workflow"]}]}), encoding="utf-8")
+        repo = _git_repo(tmp_path / "repo")
+        monkeypatch.chdir(repo)
+        r = boost("context", "apply")
+        assert "sidelined: tdd-workflow" in r.out
+        assert "not installed" not in r.out
+        assert (paths.home() / ".claude" / "skills" / "commit-messages").is_symlink()
 
     def test_map_requires_skills(self, boost, sandbox):
         r = boost("context", "map", "feature/*", " , ", expect=1)
@@ -822,7 +1139,9 @@ class TestContext:
         r = boost("context", "apply")
         assert "sidelined: tdd-workflow" in r.out
         assert not link.exists()
-        assert (paths.store_dir() / "tdd-workflow").is_dir()  # store intact
+        # Held aside, out of the store Gemini CLI and Codex read directly.
+        assert not os.path.lexists(paths.store_dir() / "tdd-workflow")
+        assert (paths.held_skills_dir() / "tdd-workflow" / "SKILL.md").is_file()
         # brainstorming was never mapped, so it keeps its links
         assert (paths.home() / ".claude" / "skills" / "brainstorming").is_symlink()
 
@@ -905,7 +1224,10 @@ class TestFocus:
         jira_link = paths.home() / ".claude" / "skills" / "jira-integration"
         assert not jira_link.exists()
         assert (paths.home() / ".claude" / "skills" / "brainstorming").is_symlink()
-        assert (paths.store_dir() / "jira-integration").is_dir()  # store intact
+        # Held aside, out of the store Gemini CLI and Codex read directly.
+        assert not os.path.lexists(paths.store_dir() / "jira-integration")
+        assert (paths.held_skills_dir() / "jira-integration" / "SKILL.md"
+                ).is_file()
 
         r = boost("focus", "--status")
         assert "focus: brainstorming" in r.out
@@ -937,17 +1259,110 @@ class TestFocus:
         assert "no focus session" in r.out
         assert "restored" not in r.out
 
+    def test_clear_leaves_a_context_sidelined_skill_alone(
+            self, boost, tapped, tmp_path, monkeypatch):
+        from boost_cli.core import lockfile
+
+        for n in ("brainstorming", "commit-messages", "tdd-workflow"):
+            boost("install", n, "--no-deps")
+        repo = _git_repo(tmp_path / "repo")
+        monkeypatch.chdir(repo)
+        boost("context", "map", "feature/*", "tdd-workflow")
+        r = boost("context", "enable")
+        assert "sidelined: tdd-workflow" in r.out
+        r = boost("focus", "brainstorming")
+        assert "(other 1 skill sidelined)" in r.out
+        assert lockfile.get_skill("tdd-workflow")["sidelined_by"] == "context"
+        r = boost("focus", "--clear")
+        assert "focus cleared — 1 skill(s) restored" in r.out
+        skills = paths.home() / ".claude" / "skills"
+        assert (skills / "commit-messages").is_symlink()
+        assert not (skills / "tdd-workflow").exists()
+        assert lockfile.get_skill("tdd-workflow")["sidelined_by"] == "context"
+
+    def test_focusing_a_context_sidelined_skill_puts_it_back_at_clear(
+            self, boost, tapped, tmp_path, monkeypatch):
+        from boost_cli.core import lockfile
+
+        for n in ("brainstorming", "commit-messages", "tdd-workflow"):
+            boost("install", n, "--no-deps")
+        repo = _git_repo(tmp_path / "repo")
+        monkeypatch.chdir(repo)
+        boost("context", "map", "feature/*", "tdd-workflow")
+        boost("context", "enable")
+        assert lockfile.get_skill("tdd-workflow")["sidelined_by"] == "context"
+        boost("focus", "tdd-workflow")
+        state = json.loads((paths.state_dir() / "focus.json").read_text(
+            encoding="utf-8"))
+        assert state["prior"] == {"tdd-workflow": "context"}
+        skills = paths.home() / ".claude" / "skills"
+        assert (skills / "tdd-workflow").is_symlink()
+        # A re-focus keeps the record: tdd-workflow is a focus sideline now.
+        boost("focus", "brainstorming")
+        assert json.loads((paths.state_dir() / "focus.json").read_text(
+            encoding="utf-8"))["prior"] == {"tdd-workflow": "context"}
+        r = boost("focus", "--clear")
+        assert "focus cleared — 2 skill(s) restored" in r.out
+        assert ("sidelined again, as before the focus: tdd-workflow"
+                in flat(r.out))
+        assert not os.path.lexists(skills / "tdd-workflow")
+        assert (skills / "commit-messages").is_symlink()
+        assert lockfile.get_skill("tdd-workflow")["sidelined_by"] == "context"
+
+    def test_a_disabled_context_is_not_put_back(
+            self, boost, tapped, tmp_path, monkeypatch):
+        from boost_cli.core import lockfile
+
+        for n in ("brainstorming", "tdd-workflow"):
+            boost("install", n, "--no-deps")
+        repo = _git_repo(tmp_path / "repo")
+        monkeypatch.chdir(repo)
+        boost("context", "map", "feature/*", "tdd-workflow")
+        boost("context", "enable")
+        boost("focus", "tdd-workflow")
+        boost("context", "disable")
+        r = json.loads(boost("focus", "--clear", "--json").out)
+        assert r == {"active": [], "restored": 1, "residelined": [],
+                     "had_session": True}
+        assert "sidelined_by" not in lockfile.get_skill("tdd-workflow")
+        assert (paths.home() / ".claude" / "skills" / "tdd-workflow"
+                ).is_symlink()
+
+    def test_status_names_a_focused_skill_a_profile_set_aside(
+            self, boost, tapped):
+        boost("install", "tdd-workflow", "--no-deps")
+        boost("profile", "save", "onlytdd")
+        boost("install", "brainstorming", "--no-deps")
+        boost("focus", "brainstorming")
+        boost("profile", "use", "onlytdd")
+        r = boost("focus", "--status")
+        assert "focus: brainstorming" in r.out
+        assert ("brainstorming is not linked — sidelined by `boost profile` "
+                "since the focus began") in flat(r.out)
+        data = json.loads(boost("focus", "--json").out)
+        assert data["displaced"] == {
+            "brainstorming": "sidelined by `boost profile`"}
+
+    def test_an_intact_focus_has_nothing_displaced(self, boost, tapped):
+        boost("install", "brainstorming")
+        boost("focus", "brainstorming")
+        r = boost("focus", "--status")
+        assert "not linked" not in r.out + r.err
+        assert json.loads(boost("focus", "--json").out)["displaced"] == {}
+
     def test_focus_set_and_clear_json(self, boost, tapped):
         boost("install", "brainstorming")
         boost("install", "jira-integration", "--no-deps")
         r = json.loads(boost("focus", "brainstorming", "--json").out)
         assert r == {"active": ["brainstorming"], "sidelined": 1}
         r = json.loads(boost("focus", "--clear", "--json").out)
-        assert r == {"active": [], "restored": 1, "had_session": True}
+        assert r == {"active": [], "restored": 1, "residelined": [],
+                     "had_session": True}
 
     def test_clear_with_no_session_json(self, boost, installed):
         r = json.loads(boost("focus", "--clear", "--json").out)
-        assert r == {"active": [], "restored": 0, "had_session": False}
+        assert r == {"active": [], "restored": 0, "residelined": [],
+                     "had_session": False}
 
     def test_unknown_skill(self, boost, installed):
         r = boost("focus", "nope", expect=1)
@@ -1106,3 +1521,143 @@ class TestKindDeclines:
         r = boost("context", "apply")
         assert "mapped but not installed" not in r.out
         assert "house (rule)" in r.out
+
+
+# ------------------------------------------- AI-authored names and bad replies
+
+WRONG_NAME = ("---\nname: something-else\ndescription: AI wrote it\n"
+              "version: 1.0.0\n---\n\n# Body\n\n- An AI rule.\n")
+JUNK = "{not json [[ garbage"
+JUNK_NOTE = ("AI reply was not usable (no SKILL.md frontmatter) — see "
+             "~/.boost/logs/boost.log — using the heuristic fallback")
+
+
+class TestAuthoredName:
+    """The model is asked for a name and does not always write it; the file
+    must carry the name the user asked for, whatever the reply said."""
+
+    def _history(self, tmp_path):
+        f = tmp_path / "h.jsonl"
+        f.write_text("\n".join(
+            [_history_line("please write docstrings for every function")] * 3),
+            encoding="utf-8")
+        return f
+
+    def test_distill_writes_the_requested_name(self, boost, tapped, tmp_path,
+                                               monkeypatch, ai_on):
+        monkeypatch.chdir(tmp_path)
+        ai_on(ask_author=WRONG_NAME)
+        r = boost("distill", "brainstorming", "tdd-workflow",
+                  "--name", "merged-one")
+        text = (tmp_path / "merged-one" / "SKILL.md").read_text(encoding="utf-8")
+        assert text.startswith("---\nname: merged-one\ndescription: AI wrote it\n")
+        assert "- An AI rule." in text
+        assert FALLBACK not in flat(r.err)
+
+    def test_infer_output_carries_the_requested_name(self, boost, sandbox,
+                                                     py_project, tmp_path,
+                                                     ai_on):
+        ai_on(ask_author=WRONG_NAME)
+        out_file = tmp_path / "inf" / "SKILL.md"
+        boost("infer", "--path", py_project, "--name", "my-conv", "-o", out_file)
+        meta, body = frontmatter.parse(out_file.read_text(encoding="utf-8"))
+        assert meta["name"] == "my-conv"
+        assert "- An AI rule." in body
+
+    def test_infer_refuses_a_name_with_nothing_to_slug(self, boost, sandbox,
+                                                       py_project):
+        r = boost("infer", "--path", py_project, "--name", "!!!", expect=1)
+        assert "skill name has no letters or digits: '!!!'" in r.err
+
+    def test_absorb_prints_the_absorbed_name(self, boost, sandbox, tmp_path,
+                                             ai_on):
+        ai_on(ask_author=WRONG_NAME)
+        r = boost("absorb", "--history", self._history(tmp_path))
+        assert "name: absorbed-patterns\n" in r.out
+        assert "something-else" not in r.out
+        assert "- An AI rule." in r.out
+
+    def test_evolve_apply_keeps_the_installed_name(self, boost, installed,
+                                                   ai_on):
+        ai_on(ask_author=WRONG_NAME.replace("1.0.0", "1.4.1"))
+        r = boost("evolve", "brainstorming", "--apply", "--feedback", "terser")
+        assert "evolved brainstorming → v1.4.1" in r.out
+        text = (paths.store_dir() / "brainstorming" / "SKILL.md").read_text(
+            encoding="utf-8")
+        assert frontmatter.parse(text)[0]["name"] == "brainstorming"
+        assert "- An AI rule." in text
+
+    def test_distill_junk_reply_says_why(self, boost, tapped, tmp_path,
+                                         monkeypatch, ai_on):
+        monkeypatch.chdir(tmp_path)
+        ai_on(ask_author=JUNK)
+        r = boost("distill", "brainstorming", "tdd-workflow", "--name", "m3")
+        assert JUNK_NOTE in flat(r.err)
+        assert "AI unavailable" not in flat(r.err)
+        assert (tmp_path / "m3" / "SKILL.md").is_file()
+
+    def test_infer_junk_reply_says_why(self, boost, sandbox, py_project, ai_on):
+        ai_on(ask_author=JUNK)
+        r = boost("infer", "--path", py_project)
+        assert JUNK_NOTE in flat(r.err)
+        assert r.out.startswith("---\nname: project-conventions\n")
+
+    def test_absorb_junk_reply_says_why(self, boost, sandbox, tmp_path, ai_on):
+        ai_on(ask_author=JUNK)
+        r = boost("absorb", "--history", self._history(tmp_path))
+        assert JUNK_NOTE in flat(r.err)
+
+    def test_evolve_junk_reply_says_why(self, boost, installed, ai_on):
+        ai_on(ask_author=JUNK)
+        r = boost("evolve", "brainstorming", "--feedback", "be terser")
+        assert JUNK_NOTE in flat(r.err)
+        assert "+- be terser." in r.out
+
+
+# ------------------------------- AI replies that are frontmatter and no skill
+
+HOLLOW = "---\nname: brainstorming\n---\n"
+HOLLOW_NOTE = ("AI reply was not usable (no description in the frontmatter) — "
+               "see ~/.boost/logs/boost.log — using the heuristic fallback")
+
+
+class TestHollowReply:
+    """A reply of frontmatter alone used to be written as the skill: evolve
+    --apply wiped the installed copy and distill --install installed an
+    empty one. It must degrade to the heuristic like any unusable reply."""
+
+    def test_evolve_apply_writes_the_heuristic_revision(self, boost, installed,
+                                                        ai_on):
+        from boost_cli.commands import intelligence
+        skill_md = paths.store_dir() / "brainstorming" / "SKILL.md"
+        before = skill_md.read_text(encoding="utf-8")
+        ai_on(ask_author=HOLLOW)
+        r = boost("evolve", "brainstorming", "--apply", "--feedback", "be terser")
+        assert HOLLOW_NOTE in flat(r.err)
+        assert "evolved brainstorming → v1.4.1" in r.out
+        text = skill_md.read_text(encoding="utf-8")
+        expected = intelligence._evolve_append(before, "1.4.0", "be terser")
+        assert text == expected
+
+    def test_distill_install_installs_the_heuristic_merge(
+            self, boost, tapped, ai_on):
+        ai_on(ask_author=HOLLOW.replace("brainstorming", "m4"))
+        r = boost("distill", "brainstorming", "tdd-workflow", "--name", "m4",
+                  "--install")
+        assert HOLLOW_NOTE in flat(r.err)
+        meta, body = frontmatter.parse(
+            (paths.store_dir() / "m4" / "SKILL.md").read_text(encoding="utf-8"))
+        assert meta["description"].endswith(" (distilled)")
+        assert body.startswith("# m4\n\nDistilled from: brainstorming, "
+                               "tdd-workflow.")
+
+    def test_infer_with_an_empty_body_prints_the_heuristic(
+            self, boost, sandbox, py_project, ai_on):
+        ai_on(ask_author="---\nname: project-conventions\ndescription: d\n---\n")
+        r = boost("infer", "--path", py_project)
+        assert ("AI reply was not usable (an empty SKILL.md body) — see "
+                "~/.boost/logs/boost.log — using the heuristic fallback"
+                in flat(r.err))
+        meta, body = frontmatter.parse(r.out)
+        assert meta["name"] == "project-conventions"
+        assert body.strip()

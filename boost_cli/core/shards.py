@@ -32,6 +32,7 @@ is only usable while the tap sits at that commit, which is what
 from __future__ import annotations
 
 import hashlib
+import http.client
 import json
 import os
 import time
@@ -76,10 +77,45 @@ def manifest_url() -> str:
     return os.environ.get(MANIFEST_ENV) or DEFAULT_MANIFEST_URL
 
 
-# The one manifest hint that needs the [rag] extra: quickstart without it
-# read the manifest for its pins alone, and names the extra itself.
-LOCAL_EMBED_HINT = ("shards are optional — `boost reindex --dense` embeds "
-                    "locally instead")
+#: How every transport-failure hint opens. Quickstart without the extra read
+#: the manifest for its pins alone and names the extra itself, so it matches
+#: on this lead to drop the hint rather than say the same thing twice.
+TRANSPORT_LEAD = "shards are optional — "
+
+#: Reasons a plain `boost reindex --dense` cannot answer: it cannot run, or
+#: it refuses a store it would have to destroy. `dense.fix_hint` words each.
+_UNBUILDABLE = frozenset({"disabled", "no-backend", "no-extension-load",
+                          "no-key", "no-local-wheel", "corrupt",
+                          "provider-changed",
+                          "model-changed", "dim-changed"})
+_CANNOT_RUN = frozenset({"disabled", "no-backend", "no-extension-load",
+                         "no-key", "no-local-wheel"})
+
+
+def _how(prov: str | None) -> str:
+    """Where `boost reindex --dense` would embed under `prov`, cost included."""
+    return ("through %s's paid API" % prov) if prov in embed.KEY_ENV else "locally"
+
+
+def transport_hint() -> str:
+    """The hint for a manifest or shard that could not be fetched.
+
+    It used to be a constant, "`boost reindex --dense` embeds locally
+    instead", which was wrong twice over: without the extra that command only
+    says it needs the extra, and with a key in force it embeds through the
+    paid API — the bill :func:`remedy` exists to name. So it reads the same
+    ``dense.status()`` doctor and search read, and answers from the same table.
+    """
+    from . import dense
+    st = dense.status()
+    reason = st.get("reason") or ""
+    prov = st.get("provider")
+    if prov is None or reason in _UNBUILDABLE:
+        lead = ("to embed on this machine instead, "
+                if prov is None or reason in _CANNOT_RUN else "")
+        return TRANSPORT_LEAD + lead + dense.fix_hint(reason, st)
+    return (TRANSPORT_LEAD + "`boost reindex --dense` embeds them %s instead"
+            % _how(prov))
 
 
 def _open(url: str, timeout: float):
@@ -95,12 +131,31 @@ def _open(url: str, timeout: float):
             hint="shard URLs must be https (or file: for a local mirror)")
     try:
         return urllib.request.urlopen(url, timeout=timeout)  # noqa: S310  scheme checked above
-    except (urllib.error.URLError, OSError) as exc:
+    except (urllib.error.URLError, OSError, http.client.HTTPException) as exc:
         raise BoostError("cannot reach %s: %s" % (url, exc),
-                         hint=LOCAL_EMBED_HINT) from exc
+                         hint=transport_hint()) from exc
 
 
-def _read_capped(resp, cap: int) -> bytes:
+def _read(resp, n: int, url: str) -> bytes:
+    """``resp.read(n)``, with a failure part-way through the body made a
+    BoostError like a failure to connect.
+
+    :func:`_open` only guards the connect. A connection cut mid-body raises
+    ``http.client.IncompleteRead`` — an ``HTTPException`` and, since CPython
+    3.14, *only* that, not an ``OSError`` — and a server that stalls after the
+    headers raises ``TimeoutError`` from the socket. Both escaped as "boost hit
+    an unexpected error", exit 70, from `reindex --fetch-index`, `update
+    --shards` and `quickstart`.
+    """
+    try:
+        return resp.read(n)
+    except (OSError, http.client.HTTPException) as exc:
+        raise BoostError("cannot read %s: %s"
+                         % (url, str(exc) or type(exc).__name__),
+                         hint=transport_hint()) from exc
+
+
+def _read_capped(resp, cap: int, url: str) -> bytes:
     """Read the whole response, stopping once it exceeds `cap` bytes.
 
     THE LOOP IS THE POINT. ``HTTPResponse.read(amt)`` returns *up to* `amt`
@@ -122,7 +177,7 @@ def _read_capped(resp, cap: int) -> bytes:
     chunks: list[bytes] = []
     total = 0
     while total <= cap:
-        buf = resp.read(min(_CHUNK, cap + 1 - total))
+        buf = _read(resp, min(_CHUNK, cap + 1 - total), url)
         if not buf:
             break
         chunks.append(buf)
@@ -171,7 +226,7 @@ def fetch_manifest(url: str | None = None, timeout: float = 30.0) -> dict:
     """
     url = url or manifest_url()
     with _open(url, timeout) as resp:
-        raw = _read_capped(resp, MAX_MANIFEST_BYTES)
+        raw = _read_capped(resp, MAX_MANIFEST_BYTES, url)
         # Size ceiling first, completeness second: a manifest larger than the
         # cap is also "shorter than declared", and reporting that one as a
         # truncated download would name the wrong problem.
@@ -276,8 +331,7 @@ def remedy(manifest: dict) -> str:
     st = dense.status()
     if prov is None:
         return dense.fix_hint(st.get("reason") or "", st)
-    paid = prov in embed.KEY_ENV
-    how = ("through %s's paid API" % prov) if paid else "locally"
+    how = _how(prov)
     built = st.get("built_provider")
     if built and (built, st.get("built_model"), st.get("built_dim")) != (
             manifest.get("provider"), manifest.get("model"),
@@ -418,7 +472,7 @@ def download(row: dict, dest: Path, manifest: dict,
     try:
         with _open(url, timeout) as resp, tmp.open("wb") as fh:
             while True:
-                buf = resp.read(_CHUNK)
+                buf = _read(resp, _CHUNK, url)
                 if not buf:
                     break
                 size += len(buf)

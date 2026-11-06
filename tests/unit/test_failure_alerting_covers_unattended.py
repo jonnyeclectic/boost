@@ -30,7 +30,10 @@ the person who wrote it stops looking.
 """
 from __future__ import annotations
 
+import json
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -409,6 +412,120 @@ class TestEveryNonGreenConclusionIsLoud:
         assert "noRelease" in call, (
             "the repeat comment drops the release note the body carries")
         assert "note" in call, "the repeat comment does not carry the note"
+
+
+#: Runs the opener's github-script body under node with `github` and `context`
+#: stubbed, and prints every write it made. `listForRepo` answers with an open
+#: tracker when asked to, so the repeat-comment path runs too.
+_NODE_HARNESS = r"""
+const fs = require('fs');
+const body = fs.readFileSync(process.argv[2], 'utf8');
+const given = JSON.parse(process.argv[3]);
+const calls = [];
+const marker = '<!-- ci-failure-tracker:' + given.run.name + ' -->';
+const github = { rest: { issues: {
+  getLabel: async () => ({}),
+  createLabel: async (a) => { calls.push(['createLabel', a]); },
+  listForRepo: async () => ({ data: given.tracking ? [{ number: 9, body: marker }] : [] }),
+  createComment: async (a) => { calls.push(['createComment', a]); },
+  create: async (a) => { calls.push(['create', a]); },
+} } };
+const context = { repo: { owner: 'o', repo: 'r' }, payload: { workflow_run: given.run } };
+const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+new AsyncFunction('github', 'context', body)(github, context)
+  .then(() => process.stdout.write(JSON.stringify(calls)))
+  .catch((e) => { console.error(e); process.exit(1); });
+"""
+
+
+def _raw_opener_script() -> str:
+    yaml = pytest.importorskip("yaml")
+    doc = yaml.safe_load(ALERT.read_text(encoding="utf-8"))
+    for step in doc["jobs"]["open-issue"]["steps"]:
+        script = (step.get("with") or {}).get("script")
+        if script:
+            return script
+    raise AssertionError("no script found in the open-issue job")
+
+
+@pytest.mark.skipif(not shutil.which("node"), reason="runs the github-script body under node")
+class TestTheIssueSaysWhichRunItWas:
+    """`ci` also fails on a schedule and by hand, and neither is a release.
+
+    The nightly and a dispatched ci are the whole-codebase mutation run;
+    publish.yml releases only from a `push` run. Telling the reader "no release
+    was cut, rerun to publish" for one of those sends them to rerun a run that
+    can never publish. The text is checked as GitHub would post it: the
+    script's own code, run under node, with the API stubbed.
+    """
+
+    @staticmethod
+    def posted(tmp_path, event, *, name="ci", tracking=False) -> str:
+        script = tmp_path / "opener.js"
+        script.write_text(_raw_opener_script(), encoding="utf-8")
+        harness = tmp_path / "harness.js"
+        harness.write_text(_NODE_HARNESS, encoding="utf-8")
+        run = {"name": name, "event": event, "conclusion": "failure",
+               "head_sha": "abc123", "html_url": "https://example/run/1",
+               "run_attempt": 1}
+        proc = subprocess.run(
+            ["node", str(harness), str(script),
+             json.dumps({"run": run, "tracking": tracking})],
+            capture_output=True, text=True, timeout=60, check=False)
+        assert proc.returncode == 0, proc.stderr
+        writes = [c for c in json.loads(proc.stdout)
+                  if c[0] in ("create", "createComment")]
+        assert len(writes) == 1, writes
+        return writes[0][1]["body"]
+
+    def test_a_push_failure_still_says_no_release_was_cut(self, tmp_path):
+        body = self.posted(tmp_path, "push")
+        assert "No release was cut for this commit" in body
+        assert "whole-codebase" not in body
+
+    @pytest.mark.parametrize("tracking", [False, True])
+    def test_a_nightly_failure_says_it_was_the_nightly_and_no_release(
+            self, tmp_path, tracking):
+        body = self.posted(tmp_path, "schedule", tracking=tracking)
+        assert "nightly whole-codebase mutation run" in body
+        assert "No release was involved" in body
+        assert "No release was cut" not in body
+        assert "rerun the failed jobs on that run to publish" not in body
+        # ci_proven_tree looks past a red extended leg on the nightly and
+        # nothing else, so the note must not say that leg costs the
+        # proven-tree skip -- nor that only a red `mutation` does.
+        assert "Unless only `tests-extended` failed" in body
+        assert "If its `mutation` job is what failed" not in body
+        assert "a red `tests-extended` leg alone does not" in body
+        assert "While the newest whole-codebase run on main is not green" not in body
+        # Nor does a red job of the nightly's diff shadow: continue-on-error,
+        # and dropped by fact 3, so it may sit beside a red extended leg.
+        assert ("Unless only `tests-extended` failed (a red `nightly-shadow-base` "
+                "or `mutation-advisory-shard` job does not count") in body
+        # The obvious cleanup of a red extended leg is the costly one on an
+        # idle night: a re-run is attempt 2, and a re-run idle nightly no
+        # longer counts for fact 3. Say so, and say what to do instead.
+        assert 'do not use "Re-run failed jobs" on this run' in body
+        assert "the re-run is attempt 2" in body
+        assert "Leave the run as it is" in body
+
+    @pytest.mark.parametrize("tracking", [False, True])
+    def test_a_dispatched_ci_failure_says_it_was_the_whole_codebase_run(
+            self, tmp_path, tracking):
+        body = self.posted(tmp_path, "workflow_dispatch", tracking=tracking)
+        assert "whole-codebase mutation run" in body
+        assert "started by hand" in body
+        assert "No release was involved" in body
+        assert "No release was cut" not in body
+        # A dispatch always plans full: re-running one costs fact 3 nothing.
+        assert "Re-run failed jobs" not in body
+        # Nor does a dispatch run the nightly's diff shadow.
+        assert "Unless only `tests-extended` failed," in body
+        assert "mutation-advisory-shard" not in body
+
+    def test_another_workflows_schedule_gets_no_release_note(self, tmp_path):
+        body = self.posted(tmp_path, "schedule", name="fuzz")
+        assert "release" not in body.lower()
 
 
 class TestNoScriptBodyHoldsAnUnparseableExpression:

@@ -4,9 +4,9 @@ r"""Unit tests: every CI job declares a usable timeout-minutes.
 
 Without one a hung step — a stalled tap clone, a wedged smoke-test subprocess —
 burns GitHub's default job timeout instead of failing fast, and the bill lands
-hardest on the 3 OS x 3 Python `tests` matrix. This is a guard, not a
-one-time cleanup: the point is that a job added next month cannot quietly
-arrive without one.
+hardest on the macOS and Windows cells of `tests` and `tests-extended`. This is
+a guard, not a one-time cleanup: the point is that a job added next month
+cannot quietly arrive without one.
 
 The value is the other half, and it is the half that bit. `timeout-minutes`
 takes an expression, so `tests` now sets a per-OS cap; the bound check read
@@ -21,7 +21,7 @@ numbers to a regex and one cap to GitHub — so `job_timeouts` matches the two
 taught. And matching the source text of the condition proves nothing about
 which cells get which cap: `caps_by_os` evaluates it once per entry in the
 job's real `os:` list, so a condition that has stopped firing fails the test
-instead of silently giving all nine cells the default.
+instead of silently giving every cell the default.
 """
 from __future__ import annotations
 
@@ -40,8 +40,12 @@ REUSABLE = re.compile(r"^    uses: ", re.M)
 # The values themselves were chosen from observed job durations rather than
 # guessed — over the last 40 ci runs (every attempt, 2026-09-28) the slowest
 # *successful* job of each kind was mutation-shard 55.7m against a cap of 75,
-# tests 24.6m on windows against 45 and 10.3m on macOS against 30,
-# patch-coverage 6.0m against 15, and everything else under 3m — but the
+# tests 24.6m on windows against 45 (raised to 60 on 2026-10-21, when a
+# 15k-test suite passed at 44.9m, and to 80 on 2026-10-23, when a 17.5k one
+# finished at 58) and 10.3m on macOS against 30 (raised to 80 with
+# Windows on 2026-10-23, when a macOS cell was cancelled at 30.0),
+# patch-coverage 6.0m against 15 (raised to 30 on 2026-10-22, when a
+# train's suite was still running at 93% of 15m), and everything else under 3m — but the
 # assertion here is only that nobody sets a number so large it defeats the
 # point. A timeout that trips on a normal run is worse than none, so
 # individual jobs stay free to justify their own headroom.
@@ -52,7 +56,7 @@ MAX_REASONABLE = 90
 # runners have no such ceiling; this repo uses none.) Nothing may reach it.
 GITHUB_CEILING = 360
 
-# One job legitimately exceeds MAX_REASONABLE, and it is named here rather than
+# Two jobs legitimately exceed MAX_REASONABLE, and they are named here rather than
 # waved through by loosening the bound for everyone. `shards.yml` / `build`
 # embeds a whole bin-packed group of registries per matrix entry; the worst
 # single tap measured ~75 minutes, and 330 is what fits several of those under
@@ -60,7 +64,27 @@ GITHUB_CEILING = 360
 # how it escaped: the old parser anchored on `(\d+)\s*$`, did not match, and
 # `continue`d — so the one timeout in the repo over the bound was the one
 # timeout the bound never saw.
-JUSTIFIED_LONGER = {("shards.yml", "build"): 330}
+#
+# `ci.yml` / `mutation-shard` is the second. One function is a unit that
+# cannot be split, and its slow-runner tail alone is past 90: it was
+# `store._copy_tree` at 75.1 minutes under a 120 cap (2026-10-20). On
+# 2026-10-22 it is `store._copy_skill`, imputed at 12.3M ms, so
+# (52.4 mutating + 10.0 fixed) x 1.91 = 119.2, 99% of 120. At twenty-four
+# shards `mutation_shards.py plan --explain` puts that at 75% of 160. Main
+# run 39729763526 lost shard 7 at 120 on three attempts. On 2026-11-04 the
+# weights from nightly 41682296301 put the floor shard (store.install alone)
+# at a 134.4-minute tail. The cap went to 200 for the job and 190 for its
+# mutate step, which fires first, and the tail is 71% of 190.
+# `tests/unit/test_mutation_shard_count.py` fails the build if the pack ever
+# needs more than 80% of the step's cap, and if that cap is not under this one.
+#
+# `ci.yml` / `mutation-advisory-shard` is the same job: a full nightly's
+# advisory diff legs, run with `mutation-shard`'s steps (pinned equal in
+# tests/unit/test_mutation_plan.py) and so its caps, job and mutate step
+# alike, because a diff shard can hold the same unsplittable function.
+JUSTIFIED_LONGER = {("shards.yml", "build"): 330,
+                    ("ci.yml", "mutation-shard"): 200,
+                    ("ci.yml", "mutation-advisory-shard"): 200}
 
 CI = WORKFLOWS / "ci.yml"
 
@@ -165,7 +189,7 @@ def caps_by_os(body: str) -> dict[str, int]:
     This is the whole point of the helper. `matrix.os == 'windows-latest'`
     reads correctly and yet fires for nothing at all once the matrix moves to
     `windows-2025`, and every assertion that matches the source text still
-    passes while all nine cells quietly drop back to the default. Only
+    passes while every cell quietly drops back to the default. Only
     evaluating the condition against the list that produces the cells can tell
     those two apart.
     """
@@ -276,7 +300,22 @@ def test_the_parser_reads_the_matrix_expression():
     """
     body = dict(jobs_in(CI))["tests"]
     assert expression_of(timeout_value(body)) is not None, timeout_value(body)
-    assert sorted(job_timeouts(body, "ci.yml / tests")) == [30, 45]
+    assert sorted(job_timeouts(body, "ci.yml / tests")) == [30, 80]
+
+
+def test_the_extended_legs_get_the_cap_their_os_gets_in_tests():
+    """`tests-extended` runs, on the same machines, cells `tests` used to run.
+
+    Its cap is a literal 80, where `tests` evaluates a per-OS expression, so
+    the two are related only by this test: raise the macOS/Windows cap in
+    `tests` after a measured overrun and the same suite on the same runners
+    keeps the old one here, and is cancelled on main where it would have
+    passed -- which holds the release.
+    """
+    extended = caps_by_os(dict(jobs_in(CI))["tests-extended"])
+    twin = caps_by_os(dict(jobs_in(CI))["tests"])
+    assert extended and not any(n.startswith("ubuntu") for n in extended), extended
+    assert extended == {name: twin.get(name) for name in extended}, (extended, twin)
 
 
 @pytest.mark.parametrize("value, expected", [
@@ -309,37 +348,86 @@ def test_the_parser_refuses_a_shape_it_cannot_read(value):
         job_timeouts("    timeout-minutes: %s\n" % value)
 
 
-def test_windows_gets_the_wider_cap_and_the_others_do_not():
+def test_linux_keeps_the_tight_cap_and_the_others_get_the_wider_one():
     """Measured, not guessed — see the comment above the line in ci.yml.
 
     Over 40 `ci` runs the Windows cells' medians were 19.3-20.7 min against
-    4.0-8.8 for Linux and macOS, and the slowest Windows run that still passed
-    took 24.6. A flat 30 gave Windows 5.4 minutes of headroom, and on
-    2026-09-28 windows-3.14 ran out of it twice in one morning — a release
-    train's job at 30.4 min and main's own at 30.3, both still printing test
-    results when they were killed.
+    4.0-8.8 for Linux and macOS, and on 2026-09-28 windows-3.14 ran out of a
+    flat 30 twice in one morning, still printing test results when killed.
+    By 2026-10-23 the suite had grown to 17.5k tests and macOS had caught up:
+    macos-3.13 passed in 28.0 and macos-3.12 was cancelled at 30.0 (run
+    40037733470), while Linux took 12.7-18.3.
 
     The assertion is on the *cap each real matrix cell gets*, not on how the
-    condition is spelled: an equivalent rewrite (`!= 'windows-latest' && 30 ||
-    45`) passes, and a condition that has quietly stopped matching its own
-    `os:` list fails. Widening the default instead would make a wedged Linux
-    job — the case the timeout exists for — take 50% longer to be killed.
+    condition is spelled: an equivalent rewrite passes, and a condition that
+    has quietly stopped matching its own `os:` list fails. Widening Linux too
+    would make a wedged Linux job — the case the timeout exists for — take
+    far longer to be killed.
     """
     caps = caps_by_os(dict(jobs_in(CI))["tests"])
-    windows = {name: cap for name, cap in caps.items()
-               if name.startswith("windows")}
+    linux = {name: cap for name, cap in caps.items()
+             if name.startswith("ubuntu")}
     others = {name: cap for name, cap in caps.items()
-              if not name.startswith("windows")}
-    assert windows, "no windows runner in the os matrix: %r" % caps
-    assert others, "no non-windows runner in the os matrix: %r" % caps
-    assert min(windows.values()) > max(others.values()), (
-        "the wider cap must land on Windows, not against it: %r" % caps)
-    assert min(windows.values()) >= 40, (
-        "45 is 1.8x the slowest Windows run that ever *passed* (24.6 min) and "
-        "~1.5x the two that were killed at ~30.4; the assertion floors at 40 "
-        "rather than pinning 45 so the value stays tunable, but under 40 the "
-        "cap is back inside 1.6x of a run that already passed: %r" % caps)
-    assert max(others.values()) == 30, (
-        "the non-Windows cells measured 4.0-8.8 min with a worst pass of "
-        "10.3; 30 is 2.9x the slowest of them and does not need widening: %r"
-        % caps)
+              if not name.startswith("ubuntu")}
+    assert linux, "no ubuntu runner in the os matrix: %r" % caps
+    assert any(n.startswith("windows") for n in others), caps
+    assert any(n.startswith("macos") for n in others), caps
+    assert min(others.values()) > max(linux.values()), (
+        "the wider cap must land on macOS and Windows, not Linux: %r" % caps)
+    assert min(others.values()) >= 40, (
+        "windows-3.12 printed its `100%%` row at 58 min on 2026-10-23 and "
+        "macOS passed at 28.0 against 30; under 40 the cap is back inside "
+        "the runs that already passed: %r" % caps)
+    assert max(linux.values()) == 30, (
+        "the Linux cells took 12.7-18.3 min on a 17.5k-test suite; 30 still "
+        "leaves 1.6x headroom and does not need widening: %r" % caps)
+
+
+PUBLISH = WORKFLOWS / "publish.yml"
+PREFLIGHT = WORKFLOWS.parents[1] / "scripts" / "release_preflight.py"
+
+# release_preflight.py's worst case past its deadline, from its own source
+# (pinned below): one poll sleep, then one sweep of every gate, each GET up
+# to 3 attempts at a 30 s urlopen timeout with 1 + 2 s of backoff between.
+PREFLIGHT_POLL_S = 15
+PREFLIGHT_GET_WORST_S = 3 * 30 + 1 + 2
+# The release job's time outside the preflight step, measured: 55-77 s over
+# eight releases between 2026-10-20 and 11-04 (77 s: run 39897213817).
+RELEASE_REST_MEASURED_S = 77
+
+
+def test_the_preflight_worst_case_is_the_one_this_file_assumes():
+    source = PREFLIGHT.read_text(encoding="utf-8")
+    assert "def api_get(path: str, token: str, attempts: int = 3):" in source
+    assert "urlopen(req, timeout=30)" in source
+    assert "time.sleep(2 ** attempt)" in source
+    assert ('add_argument("--poll-seconds", type=float, default=%.1f)'
+            % PREFLIGHT_POLL_S) in source
+
+
+def test_the_release_job_outlives_its_preflight_wait():
+    """A wait that runs long must fail in the preflight, not as a job timeout.
+
+    The `release` job carried 45 minutes around a preflight told to wait 3600
+    seconds for the shipped tip's own ci, so the job was killed first, and
+    the red run ci-failure-issue.yml files carried a bare job timeout
+    instead of the preflight's own "still not conclusive" line naming the
+    gate it gave up on.
+    """
+    yaml = pytest.importorskip("yaml")
+    job = yaml.safe_load(PUBLISH.read_text(encoding="utf-8"))["jobs"]["release"]
+    steps = [s for s in job["steps"] if "release_preflight.py" in s.get("run", "")]
+    assert len(steps) == 1, steps
+    run = steps[0]["run"]
+    wait = re.findall(r"--timeout-seconds\s+(\d+)", run)
+    assert len(wait) == 1, run
+    assert "--poll-seconds" not in run, "the poll default is what this assumes"
+    gates = re.findall(r"--require\s+(\S+)", run)
+    assert gates, run
+    budget = (int(wait[0]) + PREFLIGHT_POLL_S + len(gates) * PREFLIGHT_GET_WORST_S
+              + RELEASE_REST_MEASURED_S)
+    cap = job["timeout-minutes"]
+    assert isinstance(cap, int), cap
+    assert cap * 60 > budget, (
+        "release: timeout-minutes %d is %d s, under the %d s the preflight may "
+        "wait plus the rest of the job" % (cap, cap * 60, budget))

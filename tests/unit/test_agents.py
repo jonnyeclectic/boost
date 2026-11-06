@@ -211,7 +211,20 @@ class TestCodexTarget:
         assert known["gemini"]["workflows"] is True
         assert known["codex"]["workflows"] is False
         assert set(agents.workflow_agents()) == {
-            "claude-code", "windsurf", "cursor", "gemini"}
+            "claude-code", "cursor", "gemini"}
+
+    def test_windsurf_takes_rules_but_not_workflows(self, sandbox):
+        # Windsurf documents `.windsurf/workflows/` and
+        # `~/.codeium/windsurf/global_workflows/`, never the `commands/` and
+        # `agents/` slots boost writes, so a workflow there was reported as
+        # installed and never loaded.
+        assert agents.known_agents()["windsurf"]["workflows"] is False
+        assert "windsurf" in agents.materializing_agents()
+        assert "windsurf" in agents.materializing_agents("/repo")
+        assert "windsurf" not in agents.workflow_agents()
+        assert "windsurf" not in agents.workflow_agents("/repo")
+        assert agents.materialization_skip_reason(
+            "workflow", None, "windsurf") == agents.REASON_NO_COMMAND_FORMAT
 
     def test_workflows_flag_is_configurable_back_on(self, sandbox):
         cfg = config.load()
@@ -229,7 +242,7 @@ class TestCodexTarget:
         # It must narrow the *scoped* set, not the user-scope one: antigravity
         # is out of project scope entirely, and codex stays in it.
         assert set(agents.workflow_agents("/repo")) == {
-            "claude-code", "windsurf", "cursor", "gemini"}
+            "claude-code", "cursor", "gemini"}
         assert "codex" in agents.project_agents()
 
     def test_the_base_argument_actually_reaches_the_scoped_set(self, sandbox):
@@ -379,3 +392,93 @@ class TestCheck:
                                        enabled=False)
         config.save(cfg)
         assert [n for n, _e in agents.check()] == ["cursor"]
+
+
+class TestFormerLinkDirs:
+    """Dirs boost linked into before an agent's dir was repointed."""
+
+    def _set_dir(self, agent, d):
+        cfg = config.load()
+        cfg["agents"][agent]["dir"] = str(d)
+        config.save(cfg)
+
+    def test_none_on_a_default_config(self, sandbox):
+        assert agents.former_link_dirs() == []
+        assert agents.sweep_dirs() == list(agents.unlinking_agents().values())
+
+    def test_a_repointed_default_dir_is_former(self, sandbox):
+        self._set_dir("cursor", sandbox / "elsewhere")
+        assert agents.former_link_dirs() == [
+            ("cursor", sandbox / ".cursor" / "skills")]
+
+    def test_a_remembered_dir_is_former_once_left(self, sandbox):
+        first, second = sandbox / "one", sandbox / "two"
+        self._set_dir("cursor", first)
+        agents.remember_link_dir("cursor", first)
+        agents.remember_link_dir("cursor", first)      # recorded once
+        assert agents._remembered_link_dirs() == {"cursor": [str(first)]}
+        self._set_dir("cursor", second)
+        assert ("cursor", first) in agents.former_link_dirs()
+        assert ("cursor", second) not in agents.former_link_dirs()
+
+    def test_a_native_store_agent_s_dir_is_never_former(self, sandbox):
+        gemini = agents.known_agents()["gemini"]["dir"]
+        agents.remember_link_dir("cursor", gemini)
+        assert all(d != gemini for _a, d in agents.former_link_dirs())
+
+    def test_an_unreadable_record_is_no_record(self, sandbox):
+        f = agents.link_dirs_path()
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text("[1, 2]", encoding="utf-8")
+        assert agents._remembered_link_dirs() == {}
+        f.write_text("{not json", encoding="utf-8")
+        assert agents._remembered_link_dirs() == {}
+        f.write_text('{"cursor": "nope", "x": ["/a", 3]}', encoding="utf-8")
+        assert agents._remembered_link_dirs() == {"x": ["/a"]}
+
+
+class TestSkillLinkIsWritten:
+    """A skill's link is asked the question a rule's row is, against the set
+    its install writes: linking agents at user scope, project agents at
+    project scope."""
+
+    @staticmethod
+    def _set(agent, **flags):
+        cfg = config.load()
+        cfg["agents"][agent].update(flags)
+        config.save(cfg)
+
+    def test_user_scope_is_the_linking_set(self, sandbox):
+        assert agents.materialization_is_written("skill", None, "cursor")
+        assert agents.materialization_is_written("skill", None, "antigravity")
+        assert not agents.materialization_is_written("skill", None, "gemini")
+        assert agents.materialization_is_written("skill", None, None)
+
+    def test_project_scope_is_the_project_set(self, sandbox):
+        assert agents.materialization_is_written("skill", "/repo", "gemini")
+        assert not agents.materialization_is_written(
+            "skill", "/repo", "antigravity")
+
+    def test_a_disabled_agent_is_not_written_and_says_why(self, sandbox):
+        self._set("cursor", enabled=False)
+        assert not agents.materialization_is_written("skill", None, "cursor")
+        assert not agents.materialization_is_written("skill", "/r", "cursor")
+        assert agents.materialization_skip_reason(
+            "skill", None, "cursor") == agents.REASON_DISABLED
+        assert agents.materialization_skip_reason(
+            "skill", None, "claude-code") is None
+
+    def test_a_skills_only_agent_is_never_skipped_for_being_skills_only(
+            self, sandbox):
+        """antigravity takes skills; its project refusal is scope, not kind."""
+        assert agents.materialization_skip_reason(
+            "skill", "/repo", "antigravity") == agents.REASON_NO_PROJECT_SCOPE
+        assert agents.materialization_skip_reason(
+            "rule", "/repo", "antigravity") == agents.REASON_SKILLS_ONLY
+        self._set("antigravity", enabled=False)
+        assert agents.materialization_skip_reason(
+            "skill", None, "antigravity") == agents.REASON_DISABLED
+
+    def test_an_unknown_agent_is_unconfigured(self, sandbox):
+        assert agents.materialization_skip_reason(
+            "skill", None, "nope") == agents.REASON_UNCONFIGURED

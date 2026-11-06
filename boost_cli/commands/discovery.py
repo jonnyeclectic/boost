@@ -8,8 +8,10 @@ Also exports detect_stack(), shared with the Quality commands.
 from __future__ import annotations
 
 import contextlib
+import gc
 import json
 import operator
+import os
 import re
 import shutil
 import subprocess
@@ -28,13 +30,18 @@ from ..core import (
     catalog,
     config,
     gitutil,
+    installplan,
+    installscan,
     integrity,
     journal,
+    jsonstate,
     lockfile,
     paths,
+    prereq,
     rag,
     registry,
     rules,
+    scopes,
     store,
     util,
 )
@@ -90,11 +97,16 @@ def _ai_rank(query: str, scored):
         max_tokens=400)
     order = _json_array(reply)
     if not order:
+        if reply:
+            ai.note_bad_reply("no JSON array of names", reply)
         return None
-    by_name = {e["name"]: (e, s) for e, s in scored}
-    names = [str(n) for n in order if str(n) in by_name]
-    rest = [t for t in scored if t[0]["name"] not in set(names)]
-    return [by_name[n] for n in names] + rest
+    # A reply naming none of the candidates leaves the order exactly as BM25
+    # had it, so crediting the AI with it would be a false label.
+    if not rag.names_any(scored, order, lambda t: t[0]["name"]):
+        ai.note_bad_reply("named none of the candidates", reply)
+        return None
+    # Homonyms from different taps are different rows; see reorder_by_names.
+    return rag.reorder_by_names(scored, order, lambda t: t[0]["name"])
 
 
 _ENGINE_LABEL = {"BM25 full-content": "full-content BM25"}
@@ -108,7 +120,7 @@ def cmd_search(argv):
     p.add_argument("query", nargs="+", help="search terms")
     p.add_argument("--smart", action="store_true",
                    help="rerank the top hits with Claude")
-    p.add_argument("--category", default="",
+    p.add_argument("--category", type=util.nonempty_str,
                    help="only show entries whose category matches (case-insensitive)")
     p.add_argument("-k", "--limit", type=util.positive_int, default=15,
                    help="max results (default 15)")
@@ -122,7 +134,19 @@ def cmd_search(argv):
                    help="machine-readable output")
     args = p.parse_args(argv)
     query = " ".join(args.query)
+    if not query.strip():
+        # `boost search ""` got past `nargs="+"` and was answered as a real
+        # miss, with a hint to run a bare `boost discover` — which browses the
+        # cache and searches nothing. It is the same mistake as giving no
+        # query at all, so it gets the same answer and argparse's rc 2.
+        p.error("the query is empty — give at least one search term")
     if not registry.list_taps():
+        cfg_err = config.check()
+        if isinstance(cfg_err, jsonstate.Unreadable):
+            # The taps may all be in it; `tap --defaults` is refused over it.
+            raise BoostError("%s — no taps are read, so nothing was searched"
+                             % cfg_err,
+                             hint=jsonstate.read_remedy(cfg_err, paths.tilde))
         raise BoostError("no taps configured — nothing to search",
                         hint="add the recommended registries with `boost tap --defaults`")
     # Full-content (RAG) search is the default: build the index on first use so
@@ -152,8 +176,19 @@ def cmd_search(argv):
         # built and floors to BM25 otherwise, so the CLI and the MCP server
         # answer from the same engine instead of the CLI being BM25-only.
         k = max(60, args.limit * 4)
-        hits, engine = rag.retrieve_any(
-            query, k=k, collapse_near_duplicates=args.collapse_dupes)
+        if args.category:
+            # Widen until --limit rows survive the filter: filtering one
+            # page of `k` returned 10 of a category's 20 matches against a
+            # --limit of 15, the rest sitting past the cut unmentioned.
+            categories = _tap_categories()
+            hits, engine, k = rag.retrieve_filtered(
+                query, k=k, want=args.limit,
+                keep=lambda e: catalog.matches_category(e, args.category,
+                                                        categories),
+                collapse_near_duplicates=args.collapse_dupes)
+        else:
+            hits, engine = rag.retrieve_any(
+                query, k=k, collapse_near_duplicates=args.collapse_dupes)
         hits = hits or []
         # Retrieval never returns more than `k` — hitting that cap means
         # there may be more matches beyond it, not that there are exactly
@@ -163,22 +198,35 @@ def cmd_search(argv):
         scored = [(h["entry"], h["score"]) for h in hits]
     else:
         scored = catalog.search(query)
+    # Whether the query matched before --category narrowed it: an empty list
+    # the filter produced is a different answer from one the query did.
+    matched_before_filter = len(scored)
     if args.category:
+        categories = _tap_categories()
         scored = [(e, s) for e, s in scored
-                 if catalog.matches_category(e, args.category)]
+                 if catalog.matches_category(e, args.category, categories)]
     # One measurement, three branches below: the words the index cannot hold.
     # Two gates, and each excludes an engine that did not drop anything.
     # `catalog.search` is a substring match, so the non-RAG path discards
     # nothing; and `dense.retrieve` embeds the raw query string, so on a
     # machine with vectors built the term reached an index after all.
-    dropped = (rag.dropped_terms(query)
-               if use_rag and rag.tokenizer_is_the_only_reader() else [])
+    tokenized_only = use_rag and rag.tokenizer_is_the_only_reader()
+    dropped = rag.dropped_terms(query) if tokenized_only else []
+    # Stopwords and bare punctuation are not "dropped" (a notice on every
+    # ordinary phrase is noise), so a query of nothing else needs its own test.
+    ignored = tokenized_only and rag.ignored_by_design(query)
     if not scored:
         if args.as_json:
             print(json.dumps([]))
             _warn_dropped_terms(dropped)
+            if ignored:
+                out.warn("no searchable terms in %r — %s" % (query, _IGNORED_RULE),
+                         wrap=True, stream=sys.stderr)
             return 0
-        if dropped and not rag.tokenize(query):
+        if ignored:
+            print(out.empty_state("no searchable terms in %r" % query,
+                                  _IGNORED_RULE))
+        elif dropped and not rag.tokenize(query):
             # Nothing was searched at all, so "no matches" asserts something
             # this command never checked, and `boost discover` spends a network
             # round trip on a query that never reached an index. Measured: a
@@ -188,6 +236,26 @@ def cmd_search(argv):
                 "no searchable terms in %r" % query,
                 "a term needs 2 or more ASCII letters or digits — %s"
                 % _quoted(dropped)))
+        elif matched_before_filter and hit_cap:
+            # The filter only ever saw the top k: retrieval stopped at its
+            # cap, so a match in the category may sit past it, and "it
+            # matches outside that category" would be a claim about the
+            # whole catalogue made from one page of it.
+            print(out.empty_state(
+                "none of the top %d matches for %r are in category %r"
+                % (matched_before_filter, query, args.category),
+                "narrow the query so the category's items rank higher, or "
+                "drop --category"))
+            _note_dropped_terms(dropped)
+        elif matched_before_filter:
+            # The query matched; only the filter emptied the list. "no
+            # matches" plus a `boost discover` hint sent the user to GitHub
+            # for something already on disk, never naming the filter.
+            print(out.empty_state(
+                "no matches for %r in category %r" % (query, args.category),
+                "it matches outside that category — drop --category, or "
+                "`boost browse --categories` lists them"))
+            _note_dropped_terms(dropped)
         else:
             # The standardized ○/→ empty state, so "nothing here" reads the same
             # as every other command's; both wordings are pinned by tests.
@@ -203,14 +271,15 @@ def cmd_search(argv):
     # The CLI's long-standing wording for the BM25 engine differs from the label
     # rag/eval use ("BM25 full-content"), and both are load-bearing: the latter
     # is pinned in tests/eval/baseline.json. Map instead of moving either.
-    ranker = _ENGINE_LABEL.get(engine, engine) if use_rag else "heuristic relevance"
+    ranker = _ENGINE_LABEL.get(engine, engine) if use_rag else rag.HEURISTIC_ENGINE
     if args.smart:
         reranked = None
         if ai.available():
             with spin.Spinner("ranking %d matches with Claude" % len(scored)):
                 reranked = _ai_rank(query, scored)
         if reranked:
-            scored, ranker = reranked, "Claude Haiku relevance"
+            # Named for the route that answered, not a model nobody checked.
+            scored, ranker = reranked, ai.ranker_label()
         else:
             # Fires whether AI was never available or was tried and failed —
             # a silent unranked list otherwise looks identical to a
@@ -233,7 +302,8 @@ def cmd_search(argv):
     # problem must never take search down with it.
     installed: set[str] = set()
     with contextlib.suppress(Exception):
-        installed = set(store.installed())
+        # Both scopes: a `--local` install in this project is installed too.
+        installed = set(store.installed()) | set(integrity.project_skills()[1])
     # The meter reads across the whole shown page, so its fractions are one
     # screen-wide decision rather than a per-row division — see
     # out.relevance_fractions for why the top score alone cannot say it.
@@ -246,9 +316,9 @@ def cmd_search(argv):
     # grep owner/repo` found nothing the same search shows on a wide pane.
     # No pane (None) plans nothing to fit — see `search_layout`.
     lay = out.search_layout(out.pane_width(),
-                            [e["name"] for e, _ in shown],
+                            [out.plain(e["name"]) for e, _ in shown],
                             [str(e.get("kind") or "skill") for e, _ in shown],
-                            [str(e.get("tap") or "") for e, _ in shown])
+                            [out.plain(e.get("tap") or "") for e, _ in shown])
     for (e, _sc), frac in zip(shown, fracs, strict=True):
         out.info(out.format_search_row(
             e["name"], e.get("description") or "",
@@ -297,6 +367,11 @@ def _note_stem_expansions(query: str) -> None:
 
 #: How the index's own rule reads to someone who just lost a word to it.
 _TERM_RULE = "a term needs 2 or more ASCII letters or digits"
+
+
+#: Why a query of only stopwords or punctuation searched nothing.
+_IGNORED_RULE = ("common words (the, and, how, …) and punctuation are not "
+                 "indexed — add a word that names the task")
 
 
 def _quoted(terms: list[str]) -> str:
@@ -595,10 +670,10 @@ def cmd_reindex(argv):
     p.add_argument("--dense", action="store_true",
                    help="also embed chunks into the opt-in dense vector store "
                         "(needs the `rag` extra; no API key required)")
-    p.add_argument("--export-shard", metavar="TAP",
+    p.add_argument("--export-shard", type=util.nonempty_str, metavar="TAP",
                    help="write TAP's prebuilt vectors to stdout as JSON, for "
                         "publishing so others need not re-embed them")
-    p.add_argument("--import-shard", metavar="FILE",
+    p.add_argument("--import-shard", type=util.nonempty_str, metavar="FILE",
                    help="merge a prebuilt vector shard, skipping the embed "
                         "cost; refused unless it matches this store's backend "
                         "and the tap's current commit")
@@ -676,8 +751,20 @@ def cmd_reindex(argv):
                  wrap=True)
     if args.dense:
         if dense_stats is None:
-            out.warn("dense index skipped — %s" % embed.fallback_note(),
-                     wrap=True)
+            from ..core import dense
+            st = dense.status()
+            # The extra is here and cannot load, or is here without the
+            # model runtime this interpreter has no wheel for: "install the
+            # extra" would name the step this machine already took.
+            note = (dense.fix_hint(st["reason"], st)
+                    if st["reason"] in ("no-extension-load", "no-local-wheel")
+                    else embed.fallback_note())
+            out.warn("dense index skipped — %s" % note, wrap=True)
+        elif dense_stats.get("refused"):
+            from ..core import dense
+            msg, fix = dense.refusal_text(dense_stats)
+            out.warn(msg, wrap=True)
+            out.dim("hint: %s" % fix, wrap=True, indent=2)
         else:
             failed = dense_stats.get("failed") or []
             model_error = dense_stats.get("model_error")
@@ -811,6 +898,8 @@ def _reindex_dense(force, spinner=None):
     # embeds nothing and would otherwise never touch the model at all.
     embed.retry_local()
     stats = dense.build(force=force, on_progress=_embed_progress(spinner))
+    if isinstance(stats, dict) and stats.get("refused"):
+        return stats            # nothing was written; the caller words it
     if migrated and isinstance(stats, dict):
         stats = stats | {"quantized": migrated["chunks"]}
     if collapsed and isinstance(stats, dict) and collapsed["freed"]:
@@ -852,10 +941,12 @@ def cmd_index(argv):
             time.sleep(1)  # stay under the code-search rate limit
         try:
             proc = subprocess.run(
-                ["gh", "api", "-H", "Accept: application/vnd.github+json",
-                 "search/code?q=%s&per_page=100&page=%d"
-                 % (urllib.parse.quote(q, safe=":"), page)],
-                capture_output=True, text=True, timeout=120)
+                util.resolve_exe(
+                    ["gh", "api", "-H", "Accept: application/vnd.github+json",
+                     "search/code?q=%s&per_page=100&page=%d"
+                     % (urllib.parse.quote(q, safe=":"), page)]),
+                capture_output=True, text=True, encoding="utf-8",
+                errors="replace", timeout=120)
         except (subprocess.TimeoutExpired, OSError) as e:
             spin.progress_clear()
             raise BoostError("gh api timed out on page %d" % page, hint=str(e)) from e
@@ -936,10 +1027,12 @@ def github_skill_search(query="", limit=20):
     per_page = max(1, min(int(limit), 100))
     try:
         proc = subprocess.run(
-            ["gh", "api", "-H", "Accept: application/vnd.github+json",
-             "search/code?q=%s&per_page=%d&page=1"
-             % (urllib.parse.quote(q, safe=":"), per_page)],
-            capture_output=True, text=True, timeout=120)
+            util.resolve_exe(
+                ["gh", "api", "-H", "Accept: application/vnd.github+json",
+                 "search/code?q=%s&per_page=%d&page=1"
+                 % (urllib.parse.quote(q, safe=":"), per_page)]),
+            capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=120)
     except (subprocess.TimeoutExpired, OSError):
         return None
     if proc.returncode != 0:
@@ -1005,6 +1098,13 @@ def _fall_back(why: str, hint: str) -> None:
     return None
 
 
+def _note_tapped(n: int) -> None:
+    """Say how many matching repos were left out for being tapped already."""
+    if n:
+        out.info(out.role("%d already-tapped repo(s) not shown — `boost search` "
+                          "covers them" % n, "muted"))
+
+
 def _discover_live(args, tokens):
     """Search GitHub itself — the same reach-out the MCP tool makes.
 
@@ -1024,7 +1124,8 @@ def _discover_live(args, tokens):
     if hits is None:
         _fall_back("GitHub code search failed", "check `gh auth status`")
         return None, "GitHub code search failed"
-    rows = _by_repo(hits)[:args.limit]
+    fresh, tapped = registry.untapped_repos(hits)
+    rows = _by_repo(fresh)[:args.limit]
     if args.as_json:
         # `source` on every row, in both paths, because the fall-through above
         # switches corpus *and* row shape. Without it a script cannot tell
@@ -1034,6 +1135,7 @@ def _discover_live(args, tokens):
     if not rows:
         out.info("no SKILL.md repositories on GitHub match %r"
                  % " ".join(tokens))
+        _note_tapped(tapped)
         out.info(out.role("try broader terms, or `boost search` for the "
                           "registries already tapped", "muted"))
         return 0, None
@@ -1050,6 +1152,7 @@ def _discover_live(args, tokens):
     # than letting a capped sample read as a total.
     out.info(out.role("%d repo(s) across the top %d code-search hits · live "
                       "GitHub Code Search" % (len(rows), len(hits)), "muted"))
+    _note_tapped(tapped)
     out.info(out.role("add one with `boost tap <repo>`, then `boost install "
                       "<skill>`", "muted"))
     return 0, None
@@ -1102,12 +1205,23 @@ def cmd_discover(argv):
     except (json.JSONDecodeError, OSError):
         raise BoostError("the discovery index is corrupt",
                         hint="rebuild it with `boost index`") from None
-    all_items = data.get("items") or []
+    # A row that is not an object is not an index row: such a file reached
+    # here through `catalog --import` and crashed every lookup at rc 70.
+    all_items = (data.get("items") or []) if isinstance(data, dict) else None
+    if (not isinstance(all_items, list)
+            or not all(isinstance(it, dict) for it in all_items)):
+        raise BoostError("the discovery index is corrupt",
+                        hint="rebuild it with `boost index`")
     query_tokens = [t.lower() for t in args.query if t.strip()]
-    items = [it for it in all_items
-             if all(t in ("%s %s %s" % (it.get("repo", ""), it.get("path", ""),
-                                        it.get("description", ""))).lower()
-                    for t in query_tokens)]
+    matched = [it for it in all_items
+               if all(t in ("%s %s %s" % (it.get("repo", ""), it.get("path", ""),
+                                          it.get("description", ""))).lower()
+                      for t in query_tokens)]
+    # The index is a snapshot from before any tap made since: reconcile it
+    # with the tap list now, as the help promises (`registry.untapped_repos`).
+    # After the query filter, so "N already-tapped not shown" counts only
+    # repos this query would otherwise have shown.
+    items, tapped = registry.untapped_repos(matched)
     if args.as_json:
         # Tagged like the live rows above: this is the branch a script reaches
         # after a silent fall-through, and the two row shapes differ. Rows stay
@@ -1138,6 +1252,7 @@ def cmd_discover(argv):
             note = ("this searched a local sample of %d entries — GitHub was "
                      "not searched" % len(all_items))
         out.info(out.role(note, "muted"))
+        _note_tapped(tapped)
         return 0
     # out.plain: these rows came from GitHub too, by way of `boost index`. The
     # "(N)" cell mirrors the live table for the same reason it exists there.
@@ -1153,6 +1268,7 @@ def cmd_discover(argv):
                       "reported ~%d total%s when this index was built"
                       % (len(repo_rows), len(items), len(all_items),
                          int(data.get("github_total") or 0), scope), "muted"))
+    _note_tapped(tapped)
     return 0
 
 
@@ -1169,8 +1285,13 @@ def _ai_picks(stack: dict, cands):
         max_tokens=500)
     picks = _json_array(reply)
     if not picks:
+        if reply:
+            ai.note_bad_reply("no JSON array of picks", reply)
         return None
-    return [pk for pk in picks if isinstance(pk, dict) and pk.get("name")][:5]
+    usable = [pk for pk in picks if isinstance(pk, dict) and pk.get("name")][:5]
+    if not usable:
+        ai.note_bad_reply("no pick carried a name", reply)
+    return usable or None
 
 
 def cmd_recommend(argv):
@@ -1178,8 +1299,8 @@ def cmd_recommend(argv):
     p = cliparse.parser(
         prog="boost recommend",
         description="Suggest skills based on your project's tech stack")
-    p.add_argument("--path", default=".", help="project directory (default: cwd)")
-    p.add_argument("--category", default="",
+    p.add_argument("--path", type=util.nonempty_str, default=".", help="project directory (default: cwd)")
+    p.add_argument("--category", type=util.nonempty_str,
                    help="only recommend entries whose category matches (case-insensitive)")
     p.add_argument("--limit", type=util.positive_int, default=8,
                    help="max suggestions (default 8)")
@@ -1191,7 +1312,8 @@ def cmd_recommend(argv):
         raise BoostError("no such directory: %s" % args.path)
     entries = catalog.all_entries()
     if args.category:
-        entries = catalog.filter_by_category(entries, args.category)
+        entries = catalog.filter_by_category(entries, args.category,
+                                             _tap_categories())
         if not entries:
             raise BoostError("no entries in category %r" % args.category,
                             hint="try `boost recommend` with no --category")
@@ -1216,7 +1338,15 @@ def cmd_recommend(argv):
     for rec in agg.values():
         if rec["entry"].get("curated"):
             rec["score"] += 10
-    ranked = sorted(agg.values(),
+    # What is already installed is not a suggestion, and leaving it in spent
+    # --limit slots on it: excluded by name across every kind and both scopes
+    # (the project being the one --path names), the match search's installed
+    # dot makes. A lock problem must not take recommend down with it.
+    have: frozenset[str] = frozenset()
+    with contextlib.suppress(Exception):
+        have = prereq.installed_names(
+            scopes.resolve_base(scopes.SCOPE_PROJECT, start=target))
+    ranked = sorted((r for r in agg.values() if r["entry"]["name"] not in have),
                     key=lambda r: (-r["score"], r["entry"]["name"]))
     # The shown set (curated fallback included) is computed once, before the
     # --json/text split, so both modes report the same recommendations — the
@@ -1230,7 +1360,7 @@ def cmd_recommend(argv):
         # read below an error about indexing `object`.
         curated: list[dict[str, Any]] = [
             {"entry": e, "score": 0, "because": {"curated"}}
-            for e in catalog.curated_entries(entries)]
+            for e in catalog.curated_entries(entries) if e["name"] not in have]
         shown = curated[:args.limit]
     if args.as_json:
         print(json.dumps({"stack": stack, "recommendations": [
@@ -1266,25 +1396,34 @@ def cmd_recommend(argv):
         out.info(name_cell + "  " + desc + " " * (desc_w - out.visible_len(desc))
                  + "  " + out.role(because, "muted"))
     if ai.available():
-        picks = _ai_picks(stack, [r["entry"] for r in ranked[:20]])
+        # A spinner, as search --smart has: the table above already looks
+        # finished, and a hung CLI otherwise sat silent until the timeout.
+        with spin.Spinner("asking AI for its picks"):
+            picks = _ai_picks(stack, [r["entry"] for r in ranked[:20]])
         if picks:
             out.heading("AI picks")
             for pk in picks:
                 out.info(out.role(str(pk.get("name", "?")), "accent") + "  "
                          + str(pk.get("reason", "")))
+        else:
+            # Same contract as every other AI-assisted command: a dropped
+            # "AI picks" section says why instead of vanishing.
+            out.warn(ai.fallback_note(), wrap=True, stream=sys.stderr)
     return 0
 
 
 def _browse_plain(entries, why: str):
-    out.warn(why + " — showing the full catalog")
+    # stderr: piping is the only scripted use of browse, so stdout's first
+    # line must be the table header, not this notice.
+    out.warn(why + " — showing the full catalog", stream=sys.stderr)
     # Same collapse the TUI does: a registry renders one skill into
     # .claude/, .cursor/, .gemini/ and a plugin root, and this fallback used
     # to list every copy with nothing to tell them apart.
     unique = [e for e, _n in browse.dedupe(entries)]
     show_curated = any(e.get("curated") for e in unique)
     headers = ["name", "version", "tap", "kind"]
-    rows = [[e["name"], "v" + e["version"], e["tap"],
-             out.kind_label(e.get("kind", "skill"))]
+    rows = [[out.plain(e["name"]), "v" + out.plain(e["version"]),
+             out.plain(e["tap"]), out.kind_label(e.get("kind", "skill"))]
             for e in unique]
     if show_curated:
         headers.append("")
@@ -1317,23 +1456,24 @@ def _kind_theme_key(kind: str) -> str:
 
 
 def _row_badges(e: dict, categories: dict):
-    """Ordered (text, theme-key) badges for a browse row: kind, version, tap,
-    and the item's category, when one is known. Most-important-first, so a
-    narrow terminal drops from the tail without losing the essentials (kind
-    and version survive; category goes first).
+    """Ordered (text, theme-key) badges for a browse row: kind, #category,
+    tap, version. Most-important-first, so a narrow terminal drops from the
+    tail — the version goes first (it is in the detail chips, and on most
+    registries it is ``v0.0.0`` on every row), then the tap, then the
+    category; the kind survives longest.
 
-    The entry's own stamped `category` (`catalog.CACHE_FORMAT` 2+) is used
-    first — it covers un-bundled taps too, which the old tap-level lookup
-    never could. `categories` (`_tap_categories`) is the fallback for a cache
-    written before that field existed, so an un-rescanned tap doesn't lose its
-    badge outright."""
-    badges = [(out.kind_label(e.get("kind", "skill")),
-               _kind_theme_key(e.get("kind", "skill"))),
-              ("v" + e["version"], "version"),
-              ("[%s]" % e["tap"], "tap")]
-    category = e.get("category") or categories.get(e["tap"])
+    The kind keeps its bracketed ``[skill]`` label — one vocabulary with the
+    search rows — and gains its hue from the theme. The tap is the repo name
+    alone (:func:`browse.short_tap`); the owner is in the detail pane. The
+    category is a ``#chip`` from :func:`browse.entry_category`, the same
+    lookup the ``category`` scope searches, so a chip is always findable."""
+    kind = e.get("kind", "skill")
+    badges = [(out.kind_label(kind), _kind_theme_key(kind))]
+    category = browse.entry_category(e, categories)
     if category:
-        badges.append(("[%s]" % category, "badge_category"))
+        badges.append(("#" + category, "badge_category"))
+    badges.extend(((browse.short_tap(e["tap"]), "tap"),
+                   ("v" + e["version"], "version")))
     return badges
 
 
@@ -1415,61 +1555,85 @@ _grad_segments = browse.rule_segments
 def _aurora_pairs(curses):
     """Allocate Aurora curses colour pairs.
 
-    Returns ``(pairs, custom)``: token-name -> attr int (0 if none), and
-    whether true custom colours were achieved — the theme needs to know,
-    because the gradient rule is only honest when its three stops are the
-    real Aurora hues (on the 8/16-colour fallback violet and pink both map to
+    Returns ``(pairs, level)``: token-name -> attr int (0 if none), plus the
+    :func:`browse.palette_level` achieved. The theme needs the level, because
+    the gradient rule and the kind hues are only honest when the hues are
+    distinct (on the 8/16-colour fallback violet and pink both map to
     magenta, and cyan/magenta/magenta reads as confetti, not a gradient).
+
+    Three levels, best first: ``custom`` redefines palette slots to the exact
+    Aurora values; ``256`` picks the nearest xterm-cube index for each (tmux
+    without ``Tc`` lands here, and used to fall all the way to 8 colours);
+    ``base`` maps each to its nearest of the 8. The slate selection background
+    exists on the first two only — ``base`` keeps reverse video.
     """
     names = ("cyan", "violet", "pink", "green", "yellow")
     try:
-        custom = curses.can_change_color() and 16 + len(names) <= curses.COLORS
-    except curses.error:
-        custom = False
+        level = browse.palette_level(bool(curses.can_change_color()),
+                                     int(curses.COLORS))
+    except (curses.error, AttributeError):
+        level = browse.BASE
     fg = dict(_nearest_base(curses))
-    if custom:
+    slate = None
+    if level == browse.CUSTOM:
         rgb = _curses_rgb1000()
-        for idx, nm in enumerate(names):
+        rgb["slate"] = tuple(round(c / 255 * 1000) for c in browse.SLATE)
+        for idx, nm in enumerate((*names, "slate")):
             slot = 16 + idx
             try:
                 curses.init_color(slot, *rgb[nm])
-                fg[nm] = slot
             except curses.error:
-                pass
+                continue
+            if nm == "slate":
+                slate = slot
+            else:
+                fg[nm] = slot
+    elif level == browse.XTERM256:
+        for nm in names:
+            fg[nm] = browse.xterm256(out.TOKENS[nm])
+        slate = browse.xterm256(browse.SLATE)
     fg["red"] = curses.COLOR_RED
     pairs = {}
-    for i, nm in enumerate(("cyan", "violet", "pink", "green", "yellow", "red"),
-                           start=1):
+    plan = [(nm, fg[nm], -1) for nm in
+            ("cyan", "violet", "pink", "green", "yellow", "red")]
+    if slate is not None:
+        # The selected row: bright text and the accent bar, both on slate. An
+        # explicit foreground, not the terminal default — on a light theme the
+        # default is black, and black on slate is unreadable.
+        plan += [("sel", getattr(curses, "COLOR_WHITE", 7), slate),
+                 ("sel_bar", fg["cyan"], slate)]
+    for i, (nm, f, b) in enumerate(plan, start=1):
         try:
-            curses.init_pair(i, fg[nm], -1)
+            curses.init_pair(i, f, b)
             pairs[nm] = curses.color_pair(i)
         except curses.error:
             pairs[nm] = 0
-    return pairs, custom
+    return pairs, level
 
 
-_NAME_X = 4  # column the name (and everything under it) starts at
+_NAME_X = 4  # column, inside the list pane, the name (and its description) start
 
 
 def _browse_theme(curses):
     """Role -> curses attr for the browser, built grayscale-first.
 
-    The browser used six hues at once — cyan kinds, violet taps, pink matches,
-    yellow categories, green states — and read as confetti rather than as one
-    surface. Refactoring UI's rule is the fix: hierarchy comes from weight, and
-    colour is added last, for meaning only.
+    Hierarchy comes from weight — BOLD / normal / DIM — and colour is layered
+    on top for meaning only, so a monochrome terminal (or ``NO_COLOR``) keeps
+    the whole structure. The meanings, and nothing else:
 
-    So the tiers are BOLD / normal / DIM, and the palette is one accent plus two
-    semantics that earn their place:
-
-      accent (cyan)   focus, selection, section heads — the one brand colour
+      accent (cyan)   focus, the selection bar, section heads, the mode pill
+      kind hues       skill cyan · rule violet · workflow pink — kind is the
+                      first thing a reader sorts by, so it earns a hue; three
+                      and no more (see browse.KIND_HUES for the 8-colour map)
       ok (green)      installed; the only "this succeeded" signal
-      warn (yellow)   curated star, and a failed install
-      everything else BOLD for primary, plain for values, DIM for labels,
-                      badges, descriptions and chrome
+      warn (yellow)   a failed install, and the curated star
+      everything else plain for values, DIM for labels, taps, versions and
+                      chrome
 
-    Monochrome terminals keep the whole hierarchy, because the tiers are
-    attributes rather than colours.
+    An earlier pass stripped the kind hues along with four others because six
+    hues at once read as confetti. The kinds came back on their own: bounded
+    to one badge per row, they sort the list at a glance without competing
+    with the accent.
     """
     B, D, N, R = curses.A_BOLD, curses.A_DIM, curses.A_NORMAL, curses.A_REVERSE
     t = {
@@ -1480,30 +1644,38 @@ def _browse_theme(curses):
         # chrome
         "border": D, "border_focus": B, "title": B, "help": D,
         "prompt": B, "query": B, "count": D,
-        "row_sel": R, "scroll": D,
+        "row_sel": R, "row_sel_name": R | B, "sel_bar": R | B, "scroll": D,
+        "pill": R | B, "key": B, "hint": D,
         # rows
         "name": B, "desc": D, "match": B, "star": N, "check": B, "state": N,
         "version": D, "tap": D,
-        "badge_skill": D, "badge_rule": D, "badge_workflow": D,
+        "badge_skill": N, "badge_rule": N, "badge_workflow": N,
         "badge_category": D,
         # detail pane
         "detail_name": B, "head": B, "field": N, "label": D,
+        "kind_skill": B, "kind_rule": B, "kind_workflow": B,
+        "category": N,
         "busy": B, "failed": B,
         "dot_r": N, "dot_y": N, "dot_g": N,
         "rule": [D, D, D],
     }
-    if not hasattr(curses, "start_color"):
+    if not hasattr(curses, "start_color") or os.environ.get("NO_COLOR"):
+        # NO_COLOR (no-color.org) is honoured here as everywhere else in the
+        # CLI; the tiers above are the whole design, so nothing goes missing.
         return t
     try:
         curses.start_color()
         curses.use_default_colors()
     except curses.error:
         return t
-    p, custom = _aurora_pairs(curses)
+    p, level = _aurora_pairs(curses)
 
     def P(nm, bold=False):
         a = p.get(nm, 0)
         return (a | curses.A_BOLD) if bold else a
+
+    def hue(kind, bold=False):
+        return P(browse.kind_hue(kind, level), bold)
 
     # Colour is layered ON the tiers, never instead of them: every role below
     # keeps the weight it had, so removing colour changes nothing structural.
@@ -1512,21 +1684,30 @@ def _browse_theme(curses):
         "ok": P("green", True), "warn": P("yellow"), "err": P("red", True),
         "title": P("cyan", True), "prompt": P("cyan", True),
         "border": P("cyan"), "border_focus": P("cyan", True),
-        "row_sel": P("cyan", True) | curses.A_REVERSE,
         "scroll": P("cyan"),
+        "pill": P("cyan", True) | R, "key": P("cyan", True),
         "match": P("cyan", True), "star": P("yellow"), "check": P("green", True),
         "state": P("green"), "detail_name": P("cyan", True),
         "head": P("cyan", True), "busy": P("cyan", True),
         "ok_line": P("green", True), "failed": P("yellow", True),
         "dot_r": P("red"), "dot_y": P("yellow"), "dot_g": P("green"),
+        "badge_skill": hue("skill"), "badge_rule": hue("rule"),
+        "badge_workflow": hue("workflow"),
+        "kind_skill": hue("skill", True), "kind_rule": hue("rule", True),
+        "kind_workflow": hue("workflow", True),
         # The browser's one gradient moment: the top rule runs cyan → violet
-        # → pink, but only when the terminal can render the real Aurora hues.
-        # The 8/16-colour fallback keeps a single-hue rule (mirroring
+        # → pink, but only when the terminal can render distinct hues. The
+        # 8/16-colour fallback keeps a single-hue rule (mirroring
         # out.gradient's basic-level behaviour) rather than the cyan/magenta/
         # magenta confetti the base palette would produce.
-        "rule": ([P("cyan"), P("violet"), P("pink")] if custom
+        "rule": ([P("cyan"), P("violet"), P("pink")] if level != browse.BASE
                  else [P("cyan")] * 3),
     })
+    if p.get("sel"):
+        # Slate under the selected row, the accent in its bar. Where there is
+        # no slate (base colours) the row keeps reverse video from the tiers.
+        t.update({"row_sel": p["sel"], "row_sel_name": p["sel"] | B,
+                  "sel_bar": p["sel_bar"] | B})
     return t
 
 
@@ -1567,20 +1748,48 @@ def _install_targets() -> dict[str, str]:
     }
 
 
-def _browse_tui(curses, entries, install=None):
-    """Run the curses UI. Returns the list of entries picked for install
-    (one or more, via multi-select), or None if the user quit without picking.
+def _installed_rows() -> set:
+    """``(tap, name)`` for every installed skill — row identity, not a name.
 
-    Layout is a single framed surface: title bar, query, scope radios, then a
-    list pane and a detail pane divided by a rule. All of the geometry and all
+    By name, a same-named skill from another tap drew as installed and Enter
+    on it was a silent no-op. A lock row that records no tap is kept as
+    ``("", name)`` and matches any tap (:func:`_row_installed`), so an older
+    lock still shows what it holds."""
+    return {(str(rec.get("tap") or ""), name)
+            for name, rec in store.installed().items()}
+
+
+def _row_installed(e: dict, installed) -> bool:
+    """Whether this catalog row is the copy the lock holds."""
+    return (_desc_key(e) in installed) or (("", e["name"]) in installed)
+
+
+def _browse_tui(curses, entries, install=None, category=""):
+    """Run the curses UI. Returns a :class:`browse.InstallSession` saying what
+    Enter installed, refused and (on ^C) cancelled, or None if the user quit
+    without asking for anything.
+
+    An install takes ``boost install``'s plan (:func:`installplan.plan`: the
+    look-alike warning and the ``requires:`` closure, dependencies first) and
+    its refusals (``store.check_existing``, policy inside ``store.install``),
+    and the pane shows the injection/secret scan. What prompts — the MCP offer
+    — cannot prompt under curses, so the caller runs it after the browser
+    exits, from the session.
+
+    Layout is a single framed surface — title tab, query, scope toggles, then
+    a list pane and a detail pane divided by a rule — with a status bar under
+    it. Matches are ranked (:func:`browse.rank`). All of the geometry and all
     of the matching come from :mod:`core.browse`, which is where they can be
     tested — this function only draws and dispatches keys.
+
+    ``category`` opens the browser already narrowed to one category. ^G,
+    ^R and ^K open the category, tap and kind pickers (one facet picker, see
+    :class:`browse.Picker`); their filters AND together and with the query.
     """
-    state: dict[str, Any] = {"picks": None}
     categories = _tap_categories()
     desc_cache: dict = {}
     loading: set = set()
-    installed_names = set(store.installed())
+    installed_rows = _installed_rows()
     do_install = install or store.install
     from .pkg import _skipped_agent_lines  # imported here: pkg is large
     # Collapse rows that say the same thing. A registry renders one skill into
@@ -1591,64 +1800,139 @@ def _browse_tui(curses, entries, install=None):
     copies = {id(e): n for e, n in deduped}
     unique_entries = [e for e, _n in deduped]
     hidden = len(entries) - len(unique_entries)
-    # name -> (state, message). Item 1: an install runs without leaving the
-    # browser, and the detail pane reports it. Threaded so the draw loop keeps
-    # answering keys while files are written — an install that freezes the UI
-    # reads as a crash.
-    status: dict[str, tuple[str, str]] = {}
-    done: list = []
+    # Everything allocated so far lives as long as the browser does, and the
+    # collector would otherwise walk all of it — every catalogue dict — on
+    # each gen-2 pass, which the ranking's per-keystroke tuples trigger.
+    # Measured over a 61,801-entry catalogue: a one-letter query 122 ms
+    # unfrozen, 52 ms frozen. Undone on the way out (see the finally below).
+    gc.freeze()
+    # (tap, name) -> (state, message). Item 1: an install runs without leaving
+    # the browser, and the detail pane reports it. Threaded so the draw loop
+    # keeps answering keys while files are written — an install that freezes
+    # the UI reads as a crash. Keyed by row, not name: two taps' `brainstorming`
+    # are two rows, and one installing must not mark the other.
+    status: dict[tuple, tuple[str, str]] = {}
+    session = browse.InstallSession()
     workers: list = []
-    queue: list = []
+    queue: list = []                      # one list of picked roots per Enter
     queue_lock = threading.Lock()
+    draining = [False]                    # a worker owns the queue
+    cancel = threading.Event()
     # What Enter will touch, by kind. Built once: the paths cannot change
     # mid-session, and browse.install_target stays pure by receiving them.
     targets = _install_targets()
 
-    def start_install(entry):
-        """Queue an install. Installs run one at a time, in a single worker.
+    def fail(item, err):
+        msg, hint = ((err.message, err.hint or "") if isinstance(err, BoostError)
+                     else (str(err) or type(err).__name__, ""))
+        session.failed.append((item, msg, hint))
+        status[_desc_key(item)] = (browse.FAILED,
+                                   " — ".join(p for p in (msg, hint) if p))
+
+    def install_one(item, notes):
+        key = _desc_key(item)
+        status[key] = (browse.BUSY, "")
+        try:
+            res = do_install(item)
+        except Exception as e:                  # never kill the TUI
+            fail(item, e)
+            return
+        installed_rows.add(key)
+        session.installed.append((item, res))
+        # An agent the install skipped rides on the message, and so do the
+        # plan's warnings and the injection/secret scan `boost install`
+        # prints: the pane is the only report an in-place install gets while
+        # the browser is open, and a bare path there read as "nothing to see".
+        conflicts, refused = _skipped_agent_lines(res)
+        scan = (installscan.scan(res)
+                if isinstance(res, store.InstallResult) else [])
+        status[key] = (browse.OK, " · ".join(
+            [_tilde(getattr(res, "dest", "")), *conflicts, *refused,
+             *("! " + n for n in notes),
+             *("! " + rep.headline for rep in scan)]))
+
+    def run_request(roots):
+        """One Enter: refuse what `boost install` refuses, plan the closure,
+        install it dependencies first."""
+        ok_roots = []
+        for e in roots:
+            try:
+                store.check_existing(e)
+            except BoostError as err:
+                fail(e, err)
+                continue
+            ok_roots.append(e)
+        if not ok_roots:
+            return
+        try:
+            the_plan = installplan.plan(ok_roots)
+        except BoostError as err:
+            for e in ok_roots:
+                fail(e, err)
+            return
+        session.notes.extend(the_plan.notes())
+        warnings = [text for role, text in the_plan.notes() if role == "warn"]
+        root_keys = {_desc_key(e) for e in ok_roots}
+        for i, item in enumerate(the_plan.entries):
+            if cancel.is_set():
+                session.cancelled.extend(the_plan.entries[i:])
+                return
+            key = _desc_key(item)
+            if key not in root_keys and \
+                    status.get(key, ("", ""))[0] == browse.OK:
+                continue                        # landed earlier this session
+            install_one(item, warnings if key in root_keys else [])
+
+    def start_install(picked):
+        """Queue one Enter's picks. Requests run one at a time, in a single
+        worker.
 
         Serial on purpose. Running them in parallel threads was a lost update:
         every `store.install` does a read-modify-write of `.skill-lock.json`, so
         two at once raced and one entry vanished from the lock — a Tab-select of
         two skills installed both to disk and recorded one. It showed up as a
-        test that passed alone and failed 3 runs in 5 in the suite.
+        test that passed alone and failed 3 runs in 5 in the suite. The plan's
+        `requires:` closure reads that lock too, which serial keeps honest.
 
         One background worker still keeps the draw loop answering keys, which is
-        the property that actually mattered.
+        the property that actually mattered. It is *not* a daemon: a daemon dies
+        with the process, and ^C mid-install left a store copy and agent links
+        with no lock row behind them.
         """
-        name = entry["name"]
         with queue_lock:
-            if status.get(name, ("", ""))[0] in (browse.BUSY, browse.OK):
+            fresh = [e for e in picked
+                     if status.get(_desc_key(e), ("", ""))[0]
+                     not in (browse.BUSY, browse.OK)]
+            if not fresh:
                 return
-            status[name] = (browse.BUSY, "")
-            queue.append(entry)
-            if any(t.is_alive() for t in workers):
+            for e in fresh:
+                status[_desc_key(e)] = (browse.BUSY, "")
+            queue.append(fresh)
+            # A flag, not `is_alive()`: a worker that has just found the queue
+            # empty is still alive for a moment, and a request queued then was
+            # stranded with its rows spinning.
+            if draining[0]:
                 return                                  # a worker is draining
+            draining[0] = True
 
         def worker():
             while True:
                 with queue_lock:
                     if not queue:
+                        draining[0] = False
                         return
-                    item = queue.pop(0)
-                nm = item["name"]
+                    req = queue.pop(0)
                 try:
-                    res = do_install(item)
-                except BoostError as e:
-                    status[nm] = (browse.FAILED, e.message)
-                except Exception as e:                  # never kill the TUI
-                    status[nm] = (browse.FAILED, str(e))
-                else:
-                    installed_names.add(nm)
-                    done.append(item)
-                    # An agent the install skipped rides on the message: the
-                    # pane is the only report an in-place install gets, and a
-                    # bare path there read as every agent reached.
-                    conflicts, refused = _skipped_agent_lines(res)
-                    status[nm] = (browse.OK, " · ".join(
-                        [_tilde(getattr(res, "dest", "")), *conflicts, *refused]))
+                    run_request(req)
+                except Exception as e:          # the plan, not an install
+                    # A dead worker would leave every later Enter ignored and
+                    # these rows spinning, reported nowhere.
+                    for root in req:
+                        if status.get(_desc_key(root), ("", ""))[0] == \
+                                browse.BUSY:
+                            fail(root, e)
 
-        t = threading.Thread(target=worker, daemon=True)
+        t = threading.Thread(target=worker, daemon=False)
         workers.append(t)
         t.start()
 
@@ -1681,7 +1965,11 @@ def _browse_tui(curses, entries, install=None):
             # `x < _w`, not `_w - 1`: the right-hand border lives in the last
             # column, and the old bound made it unwritable — the frame drew
             # with three sides. Writing the very last cell can make curses
-            # scroll, which is what the suppressed error covers.
+            # scroll, which is what the suppressed error covers. out.plain:
+            # every cell the TUI draws passes here, and its colors are curses
+            # attributes, never in-band escapes — so no byte of a tap's
+            # frontmatter can address the terminal through a row.
+            s = out.plain(s)
             if 0 <= y < _h and 0 <= x < _w and s:
                 with contextlib.suppress(curses.error):
                     scr.addnstr(y, x, s, _w - x, attr)
@@ -1689,44 +1977,127 @@ def _browse_tui(curses, entries, install=None):
         filt, sel, detail = "", 0, True
         focus, scope, dscroll = "list", browse.SCOPES[0], 0
         collapse = True
+        # facet -> value; "" is no filter. Every facet is always present so
+        # the cache keys below have one fixed shape.
+        filters = dict.fromkeys(browse.FACETS, "")
+        filters["category"] = category.strip().lower()
+        picker: browse.Picker | None = None   # while ^G / ^R / ^K is open
+        order = browse.ORDERS[0]       # the picker's sort, kept across opens
         selected: set = set()
         # One haystack per entry per scope, built on first use and reused for
         # every keystroke: re-deriving it inside the filter cost 125 ms per key
         # over 71,700 entries, which is slower than the draw poll.
         index: dict = {}
+        pools: dict = {}
+        # The result list, recomputed only when something it depends on
+        # changes. The loop wakes every 80 ms to redraw a finished lazy-load;
+        # re-filtering 42,000 rows on each of those ticks spent the CPU on
+        # an answer it already had.
+        memo: tuple = (None, [])
+
+        def pool_for(coll, fl):
+            pk = (coll, *(fl[f] for f in browse.FACETS))
+            if pk not in pools:
+                pools[pk] = browse.narrow(unique_entries if coll else entries,
+                                          fl, categories)
+            return pools[pk]
+
+        def open_facet(facet):
+            # Counted over the rows the browser is showing — collapsed or
+            # not — narrowed by every *other* active filter but not this
+            # facet's own, so each count is what picking that row would leave
+            # (the faceted-search convention). The text query is left out on
+            # purpose: honouring it means a second haystack index per filter
+            # combination, rebuilt on every open, over 71,700 rows — and a
+            # count that moved under every keystroke would describe the query
+            # rather than the facet. One walk per open, never per draw.
+            base = pool_for(collapse, filters | {facet: ""})
+            return browse.open_picker(
+                facet, browse.facet_counts(base, facet, categories).items(),
+                len(base), filters[facet], order)
+
+        # Key codes the picker understands, by name; browse.picker_step
+        # decides what each does. ←/→ and Tab both walk the facets — the
+        # picker has no horizontal motion of its own to give them.
+        pkeys = {27: "esc", 10: "enter", 13: "enter",
+                 curses.KEY_ENTER: "enter", curses.KEY_UP: "up",
+                 curses.KEY_DOWN: "down", curses.KEY_PPAGE: "pgup",
+                 curses.KEY_NPAGE: "pgdn", curses.KEY_BACKSPACE: "backspace",
+                 127: "backspace", 8: "backspace", 9: "next",
+                 getattr(curses, "KEY_BTAB", 353): "prev",
+                 curses.KEY_RIGHT: "next", curses.KEY_LEFT: "prev",
+                 20: "sort"}
+        facet_codes = {7: "category", 18: "tap", 11: "kind"}  # ^G ^R ^K
         while True:
             _h, _w = scr.getmaxyx()
-            pool = unique_entries if collapse else entries
-            key = (scope, collapse)
+            fkey = tuple(filters[f] for f in browse.FACETS)
+            pool = pool_for(collapse, filters)
+            key = (scope, collapse, fkey)
             if key not in index:
-                index[key] = browse.index_entries(pool, scope)
-            found = browse.matches_indexed(index[key], filt)
+                index[key] = browse.index_entries(pool, scope, categories)
+            if memo[0] != (key, filt):
+                memo = ((key, filt),
+                        browse.matches_indexed(index[key], filt, scope))
+            found = memo[1]
             sel = max(0, min(sel, len(found) - 1))
             lay = browse.layout(_w, _h, detail=detail)
             try:
                 scr.erase()
                 # status.copy(): the worker thread owns the mapping; a shallow
                 # copy keeps the fold safe from a mid-iteration mutation.
-                _draw_frame(put, th, lay, focus,
-                            browse.session_summary(status.copy()))
+                _draw_frame(put, th, lay, focus)
+                _draw_status(put, th, lay, "picker" if picker else focus,
+                             browse.session_summary(status.copy()),
+                             browse.FACET_MODES.get(picker.facet)
+                             if picker else None)
                 _draw_query(put, th, lay, filt, focus, len(found), len(pool),
-                            len(selected), hidden if collapse else 0)
+                            len(selected), hidden if collapse else 0,
+                            browse.query_chips(filters))
                 _draw_scopes(put, th, lay, scope, focus)
-                rows = _draw_rows(put, th, lay, found, sel, selected, filt,
-                                  focus, describe, categories, installed_names,
-                                  copies if collapse else None, status,
-                                  scope, hidden if collapse else 0)
+                if picker:
+                    rows = _draw_picker(put, th, lay, picker)
+                else:
+                    rows = _draw_rows(put, th, lay, found, sel, selected,
+                                      filt, focus, describe, categories,
+                                      installed_rows,
+                                      copies if collapse else None, status,
+                                      scope, hidden if collapse else 0,
+                                      filters)
                 if lay.has_detail and found:
                     dscroll = _draw_detail(
                         put, th, lay, found[sel], dscroll, focus,
-                        installed_names, status,
-                        browse.install_target(found[sel], targets))
+                        installed_rows, status,
+                        browse.install_target(found[sel], targets), categories)
                 scr.refresh()
             except curses.error:
                 pass  # terminal too small mid-draw; retry on next key
                 rows = 1
             key = scr.getch()
             if key == -1:                                 # poll tick, no key
+                continue
+            if picker is not None:
+                # The picker owns every key while it is open: Esc closes it
+                # rather than quitting the browser behind it.
+                name = pkeys.get(key) or (
+                    "facet:" + facet_codes[key] if key in facet_codes
+                    else chr(key) if 32 <= key <= 126 else "")
+                if not name:
+                    continue
+                picker, act = browse.picker_step(picker, name, max(1, rows))
+                order = picker.order
+                if act == "apply":
+                    filters[picker.facet] = browse.picker_value(picker) or ""
+                    picker, sel, dscroll = None, 0, 0
+                elif act == "cancel":
+                    picker = None
+                elif act in ("next", "prev"):
+                    picker = open_facet(browse.next_facet(
+                        picker.facet, 1 if act == "next" else -1))
+                elif act:                                 # facet:<name>
+                    picker = open_facet(act.split(":", 1)[1])
+                continue
+            if key in facet_codes:                        # ^G ^R ^K
+                picker = open_facet(facet_codes[key])
                 continue
             if key == 9 and found:                        # TAB: multi-select
                 selected.symmetric_difference_update({_desc_key(found[sel])})
@@ -1741,9 +2112,8 @@ def _browse_tui(curses, entries, install=None):
                 # It installs in place rather than exiting: the browser is for
                 # finding several things, and dropping to a shell after the
                 # first one makes the user re-run and re-type to get the next.
-                for e in ([e for e in entries if _desc_key(e) in selected]
-                          if selected else [found[sel]]):
-                    start_install(e)
+                start_install([e for e in entries if _desc_key(e) in selected]
+                              if selected else [found[sel]])
                 selected.clear()
                 continue
             if key in (curses.KEY_LEFT, curses.KEY_RIGHT) and \
@@ -1788,45 +2158,60 @@ def _browse_tui(curses, entries, install=None):
                 filt, sel, dscroll = filt + chr(key), 0, 0
                 focus = "search" if focus == "search" else focus
 
-    curses.wrapper(ui)  # wrapper guards drawing with try/finally endwin()
-    # Join before returning. The workers are daemons so the draw loop can exit
-    # promptly, but a daemon dies with the process — quitting right after Enter
-    # would abandon an install mid-write. `store.install` stages atomically, so
-    # the store survives either way; what would not survive is the user's
-    # belief that it finished.
-    for t in workers:
-        t.join(timeout=60)
-    # Installs already happened in-loop; hand back what landed so the caller
-    # can print a summary rather than repeating the work.
-    return done or state["picks"]
+    try:
+        curses.wrapper(ui)  # wrapper guards drawing with try/finally endwin()
+    except KeyboardInterrupt as exc:
+        # ^C. The install in flight finishes (the join below) — killing it
+        # between the copy and the lock write is what left an unrecorded store
+        # dir — and nothing queued behind it starts. The caller reports both
+        # and re-raises, so the exit code stays the interrupt's.
+        session.interrupted = exc
+        cancel.set()
+        with queue_lock:
+            for req in queue:
+                session.cancelled.extend(req)
+            queue.clear()
+    finally:
+        gc.unfreeze()
+        # Join on every way out. Quitting right after Enter must not leave an
+        # install half-written, nor its result unreported.
+        for t in workers:
+            t.join()
+    return session if session.requested() or session.interrupted else None
 
 
-def _draw_frame(put, th, lay, focus, summary=None):
-    """Outer box, column divider, and the title sitting in the top rule.
+def _draw_frame(put, th, lay, focus):
+    """Outer box, column divider, and the title tab sitting in the top rule.
 
-    ``summary`` is the session's install chip from
-    :func:`browse.session_summary` — set into the bottom rule when present,
-    so what happened this session is visible even with the detail pane
-    closed or parked elsewhere.
+    The key hints and the session chip used to live in here too — the hints
+    on a chrome row of their own, the chip in the bottom rule. Both moved to
+    the status bar under the frame (:func:`_draw_status`), which gave a
+    result row back to the list and stopped the chip fighting the divider's
+    tee for the same cells.
     """
     w, h = lay.w, lay.h
     if w < 4 or h < 6:
         return
     inner = w - 2
+    bottom = lay.bottom
     put(0, 0, "╭" + "─" * inner + "╮", th["border"])
-    # Dots grouped rather than dash-separated: spaced out they read as part of
-    # the rule instead of as a cluster of window controls.
+    # ╭─ ●●● ─┤ ◆ boost browse ├──── the title is a tab set into the rule,
+    # with the window dots grouped ahead of it so they read as one cluster of
+    # controls rather than as part of the rule.
     put(0, 2, " ", th["border"])
     put(0, 3, "●", th["dot_r"])
     put(0, 4, "●", th["dot_y"])
     put(0, 5, "●", th["dot_g"])
-    title = "  boost browse  "
-    put(0, 6, title, th["title"])
+    put(0, 6, " ─┤ ", th["border"])
+    put(0, 10, "◆", th["accent"])
+    title = " boost browse "
+    put(0, 11, title, th["title"])
+    put(0, 11 + len(title), "├", th["border"])
     # The one gradient moment: the rest of the top rule runs cyan → violet →
     # pink (glyphs unchanged — repainted in place, so monochrome loses
-    # nothing). The theme decides whether the stops are real Aurora hues or
+    # nothing). The theme decides whether the stops are distinct hues or
     # collapse to a single accent; see _browse_theme.
-    grad_x = 6 + len(title)
+    grad_x = 12 + len(title)
     # Tolerate a theme without the stop list (the draw loop never raises on a
     # frame): anything short falls back to the plain border attr.
     stops = th["rule"] if isinstance(th["rule"], (list, tuple)) else ()
@@ -1840,7 +2225,7 @@ def _draw_frame(put, th, lay, focus, summary=None):
     list_edge = th["border_focus"] if focus in ("list", "search", "scopes") \
         else th["border"]
     detail_edge = th["border_focus"] if focus == "detail" else th["border"]
-    for y in range(1, h - 1):
+    for y in range(1, bottom):
         put(y, 0, "│", list_edge if y >= lay.body_y else th["border"])
         put(y, w - 1, "│",
             detail_edge if lay.has_detail and y >= lay.body_y else th["border"])
@@ -1849,97 +2234,105 @@ def _draw_frame(put, th, lay, focus, summary=None):
     put(sep, 0, "├" + "─" * inner + "┤", th["border"])
     if lay.has_detail:
         put(sep, lay.detail_x - 1, "┬", th["border"])
-        for y in range(lay.body_y, h - 1):
+        for y in range(lay.body_y, bottom):
             put(y, lay.detail_x - 1, "│", detail_edge)
         cap = " details " if focus != "detail" else " details · ↑↓ scroll "
         if lay.detail_w > len(cap) + 2:
             put(sep, lay.detail_x + 1, cap,
                 th["accent"] if focus == "detail" else th["muted"])
-    put(h - 1, 0, "╰" + "─" * inner + "╯", th["border"])
+    put(bottom, 0, "╰" + "─" * inner + "╯", th["border"])
     if lay.has_detail:
-        put(h - 1, lay.detail_x - 1, "┴", th["border"])
-    if summary:
-        # Clipped to end before the divider tee (or the corner), so the frame
-        # glyphs survive any message length. Absent, the idle rule is
-        # byte-identical to a summary-less frame.
-        role, text = summary
-        boundary = lay.detail_x - 1 if lay.has_detail else w - 1
-        room = boundary - 3
-        if room > 4:
-            put(h - 1, 2, (" " + text + " ")[:room],
-                th.get(role) or th.get("ok") or 0)
-    # The hint used to live in the bottom rule, where the column divider's
-    # tee landed on top of it and turned "esc quit" into "┴sc quit". It has
-    # its own row now, above the rule that separates chrome from body.
-    # Two hints, not one truncated: clipping the long one mid-word ends the
-    # line on "esc", which reads as a key rather than as a cut-off phrase.
-    hint = ("↑↓ move  ⇥ select  → detail  ^T scope  ^D dupes  "
-            "↵ install  esc quit")
-    if len(hint) > inner - 2:
-        hint = "↑↓ move  ⇥ select  ↵ install  esc quit"
-    if len(hint) > inner - 2:
-        hint = "↑↓  ⇥ sel  ↵ add  esc"
-    put(lay.body_y - 2, 2, hint[:max(0, inner - 2)], th["help"])
+        put(bottom, lay.detail_x - 1, "┴", th["border"])
 
 
-def _draw_query(put, th, lay, filt, focus, n_found, n_all, n_sel, hidden=0):
-    """The query row: chevron, text, cursor when focused, right-aligned count.
+def _draw_status(put, th, lay, focus, summary=None, mode=None):
+    """The tmux-style status bar under the frame: mode pill, the hints for
+    that mode, and the session's install chip at the right.
+
+    The hints change with focus because the keys do — ``←`` picks a scope on
+    the toggle row and leaves the detail pane everywhere else, and a single
+    hint line could only ever describe one of those. All of the placement is
+    :func:`browse.status_spans`; this only paints it.
+    """
+    if not lay.has_status:
+        return
+    for x, role, text in browse.status_spans(focus, lay.w, summary, mode):
+        put(lay.status_y, x, text, th.get(role) or th.get("ok") or 0)
+
+
+def _draw_query(put, th, lay, filt, focus, n_found, n_all, n_sel, hidden=0,
+                chips=()):
+    """The query row: chevron, a chip per active facet filter, text, cursor
+    when focused, right-aligned count.
 
     ``hidden`` is stated, never implied: a browser that quietly drops a third of
     the catalogue and shows a smaller total is indistinguishable from one with a
-    broken filter.
+    broken filter. The category chip sits where the query starts for the same
+    reason — it narrows as much as the text does, so it reads as part of it.
+    The count's denominator is the pool after every filter, so ``n/m`` stays
+    the share of what the chips allow rather than of the whole catalogue.
     """
     active = focus == "search"
     put(1, 2, "❯", th["prompt"] if active else th["border"])
-    put(1, 4, filt or "type to filter…",
+    qx = 4
+    for chip in chips:
+        put(1, qx, chip, th["category"])
+        qx += len(chip) + 1
+    put(1, qx, filt or "type to filter…",
         th["query"] if filt else th["help"])
     if active:
-        put(1, 4 + len(filt), "▏", th["prompt"])
+        put(1, qx + len(filt), "▏", th["prompt"])
     tail = browse.count_tail(n_found, n_all, n_sel, hidden)
-    put(1, max(4 + len(filt) + 2, lay.w - 2 - len(tail)), tail, th["count"])
+    put(1, max(qx + len(filt) + 2, lay.w - 2 - len(tail)), tail, th["count"])
 
 
 def _draw_scopes(put, th, lay, scope, focus):
-    """Radio row — which field the query is matched against.
+    """Toggle row — which field the query is matched against.
 
-    Item 2: reachable by arrow. When the row holds focus it says so and shows
-    that left/right pick, rather than leaving ^T as the only way in.
+    ``● all  name  descr  tap  category``: the active scope carries the dot
+    *and* the accent, so it reads with the colour off. Item 2: reachable by
+    arrow; when the row holds focus the active toggle underlines and the row
+    says that left/right pick, rather than leaving ^T as the only way in.
     """
     active = focus == "scopes"
     x = 2
-    put(2, x, "match", th["accent"] if active else th["help"])
-    x += 6
     for name in browse.SCOPES:
         on = name == scope
-        if on:
-            mark, attr = "(●)", th["accent"]
-        else:
-            mark, attr = "( )", th["muted"]
-        put(2, x, mark, attr)
         label = browse.scope_label(name)
-        # The active toggle is underlined while the row is focused, so "which
-        # one is selected" and "which pane am I in" stay separate signals.
-        put(2, x + 4, label, attr | (4 if active and on else 0))
-        x += 5 + len(label)
+        if on:
+            put(2, x, "●", th["accent"])
+            # The active toggle is underlined while the row is focused, so
+            # "which one is selected" and "which pane am I in" stay separate.
+            put(2, x + 2, label, th["accent"] | (4 if active else 0))
+        else:
+            put(2, x + 2, label, th["muted"])
+        x += 4 + len(label)
         if x > lay.w - 6:
             break
-    if active and x + 12 < lay.w - 2:
-        put(2, x + 1, "← → pick", th["help"])
+    if active and x + 10 < lay.w - 2:
+        put(2, x, "← → pick", th["help"])
 
 
 def _draw_rows(put, th, lay, found, sel, selected, filt, focus,
-               describe, categories, installed_names, copies=None,
-               status=None, scope="all", hidden=0):
-    """The result list. Returns how many rows fit, for page-up/down."""
+               describe, categories, installed, copies=None,
+               status=None, scope="all", hidden=0, filters=None):
+    """The result list. Returns how many rows fit, for page-up/down.
+
+    Columns inside the pane: the ``▌`` selection bar, the ✓ multi-select
+    mark, the install-state glyph, then the name at ``_NAME_X``. The ★ column
+    is gone — on a curated catalogue it marked every row — and curated lives
+    in the detail chips.
+    """
     rows = max(1, lay.body_h // 2)
     lw = lay.list_w
+    bottom = lay.bottom
     if not found:
         # A silent void is indistinguishable from a hung draw; the pane says
         # what happened and which keys widen the net (see browse.empty_lines).
-        for i, (role, text) in enumerate(browse.empty_lines(filt, scope,
-                                                            hidden)):
+        for i, (role, text) in enumerate(browse.empty_lines(
+                filt, scope, hidden, filters=filters or {})):
             y = lay.body_y + 1 + i
-            if y >= lay.h - 1:
+            if y >= bottom:
                 break
             put(y, lay.list_x + 2, text[:max(0, lw - 4)], th[role])
         return rows
@@ -1953,33 +2346,35 @@ def _draw_rows(put, th, lay, found, sel, selected, filt, focus,
     railw = lw - (2 if has_bar else 1)
     for i, e in enumerate(view):
         y = lay.body_y + i * 2
-        if y + 1 >= lay.h - 1:
+        if y + 1 >= bottom:
             break
         chosen = top + i == sel
         # Item 5: the whole row highlights, not just its marker. Painting the
-        # full span first means the badges and description inherit it too.
+        # full span first means the badges and description inherit it too —
+        # a soft slate where the terminal has one, reverse video where not.
         row_attr = th["row_sel"] if chosen else 0
         if chosen:
             put(y, lay.list_x, " " * lw, row_attr)
             put(y + 1, lay.list_x, " " * lw, row_attr)
+            put(y, lay.list_x, "▌", th["sel_bar"])
+            put(y + 1, lay.list_x, "▌", th["sel_bar"])
         x = lay.list_x + 1
         put(y, x, "✓" if _desc_key(e) in selected else " ",
             row_attr or th["check"])
-        put(y, x + 1, "★" if e.get("curated") else " ", row_attr or th["star"])
-        # The third mark carries the whole install lifecycle (◐ / ✗ / ●),
+        # The state mark carries the whole install lifecycle (◐ / ✗ / ●),
         # from the same glyph table the detail pane reports with.
-        st = (status or {}).get(e["name"], (None, ""))[0]
-        glyph, role = browse.state_glyph(st, e["name"] in installed_names)
-        put(y, x + 2, glyph, row_attr or th[role])
-        nx = x + 4
-        namew = max(4, min(len(e["name"]), lw - 6))
+        st = (status or {}).get(_desc_key(e), (None, ""))[0]
+        glyph, role = browse.state_glyph(st, _row_installed(e, installed))
+        put(y, x + 1, glyph, row_attr or th[role])
+        nx = lay.list_x + _NAME_X
+        namew = max(4, min(len(e["name"]), lw - _NAME_X - 2))
         nm = out.truncate(e["name"], namew)
-        put(y, nx, nm, row_attr or th["name"])
+        put(y, nx, nm, th["row_sel_name"] if chosen else th["name"])
         if not chosen:
             for pos in browse.highlight_positions(filt, nm):
                 if pos < len(nm):
                     put(y, nx + pos, nm[pos], th["match"])
-        # The badge rail right-aligns to the pane edge so kind/version/tap
+        # The badge rail right-aligns to the pane edge so kind/category/tap
         # stop wandering with every name length. A collapsed row's ×N count
         # leads the rail and is the last badge to drop — copies are accounted
         # for, never disappeared.
@@ -1988,11 +2383,11 @@ def _draw_rows(put, th, lay, found, sel, selected, filt, focus,
         if n_copies > 1:
             rail.append(("×%d" % n_copies, "accent_dim"))
         rail += _row_badges(e, categories)
-        name_end = (nx - lay.list_x) + len(nm) + 2
+        name_end = _NAME_X + len(nm) + 2
         for bx, text, tkey in browse.badge_positions(name_end, rail, railw):
             put(y, lay.list_x + bx, text, row_attr or th[tkey])
         put(y + 1, nx, out.truncate(describe(e),
-                                    max(4, lw - (7 if has_bar else 6))),
+                                    max(4, lw - _NAME_X - (3 if has_bar else 2))),
             row_attr or th["desc"])
     if has_bar:
         # The detail pane always had one; a 70,000-row list deserves to know
@@ -2006,44 +2401,106 @@ def _draw_rows(put, th, lay, found, sel, selected, filt, focus,
                 thumb = bstart <= j < bstart + blen
                 for dy in (0, 1):
                     y = lay.body_y + j * 2 + dy
-                    if y >= lay.h - 1:
+                    if y >= bottom:
                         break
                     put(y, bx, "█" if thumb else "│", attr)
     return rows
 
 
-def _draw_detail(put, th, lay, entry, dscroll, focus, installed_names,
-                 status=None, install_to=None):
+def _draw_picker(put, th, lay, p):
+    """The facet picker, drawn over the list pane. Returns how many rows fit,
+    for page-up/down.
+
+    Over the list rather than in a window of its own: the query, the count and
+    the detail pane stay where they were, so picking a filter reads as
+    changing a filter, not as leaving the browser. Row one names the facets —
+    the open one dotted, as the scope toggles are, so it reads with the colour
+    off — and the sort; row two is the picker's own query.
+    """
+    lw = lay.list_w
+    x = lay.list_x + 2
+    for facet in browse.FACETS:
+        on = facet == p.facet
+        put(lay.body_y, x, ("● " if on else "  ") + facet,
+            th["head"] if on else th["muted"])
+        x += len(facet) + 4
+    sort = "^T " + browse.order_label(p.order)
+    if x + len(sort) < lay.list_x + lw - 1:
+        put(lay.body_y, lay.list_x + lw - 1 - len(sort), sort, th["muted"])
+    vis = browse.picker_visible(p)
+    qy = lay.body_y + 1
+    put(qy, lay.list_x + 2, "❯", th["prompt"])
+    put(qy, lay.list_x + 4, p.query or "type to filter…",
+        th["query"] if p.query else th["help"])
+    put(qy, lay.list_x + 4 + len(p.query), "▏", th["prompt"])
+    tail = browse.picker_tail(p)
+    put(qy, max(lay.list_x + 6 + len(p.query), lay.list_x + lw - 1 - len(tail)),
+        tail, th["count"])
+    visible = max(1, lay.bottom - lay.body_y - 2)
+    if not vis:
+        for i, (role, text) in enumerate(browse.picker_empty(p.query)):
+            if lay.body_y + 2 + i < lay.bottom:
+                put(lay.body_y + 2 + i, lay.list_x + 2,
+                    text[:max(0, lw - 4)], th[role])
+        return visible
+    sel = max(0, min(p.sel, len(vis) - 1))
+    top = browse.picker_top(sel, len(vis), visible)
+    width = max(0, lw - 3)
+    for i, (value, n) in enumerate(vis[top:top + visible]):
+        y = lay.body_y + 2 + i
+        if y >= lay.bottom:
+            break
+        chosen = top + i == sel
+        line = browse.picker_line(value, n, width, value == p.active)
+        if chosen:
+            put(y, lay.list_x, " " * lw, th["row_sel"])
+            put(y, lay.list_x, "▌", th["sel_bar"])
+        put(y, lay.list_x + 2, line,
+            th["row_sel_name"] if chosen else th["value"])
+        if not chosen:
+            for col in browse.picker_marks(p.query, value, n, width):
+                put(y, lay.list_x + 2 + col, line[col], th["match"])
+    return visible
+
+
+#: Detail-pane role -> theme key, for roles whose names differ.
+_DETAIL_ROLE_KEYS = {"title": "detail_name", "desc": "value", "ok": "ok_line"}
+
+
+def _draw_detail(put, th, lay, entry, dscroll, focus, installed,
+                 status=None, install_to=None, categories=None):
     """The right-hand panel. Returns the clamped scroll offset."""
-    st, msg = (status or {}).get(entry["name"], (None, ""))
+    st, msg = (status or {}).get(_desc_key(entry), (None, ""))
     # -3, not -2: one column of left padding, and one on the right reserved for
     # the scrollbar. At -2 a wrapped sentence ran into the thumb.
     lines = browse.detail_lines(entry, width=max(8, lay.detail_w - 3),
-                               installed=entry["name"] in installed_names,
-                               state=st, message=msg, install_to=install_to)
+                                installed=_row_installed(entry, installed),
+                                state=st, message=msg, install_to=install_to,
+                                categories=categories)
     visible = max(0, lay.body_h)
     dscroll = browse.clamp_scroll(dscroll, len(lines), visible)
     active = focus == "detail"
-    for i, (role, text) in enumerate(lines[dscroll:dscroll + visible]):
+    for i, line in enumerate(lines[dscroll:dscroll + visible]):
         y = lay.body_y + i
-        if y >= lay.h - 1:
+        if y >= lay.bottom:
             break
-        if role == "rule":
+        if browse.line_role(line) == "rule":
             put(y, lay.detail_x, "─" * max(0, lay.detail_w), th["border"])
             continue
-        attr = {"title": th["detail_name"], "head": th["head"],
-                "desc": th["value"], "state": th["state"],
-                "ok": th.get("ok_line", th["ok"]), "busy": th["busy"],
-                "failed": th["failed"], "muted": th["muted"],
-                "field": th["field"]}.get(role, th["field"])
-        put(y, lay.detail_x + 1, text, attr)
+        x = lay.detail_x + 1
+        for role, text in line:
+            key = _DETAIL_ROLE_KEYS.get(role, role)
+            put(y, x, text, th[key] if key in th else th["field"])
+            # Columns, not codepoints: after a CJK label span the next span
+            # started inside it, half a line to the left of where it drew.
+            x += out.visible_len(text)
     if len(lines) > visible and visible > 0:
         bar = _scrollbar(len(lines), visible, dscroll)
         if bar:
             bstart, blen = bar
             for i in range(visible):
                 y = lay.body_y + i
-                if y >= lay.h - 1:
+                if y >= lay.bottom:
                     break
                 thumb = bstart <= i < bstart + blen
                 put(y, lay.detail_x + lay.detail_w - 1,
@@ -2052,31 +2509,100 @@ def _draw_detail(put, th, lay, entry, dscroll, focus, installed_names,
     return dscroll
 
 
+def _print_categories(entries, categories, by_count=False) -> int:
+    """``boost browse --categories``: each category and its item count, over
+    the deduplicated catalogue — the numbers and the order the ^G picker
+    shows (A–Z, ``uncategorized`` last; ``--by-count`` for largest first)."""
+    unique = [e for e, _n in browse.dedupe(entries)]
+    rows = browse.picker_rows(unique, categories,
+                              order="count" if by_count else "az")[1:]
+    out.heading("%d categories · %s items" % (len(rows),
+                                              format(len(unique), ",")))
+    # plain(): a category is frontmatter, and its ESC/BEL bytes both reached
+    # the terminal and counted as columns, pushing that row's count out of line.
+    out.table([(out.plain(c), format(n, ",")) for c, n in rows],
+              headers=("category", "items"), whole=("category",))
+    out.info(out.c("open one with `boost browse --category <name>`", out.DIM))
+    return 0
+
+
+def _report_browse_session(session: browse.InstallSession) -> int:
+    """What the browser's in-place installs did, said once the curses screen
+    is gone, in ``boost install``'s words.
+
+    Each landed item gets the canonical install report
+    (:func:`pkg._report_result`) — the injection and secret scan, and the MCP
+    offer, which prompts and so could not run under curses. A refused or
+    failed pick is named on stderr with its hint and makes the exit 1, as
+    ``boost install`` does; before this the refusal lived only in a pane that
+    had already closed, and the exit was 0. An interrupt names what it
+    cancelled, then re-raises so the exit code stays the interrupt's.
+    """
+    from .pkg import _report_prerequisites, _report_result
+    for role, text in dict.fromkeys(session.notes):
+        (out.warn if role == "warn" else out.info)(text, wrap=True)
+    for entry, res in session.installed:
+        out.ok("installed %s v%s (%s)" % (entry["name"],
+                                          out.plain(entry.get("version", "?")),
+                                          entry.get("tap", "")))
+        _report_result(res)
+    if session.installed:
+        _report_prerequisites(session.landed())
+    for entry, message, hint in session.failed:
+        out.warn("%s: %s" % (entry["name"], message), stream=sys.stderr,
+                 wrap=True)
+        if hint:
+            out.info("  " + hint, stream=sys.stderr, wrap=True)
+    if session.cancelled:
+        out.warn("interrupted — not installed: %s"
+                 % ", ".join(e["name"] for e in session.cancelled),
+                 stream=sys.stderr, wrap=True)
+    if session.interrupted is not None:
+        raise session.interrupted
+    return session.exit_code()
+
+
 def cmd_browse(argv):
     """Full-screen fuzzy browser over every catalog entry."""
     p = cliparse.parser(
         prog="boost browse",
         description="Interactive full-screen TUI with fuzzy search")
-    p.add_argument("--category", default="",
-                   help="only browse entries whose category matches (case-insensitive)")
+    p.add_argument("--category", type=util.nonempty_str,
+                   help="open on one category (case-insensitive); ^G switches")
+    p.add_argument("--categories", action="store_true",
+                   help="list the categories and how many items each holds, A–Z")
+    p.add_argument("--by-count", action="store_true",
+                   help="with --categories: largest first instead of A–Z")
     args = p.parse_args(argv)
+    if args.by_count and not args.categories:
+        p.error("--by-count only applies with --categories")
     entries = sorted(catalog.all_entries(), key=operator.itemgetter("name"))
-    if args.category:
-        entries = catalog.filter_by_category(entries, args.category)
-        if not entries:
-            raise BoostError("no entries in category %r" % args.category,
-                            hint="try `boost browse` with no --category to see them all")
-    elif not entries:
+    if not entries:
         raise BoostError("no skills available to browse",
                         hint="add registries with `boost tap --defaults`")
-    if not (sys.stdin.isatty() and sys.stdout.isatty()):
-        return _browse_plain(entries, "interactive mode needs a TTY")
+    categories = _tap_categories()
+    if args.categories:
+        return _print_categories(entries, categories, args.by_count)
+    narrowed = entries
+    if args.category:
+        # By its stamped category *or* its tap's — the same test search and
+        # recommend apply (catalog.matches_category delegates here), so no
+        # flag rejects a category the ^G picker lists.
+        narrowed = [e for e in entries
+                    if browse.in_category(e, args.category, categories)]
+        if not narrowed:
+            raise BoostError("no entries in category %r" % args.category,
+                            hint="`boost browse --categories` lists them")
+    if not (out.stdin_is_tty(sys.stdin) and sys.stdout.isatty()):
+        return _browse_plain(narrowed, "interactive mode needs a TTY")
     try:
         import curses
     except ImportError:
-        return _browse_plain(entries, "curses is unavailable on this Python")
+        return _browse_plain(narrowed, "curses is unavailable on this Python")
     try:
-        picked = _browse_tui(curses, entries)
+        # The whole catalogue, not `narrowed`: the category is a filter the
+        # browser can lift, so it needs the rows outside it too.
+        session = _browse_tui(curses, entries, category=args.category or "")
     except curses.error as e:
         # An fd that claims isatty() but isn't a real pty (IDE run consoles,
         # `script`, TERM=dumb) can fail deep inside curses.wrapper's own
@@ -2084,44 +2610,11 @@ def cmd_browse(argv):
         # already ran its finally block (endwin() included), so the screen is
         # restored by the time this is caught — printing here lands on a
         # normal terminal, not a hosed one.
-        return _browse_plain(entries,
+        return _browse_plain(narrowed,
                              "the terminal does not support curses (%s)" % e)
-    if not picked:
+    if session is None:
         return 0
-    # The browser installs in place now, so anything it hands back is usually
-    # already on disk. Install only what still needs it — that keeps this path
-    # correct whether the TUI did the work or merely picked.
-    settled = set(store.installed())
-    staged = [e for e in picked if e["name"] in settled]
-    for entry in staged:
-        out.ok("installed %s v%s" % (entry["name"], entry.get("version", "?")))
-    for entry in [e for e in picked if e["name"] not in settled]:
-        try:
-            res = store.install(entry)
-        except BoostError as e:
-            # browse lists every catalog kind (skills, rules, workflows), but
-            # only skills install; a rule/workflow pick — or an already-
-            # installed/pinned skill — must not abort the rest of the batch.
-            out.warn(e.message)
-            if e.hint:
-                out.info(out.c(e.hint, out.DIM))
-            continue
-        out.ok("installed %s v%s → %s"
-               % (entry["name"], entry["version"], _tilde(res.dest)))
-        if res.linked:
-            out.info("linked into: "
-                     + ", ".join(agents.display_name(a) for a in res.linked))
-        for conflict in res.conflicts:
-            out.warn("conflict: %s exists and is not a symlink" % _tilde(conflict))
-        for adir in res.unwritable:
-            out.warn("not %s: %s — %s, then `boost sync`"
-                     % ("linked" if res.kind == "skill" else "written",
-                        *store.unwritable_refusal(adir)), wrap=True)
-        for adir, block in res.blocked:
-            out.warn("not %s: %s — %s, then `boost sync`"
-                     % ("linked" if res.kind == "skill" else "written",
-                        *store.link_refusal(adir, block)), wrap=True)
-    return 0
+    return _report_browse_session(session)
 
 
 def cmd_trending(argv):
@@ -2135,15 +2628,24 @@ def cmd_trending(argv):
     p.add_argument("--json", action="store_true", dest="as_json",
                    help="machine-readable output")
     args = p.parse_args(argv)
-    evs = journal.events(action="install")
+    # New installs only: `boost update` and `boost reinstall` journal an
+    # "install" per refresh, and counting them ranked an item by how often its
+    # tap moved rather than by how often anyone chose it.
+    evs = [ev for ev in journal.events(action="install")
+           if journal.is_new_install(ev)]
     # setdefault, not a dict comprehension: a comprehension keeps the LAST
     # entry per name (whichever tap sorts last in catalog.all_entries()),
     # while cmd_recommend's equivalent aggregation (agg.setdefault) keeps the
     # first — so the two commands showed different descriptions for a name
     # shipped by more than one tap. First-wins here matches that convention.
     by_name: dict[str, dict] = {}
+    # (tap, name) too: a ranked row was installed from one particular tap,
+    # which its journal event names, and that tap's entry is the one to
+    # describe. First-wins is only the fallback for an event with no tap.
+    by_tap_name: dict[tuple[str, str], dict] = {}
     for e in catalog.all_entries():
         by_name.setdefault(e["name"], e)
+        by_tap_name.setdefault((e["tap"], e["name"]), e)
     if not evs:
         curated = sorted((e for e in by_name.values() if e.get("curated")),
                          key=operator.itemgetter("name"))[:args.limit]
@@ -2167,8 +2669,10 @@ def cmd_trending(argv):
             return 0
         # reserve name/version/kind columns
         descw = max(out.term_width() - 34, 24)
-        out.table([(e["name"], "v" + e["version"], e.get("kind", "skill"),
-                    out.truncate(e["description"], descw))
+        # Sanitised before the truncate, so it clips printable columns.
+        out.table([(out.plain(e["name"]), "v" + out.plain(e["version"]),
+                    out.plain(e.get("kind", "skill")),
+                    out.truncate(out.plain(e["description"]), descw))
                    for e in curated],
                   headers=("name", "version", "kind", "description"),
                   whole=("name",))  # `boost install <name>`
@@ -2176,9 +2680,12 @@ def cmd_trending(argv):
     agg: dict[str, Any] = {}
     for ev in evs:  # most-recent-first, so first ts per subject is the latest
         name = ev.get("subject") or "?"
-        rec = agg.setdefault(name, {"count": 0, "last": ev.get("ts", "")})
+        rec = agg.setdefault(name, {"count": 0, "last": ev.get("ts", ""),
+                                    "tap": ev.get("tap")})
         rec["count"] += 1
     ranked = sorted(agg.items(), key=lambda kv: (-kv[1]["count"], kv[0]))
+    entry_for = {name: by_tap_name.get((rec["tap"], name))
+                 or by_name.get(name, {}) for name, rec in ranked}
     if args.as_json:
         # `kind` is carried so rules and workflows stay distinguishable —
         # the prose table shows it, and a payload that dropped it would make
@@ -2186,15 +2693,16 @@ def cmd_trending(argv):
         print(json.dumps(
             {"source": "installs", "items": [
                 {"name": name, "installs": rec["count"], "last": rec["last"],
-                 "kind": by_name.get(name, {}).get("kind", "skill"),
-                 "description": by_name.get(name, {}).get("description", "")}
+                 "kind": entry_for[name].get("kind", "skill"),
+                 "description": entry_for[name].get("description", "")}
                 for name, rec in ranked[:args.limit]]}, indent=2))
         return 0
     # reserve name/installs/last/kind columns
     descw = max(out.term_width() - 54, 24)
-    out.table([(name, str(rec["count"]), util.rel_time(rec["last"]),
-                by_name.get(name, {}).get("kind", "skill"),
-                out.truncate(by_name.get(name, {}).get("description", ""), descw))
+    out.table([(out.plain(name), str(rec["count"]), util.rel_time(rec["last"]),
+                out.plain(entry_for[name].get("kind", "skill")),
+                out.truncate(out.plain(entry_for[name].get("description", "")),
+                             descw))
                for name, rec in ranked[:args.limit]],
               headers=("name", "installs", "last", "kind", "description"),
               whole=("name",))  # `boost install <name>`
@@ -2207,7 +2715,7 @@ def cmd_stats(argv):
     p = cliparse.parser(
         prog="boost stats",
         description="Install statistics & trend for a single skill")
-    p.add_argument("name", help="skill name")
+    p.add_argument("name", type=util.nonempty_str, help="skill name")
     p.add_argument("--json", action="store_true", dest="as_json",
                    help="machine-readable output")
     args = p.parse_args(argv)
@@ -2219,14 +2727,30 @@ def cmd_stats(argv):
     # "no skill named X". `catalog.find` keeps the original string so a
     # qualifier still narrows a not-yet-installed lookup.
     name, kind, lock = store.resolve_lock_entry(args.name)
+    # A skill installed `--local` into the current project is installed —
+    # `boost list` shows it — and its copy is in the repo, not the store.
+    prow = None
+    if lock is None:
+        prow = integrity.resolve_skill(args.name)
+        if prow is not None:
+            kind, lock = "skill", prow.entry
     kind = kind or "skill"
+    qualifier, _bare = catalog.split_name(args.name)
     matches = catalog.find(args.name)
-    cat = matches[0] if matches else None
+    cat: dict | None
+    if lock is None and matches:
+        # Nothing installed to narrow by, so the row is picked the way `info`
+        # picks it: `matches[0]` described whichever tap sorted first — and
+        # suggested an install that then refused the same name as ambiguous.
+        cat = catalog.resolve_one(args.name)
+    else:
+        cat = catalog.for_lock(matches, lock)
     if not lock and not cat:
         raise BoostError("no skill named %r installed or in any tap" % args.name,
-                        hint="try `boost search %s`" % name)
-    acts = {a: len(journal.events(action=a, subject=name))
-            for a in ("install", "update", "uninstall")}
+                        hint=catalog.join_hints(catalog.search_hint(name),
+                                                catalog.stale_commit_hint()))
+    acts = journal.activity_counts(catalog.events_for_tap(
+        journal.events(subject=name), qualifier, lock))
     latest = cat["version"] if cat else None
     upstream = None
     if cat:
@@ -2239,20 +2763,42 @@ def cmd_stats(argv):
     # into shared agent files instead of a directory boost owns, so `sdir`
     # is never even looked up for those and `size` stays None rather than
     # needing its own kind check below.
-    sdir = store.skill_store_dir(name) if kind == "skill" else None
+    if prow is not None:
+        sdir = prow.dir
+    else:
+        sdir = store.skill_store_dir(name) if kind == "skill" else None
     size = util.dir_size(sdir) if sdir and lock and sdir.is_dir() else None
+    scope = (scopes.SCOPE_PROJECT if prow is not None
+             else scopes.SCOPE_USER if lock else None)
+    # Edited since install, by doctor's and verify's own check, as `list`
+    # and `info` report it.
+    edited = (lock is not None and kind == "skill"
+              and integrity.locally_edited(
+                  "skill", name, lock,
+                  base=prow.base if prow is not None else None))
     if args.as_json:
         print(json.dumps({
             "name": name, "kind": kind, "installed": bool(lock), "lock": lock,
+            "scope": scope, "modified": edited,
             "size": size, "activity": acts,
             "catalog": ({"latest": latest, "tap": cat["tap"],
                          "description": cat["description"],
                          "upstream": upstream} if cat else None)}))
         return 0
+    # Display copies from here on: the lock and catalogue rows, the latest
+    # version and the upstream commit subject are all tap-authored text. The
+    # update check compares the raw versions, before they are sanitised.
+    newer = bool(lock and latest
+                 and util.semver_gt(latest, lock.get("version", "0")))
+    name, lock, cat = out.plain(name), out.plain_fields(lock), out.plain_fields(cat)
+    latest = out.plain(latest) if latest else latest
+    upstream = out.plain(upstream) if upstream else upstream
     out.heading(name if kind == "skill" else "%s (%s)" % (name, kind))
     if lock:
         out.kv("version", lock.get("version", "?"))
         out.kv("tap", lock.get("tap", "?"))
+        if prow is not None:
+            out.kv("scope", "project (%s)" % paths.tilde(prow.base))
         out.kv("installed", util.rel_time(lock.get("installed_at", "")))
         out.kv("updated", util.rel_time(lock.get("updated_at", "")))
         # Sorted for both kinds — before this, a rule/workflow's agents line
@@ -2267,6 +2813,9 @@ def cmd_stats(argv):
         if lock.get("quarantined"):
             out.kv("quarantined", "yes")
         out.kv("sha256", str(lock.get("sha256", ""))[:12])
+        if edited:
+            out.kv("modified", out.role("yes", "warn")
+                   + out.role("  (edited since install)", "muted"))
         if size is not None:
             out.kv("size", util.human_size(size))
         if cat and cat.get("description"):
@@ -2275,11 +2824,16 @@ def cmd_stats(argv):
         out.kv("version", cat["version"])
         out.kv("tap", cat["tap"])
         out.kv("description", cat["description"], wrap=True)
-        out.info(out.role("not installed — `boost install %s`" % name, "muted"))
-    out.kv("activity", "%d installs · %d updates · %d uninstalls"
-           % (acts["install"], acts["update"], acts["uninstall"]))
+        # As typed: a bare name can resolve to another tap's copy, or not at
+        # all, where the qualified spelling just resolved to this one.
+        out.info(out.role("not installed — `boost install %s`"
+                          % out.plain(args.name), "muted"))
+    out.kv("activity", "%d installs · %d updates · %d reinstalls · "
+           "%d uninstalls" % (acts["install"], acts["update"],
+                              acts["reinstall"], acts["uninstall"]),
+           wrap=True)
     if lock and latest:
-        if util.semver_gt(latest, lock.get("version", "0")):
+        if newer:
             out.kv("latest", "%s %s" % (latest, out.role("(update available)", "warn")))
         else:
             out.kv("latest", "%s %s" % (latest, out.role("(up to date)", "muted")))
@@ -2298,6 +2852,9 @@ def cmd_count(argv):
     args = p.parse_args(argv)
     by_kind = {kind: len(section)
                for kind, section in lockfile.all_installed().items()}
+    # The current project's `--local` skills are installed too: the count
+    # is of what `boost list` shows, so both scopes' rows add up here.
+    by_kind["skill"] += len(integrity.project_skills()[1])
     installed_n = sum(by_kind.values())
     taps_n = len(registry.list_taps())
     available_n = len(catalog.all_entries())

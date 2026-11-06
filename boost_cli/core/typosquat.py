@@ -66,16 +66,50 @@ def confusable_names(name: str, candidates, max_distance: int = 1) -> list[str]:
     return [c for _d, c in hits]
 
 
-def find_confusions(target: dict, entries, max_distance: int = 1) -> list[dict]:
+def _variants(name: str) -> set[str]:
+    """``name`` and every string one character deletion away from it."""
+    return {name} | {name[:i] + name[i + 1:] for i in range(len(name))}
+
+
+def build_index(entries) -> dict[str, list[int]]:
+    """Deletion-variant index over ``entries`` for :func:`find_confusions`.
+
+    Maps each lowercased name, and each of its one-character deletions, to the
+    positions in ``entries`` carrying it, ascending. Two names within one edit
+    always share a variant — equal, one substitution (delete the same
+    position from both), or one insertion (the shorter is a deletion of the
+    longer) — so a lookup is a handful of dict hits instead of an
+    ``edit_distance`` against every entry: ~60 ms per target over a 63k
+    catalogue. Sharing a variant is not sufficient (``ab``/``ba`` share ``a``
+    and are two edits apart), so candidates are still confirmed.
+    """
+    index: dict[str, list[int]] = {}
+    for pos, e in enumerate(entries):
+        for v in _variants(str(e.get("name", "")).lower()):
+            index.setdefault(v, []).append(pos)
+    return index
+
+
+def find_confusions(target: dict, entries, max_distance: int = 1,
+                    index: dict[str, list[int]] | None = None) -> list[dict]:
     """Catalog entries that are confusable with ``target`` but from another tap.
 
     Flags both the owner-confusion case (same name, *different* tap → distance
     0) and the typosquat case (name within ``max_distance`` edits, different
     tap). Entries from ``target``'s own tap are never flagged, and ``target``
     itself is excluded by identity. Sorted by ``(distance, name, tap)``.
+
+    ``index`` is :func:`build_index` over the same ``entries`` (a list), worth
+    building once when checking several targets. It only narrows which
+    entries are compared, in their original order, so the answer is the one
+    the full scan gives; it is ignored past one edit, which it cannot answer.
     """
     tname = str(target.get("name", "")).lower()
     ttap = target.get("tap")
+    if index is not None and max_distance == 1:
+        positions = sorted({pos for v in _variants(tname)
+                            for pos in index.get(v, ())})
+        entries = [entries[pos] for pos in positions]
     scored = []
     for e in entries:
         if e is target or e.get("tap") == ttap:

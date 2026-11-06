@@ -34,10 +34,15 @@ from pathlib import Path
 from typing import NamedTuple
 
 from ..errors import BoostError
-from . import frontmatter, util
+from . import frontmatter, output, util
 
 SLOT_COMMANDS = "commands"
 SLOT_AGENTS = "agents"
+# Not a directory any agent reads workflows from: the slot of the copy boost
+# writes into the canonical store (``~/.agents/skills/<name>/SKILL.md``) so an
+# agent that only reads skills — Codex, which has no slash-command format —
+# can still reach the workflow. See :func:`render_skill`.
+SLOT_SKILL = "skill"
 
 # Source directory names that mark a workflow as a subagent rather than a
 # slash command. Everything else (commands/, workflows/, or frontmatter-only)
@@ -63,6 +68,44 @@ def detect_slot(source_rel: str) -> str:
     """
     parts = {p.lower() for p in Path(source_rel).parts}
     return SLOT_AGENTS if parts & AGENT_DIRS else SLOT_COMMANDS
+
+
+#: Source dirs a slash command's namespace is read under: the subdirectories
+#: between one of these and the file. Claude Code: ``.claude/commands/
+#: frontend/component.md`` is ``/frontend:component``; Gemini's
+#: FileCommandLoader joins the same path segments with ``:``.
+COMMAND_DIRS = {"commands", "workflows"}
+#: How a namespaced command is spelled as a boost name: ``frontend/test``. Not
+#: ``:``, the agents' own separator, because ``tap:name`` already owns it
+#: (``catalog.split_name``) and ``tap:frontend:test`` would split wrongly.
+NAMESPACE_SEP = "/"
+
+
+def command_namespace(source_rel: str) -> tuple[str, ...]:
+    """The namespace dirs of the command at ``source_rel``, outermost first.
+
+    The directories after the LAST :data:`COMMAND_DIRS` segment, so a
+    plugin's ``plugins/x/commands/test.md`` has none and ``commands/
+    frontend/test.md`` has ``("frontend",)``. A file under no such dir (a
+    frontmatter-tagged loose command) has none.
+    """
+    parts = Path(source_rel).parts[:-1]
+    at = [i for i, part in enumerate(parts) if part.lower() in COMMAND_DIRS]
+    return parts[at[-1] + 1:] if at else ()
+
+
+def name_parts(name: str, slot: str) -> list[str]:
+    """``name`` split into its path components, each one validated.
+
+    Only a command may be namespaced. Every component is tap-controlled and
+    about to become a path component, so traversal is refused before any
+    join, as :func:`rules.rule_target` does for a rule.
+    """
+    parts = name.split(NAMESPACE_SEP)
+    if (len(parts) > 1 and slot != SLOT_COMMANDS) or not all(
+            util.is_safe_component(part) for part in parts):
+        raise BoostError("invalid workflow name %r" % name)
+    return parts
 
 
 def target_ext(agent: str | None, slot: str) -> str:
@@ -99,13 +142,13 @@ def workflow_target(skills_dir: Path, slot: str, name: str,
     same terms. It is passed in rather than looked up here so this module stays
     a pure function of its arguments and needs no config read.
     """
-    # Same guard as rule_target: `name` is tap-controlled and is about to become
-    # a path component, so traversal has to be refused before the join.
-    if not util.is_safe_component(name):
-        raise BoostError("invalid workflow name %r" % name)
+    # A namespaced command (``frontend/test``) keeps its subdirectory, which
+    # is what makes it ``/frontend:test`` rather than a ``/test`` that a
+    # second namespace's ``test`` would overwrite. See :func:`name_parts`.
+    *namespace, leaf = name_parts(name, slot)
     root = (Path(base) / (dotdir or Path(skills_dir).parent.name)) \
         if base is not None else Path(skills_dir).parent
-    return root / slot / (name + target_ext(agent, slot))
+    return root.joinpath(slot, *namespace, leaf + target_ext(agent, slot))
 
 
 def _toml_str(s: str) -> str:
@@ -122,8 +165,118 @@ def _toml_str(s: str) -> str:
     bodies containing ``\"\"\"`` or a trailing quote cannot be embedded in the
     multi-line form without escaping anyway. Correctness for every input beats
     readability for most of them.
+
+    The subset trick has one gap: JSON escapes U+0000-U+001F but passes DEL
+    (U+007F) through raw, and TOML forbids a raw DEL in a basic string, so a
+    description holding one produced a file Gemini could not parse while
+    install, verify and doctor all said ok. It is escaped by hand.
     """
-    return json.dumps(s, ensure_ascii=False)
+    return json.dumps(s, ensure_ascii=False).replace("\x7f", "\\u007f")
+
+
+# Claude's whole-input placeholder, not a longer identifier that starts with
+# it, and not the indexed ``$ARGUMENTS[0]`` form, which has no Gemini twin.
+_ARGUMENTS = re.compile(r"\$ARGUMENTS(?![\w\[])")
+
+# Claude's dynamic content, and Gemini's spelling of the same two things.
+# Source: Gemini CLI's bundled FileCommandLoader (chunk-55E6VPR2.js,
+# `SHELL_INJECTION_TRIGGER = "!{"`, `AT_FILE_INJECTION_TRIGGER = "@{"`), whose
+# extractor closes an injection on the brace that balances its opener and has
+# no escape. Claude Code documents !`cmd` as "runs before the prompt" and
+# @path as "includes the file".
+#
+# A command holding a brace is left alone: inside !{...} it would close the
+# injection early or leave it unclosed, and Gemini refuses the whole command
+# with "Unclosed injection".
+_BANG_CMD = re.compile(r"(?<!`)!`([^`\n{}]+)`(?!`)")
+_BANG_CMD_BRACED = re.compile(r"(?<!`)!`([^`\n]*[{}][^`\n]*)`(?!`)")
+# Conservative on purpose: a missing path is an error line in Gemini where it
+# was plain text in Claude, so only a token that names a FILE is converted —
+# one ending in an extension (`@src/main.py`, `@package.json`). An npm scope
+# (`@angular/core`), a mention (`@alice`), an email (`a@b.com`, the `@` is
+# not at a word start) and git's `stash@{0}` are all left as written.
+_AT_FILE = re.compile(
+    r"(?<![^\s(\[])@((?:\.{0,2}/|~/)?[\w./-]*\.[A-Za-z]\w*)(?![\w/-])")
+# A fenced code block, closed by a fence of the same character at least as
+# long, or running to the end of the body when never closed (CommonMark).
+# Inside one, `@pytest.fixture` and `@app.route` are decorators in an
+# example, not files (converted, each was a missing-file error in Gemini),
+# and a shown !`git reset --hard` is an example, not a command to run.
+_FENCE = re.compile(
+    r"^[ \t]{0,3}(`{3,}|~{3,})[^\n]*\n.*?(?:^[ \t]{0,3}\1[`~]*[ \t]*$|\Z)",
+    re.MULTILINE | re.DOTALL)
+
+
+def _outside_fences(text: str, fix) -> str:
+    """``text`` with ``fix`` applied to every span outside a fenced block."""
+    out, at = [], 0
+    for m in _FENCE.finditer(text):
+        out += [fix(text[at:m.start()]), m.group(0)]
+        at = m.end()
+    out.append(fix(text[at:]))
+    return "".join(out)
+
+
+def _gemini_prompt(body: str) -> str:
+    """``body`` with Claude's placeholders in Gemini's spelling."""
+    # Commands first: `{{args}}` is legal inside !{...} (Gemini shell-escapes
+    # it there), but its braces would stop _BANG_CMD matching the command.
+    # Neither is converted inside a fenced block: there each is an example,
+    # and as !{...} Gemini would RUN the example at every invocation.
+    out = _outside_fences(
+        body, lambda part: _BANG_CMD.sub(lambda m: "!{%s}" % m.group(1), part))
+    out = _ARGUMENTS.sub("{{args}}", out)
+    return _outside_fences(
+        out, lambda part: _AT_FILE.sub(lambda m: "@{%s}" % m.group(1), part))
+
+
+def gemini_command_notes(raw: str) -> list[str]:
+    """What a Gemini rendering of command ``raw`` could not carry over.
+
+    Gemini's loader has no escape for its two triggers, so text a tap meant
+    literally — git's ``stash@{0}`` or ``@{u}``, a shell ``!{`` — is read as
+    a file or shell injection: an error line at each run, or the whole command
+    refused when the braces do not balance. :func:`render_gemini_command`
+    cannot fix that without changing the prompt, so it is said instead.
+    """
+    _meta, body = frontmatter.parse(raw)
+    notes = ["Gemini reads the `%s` in its prompt as %s; the text is written "
+             "as the tap has it" % (trigger, what)
+             for trigger, what in (("@{", "a file to inject"),
+                                   ("!{", "a shell command to run"))
+             if trigger in body]
+    # Each distinct command once, in order: the same `!`...`` repeated down a
+    # workflow is one thing to say, not one note per occurrence.
+    braced = list(dict.fromkeys(
+        m.group(1) for m in _BANG_CMD_BRACED.finditer(body)))
+    notes += ["Gemini cannot run `!`%s`` before the prompt (a brace would end "
+              "its `!{...}` early); left as text" % _note_snippet(cmd)
+              for cmd in braced[:NOTE_EXAMPLES]]
+    if len(braced) > NOTE_EXAMPLES:
+        notes.append("... and %d more braced `!`...`` command%s, left as text"
+                     % (len(braced) - NOTE_EXAMPLES,
+                        "" if len(braced) - NOTE_EXAMPLES == 1 else "s"))
+    return notes
+
+
+#: How many braced commands :func:`gemini_command_notes` quotes before it
+#: counts the rest. One note per match made a 20,000-line workflow print
+#: 40,008 lines of install output.
+NOTE_EXAMPLES = 2
+#: The longest command a note quotes, in characters, before ``…``.
+NOTE_SNIPPET_MAX = 80
+
+
+def _note_snippet(cmd: str) -> str:
+    """``cmd`` safe to echo in a note: control bytes gone, length bounded.
+
+    The note is printed to the user's terminal, and the command is tap text:
+    an ESC in it retitled the window and cleared the screen at install.
+    """
+    cmd = output.plain(cmd)
+    if len(cmd) > NOTE_SNIPPET_MAX:
+        cmd = cmd[:NOTE_SNIPPET_MAX - 1] + "…"
+    return cmd
 
 
 def render_gemini_command(name: str, raw: str) -> str:
@@ -138,13 +291,28 @@ def render_gemini_command(name: str, raw: str) -> str:
     A body that is empty after stripping frontmatter still emits ``prompt = ""``
     — a valid, discoverable (if useless) command — because the alternative is a
     file with no ``prompt`` key at all, which Gemini rejects outright.
+
+    Claude's ``$ARGUMENTS`` becomes Gemini's ``{{args}}``. Source: the
+    ``docs/cli/custom-commands.md`` shipped in Gemini CLI 0.61.0's bundle
+    ("Handling arguments"): a prompt containing ``{{args}}`` has it replaced
+    with what the user typed, and a prompt without one gets the input
+    appended after two newlines, so a literal ``$ARGUMENTS`` left the model
+    reading a placeholder where the input belonged. Claude's positional
+    ``$1``/``$2`` have no Gemini counterpart and are left as written.
+    Claude's !`cmd` and @path become Gemini's !{cmd} and @{path} (see
+    :data:`_BANG_CMD` and :data:`_AT_FILE` for what is left alone, and
+    :func:`gemini_command_notes` for what is said about it). A
+    ``description`` that is not a string (a YAML list) is dropped rather than
+    emitted as its Python repr.
     """
     meta, body = frontmatter.parse(raw)
     lines = []
-    description = str(meta.get("description") or "").strip()
+    d = meta.get("description")
+    description = d.strip() if isinstance(d, str) else ""
     if description:
         lines.append("description = %s" % _toml_str(description))
-    lines.append("prompt = %s" % _toml_str(body.strip("\n")))
+    prompt = _gemini_prompt(body.strip("\n"))
+    lines.append("prompt = %s" % _toml_str(prompt))
     return "\n".join(lines) + "\n"
 
 
@@ -664,6 +832,27 @@ def _tools_verdict(lines: list[tuple[str, str]],
     return _REWRITE, out
 
 
+_NULL_TEXTS = ("", "~", "null")
+
+
+def _is_empty_value(lines: list[tuple[str, str]], key: _Key) -> bool:
+    """Whether ``key`` holds YAML null (or an empty string): no value at all."""
+    shape, text, _items = _read_value(lines, key)
+    return shape == _SCALAR and text.lower() in _NULL_TEXTS
+
+
+def _plain_scalar_needs_quotes(lines: list[tuple[str, str]], key: _Key) -> bool:
+    """Whether ``key``'s one-line plain scalar is invalid YAML as written.
+
+    Only the shape js-yaml refuses that a quote cures: ``": "`` inside an
+    unquoted value. A quoted value, a list, or anything :func:`_read_value`
+    cannot read is left alone.
+    """
+    shape, text, _items = _read_value(lines, key)
+    return (shape == _SCALAR and not _is_quoted(_strip_comment(key.value))
+            and ": " in text)
+
+
 def _plan(install: str, lines: list[tuple[str, str]],
           keys: list[_Key]) -> _Plan | None:
     """The edit to make, or None for "hand this file back untouched"."""
@@ -724,6 +913,17 @@ def _plan(install: str, lines: list[tuple[str, str]],
             drop -= {tools_key.start}
             drop |= set(range(tools_key.start + 1, tools_key.end))
             values["tools"] = tools
+
+    # A plain scalar holding ": " is a YAML error ("bad indentation of a
+    # mapping entry"), and it is the common Claude-corpus description: one
+    # line of `Use this agent when...\n\n<example>\nContext: ...`. Claude
+    # reads the line as text; quoting it gives Gemini that same text.
+    for text_key in ("description", "display_name"):
+        key = seen.get(text_key)
+        if key is not None and _plain_scalar_needs_quotes(lines, key):
+            value = _read_value(lines, key)[1]
+            replace[key.start] = "%s: %s" % (text_key, _yaml_str(value))
+            values[text_key] = value
 
     name_key = seen.get("name")
     declared = ""
@@ -866,8 +1066,8 @@ def sanitize_gemini_agent(name: str, raw: str) -> str:
     - every key outside :data:`GEMINI_AGENT_KEYS` is deleted, span and all,
       because ``localAgentSchema`` is ``.strict()``. This is safe *because it
       is the Gemini copy*: ``store.render`` runs once per enabled agent and
-      writes four separate regular files, so ``~/.gemini/agents/<x>.md`` is
-      read by Gemini and by nothing else. Claude, Cursor and Windsurf still get
+      writes a separate regular file each, so ``~/.gemini/agents/<x>.md`` is
+      read by Gemini and by nothing else. Claude and Cursor still get
       the tap's bytes verbatim, keys boost has never heard of included.
     - ``tools`` is kept when Gemini already accepts it, translated when every
       entry has an exact Gemini counterpart, and otherwise the whole FILE is
@@ -889,6 +1089,8 @@ def sanitize_gemini_agent(name: str, raw: str) -> str:
     fails at load. Those files are returned byte-identical (6 of 5,005 in the
     tapped corpus), as are remote agents, duplicated keys, and every construct
     :func:`_scan_keys` and :func:`_read_value` decline to interpret.
+    Returned, not written: ``store`` asks :func:`gemini_agent_problem` of
+    the result and withholds a file Gemini would reject, with the reason.
 
     The result is verified before it is returned (:func:`_verify_output`) and
     then required to be a fixed point — ``sanitize(sanitize(x)) ==
@@ -896,10 +1098,323 @@ def sanitize_gemini_agent(name: str, raw: str) -> str:
     refused instead. A renderer that does not settle makes ``boost sync``
     rewrite files that never changed.
     """
+    # Gemini's FRONTMATTER_REGEX is anchored at `---` on a plain utf-8 read,
+    # so a leading BOM is "Missing mandatory YAML frontmatter". boost's own
+    # frontmatter.parse strips one, which is why the catalog never saw it.
+    raw = raw.removeprefix("\ufeff")
     out = _sanitize_once(name, raw)
     if out == raw:
         return raw
     return out if _sanitize_once(name, out) == out else raw
+
+
+def gemini_agent_problem(text: str) -> str | None:
+    """Why Gemini would reject the agent file ``text``, or None.
+
+    Asked of :func:`sanitize_gemini_agent`'s OUTPUT, so it answers for what
+    the repair could not fix — a description that is missing, a ``tools``
+    list with a name that has no Gemini counterpart, a file with no
+    frontmatter. ``store`` does not write such a file: written, it was a
+    validation error at every Gemini session for a file boost reported as
+    installed and `boost verify` called ok.
+
+    Only definite rejections, each one a rule of ``localAgentSchema`` or of
+    ``parseAgentMarkdown``. A construct this module cannot read (a block
+    scalar, a nested mapping, a remote agent) answers None: refusing a file
+    Gemini might load is the worse error, and it keeps the pre-existing
+    behaviour for exactly the shapes nothing here can judge.
+    """
+    if not text.startswith(("---\n", "---\r\n")):
+        return "has no YAML frontmatter, which Gemini requires"
+    span = _locate_frontmatter(text)
+    if span is None:
+        return None if "\n---" in text[3:] else (
+            "has a frontmatter block that is never closed")
+    lines = _lines_of(text[span[0]:span[1]])
+    keys = _scan_keys(lines)
+    if keys is None:
+        return None
+    seen = {key.name: key for key in keys}
+    if len(seen) != len(keys):
+        return "repeats a frontmatter key, which Gemini's YAML parser refuses"
+    if not GEMINI_REMOTE_KEYS.isdisjoint(seen):
+        return None
+    unknown = [key.name for key in keys if key.name not in GEMINI_AGENT_KEYS]
+    if unknown:
+        return "carries %s, which Gemini's agent schema does not allow" % (
+            ", ".join("`%s`" % k for k in unknown))
+    for name in ("name", "description"):
+        if name not in seen or _is_empty_value(lines, seen[name]):
+            return "has no `%s`, which Gemini requires" % name
+    for key in keys:
+        if _plain_scalar_needs_quotes(lines, key):
+            return "has an unquoted `: ` in `%s`, which is not valid YAML" % (
+                key.name)
+    shape, declared, _items = _read_value(lines, seen["name"])
+    if shape == _SCALAR and (not GEMINI_NAME_RE.match(declared) or (
+            not _is_quoted(_strip_comment(seen["name"].value))
+            and _NON_STRING_RE.match(declared))):
+        return "is named %r, which is not a Gemini agent name" % declared
+    if "tools" in seen:
+        return _tools_problem(lines, seen["tools"])
+    return None
+
+
+def _tools_problem(lines: list[tuple[str, str]], key: _Key) -> str | None:
+    """Why Gemini would reject this ``tools`` value, or None."""
+    shape, text, items = _read_value(lines, key)
+    if shape == _OTHER:
+        return None
+    if shape == _SCALAR:
+        return ("has an empty `tools`, which Gemini reads as null"
+                if text.lower() in _NULL_TEXTS else
+                "has `tools` as a string, where Gemini requires a list")
+    bad = [t for t in items if not _valid_gemini_tool(t)]
+    if bad:
+        return "grants %s, which Gemini has no tool for" % ", ".join(
+            "`%s`" % t for t in bad)
+    return None
+
+
+def skill_description(slot: str, meta: dict) -> str | None:
+    """The description a workflow's skill copy would carry, or None for none.
+
+    Both slots qualify, on one condition: a non-empty ``description``. A
+    subagent is a procedure with a name, which is exactly what a skill is; a
+    slash command is too, and Codex's own plugin importer turns a Claude
+    ``commands/*.md`` into a SKILL.md for that reason (``config.DEFAULTS``'
+    codex entry). What a command loses is its ``$ARGUMENTS`` substitution,
+    which a skill has no way to receive — the prompt still reads.
+
+    The description is the condition because boost's own checks call a
+    SKILL.md without one a fault (``util`` lint: "missing required field:
+    description"), and a skill host picks a skill by its description: a copy
+    without one is a file `boost doctor` would complain about and no agent
+    would ever choose.
+    """
+    if slot not in (SLOT_AGENTS, SLOT_COMMANDS):
+        return None
+    desc = str(meta.get("description") or "").strip()
+    return desc or None
+
+
+def _skill_body(raw: str) -> str:
+    """``raw`` after its frontmatter, byte for byte; all of it when it has none.
+
+    The same fences :func:`frontmatter.split` accepts (``---`` or ``...`` to
+    close), but sliced from the original text rather than re-joined from
+    ``splitlines()``, which drops the final newline and turns CRLF into LF —
+    the body is the procedure, and the copy promises it unchanged. A UTF-8
+    BOM is dropped first, as :func:`frontmatter.split` drops it: it is not
+    whitespace, so the fence check missed it and the source's whole
+    frontmatter became the copy's body, behind boost's own.
+    """
+    raw = raw.removeprefix(frontmatter.BOM)
+    lines = raw.splitlines(keepends=True)
+    if not lines or lines[0].strip() != "---":
+        return raw
+    for i in range(1, len(lines)):
+        if lines[i].strip() in ("---", "..."):
+            return "".join(lines[i + 1:]).lstrip("\r\n")
+    return raw
+
+
+def render_skill(name: str, description: str, raw: str) -> str:
+    """A workflow as the ``SKILL.md`` of its copy in the canonical store.
+
+    The frontmatter is cut to ``name`` and ``description`` — the two keys the
+    Agent Skills format requires. Everything else a workflow carries
+    (``tools``, ``model``, ``color``, ``isolation``, ``argument-hint``…) is one
+    host's subagent or command vocabulary; a skill host either ignores it or,
+    as Gemini does for its own agents, validates it and rejects the file.
+
+    ``name`` is the store dir's name, never the source's ``name:``: a skill
+    host keys a skill by the two agreeing, and the dir is what boost records.
+    The body is unchanged (:func:`_skill_body`).
+    """
+    head = frontmatter.dump({"name": name, "description": description})
+    return "%s\n\n%s" % (head, _skill_body(raw))
+
+
+#: Claude Code's agent name in the config, the one target whose subagent
+#: ``tools`` line :func:`claude_agent_notes` reads.
+CLAUDE_AGENT = "claude-code"
+
+#: Claude Code's built-in tool names, every row of the tools table at
+#: https://code.claude.com/docs/en/tools-reference (read 2026-10-31), which
+#: says they are "the exact strings you use in ... subagent tool lists".
+#: ``TaskOutput`` is listed there as removed in 2.1.277 and is kept: a file
+#: written for an older Claude Code still names it, and it is Claude-shaped.
+#: The list is the evidence for :data:`_CLAUDE_TOOL_SHAPE` rather than a gate
+#: of its own -- a test pins that the shape covers every name here, so a
+#: built-in the shape rejected would fail the build rather than be warned
+#: about as foreign. It also gives a lowercase ``read`` its spelling.
+CLAUDE_TOOL_NAMES = frozenset({
+    "Agent", "Artifact", "AskUserQuestion", "Bash", "CronCreate",
+    "CronDelete", "CronList", "Edit", "EndConversation", "EnterPlanMode",
+    "EnterWorktree", "ExitPlanMode", "ExitWorktree", "Glob", "Grep",
+    "ListAgents", "ListMcpResourcesTool", "LSP", "Monitor", "NotebookEdit",
+    "PowerShell", "PushNotification", "Read", "ReadMcpResourceTool",
+    "RemoteTrigger", "ReportFindings", "ScheduleWakeup", "SendFeedback",
+    "SendMessage", "SendUserFile", "ShareOnboardingGuide", "Skill",
+    "SubagentHandback", "TaskCreate", "TaskGet", "TaskList", "TaskOutput",
+    "TaskStop", "TaskUpdate", "TodoWrite", "ToolSearch", "WaitForMcpServers",
+    "WebFetch", "WebSearch", "Workflow", "Write"})
+#: "In version 2.1.63, the Task tool was renamed to Agent. Existing `Task(...)`
+#: references in settings and agent definitions still work as aliases."
+#: (https://code.claude.com/docs/en/sub-agents, read 2026-10-31.)
+CLAUDE_TOOL_ALIASES = frozenset({"Task"})
+
+#: The shape of a Claude Code tool entry: a capitalised name, optionally with
+#: a ``(specifier)`` -- ``Bash(git add *)``, ``Agent(worker, researcher)``.
+#: Deciding by shape rather than by :data:`CLAUDE_TOOL_NAMES` is what keeps a
+#: list that goes stale with every Claude Code release from warning about a
+#: tool added since: ``FutureTool`` is quiet, ``codebase`` is not.
+_CLAUDE_TOOL_SHAPE = re.compile(r"^[A-Z][A-Za-z0-9]*(\(.*\))?$")
+#: An MCP tool, or a whole server's: ``mcp__github__create_issue``,
+#: ``mcp__github``, ``mcp__github__*``.
+CLAUDE_MCP_PREFIX = "mcp__"
+_CLAUDE_TOOL_BY_FOLD = {name.casefold(): name for name in CLAUDE_TOOL_NAMES}
+
+
+def _split_claude_tools(text: str) -> list[str]:
+    """A ``tools: Read, Grep, Bash`` string as its entries, split on commas
+    *outside* parentheses.
+
+    Claude Code's own string form, and the reason :func:`_tools_entries` is
+    not reused: it splits on every comma, so ``Agent(worker, researcher)``
+    became ``Agent(worker`` and ``researcher)``, neither of them a tool, and
+    a line Claude Code launches fine read as granting nothing. A stray ``)``
+    leaves the depth at zero rather than below it, so it cannot swallow the
+    commas after it.
+    """
+    parts: list[str] = []
+    buf, depth = "", 0
+    for ch in text:
+        if ch == "(":
+            depth += 1
+        elif ch == ")" and depth:
+            depth -= 1
+        if ch == "," and not depth:
+            parts.append(buf)
+            buf = ""
+        else:
+            buf += ch
+    parts.append(buf)
+    return [p.strip() for p in parts if p.strip()]
+
+
+def claude_tool_resolves(entry: str) -> bool:
+    """Whether Claude Code could read ``entry`` in a ``tools`` list as a tool.
+
+    ``*``, an ``mcp__`` name, or anything Claude-shaped
+    (:data:`_CLAUDE_TOOL_SHAPE`) -- which covers every built-in, the ``Task``
+    alias and the ``Name(spec)`` form. Generous on purpose: this decides
+    whether to *warn*, and a false warning on a working subagent is worse
+    than a quiet one on a made-up ``ReadFile``.
+    """
+    return (entry == "*" or entry.startswith(CLAUDE_MCP_PREFIX)
+            or _CLAUDE_TOOL_SHAPE.match(entry) is not None)
+
+
+def claude_agent_notes(raw: str) -> list[str]:
+    """What is wrong with subagent ``raw``'s ``tools`` line for Claude Code.
+
+    One case: the line grants something and *none* of it is a Claude Code
+    tool -- a tap's agent written for GitHub Copilot (``tools: codebase,
+    edit/editFiles, terminalCommand, search, githubRepo``). Claude Code loads
+    that file and then refuses to launch it, "would be spawned with zero
+    tools" (https://code.claude.com/docs/en/sub-agents: "If no entry in the
+    list resolves to a tool, the subagent usually fails to launch").
+
+    A note, never a refusal. Declining the file would take back a copy the
+    user may already have fixed by hand, and dropping the line would make it
+    inherit every tool -- a wider grant than its author wrote, the move
+    :func:`_key_is_dropped` refuses for Gemini. So the file is written as
+    the tap has it and the line to fix is named.
+
+    Quiet for everything Claude Code itself is quiet about: no ``tools`` key
+    (inherit every tool), an empty or null one, a line with at least one
+    Claude entry (Claude Code launches with the subset), and any value this
+    module cannot read. ``disallowedTools`` is not read: a deny entry that
+    resolves to nothing never stops a launch.
+    """
+    span = _locate_frontmatter(raw)
+    if span is None:
+        return []
+    lines = _lines_of(raw[span[0]:span[1]])
+    keys = _scan_keys(lines)
+    key = next((k for k in keys or () if k.name == "tools"), None)
+    if key is None:
+        return []
+    shape, text, items = _read_value(lines, key)
+    if shape == _LIST:
+        entries = items
+    elif shape == _SCALAR and text.lower() not in _NULL_TEXTS:
+        entries = _split_claude_tools(text)
+    else:
+        entries = []
+    if not entries or any(claude_tool_resolves(e) for e in entries):
+        return []
+    spelled = ["`%s` as `%s`" % (e, _CLAUDE_TOOL_BY_FOLD[e.casefold()])
+               for e in entries if e.casefold() in _CLAUDE_TOOL_BY_FOLD]
+    return ["`tools` grants %s, none of which is a Claude Code tool, and "
+            "Claude Code refuses to launch a subagent whose tools resolve to "
+            "nothing — fix the `tools` line%s; written as the tap has it"
+            % (", ".join("`%s`" % e for e in entries),
+               " (Claude Code spells %s)" % ", ".join(spelled)
+               if spelled else "")]
+
+
+def invocation_hint(agent: str | None, slot: str, name: str,
+                    raw: str) -> str | None:
+    """How a user reaches what was written for ``agent`` in ``slot``, when
+    it is not the ``/<name>`` a slash command would be; else None.
+
+    A Claude Code subagent is the case: it is run by an @-mention or by
+    asking Claude, never as a slash command, and the mention is the
+    frontmatter ``name`` -- "identity comes only from the `name` frontmatter
+    field" (https://code.claude.com/docs/en/sub-agents) -- which need not be
+    the file boost wrote. ``name`` (boost's) stands in when there is none.
+    """
+    if agent != CLAUDE_AGENT or slot != SLOT_AGENTS:
+        return None
+    meta, _ = frontmatter.parse(raw)
+    called = str(meta.get("name") or "").strip() or name
+    return ("a subagent, not a slash command — @-mention it as "
+            "`@agent-%s`, or ask Claude to use it" % called)
+
+
+def render_notes(agent: str | None, slot: str, raw: str) -> list[str]:
+    """What :func:`render` could not carry over for ``agent`` in ``slot``,
+    or what the agent will make of what it carried.
+
+    The file is still written; these are said beside it. Gemini's TOML
+    commands have them (:func:`gemini_command_notes`), and so does a Claude
+    Code subagent whose ``tools`` name no Claude tool
+    (:func:`claude_agent_notes`) -- written verbatim, and refused at launch.
+    """
+    if target_ext(agent, slot) == TOML_EXT:
+        return gemini_command_notes(raw)
+    if agent == CLAUDE_AGENT and slot == SLOT_AGENTS:
+        return claude_agent_notes(raw)
+    return []
+
+
+def render_problem(agent: str | None, slot: str, text: str) -> str | None:
+    """Why ``agent`` would reject ``text`` (what :func:`render` produced for
+    it in ``slot``), or None when nothing says it would.
+
+    Only Gemini's subagent slot is judged (:func:`gemini_agent_problem`): it
+    is the one target with a strict load-time schema, and the one whose repair
+    can decline. A caller that gets a reason does not write the file. A
+    Claude Code subagent that would fail at *launch* is not declined here:
+    its file is written and :func:`render_notes` says what to fix
+    (:func:`claude_agent_notes` says why).
+    """
+    if agent in TOML_COMMAND_AGENTS and slot == SLOT_AGENTS:
+        return gemini_agent_problem(text)
+    return None
 
 
 def render(agent: str | None, slot: str, name: str, raw: str) -> str:
@@ -910,8 +1425,20 @@ def render(agent: str | None, slot: str, name: str, raw: str) -> str:
     and its ``agents`` slot has its frontmatter sanitized by
     :func:`sanitize_gemini_agent` — the body is still verbatim there. Pairs
     with :func:`target_ext`: the two agree on exactly which combination is
-    special, so the extension and the content can never disagree.
+    special, so the extension and the content can never disagree. A Claude
+    Code subagent stays verbatim even when its ``tools`` line names no Claude
+    tool: :func:`render_notes` says so rather than this rewriting it.
+
+    The skill slot (:data:`SLOT_SKILL`) is asked first and belongs to no
+    agent: it is the copy in the canonical store, rendered by
+    :func:`render_skill`. Routing it through here is what lets every reader
+    that re-renders a recorded row to compare it — `boost update`'s risk diff
+    among them — compare like with like.
     """
+    if slot == SLOT_SKILL:
+        meta, _ = frontmatter.parse(raw)
+        return render_skill(name, str(meta.get("description") or "").strip(),
+                            raw)
     if target_ext(agent, slot) == TOML_EXT:
         return render_gemini_command(name, raw)
     if agent in TOML_COMMAND_AGENTS and slot == SLOT_AGENTS:

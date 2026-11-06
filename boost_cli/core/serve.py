@@ -22,7 +22,7 @@ from pathlib import Path
 
 from .. import __version__
 from ..errors import BoostError
-from . import catalog, lockfile, logs, paths, registry, store
+from . import catalog, frontmatter, lockfile, logs, paths, registry, store
 from . import output as out
 
 SKILL_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
@@ -99,15 +99,37 @@ def _frontmatter_tags(meta) -> list:
     reads as "no tags". This runs inside the page render, so a single item with
     ``tags: {a: 1}`` in one of hundreds of taps must not blank the catalogue.
     """
-    if not isinstance(meta, dict):
-        return []
-    raw = meta.get("tags")
-    if isinstance(raw, str):
-        raw = raw.split(",")
-    if not isinstance(raw, (list, tuple)):
-        return []
-    return [str(t).strip().lower() for t in raw
-            if isinstance(t, (str, int, float)) and str(t).strip()]
+    return [t.lower() for t in frontmatter.tags_of(meta)]
+
+
+def installed_taps(lock: dict) -> dict:
+    """Name -> the set of taps the lock installed it from, across all kinds.
+
+    A set of bare names marked a homonym from a *different* tap installed too,
+    so `state:installed` returned two rows for one install. ``""`` stands for a
+    lock entry that records no tap, which can only be matched by name.
+    """
+    out: dict = {}
+    for key in ("skills", "rules", "workflows"):
+        for name, rec in (lock.get(key) or {}).items():
+            tap = rec.get("tap") if isinstance(rec, dict) else None
+            out.setdefault(name, set()).add(str(tap or ""))
+    return out
+
+
+def is_installed(entry: dict, installed) -> bool:
+    """True when ``entry`` is the row the lock installed.
+
+    ``installed`` is :func:`installed_taps`' map — matched on name *and* tap —
+    or a plain collection of names, matched on name alone.
+    """
+    name = entry.get("name")
+    if not isinstance(installed, dict):
+        return name in installed
+    taps = installed.get(name)
+    if taps is None:
+        return False
+    return "" in taps or str(entry.get("tap") or "") in taps
 
 
 def entry_tags(entry: dict, *, installed=(), categories=None) -> list:
@@ -128,7 +150,7 @@ def entry_tags(entry: dict, *, installed=(), categories=None) -> list:
             tags.add("topic:" + str(cat))
     if entry.get("curated"):
         tags.add("state:curated")
-    if entry.get("name") in installed:
+    if is_installed(entry, installed):
         tags.add("state:installed")
     tags.update("tag:" + t for t in _frontmatter_tags(entry.get("meta")))
     return sorted(tags)
@@ -143,8 +165,7 @@ def catalog_rows() -> list:
     boost installs.
     """
     lock = lockfile.read()
-    installed = {n for key in ("skills", "rules", "workflows")
-                 for n in (lock.get(key) or {})}
+    installed = installed_taps(lock)
     cats = registry_categories()
     return [{
         "name": str(e.get("name") or ""),
@@ -153,7 +174,7 @@ def catalog_rows() -> list:
         "tap": str(e.get("tap") or ""),
         "kind": str(e.get("kind") or "skill"),
         "curated": bool(e.get("curated")),
-        "installed": e.get("name") in installed,
+        "installed": is_installed(e, installed),
         "tags": entry_tags(e, installed=installed, categories=cats),
         "search_blob": e.get("search_blob") or "",
     } for e in catalog.all_entries()]

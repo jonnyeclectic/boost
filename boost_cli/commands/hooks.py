@@ -45,7 +45,7 @@ def cmd_hooks(argv) -> int:
                     "settings")
     p.add_argument("action", choices=("add", "remove", "list"),
                    help="add | remove | list")
-    p.add_argument("event", nargs="?",
+    p.add_argument("event", type=util.nonempty_str, nargs="?",
                    help="hook event, e.g. SessionStart "
                         "(required for add; filters remove/list)")
     p.add_argument("--host", metavar="H", default=None,
@@ -53,11 +53,11 @@ def cmd_hooks(argv) -> int:
                    help="agent CLI whose hook settings to manage: %s "
                         "(default: claude for add/remove, all of them for list)"
                         % ", ".join(hookhost.hosts()))
-    p.add_argument("-c", "--command", help="command the hook runs (add)")
-    p.add_argument("-n", "--name", help="stable name used to tag & find the hook")
+    p.add_argument("-c", "--command", type=util.nonempty_str, help="command the hook runs (add)")
+    p.add_argument("-n", "--name", type=util.nonempty_str, help="stable name used to tag & find the hook")
     p.add_argument("-s", "--scope", choices=cs.SCOPES, default=None,
                    help="settings scope (default: project; list shows both)")
-    p.add_argument("-m", "--matcher",
+    p.add_argument("-m", "--matcher", type=util.nonempty_str,
                    help="Claude matcher, e.g. 'startup|resume|clear'")
     p.add_argument("--timeout", type=util.positive_int, default=10,
                    help="hook timeout in seconds (default: 10)")
@@ -66,11 +66,31 @@ def cmd_hooks(argv) -> int:
     p.add_argument("--force", action="store_true",
                    help="write even when $CODEX_HOME points outside this $HOME")
     args = p.parse_args(argv)
+    # Trimmed once, here, so the name this command echoes back is the one
+    # stored and compared (`cs.clean_name` trims again as the core backstop);
+    # an all-whitespace name then meets the "needs --name" refusal below.
+    args.name = (args.name or "").strip()
+    if args.as_json and args.action != "list":
+        p.error("--json is only supported with `hooks list`")
 
     if args.action == "list":
         return _list(args.scope, args.host, args.event, args.as_json)
+    # Missing arguments are usage errors (exit 2), so they are checked here,
+    # where the parser is, rather than in _add/_remove.
     if args.action == "add":
+        if not args.event:
+            p.error("hooks add needs an EVENT",
+                    hint="e.g. boost hooks add SessionStart -c '<cmd>' -n <name>")
+        if not args.command:
+            p.error("hooks add needs --command",
+                    hint="the shell command Claude should run for this hook")
+        if not args.name:
+            p.error("hooks add needs --name",
+                    hint="a stable name so the hook can be removed later")
         return _add(args)
+    if not args.name:
+        p.error("hooks remove needs --name",
+                hint="the name you gave the hook when adding it")
     return _remove(args)
 
 
@@ -172,15 +192,6 @@ def _native_event(host: str, event: str) -> str:
 
 
 def _add(args) -> int:
-    if not args.event:
-        raise BoostError("hooks add needs an EVENT",
-                         hint="e.g. boost hooks add SessionStart -c '<cmd>' -n <name>")
-    if not args.command:
-        raise BoostError("hooks add needs --command",
-                         hint="the shell command Claude should run for this hook")
-    if not args.name:
-        raise BoostError("hooks add needs --name",
-                         hint="a stable name so the hook can be removed later")
     scope = args.scope or "project"
     host = _write_host(args.host)
     event = _native_event(host, args.event)
@@ -222,9 +233,6 @@ def _after_add(host: str, scope: str) -> list[str]:
 
 
 def _remove(args) -> int:
-    if not args.name:
-        raise BoostError("hooks remove needs --name",
-                         hint="the name you gave the hook when adding it")
     scope = args.scope or "project"
     host = _write_host(args.host)
     event = _native_event(host, args.event) if args.event else None

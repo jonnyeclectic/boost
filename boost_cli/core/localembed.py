@@ -72,6 +72,7 @@ import importlib.util
 import json
 import math
 import shutil
+import sys
 import time
 from pathlib import Path
 
@@ -159,6 +160,45 @@ def installed() -> bool:
         # find_spec raises for a namespace package with no spec, and for a
         # parent that is not importable. Either way there is no backend.
         return False
+
+
+#: The first interpreter onnxruntime publishes no wheel for. The ``[rag]``
+#: extra's marker in pyproject.toml (``python_version < '3.15'``) says the same
+#: thing to pip, and `tests/unit/test_rag_python_ceiling.py` fails if the two
+#: disagree. Measured 2026-10-28: onnxruntime 1.31.1 ships cp311-cp314 wheels
+#: and **no sdist**, so on 3.15 the unmarked requirement made the whole extra
+#: uninstallable rather than merely slower. Raise this, and drop the marker,
+#: the day onnxruntime publishes cp315 wheels.
+ONNX_WHEEL_CEILING = (3, 15)
+
+#: The interpreter every "move boost to an older Python" hint names. 3.13 and
+#: not 3.14: both carry onnxruntime wheels, but 3.13 is the one further from
+#: the next Homebrew removal, which is how a working install lost its Python.
+RECOMMENDED_PYTHON = "3.13"
+
+
+def no_wheel_here(version: tuple[int, ...] | None = None) -> bool:
+    """True when this interpreter is too new for onnxruntime *and* lacks it.
+
+    Both halves matter. The version alone would also fire for someone who
+    built onnxruntime from source, or for the first boost run after onnxruntime
+    ships cp315 wheels and before :data:`ONNX_WHEEL_CEILING` is raised — and
+    for them the local model works, so telling them to change interpreter would
+    be a remedy for a state they are not in. The package alone cannot tell "the
+    extra is not installed" (one command fixes it) from "the extra installed
+    without its model runtime because pip skipped a marked requirement" (no
+    command run on this interpreter fixes it).
+
+    ``find_spec`` rather than an import, for the reason :func:`installed`
+    gives: this words hints, and must not load an ONNX runtime to do it.
+    """
+    here = tuple(sys.version_info[:2]) if version is None else tuple(version)
+    if here < ONNX_WHEEL_CEILING:
+        return False
+    try:
+        return importlib.util.find_spec("onnxruntime") is None
+    except (ImportError, ValueError):
+        return True
 
 
 def model_dir() -> Path:

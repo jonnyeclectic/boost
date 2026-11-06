@@ -75,11 +75,11 @@ class TestPlanWithoutAVouchingLock:
         assert store.sync_plan()["stale_links"] == []
 
     @pytest.mark.parametrize("lose", [_lose_lock, _corrupt_lock])
-    def test_store_dirs_are_unrecorded_not_orphaned(self, installed, lose):
-        """Orphans are what `--prune` deletes; an unrecorded dir never is."""
+    def test_store_dirs_are_unrecorded_not_classified(self, installed, lose):
+        """`--prune` deletes a foreign copy; an unrecorded dir never is one."""
         lose()
         plan = store.sync_plan()
-        assert plan["orphaned_store"] == []
+        assert plan["foreign_store"] == plan["adoptable_store"] == []
         assert plan["unrecorded_store"] == ["brainstorming"]
 
     def test_a_broken_link_is_still_stale(self, installed):
@@ -90,16 +90,17 @@ class TestPlanWithoutAVouchingLock:
         _lose_lock()
         assert store.sync_plan()["stale_links"] == [str(link)]
 
-    def test_with_a_vouching_lock_an_unrecorded_dir_is_an_orphan(self, installed):
+    def test_with_a_vouching_lock_an_unrecorded_dir_is_classified(self, installed):
         (paths.store_dir() / "rogue").mkdir()
         plan = store.sync_plan()
-        assert plan["orphaned_store"] == ["rogue"]
+        assert plan["not_skill_store"] == ["rogue"]
         assert plan["unrecorded_store"] == []
 
     def test_a_dot_dir_in_the_store_is_neither(self, installed):
         (paths.store_dir() / ".cache").mkdir()
         plan = store.sync_plan()
-        assert ".cache" not in plan["orphaned_store"] + plan["unrecorded_store"]
+        assert ".cache" not in (plan["not_skill_store"] + plan["adoptable_store"]
+                                + plan["unrecorded_store"])
 
 
 class TestSyncApplyRecovers:
@@ -162,10 +163,8 @@ class TestSyncApplyRecovers:
                             encoding="utf-8")
         _lose_lock()
         [action] = store.sync_apply(store.sync_plan())
-        assert action == (
-            "re-recorded brainstorming as a local skill (its content matches no "
-            "tapped source; `boost reinstall brainstorming` replaces it with a "
-            "tap's copy)")
+        # No `boost reinstall` offer: it would re-read the store dir itself.
+        assert action == "re-recorded brainstorming as a local skill"
         assert "# mine" in skill_md.read_text(encoding="utf-8")
         entry = lockfile.get_skill("brainstorming")
         assert {k: entry[k] for k in ("version", "tap", "source_dir", "commit")} == {
@@ -183,7 +182,10 @@ class TestSyncApplyRecovers:
         monkeypatch.setattr(store, "_skill_source_sha", lambda _e: same)
         _lose_lock()
         [action] = store.sync_apply(store.sync_plan())
-        assert "matches more than one tapped source" in action
+        assert action == (
+            "re-recorded brainstorming as a local skill (its content matches "
+            "more than one tapped source; `boost install <tap>:brainstorming "
+            "--force` replaces it with that tap's copy)")
 
     def test_only_skill_entries_can_vouch_for_a_store_dir(
             self, installed, monkeypatch):
@@ -209,11 +211,15 @@ class TestSyncApplyRecovers:
         assert store.sync_plan()["missing_links"] == []
 
     def test_a_dir_without_skill_md_is_left_unrecorded(self, installed):
+        # Not a skill, so not queued: the plan names it and the run leaves it.
         gutted = paths.store_dir() / "gutted"
         gutted.mkdir()
         _lose_lock()
-        actions = store.sync_apply(store.sync_plan())
-        assert "left gutted unrecorded (no SKILL.md to record)" in actions
+        plan = store.sync_plan()
+        assert plan["not_skill_store"] == ["gutted"]
+        assert "gutted" not in plan["unrecorded_store"]
+        actions = store.sync_apply(plan)
+        assert not any("gutted" in a for a in actions)
         assert lockfile.get_skill("gutted") is None
 
     def test_a_corrupt_lock_is_never_overwritten(self, installed):

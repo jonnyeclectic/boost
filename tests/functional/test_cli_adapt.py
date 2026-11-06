@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import subprocess
 
+import pytest
+
 
 def test_adapt_installed_skill_to_crewai_stdout(boost, installed):
     r = boost("adapt", installed, "--to", "crewai")
@@ -34,6 +36,22 @@ def test_adapt_writes_file_with_o(boost, installed, tmp_path):
     assert dest.exists()
     compile(dest.read_text(encoding="utf-8"), "<crewai>", "exec")
     assert "adapted" in r.out  # success line
+
+
+@pytest.mark.parametrize("flag", ["--output", "--out"])
+def test_adapt_takes_both_long_spellings_of_o(boost, installed, tmp_path, flag):
+    # infer/distill spelled it --output and adapt/export/run --out; each
+    # rejected the other's with rc 2. Both now work everywhere.
+    dest = tmp_path / "reviewer.py"
+    boost("adapt", installed, "--to", "crewai", flag, str(dest))
+    compile(dest.read_text(encoding="utf-8"), "<crewai>", "exec")
+
+
+@pytest.mark.parametrize("flag", ["--output", "--out"])
+def test_export_takes_both_long_spellings_of_o(boost, installed, tmp_path, flag):
+    dest = tmp_path / "x.tar.gz"
+    boost("export", installed, flag, str(dest))
+    assert dest.is_file()
 
 
 def test_unknown_framework_errors(boost, installed):

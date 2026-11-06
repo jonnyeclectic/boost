@@ -40,11 +40,13 @@ the person adding it, not defaulted to "probably fine".
 weekly ``floors`` cron went red on 2026-09-30 with the same seventeen
 ``ModuleNotFoundError: No module named 'setuptools'``. That job also builds
 its venv by hand, and this file had been written to read exactly one job —
-``jobs["canary"]`` in ci.yml — so it had nothing to say about the second
+``jobs["canary"]`` (then in ci.yml, now compat.yml) — so it had nothing to say about the second
 place the same mistake lives. :func:`_harness_jobs` now finds them by shape
-rather than by name: **six** jobs across three workflow files run
+rather than by name: **five** jobs across three workflow files run
 ``tests/unit``/``tests/functional`` out of a venv they assemble themselves,
-and a seventh is covered before it is written.
+and a sixth is covered before it is written. (There were six until
+``ci.yml:patch-coverage`` stopped running the suite and started downloading
+the ``tests`` matrix's coverage report instead.)
 
 Six, not five. An earlier draft of this file said five and claimed "the sixth
 is covered before it is written" — while ``ci.yml:onnx-inference``, which
@@ -71,6 +73,8 @@ yaml = pytest.importorskip("yaml")
 
 ROOT = Path(__file__).resolve().parents[2]
 CI = ROOT / ".github" / "workflows" / "ci.yml"
+#: Where the canary lives since it left the PR path: after a merge, and daily.
+COMPAT = ROOT / ".github" / "workflows" / "compat.yml"
 WORKFLOWS = ROOT / ".github" / "workflows"
 
 
@@ -101,8 +105,8 @@ MODULE_TO_DIST = {
 #: Importable from a checkout without being installed: first-party packages and
 #: the ``scripts/`` modules the suite puts on ``sys.path`` to test directly.
 REPO_LOCAL = {
-    "boost_cli", "boost_langchain", "conftest", "evals", "noxfile",
-    "publish_shards", "scripts", "shard_plan", "tests",
+    "_tapped_support", "boost_cli", "boost_langchain", "conftest", "evals",
+    "noxfile", "publish_shards", "scripts", "shard_plan", "tests",
 }
 
 
@@ -443,10 +447,9 @@ def _installs(run: str, interpreter: str | None = None) -> set[str]:
     Explicitly named ones, plus everything a committed ``-r`` file pins —
     without the second half, every job that installs from
     ``requirements/*.txt`` would read as installing nothing at all and so
-    look broken. That is **four** of the six harness jobs —
-    ``ci.yml:{tests,patch-coverage,onnx-inference}`` and
-    ``sonarcloud.yml:sonar-analyze`` — not the three an earlier draft of
-    this docstring counted, plus ``floors.yml:lowest``, which reads a
+    look broken. That is **three** of the five harness jobs —
+    ``ci.yml:{tests,onnx-inference}`` and ``sonarcloud.yml:sonar-analyze``
+    — plus ``floors.yml:lowest``, which reads a
     ``requirements-lowest.txt`` it generates a step earlier. A number in
     prose that nothing checks is how that got stale;
     ``test_which_jobs_install_from_a_requirements_file`` now pins both sets
@@ -592,7 +595,7 @@ def _harness_jobs() -> list[tuple[str, str, set[str], list[Path]]]:
 
 
 def _canary_step() -> dict:
-    jobs = yaml.safe_load(CI.read_text(encoding="utf-8"))["jobs"]
+    jobs = yaml.safe_load(COMPAT.read_text(encoding="utf-8"))["jobs"]
     assert "canary" in jobs, "the canary job was renamed or removed"
     for step in jobs["canary"]["steps"]:
         run = step.get("run", "")
@@ -632,13 +635,20 @@ def _canary_targets(run: str) -> list[Path]:
 #: Every job that assembles its own venv and runs the suite in it, as
 #: ``workflow:job``. Pinned so a seventh is a decision: a new one that this
 #: file has never seen is exactly the shape both regressions took.
+#: ``ci.yml:patch-coverage`` left this set when it stopped running the suite:
+#: it downloads ``tests (ubuntu-latest, 3.12)``'s coverage.xml and runs only
+#: diff-cover, so there is no suite import for its venv to be missing.
 HARNESS_JOBS = {
     "ci.yml:tests",            # the required coverage gate (-r test-tools.txt)
-    "ci.yml:patch-coverage",   # diff-cover (-r coverage-tools.txt)
-    "ci.yml:canary",           # 3.14t free-threaded, explicit pip line
+    "ci.yml:tests-extended",   # its twin: mac/win 3.13/3.14, main pushes only
+    "compat.yml:canary",       # 3.14t free-threaded, explicit pip line
+    "compat.yml:compat",       # macOS/Windows 3.15 (-r test-tools.txt)
     "ci.yml:onnx-inference",   # one file out of tests/unit, own venv, .[rag]
     "floors.yml:lowest",       # uv lowest-direct, explicit pip line
     "sonarcloud.yml:sonar-analyze",
+    # Runs only the two mutation-tool test files, the ones whose mutmut-backed
+    # tests skip everywhere else; -r mutation-tools.txt, test-tools + mutmut.
+    "ci.yml:mutation-plan",
 }
 
 
@@ -659,6 +669,9 @@ OUT_OF_SCOPE_JOBS = {
     # `requirements/mutation-tools.txt`, a hash-pinned superset of
     # test-tools.txt, so the same lock that covers `ci.yml:tests` covers it.
     "ci.yml:mutation-shard",
+    # A full nightly's advisory diff legs: `mutation-shard`'s steps verbatim
+    # (tests/unit/test_mutation_plan.py pins them equal), so the same reason.
+    "ci.yml:mutation-advisory-shard",
 }
 
 
@@ -670,6 +683,13 @@ def _conditional_install_jobs() -> list[str]:
     ``- if: runner.os == 'Linux'`` over a ``pip install setuptools`` is
     credited on every leg of a matrix, including the legs where the step is
     skipped entirely.
+
+    One shape is not guilty: an install whose step ``if:`` is, verbatim, the
+    ``if:`` of every step in the job that runs the suite (``ci.yml:
+    mutation-plan`` builds its venv and runs its tests only for a mutation-
+    relevant change). The suite then cannot run without the install, so
+    nothing is credited that the run might lack. A shell ``if``/``case`` is
+    never excused: its condition is invisible from the step.
     """
     guilty = []
     for wf in _workflow_files():
@@ -677,11 +697,16 @@ def _conditional_install_jobs() -> list[str]:
         for job_id, job in (doc.get("jobs") or {}).items():
             if "%s:%s" % (wf.name, job_id) not in HARNESS_JOBS:
                 continue
-            for step in job.get("steps") or []:
+            steps = job.get("steps") or []
+            suite_gates = {step.get("if") for step in steps
+                           if _pytest_runs(step.get("run") or "")}
+            for step in steps:
                 body = step.get("run") or ""
                 if not any(_pip_install(c) for _a, c in _stream(body)):
                     continue
-                if step.get("if") or re.search(r"(?m)^\s*(if|case)\s", body):
+                shell_gated = re.search(r"(?m)^\s*(if|case)\s", body)
+                step_gated = step.get("if") and suite_gates != {step.get("if")}
+                if shell_gated or step_gated:
                     guilty.append("%s:%s" % (wf.name, job_id))
     return sorted(set(guilty))
 
@@ -847,15 +872,25 @@ class TestCanaryDependencies:
             f"{unknown} is imported by the suite and is in neither "
             f"MODULE_TO_DIST nor REPO_LOCAL — say which it is")
 
-    def test_the_canary_still_allows_failure(self):
+    def test_the_canary_still_blocks_nothing(self):
         """Green is the point; blocking on it is not.
 
-        The leg is a signal. If it ever becomes required, this file's premise
-        (a red canary is ignorable, so it must be green to mean anything)
-        stops holding and the docstring above needs rewriting.
+        The leg is a signal. It lives in compat.yml, which no pull request or
+        merge queue runs and publish.yml does not wait on, so a red canary
+        opens a tracker and stops neither a merge nor a release. If that ever
+        changes, this file's premise (a red canary blocks nothing, so it must
+        be green to mean anything) stops holding and the docstring above needs
+        rewriting.
         """
-        jobs = yaml.safe_load(CI.read_text(encoding="utf-8"))["jobs"]
-        assert jobs["canary"]["continue-on-error"] is True
+        doc = yaml.safe_load(COMPAT.read_text(encoding="utf-8"))
+        on = doc.get("on", doc.get(True))
+        assert "canary" in doc["jobs"]
+        assert not {"pull_request", "pull_request_target", "merge_group"} & set(on)
+        publish = yaml.safe_load(
+            (WORKFLOWS / "publish.yml").read_text(encoding="utf-8"))
+        publish_on = publish.get("on", publish.get(True))
+        assert publish_on["workflow_run"]["workflows"] == ["ci"]
+        assert "canary" not in yaml.safe_load(CI.read_text(encoding="utf-8"))["jobs"]
 
 
 class TestGuardDetection:
@@ -1286,6 +1321,49 @@ jobs:
 
         assert _conditional_install_jobs() == []
 
+    def test_an_install_gated_exactly_like_every_suite_step_is_not_flagged(
+            self, tmp_path, monkeypatch):
+        # `ci.yml:mutation-plan`'s shape: the venv is only built when the
+        # change is mutation-relevant, and the suite only runs then too. The
+        # suite cannot run without the install, so nothing is credited that
+        # the run might lack.
+        _plant(tmp_path, "probe.yml", """
+on: push
+jobs:
+  both:
+    steps:
+      - if: steps.scope.outputs.relevant == 'true'
+        run: |
+          python -m venv .venv
+          .venv/bin/pip -q install pytest setuptools
+      - if: steps.scope.outputs.relevant == 'true'
+        run: .venv/bin/python -m pytest -q tests/unit/test_a.py
+""", monkeypatch)
+        monkeypatch.setattr("test_canary_deps.HARNESS_JOBS", {"probe.yml:both"})
+
+        assert _conditional_install_jobs() == []
+
+    @pytest.mark.parametrize("suite_if", [
+        None,                                        # the suite always runs
+        "steps.scope.outputs.relevant != 'false'",  # a different condition
+    ])
+    def test_a_suite_step_not_gated_like_the_install_is_flagged(
+            self, tmp_path, monkeypatch, suite_if):
+        gate = ("      - if: %s\n        run: " % suite_if) if suite_if else "      - run: "
+        _plant(tmp_path, "probe.yml", """
+on: push
+jobs:
+  split:
+    steps:
+      - if: steps.scope.outputs.relevant == 'true'
+        run: |
+          python -m venv .venv
+          .venv/bin/pip -q install pytest setuptools
+""" + gate + ".venv/bin/python -m pytest -q tests/unit/test_a.py\n", monkeypatch)
+        monkeypatch.setattr("test_canary_deps.HARNESS_JOBS", {"probe.yml:split"})
+
+        assert _conditional_install_jobs() == ["probe.yml:split"]
+
     def test_no_venv_job_runs_the_suite_in_a_way_this_file_cannot_read(self):
         """The blind spot that would make a job vacuously compliant.
 
@@ -1367,13 +1445,14 @@ jobs:
                         elif arg.endswith(".txt"):
                             generated.add(f"{wf}:{job}")
         assert committed == {
-            "ci.yml:tests", "ci.yml:patch-coverage", "ci.yml:onnx-inference",
-            "sonarcloud.yml:sonar-analyze",
+            "ci.yml:tests", "ci.yml:tests-extended", "ci.yml:onnx-inference",
+            "sonarcloud.yml:sonar-analyze", "ci.yml:mutation-plan",
+            "compat.yml:compat",
         }
         assert generated == {"floors.yml:lowest"}
-        # `ci.yml:canary` is in neither: it names every distribution on the
+        # `compat.yml:canary` is in neither: it names every distribution on the
         # command line, which is why it is the job this file pins hardest.
-        assert "ci.yml:canary" not in committed | generated
+        assert "compat.yml:canary" not in committed | generated
 
     def test_the_single_file_job_resolves_to_that_file(self):
         """A pin on what a job's targets *are*, not that it has some.

@@ -38,6 +38,7 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.15",
     "Topic :: Software Development :: Build Tools",
 ]
 
@@ -64,7 +65,17 @@ rag = [
     # wrongly-declared licence. This pair resolves to 20 packages with zero
     # licence findings. The model weights are fetched and sha256-verified at
     # runtime, not vendored.
-    "onnxruntime>=1.17",
+    #
+    # Marked, 2026-10-28: onnxruntime 1.31.1 publishes cp311-cp314 wheels and
+    # no sdist, so on Python 3.15 an unmarked requirement made the WHOLE extra
+    # uninstallable — sqlite-vec and tokenizers included, though both install
+    # there (py3-none and abi3 wheels). With the marker, 3.15 gets the store
+    # and the tokenizer, dense search works through an API key, and `boost
+    # doctor` names the one missing piece (`dense.status()`'s no-local-wheel)
+    # instead of pip failing the install. Drop the marker, and raise
+    # `localembed.ONNX_WHEEL_CEILING` with it, the day onnxruntime ships cp315
+    # wheels; tests/unit/test_rag_python_ceiling.py keeps the two in step.
+    "onnxruntime>=1.17; python_version < '3.15'",
     "tokenizers>=0.15",
 ]
 # Opt-in eval extras. The Tier 1 gate (scripts/eval_retrieval.py) is pure-stdlib

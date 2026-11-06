@@ -7,6 +7,7 @@ import errno
 import inspect
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -20,10 +21,12 @@ from boost_cli.core import (
     catalog,
     config,
     gitutil,
+    integrity,
     journal,
     lockfile,
     paths,
     policy,
+    projectlock,
     registry,
     scopes,
     store,
@@ -218,6 +221,20 @@ class TestInstall:
         assert "max_skills limit (0) reached" in ei.value.message
         assert lockfile.get_skill("brainstorming") is None
 
+    def test_max_skills_at_cap_still_reinstalls_an_installed_skill(
+            self, tap, entry):
+        # Replacing a skill already counted adds none: at exactly the cap,
+        # `boost update` and `boost reinstall` were refused.
+        store.install(entry)
+        policy.save({"max_skills": 1})
+        store.install(entry, force=True)
+        assert lockfile.get_skill("brainstorming") is not None
+
+    def test_count_others(self):
+        assert store._count_others({"a": {}, "b": {}}, "a") == 1
+        assert store._count_others({"a": {}, "b": {}}, "c") == 2
+        assert store._count_others({}, "a") == 0
+
     def test_only_agents_links_subset(self, tap, entry):
         res = store.install(entry, only_agents=["claude-code"])
         assert res.linked == ["claude-code"]
@@ -276,6 +293,15 @@ class TestInstallVia:
         store.install(_workflow_entry(tap), via="protocol")
         ev = journal.events(action="install")[0]
         assert ev["via"] == "protocol"
+
+    def test_project_skill_install_records_tap_url(self, tap, entry, tmp_path):
+        from boost_cli.core import projectlock
+        repo = tmp_path / "proj-tapurl"
+        (repo / ".git").mkdir(parents=True)
+        store.install(entry, scope="project", base=str(repo))
+        rec = projectlock.get_skill(repo, "brainstorming")
+        assert rec is not None
+        assert rec["tap_url"] == tap.url
 
     def test_project_skill_install_records_via(self, entry, tmp_path):
         repo = tmp_path / "proj"
@@ -437,6 +463,16 @@ class TestSideline:
             assert _link(agent).is_symlink()
         assert "sidelined_by" not in lockfile.get_skill("brainstorming")
 
+    def test_unsideline_relinks_only_into_the_declared_agents(self, tap):
+        store.install(catalog.find("brainstorming")[0],
+                      only_agents=["cursor"])
+        store.sideline("brainstorming", "profile")
+        res = store.unsideline("brainstorming")
+        assert res.linked == ["cursor"]
+        assert _link("cursor").is_symlink()
+        assert not _link("claude-code").exists()
+        assert not _link("windsurf").exists()
+
     def test_unsideline_on_a_never_sidelined_skill_is_a_noop_for_the_flag(
             self, brainstorming):
         store.unsideline("brainstorming")
@@ -446,6 +482,359 @@ class TestSideline:
         # No lock entry exists — unlink_agents finds nothing to remove and
         # there is nothing to record a flag on.
         assert store.sideline("nonexistent", "focus") == []
+
+
+class TestHeldStoreCopy:
+    """Quarantine and sideline hold the store copy out of ``~/.agents/skills``.
+
+    Gemini CLI and Codex read that dir with no link, so unlinking alone left
+    a quarantined skill loaded in both while ``info`` said "agents (none)".
+    """
+
+    def _store(self):
+        return paths.store_dir() / "brainstorming"
+
+    def _held(self):
+        return paths.held_skills_dir() / "brainstorming"
+
+    def test_held_dir_is_outside_the_store(self, sandbox):
+        assert paths.held_skills_dir() == paths.state_dir() / "held"
+        assert store.held_copy_dir("x") == paths.state_dir() / "held" / "x"
+        with pytest.raises(BoostError, match="invalid skill name"):
+            store.held_copy_dir("../x")
+
+    def test_is_held_and_copy_dir(self, sandbox):
+        assert store.is_held({"held_at": "/h"}) is True
+        assert store.is_held({"held_at": ""}) is False
+        assert store.is_held({}) is False
+        assert store.is_held(None) is False
+        assert store.copy_dir("x", {"held_at": "/h"}) == store.held_copy_dir("x")
+        assert store.copy_dir("x", {}) == paths.store_dir() / "x"
+
+    def test_quarantine_holds_and_release_restores_byte_for_byte(
+            self, brainstorming):
+        before = util.sha256_dir(self._store())
+        exec_before = util.exec_bits(self._store())
+        entry = lockfile.get_skill("brainstorming")
+        store.quarantine_skill("brainstorming", entry)
+        assert not os.path.lexists(self._store())
+        assert util.sha256_dir(self._held()) == before
+        rec = lockfile.get_skill("brainstorming")
+        assert rec["held_at"] == str(self._held())
+        assert rec["quarantined"] is True
+        # Still the installed bytes, only elsewhere: not "missing".
+        assert integrity.status("brainstorming", rec) == integrity.STATUS_OK
+        meta = store.read_skill_meta("brainstorming")
+        assert meta is not None and meta[0]["name"] == "brainstorming"
+        assert "brainstorming" not in store.sync_plan()["missing_store"]
+
+        res = store.release_skill("brainstorming", rec)
+        assert res.linked == LINKED_AGENTS
+        assert util.sha256_dir(self._store()) == before
+        assert util.exec_bits(self._store()) == exec_before
+        assert not os.path.lexists(self._held())
+        rec = lockfile.get_skill("brainstorming")
+        assert "held_at" not in rec
+        assert rec["quarantined"] is False
+        assert rec["agents"] == LINKED_AGENTS
+        for agent in LINKED_AGENTS:
+            assert _link(agent).exists()
+
+    def test_a_requarantine_keeps_the_held_copy(self, brainstorming):
+        before = util.sha256_dir(self._store())
+        store.quarantine_skill("brainstorming",
+                               lockfile.get_skill("brainstorming"))
+        store.quarantine_skill("brainstorming",
+                               lockfile.get_skill("brainstorming"))
+        assert util.sha256_dir(self._held()) == before
+        assert lockfile.get_skill("brainstorming")["held_at"] == str(
+            self._held())
+
+    def test_a_stale_held_copy_gives_way_to_the_store_copy(self, brainstorming):
+        before = util.sha256_dir(self._store())
+        self._held().mkdir(parents=True)
+        (self._held() / "SKILL.md").write_text("stale\n", encoding="utf-8")
+        assert store.hold_store_copy("brainstorming") == str(self._held())
+        assert util.sha256_dir(self._held()) == before
+
+    def _legacy_quarantine(self):
+        def mark(lock):
+            lock["skills"]["brainstorming"]["quarantined"] = True
+        lockfile.mutate(mark)
+
+    def test_legacy_quarantine_is_held_once(self, brainstorming):
+        before = util.sha256_dir(self._store())
+        self._legacy_quarantine()
+        assert store.unheld_withheld() == ["brainstorming"]
+        line = ("brainstorming's store copy out of ~/.agents/skills (it is "
+                "quarantined, and Gemini CLI and Codex load the store directly)")
+        assert store.hold_legacy_copies(dry=True) == ["would hold " + line]
+        assert os.path.isdir(self._store())
+        assert store.hold_legacy_copies() == ["held " + line]
+        assert util.sha256_dir(self._held()) == before
+        assert lockfile.get_skill("brainstorming")["held_at"] == str(
+            self._held())
+        assert store.unheld_withheld() == []
+        assert store.hold_legacy_copies() == []
+
+    def test_legacy_sideline_is_named_by_its_command(self, brainstorming):
+        def mark(lock):
+            lock["skills"]["brainstorming"]["sidelined_by"] = "focus"
+        lockfile.mutate(mark)
+        assert store.hold_legacy_copies(dry=True) == [
+            "would hold brainstorming's store copy out of ~/.agents/skills "
+            "(it is sidelined by `boost focus`, and Gemini CLI and Codex load "
+            "the store directly)"]
+
+    def test_live_and_storeless_rows_are_not_candidates(self, brainstorming):
+        assert store.unheld_withheld() == []
+        self._legacy_quarantine()
+        shutil.rmtree(self._store())
+        assert store.unheld_withheld() == []
+
+    def test_a_failed_lock_write_puts_the_copies_back(self, brainstorming,
+                                                      monkeypatch):
+        before = util.sha256_dir(self._store())
+        self._legacy_quarantine()
+
+        def refuse(fn):
+            raise OSError("read-only")
+        monkeypatch.setattr(store.lockfile, "mutate", refuse)
+        with pytest.raises(OSError):
+            store.hold_legacy_copies()
+        assert util.sha256_dir(self._store()) == before
+        assert not os.path.lexists(self._held())
+
+    def test_a_failed_move_puts_the_earlier_copies_back(self, brainstorming,
+                                                         monkeypatch):
+        self._legacy_quarantine()
+        monkeypatch.setattr(store, "unheld_withheld",
+                            lambda: ["brainstorming", "second"])
+        real = store.hold_store_copy
+
+        def hold(name):
+            if name == "second":
+                raise OSError("busy")
+            return real(name)
+        monkeypatch.setattr(store, "hold_store_copy", hold)
+        with pytest.raises(OSError):
+            store.hold_legacy_copies()
+        assert os.path.isdir(self._store())
+        assert not os.path.lexists(self._held())
+        assert "held_at" not in lockfile.get_skill("brainstorming")
+
+    def test_an_unreadable_lock_is_not_migrated(self, brainstorming):
+        self._legacy_quarantine()
+        paths.lockfile_path().write_text("{not json", encoding="utf-8")
+        assert store.hold_legacy_copies() == []
+        assert store.backfill_tap_urls() == []
+        assert os.path.isdir(self._store())
+
+    def test_backfill_tap_urls_only_from_the_configured_tap(
+            self, brainstorming, tap):
+        def legacy(lock):
+            row = lock["skills"]["brainstorming"]
+            row.pop("tap_url")
+            row["installed_at"] = row["updated_at"] = "2026-01-01T00:00:00Z"
+            base = {"version": "0.0.0", "installed_at": "2026-01-01T00:00:00Z"}
+            lock["skills"]["imported"] = dict(base, tap="local")
+            lock["skills"]["from-url"] = dict(base, tap="x", source_url="")
+            lock["skills"]["untapped"] = dict(base, tap="gone")
+            lock["skills"]["no-tap"] = dict(base)
+            lock["skills"]["other-case"] = dict(base, tap=tap.name.upper())
+        lockfile.mutate(legacy)
+        assert store.backfill_tap_urls(dry=True) == [
+            "would record the tap URL of 1 lock row"]
+        assert "tap_url" not in lockfile.get_skill("brainstorming")
+        assert store.backfill_tap_urls() == [
+            "recorded the tap URL of 1 lock row"]
+        skills = lockfile.read()["skills"]
+        assert skills["brainstorming"]["tap_url"] == tap.url
+        assert [n for n, r in skills.items() if "tap_url" in r] == [
+            "brainstorming"]
+        assert store.backfill_tap_urls() == []
+
+    def test_backfill_leaves_a_row_older_than_its_tap(self, brainstorming,
+                                                      tap):
+        def legacy(lock):
+            row = lock["skills"]["brainstorming"]
+            row.pop("tap_url")
+            row["installed_at"] = row["updated_at"] = "2026-01-01T00:00:00Z"
+            row["commit"] = "0" * 40
+        lockfile.mutate(legacy)
+        assert store.backfill_tap_urls() == []
+        assert "tap_url" not in lockfile.get_skill("brainstorming")
+
+    def test_nothing_to_hold(self, sandbox):
+        assert store.hold_store_copy("brainstorming") is None
+        assert not os.path.lexists(self._held())
+
+    def test_restore_over_a_reinstalled_store_copy_drops_the_held_one(
+            self, brainstorming):
+        before = util.sha256_dir(self._store())
+        self._held().mkdir(parents=True)
+        (self._held() / "SKILL.md").write_text("old\n", encoding="utf-8")
+        store.restore_store_copy("brainstorming")
+        assert util.sha256_dir(self._store()) == before
+        assert not os.path.lexists(self._held())
+
+    def test_restore_with_nothing_held_is_a_noop(self, brainstorming):
+        before = util.sha256_dir(self._store())
+        store.restore_store_copy("brainstorming")
+        assert util.sha256_dir(self._store()) == before
+
+    def test_sideline_holds_and_unsideline_restores(self, brainstorming):
+        before = util.sha256_dir(self._store())
+        store.sideline("brainstorming", "focus")
+        assert not os.path.lexists(self._store())
+        assert lockfile.get_skill("brainstorming")["held_at"] == str(
+            self._held())
+        assert "brainstorming" not in store.sync_plan()["missing_store"]
+        res = store.unsideline("brainstorming")
+        assert res.linked == LINKED_AGENTS
+        for agent in LINKED_AGENTS:
+            assert _link(agent).exists()
+        assert util.sha256_dir(self._store()) == before
+        assert not os.path.lexists(self._held())
+        assert "held_at" not in lockfile.get_skill("brainstorming")
+
+    def test_a_refused_sideline_write_puts_the_copy_back(
+            self, brainstorming, monkeypatch):
+        before = util.sha256_dir(self._store())
+
+        def refuse(name, fn):
+            raise OSError(errno.EROFS, "read-only")
+        monkeypatch.setattr(lockfile, "update_skill", refuse)
+        with pytest.raises(OSError):
+            store.sideline("brainstorming", "focus")
+        assert util.sha256_dir(self._store()) == before
+        assert not os.path.lexists(self._held())
+
+    def test_a_refused_quarantine_write_puts_the_copy_back(
+            self, brainstorming, monkeypatch):
+        before = util.sha256_dir(self._store())
+        entry = lockfile.get_skill("brainstorming")
+
+        def refuse(name, e):
+            raise OSError(errno.EROFS, "read-only")
+        monkeypatch.setattr(lockfile, "set_skill", refuse)
+        with pytest.raises(OSError):
+            store.quarantine_skill("brainstorming", entry)
+        assert util.sha256_dir(self._store()) == before
+        assert not os.path.lexists(self._held())
+
+    def test_an_unrecorded_store_dir_is_not_held(self, sandbox):
+        mine = paths.store_dir() / "brainstorming"
+        mine.mkdir(parents=True)
+        (mine / "SKILL.md").write_text("# mine\n", encoding="utf-8")
+        assert store.sideline("brainstorming", "focus") == []
+        assert (mine / "SKILL.md").read_text(encoding="utf-8") == "# mine\n"
+        assert not os.path.lexists(self._held())
+
+    def test_uninstall_removes_the_held_copy(self, brainstorming):
+        store.quarantine_skill("brainstorming",
+                               lockfile.get_skill("brainstorming"))
+        store.uninstall("brainstorming")
+        assert not os.path.lexists(self._held())
+        assert not os.path.lexists(self._store())
+
+    def test_a_reinstall_drops_the_held_copy(self, brainstorming, entry):
+        store.sideline("brainstorming", "focus")
+        store.install(entry, force=True)
+        assert (self._store() / "SKILL.md").is_file()
+        assert not os.path.lexists(self._held())
+        assert "held_at" not in lockfile.get_skill("brainstorming")
+
+
+class TestUninstallKind:
+    """A name installed as several kinds is refused unless ``kind`` picks."""
+
+    def _rule(self):
+        lockfile.set_rule("brainstorming", {
+            "kind": "rule", "version": "1.0.0", "tap": "t",
+            "materializations": []})
+
+    def test_kinds_phrase(self):
+        assert store.kinds_phrase(["skill"]) == "a skill"
+        assert store.kinds_phrase(["skill", "rule"]) == "a skill and a rule"
+        assert store.kinds_phrase(["skill", "rule", "workflow"]) == (
+            "a skill, a rule and a workflow")
+
+    def test_installed_kinds(self, brainstorming):
+        assert store.installed_kinds("brainstorming") == ["skill"]
+        self._rule()
+        assert store.installed_kinds("brainstorming") == ["skill", "rule"]
+        assert store.installed_kinds("nope") == []
+
+    def test_ambiguous_name_is_refused(self, brainstorming):
+        self._rule()
+        with pytest.raises(BoostError) as ei:
+            store.uninstall("brainstorming")
+        assert ei.value.message == (
+            "brainstorming is installed as a skill and a rule")
+        assert ei.value.hint == (
+            "say which to remove: `boost uninstall brainstorming --kind "
+            "skill` or `boost uninstall brainstorming --kind rule`")
+        assert store.installed_kinds("brainstorming") == ["skill", "rule"]
+
+    def test_kind_rule_leaves_the_skill(self, brainstorming):
+        self._rule()
+        info = store.uninstall("brainstorming", kind="rule")
+        assert info["kind"] == "rule"
+        assert store.installed_kinds("brainstorming") == ["skill"]
+        assert (paths.store_dir() / "brainstorming").is_dir()
+
+    def test_kind_skill_leaves_the_rule(self, brainstorming):
+        self._rule()
+        info = store.uninstall("brainstorming", kind="skill")
+        assert info["kind"] == "skill"
+        assert store.installed_kinds("brainstorming") == ["rule"]
+
+    def _repo_skill_beside_a_user_rule(self, entry, tmp_path, monkeypatch):
+        from boost_cli.core import projectlock
+        repo = tmp_path / "proj"
+        (repo / ".git").mkdir(parents=True)
+        store.install(entry, scope="project", base=str(repo))
+        self._rule()
+        monkeypatch.chdir(repo)
+        assert lockfile.get_skill("brainstorming") is None
+        assert projectlock.get_skill(repo, "brainstorming")
+        return repo
+
+    def test_kind_skill_reaches_a_repo_skill_beside_a_user_rule(
+            self, tap, entry, tmp_path, monkeypatch):
+        from boost_cli.core import projectlock
+        repo = self._repo_skill_beside_a_user_rule(entry, tmp_path, monkeypatch)
+        info = store.uninstall("brainstorming", kind="skill")
+        assert projectlock.get_skill(repo, "brainstorming") is None
+        assert info["name"] == "brainstorming"
+        assert store.installed_kinds("brainstorming") == ["rule"]
+
+    def test_a_repo_skill_beside_a_user_rule_is_ambiguous(
+            self, tap, entry, tmp_path, monkeypatch):
+        from boost_cli.core import projectlock
+        repo = self._repo_skill_beside_a_user_rule(entry, tmp_path, monkeypatch)
+        with pytest.raises(BoostError) as ei:
+            store.uninstall("brainstorming")
+        assert ei.value.message == (
+            "brainstorming is installed as a skill and a rule")
+        assert projectlock.get_skill(repo, "brainstorming")
+        assert store.installed_kinds("brainstorming") == ["rule"]
+
+    def test_global_ignores_the_repo_skill(
+            self, tap, entry, tmp_path, monkeypatch):
+        from boost_cli.core import projectlock
+        repo = self._repo_skill_beside_a_user_rule(entry, tmp_path, monkeypatch)
+        info = store.uninstall("brainstorming", project_fallback=False)
+        assert info["kind"] == "rule"
+        assert projectlock.get_skill(repo, "brainstorming")
+
+    def test_a_kind_not_installed_names_what_is(self, brainstorming):
+        with pytest.raises(BoostError) as ei:
+            store.uninstall("brainstorming", kind="workflow")
+        assert ei.value.message == "no workflow named brainstorming is installed"
+        assert ei.value.hint == ("it is installed as a skill — `boost "
+                                 "uninstall brainstorming --kind skill`")
 
 
 class TestNativeStoreAgents:
@@ -783,6 +1172,75 @@ class TestInstallFromPath:
         store.install_from_path(src)
         store.install_from_path(src)
         assert lockfile.get_skill("no-pin")["pinned"] is False
+
+    # ── a rename reaches the frontmatter: agents list a skill by its
+    # frontmatter name, so renaming only the dir and lock key left the agent
+    # calling it by the old name and `boost adapt` printing a banner for it.
+
+    def test_a_rename_rewrites_only_the_name_line_of_the_store_copy(
+            self, sandbox, tmp_path):
+        fm = "---\nname: alpha\ndescription: \"Use it: now\"\nversion: 1.0.0\n---"
+        src = self._src(tmp_path, fm, extras=False)
+        before = (src / "SKILL.md").read_text(encoding="utf-8")
+        res = store.install_from_path(src, name="beta")
+        copy = (res.dest / "SKILL.md").read_text(encoding="utf-8")
+        assert copy == before.replace("name: alpha", "name: beta", 1)
+        assert (src / "SKILL.md").read_text(encoding="utf-8") == before
+        # The lock hash describes the rewritten copy, not the source.
+        assert lockfile.get_skill("beta")["sha256"] == util.sha256_dir(res.dest)
+
+    def test_an_unrenamed_import_copies_the_file_byte_for_byte(
+            self, sandbox, tmp_path):
+        src = self._src(tmp_path, "---\nname: alpha\n---", extras=False)
+        res = store.install_from_path(src, name="alpha")
+        assert ((res.dest / "SKILL.md").read_bytes()
+                == (src / "SKILL.md").read_bytes())
+
+    def test_rename_frontmatter_reports_whether_it_wrote(self, tmp_path):
+        md = tmp_path / "SKILL.md"
+        md.write_text("---\nname: alpha\n---\n\nbody\n", encoding="utf-8")
+        assert store._rename_frontmatter(md, "alpha", {"name": "alpha"}) is False
+        assert store._rename_frontmatter(md, "beta", {"name": "alpha"}) is True
+        assert md.read_text(encoding="utf-8") == "---\nname: beta\n---\n\nbody\n"
+        # No name field yet: one is added, since the agent would otherwise
+        # fall back to a dir name boost no longer uses.
+        md.write_text("---\nversion: 1\n---\n\nbody", encoding="utf-8")
+        assert store._rename_frontmatter(md, "beta", {"version": 1}) is True
+        assert md.read_text(encoding="utf-8") == (
+            "---\nversion: 1\nname: beta\n---\n\nbody")
+        # No frontmatter block to carry a name: left exactly as it was.
+        md.write_text("# just a heading\n", encoding="utf-8")
+        assert store._rename_frontmatter(md, "beta", {}) is False
+        assert md.read_text(encoding="utf-8") == "# just a heading\n"
+
+    def test_a_rename_keeps_every_other_byte_of_the_copy(self, tmp_path):
+        # `set_field` would add a blank line after the fence and fold CRLF;
+        # the copy must differ from its source by the name line alone.
+        md = tmp_path / "SKILL.md"
+        md.write_bytes(b"---\r\nname: alpha\r\nmeta:\r\n  name: inner\r\n"
+                       b"---\r\nbody\r\n")
+        assert store._rename_frontmatter(md, "beta", {"name": "alpha"}) is True
+        assert md.read_bytes() == (b"---\r\nname: beta\r\nmeta:\r\n"
+                                   b"  name: inner\r\n---\r\nbody\r\n")
+
+    def test_rename_frontmatter_leaves_an_unclosed_or_undecodable_file(
+            self, tmp_path):
+        md = tmp_path / "SKILL.md"
+        md.write_bytes(b"---\nname: alpha\nbody\n")
+        assert store._rename_frontmatter(md, "beta", {"name": "alpha"}) is False
+        assert md.read_bytes() == b"---\nname: alpha\nbody\n"
+        md.write_bytes(b"---\nname: alpha\n---\n\xff\n")
+        assert store._rename_frontmatter(md, "beta", {"name": "alpha"}) is False
+        assert md.read_bytes() == b"---\nname: alpha\n---\n\xff\n"
+
+    def test_splice_field_adds_a_missing_key_before_the_fence(self):
+        from boost_cli.core import frontmatter
+        assert (frontmatter.splice_field("\ufeff---\r\nv: 1\r\n---\r\nb",
+                                         "name", "x")
+                == "\ufeff---\r\nv: 1\r\nname: x\r\n---\r\nb")
+        assert (frontmatter.splice_field("---\nv: 1\n...\nb", "name", "x")
+                == "---\nv: 1\nname: x\n...\nb")
+        assert frontmatter.splice_field("# no fence\n", "name", "x") == "# no fence\n"
 
     def test_blocklist_policy_refuses(self, sandbox, tmp_path):
         policy.save({"blocked_skills": ["blocked-one"]})
@@ -1137,6 +1595,7 @@ class TestImportProvenance:
             "declined", msg, msg)
         actions = store.sync_apply(store.sync_plan())
         assert msg in actions
+        assert store.is_unrepaired(msg)    # a ✓ here would claim a repair
         assert lockfile.get_skill("alpha")["source_url"] == self.URL
 
 
@@ -1212,9 +1671,13 @@ class TestUninstall:
 
 class TestSyncPlan:
     EMPTY: ClassVar[dict] = {"missing_store": [], "missing_links": [],
-             "blocked_links": [], "stale_links": [], "orphaned_store": [],
-             "unrecorded_store": [], "missing_materializations": [],
-             "out_of_scope_links": []}
+             "blocked_links": [], "stale_links": [], "adoptable_store": [],
+             "older_copies": [], "foreign_store": [], "not_skill_store": [],
+             "unreadable_store": [], "misnamed_store": [], "workflow_copies": [],
+             "rule_blocks": [],
+             "plugin_duplicates": [], "unrecorded_store": [],
+             "missing_materializations": [], "out_of_scope_links": [],
+             "missing_copy_links": [], "stale_copy_links": []}
 
     def test_clean_state_empty_plan(self, brainstorming):
         assert store.sync_plan() == self.EMPTY
@@ -1243,15 +1706,21 @@ class TestSyncPlan:
         plan = store.sync_plan()
         assert plan == {**self.EMPTY, "stale_links": [str(ghost)]}
 
-    def test_unmanaged_link_into_store_is_stale(self, brainstorming):
+    def test_a_live_link_into_a_dir_sync_leaves_alone_is_not_stale(
+            self, brainstorming):
+        # Sweeping it removed the link one line above the line saying the
+        # dir it leads to was left alone. Once the dir is gone it dangles,
+        # and then it is stale.
         orphan_store = paths.store_dir() / "orphan"
         orphan_store.mkdir()
         (orphan_store / "f.txt").write_text("x", encoding="utf-8")
         link = paths.home() / ".cursor" / "skills" / "orphan"
         link.symlink_to(orphan_store)
         plan = store.sync_plan()
-        assert plan["stale_links"] == [str(link)]
-        assert plan["orphaned_store"] == ["orphan"]
+        assert plan["stale_links"] == []
+        assert plan["not_skill_store"] == ["orphan"]
+        shutil.rmtree(orphan_store)
+        assert store.sync_plan()["stale_links"] == [str(link)]
 
     def test_a_native_store_agents_dir_is_never_swept(self, brainstorming):
         # Boost only ever creates a symlink in an agent it links for, so a link
@@ -1261,18 +1730,16 @@ class TestSyncPlan:
         # `boost sync` delete another tool's files with --prune-duplicates
         # never typed. The identical link in a *linking* agent's dir is still
         # swept, so this is the set, not the check, that changed.
-        orphan = paths.store_dir() / "orphan"
-        orphan.mkdir()
+        # A recorded skill's dir, under a name the lock does not record.
+        recorded = paths.store_dir() / "brainstorming"
         for agent_dir in (".gemini", ".codex"):
             d = paths.home() / agent_dir / "skills"
             d.mkdir(parents=True, exist_ok=True)
-            (d / "orphan").symlink_to(orphan)
-        plan = store.sync_plan()
-        assert plan["stale_links"] == []
-        assert plan["orphaned_store"] == ["orphan"]
+            (d / "other").symlink_to(recorded)
+        assert store.sync_plan()["stale_links"] == []
 
-        theirs = paths.home() / ".cursor" / "skills" / "orphan"
-        theirs.symlink_to(orphan)
+        theirs = paths.home() / ".cursor" / "skills" / "other"
+        theirs.symlink_to(recorded)
         assert store.sync_plan()["stale_links"] == [str(theirs)]
 
     def test_a_dangling_link_in_a_native_store_dir_is_left_alone(
@@ -1328,12 +1795,12 @@ class TestSyncPlan:
         plain.write_text("x", encoding="utf-8")
         assert store.points_into_store(plain) is False
 
-    def test_orphaned_store_dir(self, brainstorming):
+    def test_a_store_dir_without_a_skill_md_is_not_a_skill(self, brainstorming):
         rogue = paths.store_dir() / "rogue"
         rogue.mkdir()
         (paths.store_dir() / "stray.txt").write_text("not a dir", encoding="utf-8")
         plan = store.sync_plan()
-        assert plan == {**self.EMPTY, "orphaned_store": ["rogue"]}
+        assert plan == {**self.EMPTY, "not_skill_store": ["rogue"]}
 
     def test_missing_agent_dir_reports_missing_links_not_stale(self, tap, entry):
         # only claude-code was linked, so the other agent dirs were never
@@ -1364,7 +1831,7 @@ class TestSyncPlan:
         plan = store.sync_plan()
         assert plan["missing_store"] == ["brainstorming"]
         assert plan["missing_links"] == []          # skipped via continue
-        assert plan["orphaned_store"] == []
+        assert plan["not_skill_store"] == plan["adoptable_store"] == []
         assert sorted(plan["stale_links"]) == sorted(
             str(_link(a)) for a in LINKED_AGENTS)    # links now dangle
 
@@ -1562,6 +2029,18 @@ class TestSyncApply:
                   in a for a in actions)
         assert not (paths.store_dir() / "local-skill").is_dir()
         assert lockfile.get_skill("local-skill") is not None
+        # A repair it did not make: heal and sync print it as a warning and
+        # heal exits 1, rather than a ✓ over a skill still missing.
+        declined = [a for a in actions if "repair declined" in a]
+        assert declined and all(store.is_unrepaired(a) for a in declined)
+
+    def test_is_unrepaired_names_each_declined_repair_and_nothing_else(self):
+        assert store.is_unrepaired(store._declined("alpha", "tap", "alpha"))
+        assert store.is_unrepaired(
+            store._declined("rule r", "tap", "r"))
+        assert not store.is_unrepaired(
+            "reinstalled missing alpha from fixture-tap")
+        assert not store.is_unrepaired(store._DROPPED % "alpha")
 
 
 class TestCopySkillAtomic:
@@ -1826,8 +2305,19 @@ class TestRuleInstall:
         repo2.mkdir()
         entry = _rule_entry(tap)
         store.install(entry, scope="project", base=str(repo1))
-        with pytest.raises(BoostError, match="already installed at project scope"):
-            store.install(entry, scope="project", base=str(repo2))
+        for force in (False, True):
+            with pytest.raises(BoostError) as ei:
+                store.install(entry, scope="project", base=str(repo2),
+                              force=force)
+            # The same scope, another repo: the message names the real limit,
+            # not a scope mismatch that is not there.
+            assert ei.value.message == (
+                "team-conventions is already installed --local in %s, and a "
+                "rule can be installed --local into only one repo per machine"
+                % paths.tilde(repo1))
+            assert ei.value.hint == ("`boost uninstall team-conventions` from "
+                                     "that repo first; --force cannot move it")
+        assert lockfile.get_rule("team-conventions")["base"] == str(repo1)
 
     def test_only_agents_limits_materialization(self, tap):
         res = store.install(_rule_entry(tap), only_agents=["cursor"])
@@ -1869,7 +2359,7 @@ class TestRuleInstall:
         assert lockfile.get_rule("team-conventions") is not None
 
 
-def _workflow_entry(tap, name="ship-it", rel="commands/ship.md",
+def _workflow_entry(tap, name="ship-it", rel="commands/ship-it.md",
                     body="---\nname: ship-it\ndescription: release helper\n"
                          "allowed-tools: Bash\n---\n\nRun the release.\n"):
     """Write a workflow file into the tap clone and return its catalog entry."""
@@ -1887,11 +2377,13 @@ class TestWorkflowInstall:
     def test_command_drops_into_each_agents_commands_dir(self, tap):
         res = store.install(_workflow_entry(tap))
         assert res.kind == "workflow"
-        assert set(res.linked) == {"claude-code", "windsurf", "cursor", "gemini"}
-        for adir in (".claude", ".windsurf", ".cursor"):
+        assert set(res.linked) == {"claude-code", "cursor", "gemini"}
+        for adir in (".claude", ".cursor"):
             f = paths.home() / adir / "commands" / "ship-it.md"
             assert f.is_file()
             assert "Run the release." in f.read_text(encoding="utf-8")  # verbatim drop
+        # Windsurf reads no commands/ dir (config.DEFAULTS), so none is made.
+        assert not (paths.home() / ".windsurf" / "commands").exists()
 
         # Gemini CLI reads slash commands as TOML: a .md drop there is simply
         # never discovered, so the extension AND the content have to change.
@@ -2043,7 +2535,7 @@ class TestWorkflowInstall:
         store.install(_workflow_entry(tap, name="reviewer",
                                       rel="agents/reviewer.md", body=body))
 
-        for adir in (".claude", ".windsurf", ".cursor"):
+        for adir in (".claude", ".cursor"):
             path = paths.home() / adir / "agents" / "reviewer.md"
             assert path.read_text(encoding="utf-8") == body
 
@@ -2056,17 +2548,17 @@ class TestWorkflowInstall:
         store.install(_workflow_entry(tap))
         info = store.uninstall("ship-it")
         assert info["kind"] == "workflow"
-        assert set(info["unlinked"]) == {"claude-code", "windsurf", "cursor",
-                                         "gemini"}
+        assert set(info["unlinked"]) == {"claude-code", "cursor", "gemini"}
         assert lockfile.get_workflow("ship-it") is None
-        for adir in (".claude", ".windsurf", ".cursor"):
+        for adir in (".claude", ".cursor"):
             assert not (paths.home() / adir / "commands" / "ship-it.md").exists()
         # The recorded path is the .toml one, so that is what must be removed.
         assert not (paths.home() / ".gemini" / "commands" / "ship-it.toml").exists()
 
     def test_uninstall_removes_a_gemini_subagent_markdown_file(self, tap):
         entry = _workflow_entry(tap, name="reviewer", rel="agents/reviewer.md",
-                                body="---\nname: reviewer\n---\n\nReview it.\n")
+                                body="---\nname: reviewer\ndescription: d\n---\n\n"
+                                     "Review it.\n")
         store.install(entry)
         gem = paths.home() / ".gemini" / "agents" / "reviewer.md"
         assert gem.is_file()
@@ -2240,13 +2732,13 @@ class TestRestorePreserveNewerLockSections:
         pre_rules = {"newer-rule": {"tap": tap.name, "version": "1.0.0"}}
         assert lockfile.installed_rules() == {}   # nothing on disk yet
         kept = store.restore_preserve_newer_lock_sections(pre_rules, {})
-        assert kept == {"rules": ["newer-rule"], "workflows": []}
+        assert kept == {"rules": ["newer-rule"], "workflows": [], "live": []}
         assert lockfile.installed_rules() == pre_rules
 
     def test_fills_in_a_workflow_missing_from_the_restored_lock(self, tap):
         pre_workflows = {"newer-flow": {"tap": tap.name, "version": "1.0.0"}}
         kept = store.restore_preserve_newer_lock_sections({}, pre_workflows)
-        assert kept == {"rules": [], "workflows": ["newer-flow"]}
+        assert kept == {"rules": [], "workflows": ["newer-flow"], "live": []}
         assert lockfile.installed_workflows() == pre_workflows
 
     def test_does_not_touch_an_entry_the_restored_lock_already_has(self, tap):
@@ -2256,15 +2748,27 @@ class TestRestorePreserveNewerLockSections:
         kept = store.restore_preserve_newer_lock_sections(pre_rules, {})
         # already present after "restore" (nothing was wiped in this test) ->
         # nothing to fill in, and no spurious write.
-        assert kept == {"rules": [], "workflows": []}
+        assert kept == {"rules": [], "workflows": [], "live": []}
 
     def test_no_write_when_nothing_needs_keeping(self, tap):
         # No install has happened in this test, so the lock file was never
         # created -- a spurious write would bring one into existence.
         assert not paths.lockfile_path().exists()
         kept = store.restore_preserve_newer_lock_sections({}, {})
-        assert kept == {"rules": [], "workflows": []}
+        assert kept == {"rules": [], "workflows": [], "live": []}
         assert not paths.lockfile_path().exists()
+
+    def test_the_live_row_replaces_a_differing_restored_one(self, tap):
+        # The snapshot's older row over the newer block still on disk:
+        # verify called boost's own content the user's local edits.
+        self._install_rule(tap)
+        restored = dict(lockfile.installed_rules()["team-conventions"])
+        live = {**restored, "version": "2.0.0"}
+        kept = store.restore_preserve_newer_lock_sections(
+            {"team-conventions": live}, {})
+        assert kept == {"rules": [], "workflows": [],
+                        "live": ["team-conventions"]}
+        assert lockfile.installed_rules() == {"team-conventions": live}
 
     def _install_rule(self, tap, name="team-conventions"):
         entry = _rule_entry(tap, name=name)
@@ -2328,7 +2832,10 @@ class TestCheckScopeConflict:
             store._check_scope_conflict(
                 "x", existing, "project", Path("/repo2"), force=True)
         assert ei.value.message == (
-            "x is already installed at project scope (%s)" % tmp_path)
+            "x is already installed --local in %s, and a rule or workflow can "
+            "be installed --local into only one repo per machine"
+            % paths.tilde(tmp_path))
+        assert "different scope" not in ei.value.hint
 
     def test_cross_scope_hint_points_at_uninstalling_the_other_location(self):
         existing = {"scope": "user", "base": None}
@@ -3304,17 +3811,18 @@ class TestProjectSkills:
 
     def test_already_installed_hint_names_a_command_that_exists(self, entry,
                                                                 tmp_path):
-        """`reinstall --local` exits 2 and bare `reinstall` cannot see a repo.
+        """Bare `reinstall` cannot see a repo; `reinstall --local` can.
 
         The hint is the only route the error offers, so it has to be the one
-        the README documents and the CLI accepts.
+        the CLI accepts. `reinstall --local` reads the repo's lock, so it
+        reaches the recorded tap where `install x --local --force` stops at
+        "exists in multiple taps" once two taps ship the name.
         """
         repo, _ = self._install(entry, tmp_path)
         with pytest.raises(BoostError) as err:
             store.install(entry, scope="project", base=str(repo))
         assert "already installed in this project" in err.value.message
-        assert err.value.hint == "`boost install brainstorming --local --force` to force"
-        assert "reinstall" not in (err.value.hint or "")
+        assert err.value.hint == "`boost reinstall brainstorming --local` to force"
 
     def test_uninstall_refuses_a_path_outside_the_project(self, entry, tmp_path):
         """The lock is committed, so its paths are input — never trusted."""
@@ -3404,7 +3912,9 @@ class TestProjectSkills:
 
     def test_sync_apply_reports_when_the_source_is_gone(self, entry, tmp_path):
         from boost_cli.core import projectlock
-        repo, _ = self._install(entry, tmp_path)
+        # One agent: an intact sibling copy would be restored from instead
+        # (`store.project_intact_copy`), and this is about the tap path.
+        repo, _ = self._install(entry, tmp_path, only_agents=["claude-code"])
         shutil.rmtree(repo / ".claude" / "skills" / "brainstorming")
         rec = projectlock.get_skill(repo, "brainstorming")
         rec["tap"] = "local"          # nothing to re-fetch from
@@ -3412,6 +3922,61 @@ class TestProjectSkills:
         actions = store.project_sync_apply(
             store.project_sync_plan(base=str(repo)), base=str(repo))
         assert any("source is gone" in a for a in actions)
+        # heal and sync print it as a warning, and heal exits 1 over it.
+        gone = [a for a in actions if "source is gone" in a]
+        assert gone and all(store.is_unrepaired(a) for a in gone)
+        assert not store.is_unrepaired("re-materialized brainstorming from t")
+
+    def test_sync_preview_names_a_restorable_copy_and_writes_nothing(
+            self, entry, tmp_path):
+        # One agent: an intact sibling copy would be restored from instead
+        # (`store.project_intact_copy`), and this is about the tap path.
+        repo, _ = self._install(entry, tmp_path, only_agents=["claude-code"])
+        gone = repo / ".claude" / "skills" / "brainstorming"
+        shutil.rmtree(gone)
+        lines = store.project_sync_preview(
+            store.project_sync_plan(base=str(repo)), base=str(repo))
+        tap_name = entry["tap"]
+        assert lines == ["would re-materialize project skill brainstorming "
+                         "→ claude-code from %s" % tap_name]
+        assert not any(store.is_unrepaired(x) for x in lines)
+        assert not gone.exists()
+
+    def test_sync_preview_warns_where_apply_would_report_gone(
+            self, entry, tmp_path):
+        """The preview and the run must agree on an unrestorable copy."""
+        from boost_cli.core import projectlock
+        # One agent: an intact sibling copy would be restored from instead
+        # (`store.project_intact_copy`), and this is about the tap path.
+        repo, _ = self._install(entry, tmp_path, only_agents=["claude-code"])
+        shutil.rmtree(repo / ".claude" / "skills" / "brainstorming")
+        rec = projectlock.get_skill(repo, "brainstorming")
+        rec["tap"] = "no-such-tap-preview"
+        projectlock.set_skill(repo, "brainstorming", rec)
+        plan = store.project_sync_plan(base=str(repo))
+        lines = store.project_sync_preview(plan, base=str(repo))
+        assert lines == ["brainstorming is missing from the project but its "
+                         "source is gone — run `boost update` or reinstall"]
+        assert all(store.is_unrepaired(x) for x in lines)
+        assert store.project_sync_apply(plan, base=str(repo)) == lines
+
+    def test_sync_preview_treats_a_local_row_as_gone(self, entry, tmp_path):
+        from boost_cli.core import projectlock
+        # One agent: an intact sibling copy would be restored from instead
+        # (`store.project_intact_copy`), and this is about the tap path.
+        repo, _ = self._install(entry, tmp_path, only_agents=["claude-code"])
+        shutil.rmtree(repo / ".claude" / "skills" / "brainstorming")
+        rec = projectlock.get_skill(repo, "brainstorming")
+        rec["tap"] = "local"
+        projectlock.set_skill(repo, "brainstorming", rec)
+        lines = store.project_sync_preview(
+            store.project_sync_plan(base=str(repo)), base=str(repo))
+        assert len(lines) == 1 and store.is_unrepaired(lines[0])
+
+    def test_sync_preview_is_empty_with_nothing_missing(self, entry, tmp_path):
+        repo, _ = self._install(entry, tmp_path)
+        assert store.project_sync_preview(
+            store.project_sync_plan(base=str(repo)), base=str(repo)) == []
 
     # ── the committed-lock contract ──────────────────────────────────────
 
@@ -3804,6 +4369,9 @@ class TestProjectRulesAndWorkflows:
         cfg = config.load()
         cfg["agents"]["windsurf-next"] = {"dir": "~/.windsurf/skills",
                                           "enabled": True}
+        # Windsurf takes no workflows by default; this test needs two agents
+        # writing one commands/ file, which is what turning it back on gives.
+        cfg["agents"]["windsurf"]["workflows"] = True
         config.save(cfg)
         e = (_rule_entry if kind == "rule" else _workflow_entry)(tap)
         repo = self._install(e, tmp_path)
@@ -4005,7 +4573,18 @@ class TestPreservedAgentScope:
         assert store.preserved_agent_scope(
             None, {"agents": ["claude-code"]}) == ["claude-code"]
 
-    def test_a_rule_s_scope_comes_from_its_materializations(self):
+    def test_a_rule_s_rows_are_not_its_scope(self):
+        # Rows record what was written, which is the agents enabled at
+        # install time. Replaying them froze an undeclared install out of
+        # every agent enabled afterwards, so only a declaration narrows.
+        existing = {"materializations": [{"agent": "cursor", "path": "/x"},
+                                         {"agent": "windsurf", "path": "/y"}],
+                    "only_agents": None}
+        assert store.preserved_agent_scope(None, existing) is None
+
+    def test_a_legacy_rule_s_scope_comes_from_its_materializations(self):
+        # No `only_agents` key: written before rules recorded one, so the rows
+        # are the only record of a narrowing and are still replayed.
         existing = {"materializations": [{"agent": "cursor", "path": "/x"},
                                          {"agent": "windsurf", "path": "/y"}]}
         assert store.preserved_agent_scope(None, existing) == ["cursor", "windsurf"]
@@ -4013,6 +4592,12 @@ class TestPreservedAgentScope:
     def test_a_materialization_row_with_no_agent_is_dropped(self):
         existing = {"materializations": [{"agent": "cursor"}, {"path": "/y"}]}
         assert store.preserved_agent_scope(None, existing) == ["cursor"]
+
+    def test_a_rule_s_scope_comes_from_its_declaration(self):
+        existing = {"materializations": [{"agent": "cursor", "path": "/x"},
+                                         {"agent": "windsurf", "path": "/y"}],
+                    "only_agents": ["windsurf"]}
+        assert store.preserved_agent_scope(None, existing) == ["windsurf"]
 
     def test_an_empty_record_means_every_agent_not_no_agent(self):
         # Nothing was linked last time (no agents enabled, or all conflicted).
@@ -4405,8 +4990,9 @@ class TestNarrowedRuleAndWorkflowKeepTheirRecords:
         store.install(_workflow_entry(tap))
         store.install(_workflow_entry(tap), force=True, only_agents=["cursor"])
         rec = lockfile.get_workflow("ship-it")
+        # Every agent, plus the copy in the skill store, which names none.
         assert {m["agent"] for m in rec["materializations"]} == {
-            "claude-code", "windsurf", "cursor", "gemini"}
+            "claude-code", "cursor", "gemini", None}
 
     def test_uninstall_then_removes_the_orphaned_slash_command(self, tap):
         store.install(_workflow_entry(tap))
@@ -4414,6 +5000,128 @@ class TestNarrowedRuleAndWorkflowKeepTheirRecords:
         store.uninstall("ship-it")
         assert not (paths.home() / ".claude" / "commands" / "ship-it.md").exists()
         assert not (paths.home() / ".gemini" / "commands" / "ship-it.toml").exists()
+
+
+class TestDamagedRuleBlockRefuses:
+    """A CLAUDE.md block whose end marker the user deleted by hand.
+
+    Uninstall used to report the rule removed and drop its lock row while the
+    block stayed live; install then appended a second block, and the next
+    reinstall replaced everything from the orphan start to the new end —
+    deleting the user's own notes in between.
+    """
+
+    def _damage(self, tap):
+        store.install(_rule_entry(tap))
+        claude_md = paths.home() / ".claude" / "CLAUDE.md"
+        text = claude_md.read_text(encoding="utf-8").replace(
+            "<!-- boost:rule:team-conventions end -->\n", "")
+        claude_md.write_text(text + "# My own notes\nkeep me\n",
+                             encoding="utf-8")
+        return claude_md, claude_md.read_text(encoding="utf-8")
+
+    def test_uninstall_refuses_and_keeps_the_lock_row(self, tap):
+        claude_md, before = self._damage(tap)
+        with pytest.raises(BoostError) as ei:
+            store.uninstall("team-conventions")
+        assert paths.tilde(claude_md) in ei.value.message
+        assert lockfile.get_rule("team-conventions") is not None
+        assert claude_md.read_text(encoding="utf-8") == before
+        # all-or-nothing: the other agents' files are still there too
+        assert (paths.home() / ".windsurf" / "rules"
+                / "team-conventions.md").exists()
+
+    def test_reinstall_refuses_before_any_write(self, tap):
+        claude_md, before = self._damage(tap)
+        cursor = paths.home() / ".cursor" / "rules" / "team-conventions.mdc"
+        cursor.unlink()
+        with pytest.raises(BoostError):
+            store.install(_rule_entry(tap), force=True)
+        assert claude_md.read_text(encoding="utf-8") == before
+        assert not cursor.exists()
+
+    def test_a_later_agents_damage_stops_the_earlier_writes(self, tap):
+        # GEMINI.md is written after cursor's file, so refusing inside the
+        # write loop would land cursor's file first with no lock row for it.
+        store.install(_rule_entry(tap))
+        store.uninstall("team-conventions")
+        gemini_md = paths.home() / ".gemini" / "GEMINI.md"
+        gemini_md.write_text("<!-- boost:rule:team-conventions start -->\n"
+                             "# My own notes\n", encoding="utf-8")
+        with pytest.raises(BoostError) as ei:
+            store.install(_rule_entry(tap))
+        assert paths.tilde(gemini_md) in ei.value.message
+        assert not (paths.home() / ".cursor" / "rules"
+                    / "team-conventions.mdc").exists()
+        assert not (paths.home() / ".claude" / "CLAUDE.md").exists()
+
+    def test_repaired_block_uninstalls_and_keeps_user_text(self, tap):
+        claude_md, before = self._damage(tap)
+        claude_md.write_text(before.replace(
+            "# My own notes", "<!-- boost:rule:team-conventions end -->\n"
+            "# My own notes"), encoding="utf-8")
+        store.uninstall("team-conventions")
+        assert claude_md.read_text(encoding="utf-8") == "# My own notes\nkeep me\n"
+        assert lockfile.get_rule("team-conventions") is None
+
+
+class TestDamagedRuleBlockRefusesEverywhere:
+    """The follow-ups to TestDamagedRuleBlockRefuses: a stray start after an
+    intact block, release's own write loop, and the scope guard's order."""
+
+    STRAY = "<!-- boost:rule:team-conventions start -->\n# My own notes\n"
+
+    def test_uninstall_refuses_a_stray_start_after_a_clean_block(self, tap):
+        store.install(_rule_entry(tap))
+        claude_md = paths.home() / ".claude" / "CLAUDE.md"
+        claude_md.write_text(claude_md.read_text(encoding="utf-8")
+                             + "\n" + self.STRAY, encoding="utf-8")
+        before = claude_md.read_text(encoding="utf-8")
+        with pytest.raises(BoostError) as ei:
+            store.uninstall("team-conventions")
+        assert paths.tilde(claude_md) in ei.value.message
+        assert claude_md.read_text(encoding="utf-8") == before
+        assert lockfile.get_rule("team-conventions") is not None
+        assert (paths.home() / ".windsurf" / "rules"
+                / "team-conventions.md").exists()
+
+    def test_release_refuses_before_restoring_any_file(self, tap):
+        # claude-code is restored before gemini, so a refusal from inside the
+        # loop would leave CLAUDE.md written and the entry still quarantined.
+        store.install(_rule_entry(tap))
+        store.quarantine_materialized(
+            "rule", "team-conventions", lockfile.get_rule("team-conventions"))
+        claude_md = paths.home() / ".claude" / "CLAUDE.md"
+        assert not claude_md.exists()
+        gemini_md = paths.home() / ".gemini" / "GEMINI.md"
+        gemini_md.parent.mkdir(parents=True, exist_ok=True)
+        gemini_md.write_text(self.STRAY, encoding="utf-8")
+        with pytest.raises(BoostError) as ei:
+            store.release_materialized(
+                "rule", "team-conventions",
+                lockfile.get_rule("team-conventions"))
+        assert paths.tilde(gemini_md) in ei.value.message
+        assert not claude_md.exists()
+        assert gemini_md.read_text(encoding="utf-8") == self.STRAY
+        lk = lockfile.get_rule("team-conventions")
+        assert lk["quarantined"] is True
+        assert lk["quarantine_stash"]
+
+    def test_project_scope_checks_containment_before_reading(self, tap,
+                                                             tmp_path):
+        # An escaping CLAUDE.local.md must be refused as an escape, not read
+        # through: the damaged-block message would name a file outside the
+        # repo and send the user to repair it.
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        outside = tmp_path / "outside.md"
+        outside.write_text(self.STRAY, encoding="utf-8")
+        (repo / "CLAUDE.local.md").symlink_to(outside)
+        with pytest.raises(BoostError) as ei:
+            store.install(_rule_entry(tap), scope="project", base=str(repo))
+        assert "outside this project" in ei.value.message
+        assert outside.read_text(encoding="utf-8") == self.STRAY
+        assert not (repo / ".cursor").exists()
 
 
 class TestSyncSeesLinksOutsideTheDeclaredScope:
@@ -4529,7 +5237,8 @@ class TestMaterializedGovernance:
 
     A rule materializes into the standing instructions the agent reads every
     session, so these tests hold the two flags to the same contract skills
-    already have: a pin survives a forced reinstall, quarantine does not, and
+    already have: a pin survives a forced reinstall, a quarantine refuses one
+    (only a release lifts it), and
     quarantine physically removes the artifact while a release restores the
     exact bytes it removed — never whatever the tap has moved to since.
     """
@@ -4545,18 +5254,24 @@ class TestMaterializedGovernance:
         assert rule["pinned"] is False and rule["quarantined"] is False
         assert wf["pinned"] is False and wf["quarantined"] is False
 
-    def test_pin_survives_forced_reinstall_quarantine_does_not(self, tap):
+    def test_pin_survives_forced_reinstall_quarantine_refuses_it(self, tap):
         entry = _rule_entry(tap)
         store.install(entry)
         lk = lockfile.get_rule("team-conventions")
         lk["pinned"] = True
-        lk["quarantined"] = True
         lockfile.set_rule("team-conventions", lk)
         store.install(entry, force=True)
         lk = lockfile.get_rule("team-conventions")
         assert lk["pinned"] is True, "a forced reinstall must not drop a pin"
-        assert lk["quarantined"] is False, \
-            "reinstall re-materialized the content; a surviving flag would lie"
+        # A forced reinstall used to clear the flag and re-materialize what
+        # quarantine removed, without a release ever being journalled.
+        lk["quarantined"] = True
+        lockfile.set_rule("team-conventions", lk)
+        with pytest.raises(BoostError) as exc:
+            store.install(entry, force=True)
+        assert exc.value.message == ("rule team-conventions is quarantined "
+                                     "— not reinstalled")
+        assert lockfile.get_rule("team-conventions")["quarantined"] is True
 
     def test_quarantine_strips_the_claude_block_and_stashes_it(self, tap):
         store.install(_rule_entry(tap))
@@ -5280,7 +5995,7 @@ class TestAnUnwritableRuleOrWorkflowDirIsSkipped:
     # agents.workflow_agents.
     WRITTEN: ClassVar[dict[str, set[str]]] = {
         "rule": {"claude-code", "windsurf", "gemini", "codex"},
-        "workflow": {"claude-code", "windsurf", "gemini"}}
+        "workflow": {"claude-code", "gemini"}}
 
     def _entry(self, tap, kind):
         entry = _rule_entry(tap) if kind == "rule" else _workflow_entry(tap)
@@ -5357,7 +6072,9 @@ class TestAnUnwritableRuleOrWorkflowDirIsSkipped:
         locked = self._locked(kind, entry["name"])
         agents_ = [m["agent"] for m in locked["materializations"]]
         assert agents_.count("cursor") == 1
-        assert "cursor" in store.preserved_agent_scope(None, locked)
+        # Undeclared, so the next install tries every agent, cursor included.
+        assert store.preserved_agent_scope(None, locked) is None
+        assert locked["only_agents"] is None
 
     @pytest.mark.parametrize("kind", ["rule", "workflow"])
     def test_sync_does_not_claim_a_repair_the_dir_still_refuses(self, tap, kind):
@@ -5514,6 +6231,8 @@ class TestTwoAgentsOnOneDotdir:
         cfg = config.load()
         cfg["agents"]["windsurf-next"] = {"dir": dotdir + "/skills",
                                           "enabled": True}
+        # Off by default (config.DEFAULTS); on, so a workflow shares the file.
+        cfg["agents"]["windsurf"]["workflows"] = True
         config.save(cfg)
 
     @pytest.mark.parametrize("how", [
@@ -5541,7 +6260,7 @@ class TestTwoAgentsOnOneDotdir:
         # The plan is made in one pass and applied in the next; a file gone
         # in between (another agent's row, another process) is the end state
         # the removal wanted, not an error.
-        store._remove_all_or_nothing("x", [(tmp_path / "gone.md", "")])
+        store._remove_all_or_nothing("x", [(tmp_path / "gone.md", None)])
         assert not (tmp_path / "gone.md").exists()
 
 
@@ -5570,7 +6289,7 @@ class TestUnwritableAgentDirs:
                                       rel="agents/reviewer.md"))
         home = paths.home()
         dirs = [home / ".cursor" / "skills", home / ".cursor" / "rules",
-                home / ".windsurf" / "commands", home / ".claude" / "agents"]
+                home / ".cursor" / "commands", home / ".claude" / "agents"]
         self._locked(*dirs)
         try:
             found = store.unwritable_agent_dirs()
@@ -5649,7 +6368,7 @@ class TestSomethingInTheWayOfARuleOrWorkflowDir:
     # agents.workflow_agents.
     WRITTEN: ClassVar[dict[str, set[str]]] = {
         "rule": {"claude-code", "windsurf", "gemini", "codex"},
-        "workflow": {"claude-code", "windsurf", "gemini"}}
+        "workflow": {"claude-code", "gemini"}}
 
     def _entry(self, tap, kind):
         entry = _rule_entry(tap) if kind == "rule" else _workflow_entry(tap)
@@ -5877,6 +6596,35 @@ class TestARowForADisabledAgentIsNotRot:
             ("rule", "team-conventions", "cursor", "is disabled"),
             ("workflow", "ship-it", "cursor", "is disabled")]
 
+    def test_skill_links_are_named_beside_the_rows(self, tap):
+        """A skill drops a disabled agent from its agents line as a rule
+        does, so doctor names its link as it names the rule's row. User
+        scope first, then the current project's; a quarantined, sidelined or
+        held skill's links are gone on purpose."""
+        store.install(_rule_entry(tap))
+        lockfile.set_skill("alpha", {"agents": ["cursor", "claude-code"]})
+        lockfile.set_skill("held", {"agents": ["cursor"], "quarantined": True})
+        lockfile.set_skill("parked", {"agents": ["cursor"],
+                                      "sidelined_by": "bmad"})
+        lockfile.set_skill("away", {"agents": ["cursor"],
+                                    store.HELD_KEY: "x"})
+        base = scopes.resolve_base(scopes.SCOPE_PROJECT)
+        projectlock.set_skill(base, "beta", {
+            "scope": "project", "agents": ["cursor", "gemini"]})
+        assert store.unwritten_materializations() == []
+        self._disable("cursor")
+        assert store.unwritten_materializations() == [
+            ("skill", "alpha", "cursor", "is disabled"),
+            ("skill", "beta", "cursor", "is disabled"),
+            ("rule", "team-conventions", "cursor", "is disabled")]
+
+    def test_a_project_skill_is_judged_by_the_project_set(self, tap):
+        base = scopes.resolve_base(scopes.SCOPE_PROJECT)
+        projectlock.set_skill(base, "beta", {
+            "scope": "project", "agents": ["antigravity", "gemini"]})
+        assert store.unwritten_materializations() == [
+            ("skill", "beta", "antigravity", "has no project scope")]
+
     def test_a_quarantined_entry_is_not_named(self, tap):
         """Its artifacts are deliberately gone and `sync_plan` skips it, so
         naming it would print exactly the line this list exists to end: a
@@ -6015,3 +6763,738 @@ class TestARowForADisabledAgentIsNotRot:
         locked = lockfile.get_rule("team-conventions")
         assert store.materialization_is_written(
             "rule", locked, {"mode": "file", "path": "/nope"})
+
+
+def _set_enabled(agent, on):
+    cfg = config.load()
+    cfg["agents"][agent]["enabled"] = on
+    config.save(cfg)
+
+
+class TestAnAgentEnabledLaterGetsRulesAndWorkflows:
+    """A rule or workflow installed while cursor was disabled has no cursor
+    row. Its rows used to be replayed as the re-install scope, so enabling
+    cursor afterwards left it out of `sync`, `reinstall`, `update` and
+    `install --force` for good, while doctor called it fully materialized."""
+
+    CURSOR: ClassVar[dict[str, tuple[str, str]]] = {
+        "rule": ("rules", "team-conventions.mdc"),
+        "workflow": ("commands", "ship-it.md")}
+    NAME: ClassVar[dict[str, str]] = {"rule": "team-conventions",
+                                      "workflow": "ship-it"}
+
+    def _entry(self, tap, kind):
+        entry = _rule_entry(tap) if kind == "rule" else _workflow_entry(tap)
+        catalog.rebuild_tap(tap)          # so sync's repair can find it
+        return entry
+
+    def _locked(self, kind):
+        get = lockfile.get_rule if kind == "rule" else lockfile.get_workflow
+        return get(self.NAME[kind])
+
+    def _cursor_file(self, kind):
+        sub, leaf = self.CURSOR[kind]
+        return paths.home() / ".cursor" / sub / leaf
+
+    def _install_without_cursor(self, tap, kind, **kw):
+        entry = self._entry(tap, kind)
+        _set_enabled("cursor", False)
+        store.install(entry, **kw)
+        _set_enabled("cursor", True)
+        return entry
+
+    @pytest.mark.parametrize("kind", ["rule", "workflow"])
+    def test_the_missing_agent_is_named_and_sync_writes_it(self, tap, kind):
+        self._install_without_cursor(tap, kind)
+        locked = self._locked(kind)
+        assert locked["only_agents"] is None
+        assert store.unmaterialized_agents(kind, locked) == ["cursor"]
+        assert store.sync_plan()["missing_materializations"] == [
+            (kind, self.NAME[kind])]
+
+        store.sync_apply(store.sync_plan())
+
+        assert self._cursor_file(kind).is_file()
+        assert store.unmaterialized_agents(kind, self._locked(kind)) == []
+        assert store.sync_plan()["missing_materializations"] == []
+
+    @pytest.mark.parametrize("kind", ["rule", "workflow"])
+    def test_a_bare_force_reinstall_writes_it_too(self, tap, kind):
+        entry = self._install_without_cursor(tap, kind)
+        res = store.install(entry, force=True)
+        assert "cursor" in res.linked
+        assert self._cursor_file(kind).is_file()
+
+    @pytest.mark.parametrize("kind", ["rule", "workflow"])
+    def test_a_declared_narrowing_is_not_a_gap(self, tap, kind):
+        entry = self._entry(tap, kind)
+        store.install(entry, only_agents=["claude-code"])
+        locked = self._locked(kind)
+        assert locked["only_agents"] == ["claude-code"]
+        assert store.unmaterialized_agents(kind, locked) == []
+        assert store.sync_plan()["missing_materializations"] == []
+        # And it survives a bare re-install, which writes claude-code alone.
+        res = store.install(entry, force=True)
+        assert res.linked == ["claude-code"]
+        assert self._locked(kind)["only_agents"] == ["claude-code"]
+        assert not self._cursor_file(kind).exists()
+
+    def test_a_declared_agent_enabled_later_is_a_gap(self, tap):
+        entry = self._entry(tap, "rule")
+        _set_enabled("cursor", False)
+        store.install(entry, only_agents=["claude-code", "cursor"])
+        _set_enabled("cursor", True)
+        assert store.unmaterialized_agents(
+            "rule", self._locked("rule")) == ["cursor"]
+
+    def test_quarantined_rowless_and_disabled_are_not_gaps(self, tap):
+        self._install_without_cursor(tap, "rule")
+        locked = self._locked("rule")
+        assert store.unmaterialized_agents(
+            "rule", {**locked, "quarantined": True}) == []
+        assert store.unmaterialized_agents(
+            "rule", {**locked, "materializations": []}) == []
+        _set_enabled("cursor", False)
+        assert store.unmaterialized_agents("rule", locked) == []
+
+    def test_a_legacy_entry_is_not_read_for_gaps(self, tap):
+        self._install_without_cursor(tap, "rule")
+        locked = self._locked("rule")
+        del locked["only_agents"]
+        assert store.unmaterialized_agents("rule", locked) == []
+
+    def test_a_legacy_entry_is_not_given_the_field(self, tap):
+        # Writing `only_agents: None` onto it would widen its narrowing on the
+        # next update, so a re-install leaves the field off.
+        entry = self._entry(tap, "rule")
+        store.install(entry, only_agents=["claude-code"])
+        locked = self._locked("rule")
+        del locked["only_agents"]
+        lockfile.set_rule("team-conventions", locked)
+        res = store.install(entry, force=True)
+        assert res.linked == ["claude-code"]
+        assert "only_agents" not in self._locked("rule")
+
+    def test_a_foreign_row_counts_as_present(self, tap):
+        self._install_without_cursor(tap, "workflow")
+        locked = self._locked("workflow")
+        locked["foreign"] = [{"agent": "cursor", "slot": "commands",
+                              "path": str(self._cursor_file("workflow"))}]
+        assert store.unmaterialized_agents("workflow", locked) == []
+
+    def test_doctor_names_it_instead_of_fully_materialized(self, tap, capsys):
+        from boost_cli.commands import quality
+        self._install_without_cursor(tap, "rule")
+        assert quality.cmd_doctor([]) == 1
+        out = " ".join(capsys.readouterr().out.split())
+        assert ("rule team-conventions was never written for cursor — run "
+                "`boost sync`") in out
+        assert "fully materialized" not in out
+
+
+class TestAnUpgradeThatSkipsAnAgentMarksItsCopyStale:
+    """`boost update` with windsurf disabled carried windsurf's v1 row into
+    the v2 record, old digest and all, so its old file passed every check:
+    after re-enabling windsurf, doctor, verify, drift and sync all said in
+    sync."""
+
+    WINDSURF: ClassVar[dict[str, tuple[str, str]]] = {
+        "rule": ("rules", "team-conventions.md"),
+        "workflow": ("commands", "ship-it.md")}
+    NAME: ClassVar[dict[str, str]] = {"rule": "team-conventions",
+                                      "workflow": "ship-it"}
+
+    def _entry(self, tap, kind, body=None):
+        if kind == "rule":
+            entry = _rule_entry(tap)
+            if body is not None:
+                (tap.path / entry["skill_md"]).write_text(body, encoding="utf-8")
+        else:
+            entry = (_workflow_entry(tap) if body is None
+                     else _workflow_entry(tap, body=body))
+        catalog.rebuild_tap(tap)
+        return entry
+
+    def _locked(self, kind):
+        get = lockfile.get_rule if kind == "rule" else lockfile.get_workflow
+        return get(self.NAME[kind])
+
+    def _row(self, kind, agent):
+        return next(m for m in self._locked(kind)["materializations"]
+                    if m.get("agent") == agent)
+
+    @staticmethod
+    def _windsurf_takes_workflows():
+        # Windsurf takes no workflows by default (config.DEFAULTS); the
+        # carried-row machinery under test is the same for any agent.
+        cfg = config.load()
+        cfg["agents"]["windsurf"]["workflows"] = True
+        config.save(cfg)
+
+    def _upgrade_without_windsurf(self, tap, kind):
+        self._windsurf_takes_workflows()
+        store.install(self._entry(tap, kind))
+        old = self._row(kind, "windsurf")
+        _set_enabled("windsurf", False)
+        title = "Team Conventions" if kind == "rule" else "ship-it"
+        v2 = self._entry(tap, kind,
+                         body="---\nname: %s\n---\n\nV2 body.\n" % title)
+        store.install(v2, force=True)
+        return old, v2
+
+    @pytest.mark.parametrize("kind", ["rule", "workflow"])
+    def test_the_carried_row_is_stale_and_keeps_its_digest(self, tap, kind):
+        old, _v2 = self._upgrade_without_windsurf(tap, kind)
+        row = self._row(kind, "windsurf")
+        assert row == {**old, "stale": True}
+        assert "stale" not in self._row(kind, "claude-code")
+        # Disabled, so nothing is asked of it yet.
+        assert store.sync_plan()["missing_materializations"] == []
+
+    @pytest.mark.parametrize("kind", ["rule", "workflow"])
+    def test_re_enabled_every_check_sees_it_and_sync_writes_v2(self, tap, kind):
+        self._upgrade_without_windsurf(tap, kind)
+        _set_enabled("windsurf", True)
+        from boost_cli.core import integrity
+        name = self.NAME[kind]
+        assert integrity.materialized_status(
+            name, self._locked(kind), kind) == integrity.STATUS_OUTDATED
+        assert store.sync_plan()["missing_materializations"] == [(kind, name)]
+        from boost_cli.commands import quality
+        assert quality._drift_status_materialized(
+            kind, name, self._locked(kind)) == "outdated"
+        assert quality._drift_hint(name, "outdated") == "boost sync"
+        assert not integrity.verification_passed(
+            integrity.STATUS_OUTDATED, [], None)
+
+        store.sync_apply(store.sync_plan())
+
+        sub, leaf = self.WINDSURF[kind]
+        text = (paths.home() / ".windsurf" / sub / leaf).read_text(
+            encoding="utf-8")
+        assert "V2 body." in text
+        assert "stale" not in self._row(kind, "windsurf")
+        assert integrity.materialized_status(
+            name, self._locked(kind), kind) == integrity.STATUS_OK
+        assert store.sync_plan()["missing_materializations"] == []
+
+    def test_an_unchanged_source_marks_nothing(self, tap):
+        entry = self._entry(tap, "rule")
+        store.install(entry)
+        _set_enabled("windsurf", False)
+        store.install(entry, force=True)
+        assert "stale" not in self._row("rule", "windsurf")
+
+    @pytest.mark.parametrize("kind", ["rule", "workflow"])
+    def test_a_row_outside_a_declared_narrowing_is_never_stale(self, tap,
+                                                               kind):
+        # Sync writes only the narrowed agents, so a stale flag on windsurf
+        # here was a "run `boost sync`" that sync could never satisfy.
+        self._windsurf_takes_workflows()
+        store.install(self._entry(tap, kind))
+        store.install(self._entry(tap, kind), force=True,
+                      only_agents=["claude-code"])
+        title = "Team Conventions" if kind == "rule" else "ship-it"
+        store.install(self._entry(
+            tap, kind, body="---\nname: %s\n---\n\nV2 body.\n" % title),
+            force=True)
+        assert "stale" not in self._row(kind, "windsurf")
+        assert store.sync_plan()["missing_materializations"] == []
+
+    def test_narrowing_away_from_a_stale_row_clears_it(self, tap):
+        _old, v2 = self._upgrade_without_windsurf(tap, "rule")
+        assert self._row("rule", "windsurf")["stale"] is True
+        store.install(v2, force=True, only_agents=["claude-code"])
+        _set_enabled("windsurf", True)
+        assert "stale" not in self._row("rule", "windsurf")
+        assert store.sync_plan()["missing_materializations"] == []
+
+    def test_a_stale_row_stays_stale_until_written(self, tap):
+        _old, v2 = self._upgrade_without_windsurf(tap, "rule")
+        store.install(v2, force=True)        # same source, windsurf still off
+        assert self._row("rule", "windsurf")["stale"] is True
+
+    def test_a_hand_edit_is_still_modified_not_outdated(self, tap):
+        from boost_cli.core import integrity
+        self._upgrade_without_windsurf(tap, "rule")
+        _set_enabled("windsurf", True)
+        sub, leaf = self.WINDSURF["rule"]
+        (paths.home() / ".windsurf" / sub / leaf).write_text(
+            "mine\n", encoding="utf-8")
+        assert integrity.materialized_status(
+            "team-conventions", self._locked("rule"), "rule") == \
+            integrity.STATUS_MODIFIED
+
+    def test_doctor_names_it(self, tap, capsys):
+        from boost_cli.commands import quality
+        self._upgrade_without_windsurf(tap, "rule")
+        _set_enabled("windsurf", True)
+        assert quality.cmd_doctor([]) == 1
+        out = " ".join(capsys.readouterr().out.split())
+        assert ("rule team-conventions for windsurf is older than the "
+                "installed v1.0.0 — run `boost sync`") in out
+        assert "fully materialized" not in out
+
+
+# ── reinstall_candidates / uninstall(project_fallback=) ──────────────────
+
+class TestReinstallCandidates:
+    """Which rows `boost reinstall --scope/--local/--global` addresses."""
+
+    def _seed(self, repo: Path, other: Path) -> None:
+        from boost_cli.core import projectlock
+        lockfile.set_skill("user-skill", {"tap": "t"})
+        lockfile.set_rule("user-rule", {"tap": "t", "scope": "user"})
+        lockfile.set_rule("repo-rule", {"tap": "t", "scope": "project",
+                                        "base": str(repo)})
+        lockfile.set_workflow("other-wf", {"tap": "t", "scope": "project",
+                                           "base": str(other)})
+        lockfile.set_workflow("nobase-wf", {"tap": "t", "scope": "project"})
+        projectlock.set_skill(repo, "repo-skill", {"tap": "t"})
+
+    def test_none_is_the_whole_user_lock_in_section_order(self, sandbox,
+                                                          tmp_path):
+        self._seed(tmp_path / "repo", tmp_path / "other")
+        got = [(k, n) for k, n, _ in store.reinstall_candidates(None)]
+        assert got == [("skill", "user-skill"), ("rule", "repo-rule"),
+                       ("rule", "user-rule"), ("workflow", "nobase-wf"),
+                       ("workflow", "other-wf")]
+
+    def test_user_keeps_only_rows_recorded_at_user_scope(self, sandbox,
+                                                         tmp_path):
+        self._seed(tmp_path / "repo", tmp_path / "other")
+        got = [(k, n) for k, n, _ in store.reinstall_candidates("user")]
+        assert got == [("skill", "user-skill"), ("rule", "user-rule")]
+
+    def test_project_is_that_repo_only(self, sandbox, tmp_path):
+        repo = tmp_path / "repo"
+        self._seed(repo, tmp_path / "other")
+        got = store.reinstall_candidates("project", repo)
+        assert [(k, n) for k, n, _ in got] == [("skill", "repo-skill"),
+                                               ("rule", "repo-rule")]
+        # A project skill's row is stamped with its scope so the caller can
+        # route it to a project reinstall.
+        assert got[0][2] == {"tap": "t", "scope": "project"}
+
+    def test_project_without_a_base_is_empty(self, sandbox, tmp_path):
+        self._seed(tmp_path / "repo", tmp_path / "other")
+        assert store.reinstall_candidates("project", None) == []
+
+
+def test_uninstall_without_project_fallback_names_the_local_flag(
+        sandbox, tmp_path, monkeypatch):
+    from boost_cli.core import projectlock
+    from boost_cli.errors import BoostError
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    monkeypatch.chdir(repo)
+    projectlock.set_skill(repo, "only-here", {"tap": "t"})
+    with pytest.raises(BoostError) as exc:
+        store.uninstall("only-here", project_fallback=False)
+    assert exc.value.message == "only-here is not installed"
+    assert exc.value.hint == ("only this repo has it — `boost uninstall "
+                              "--local only-here`")
+    assert projectlock.get_skill(repo, "only-here") == {"tap": "t"}
+    with pytest.raises(BoostError) as exc:
+        store.uninstall("nowhere", project_fallback=False)
+    assert exc.value.hint == "see what is with `boost list`"
+
+
+def test_reinstall_candidates_project_ignores_a_relative_base(sandbox,
+                                                              tmp_path,
+                                                              monkeypatch):
+    # "." resolved against the cwd would make one row belong to every repo;
+    # scopes.owns refuses a relative base, and so must this.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    monkeypatch.chdir(repo)
+    lockfile.set_rule("dot-rule", {"tap": "t", "scope": "project",
+                                   "base": "."})
+    lockfile.set_rule("abs-rule", {"tap": "t", "scope": "project",
+                                   "base": str(repo)})
+    got = [n for _, n, _ in store.reinstall_candidates("project", repo)]
+    assert got == ["abs-rule"]
+
+
+@pytest.mark.parametrize("kind", ["rule", "workflow"])
+def test_uninstall_without_project_fallback_keeps_a_repo_rule_or_workflow(
+        sandbox, tmp_path, kind):
+    from boost_cli.errors import BoostError
+    repo = tmp_path / "repo"
+    row = {"tap": "t", "scope": "project", "base": str(repo),
+           "materializations": []}
+    setter = lockfile.set_rule if kind == "rule" else lockfile.set_workflow
+    getter = lockfile.get_rule if kind == "rule" else lockfile.get_workflow
+    setter("in-repo", row)
+    with pytest.raises(BoostError) as exc:
+        store.uninstall("in-repo", project_fallback=False)
+    assert exc.value.message == "in-repo is not installed in your user config"
+    assert exc.value.hint == ("it was installed into %s — `boost uninstall "
+                              "--local in-repo` from there"
+                              % paths.tilde(repo))
+    assert getter("in-repo") == row
+
+
+def test_uninstall_without_project_fallback_still_removes_a_user_rule(
+        sandbox):
+    lockfile.set_rule("mine", {"tap": "t", "scope": "user",
+                               "materializations": []})
+    info = store.uninstall("mine", project_fallback=False)
+    assert info["kind"] == "rule"
+    assert lockfile.get_rule("mine") is None
+
+
+def test_url_source_name_is_the_name_boost_tap_would_give(sandbox):
+    # What allowed_taps/blocked_taps match a `boost import <URL>` against.
+    assert store.url_source_name(
+        "https://git.example.test/team/skills.git") == "team/skills"
+    assert store.url_source_name("git@github.com:a/b.git") == "a/b"
+    # A URL parse_spec refuses is matched as itself, never as nothing.
+    bad = "https://example.test/a\x01/b"
+    assert store.url_source_name(bad) == bad
+
+
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason="chmod can't make a directory unwritable on Windows")
+@pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                    reason="root ignores mode bits")
+class TestAReadOnlySourceImports:
+    """`boost import ro/eta --name eta2` of a 0555 dir crashed rc 70 writing
+    the renamed frontmatter, and the cleanup could not delete the read-only
+    copy either, so every rerun refused the unrecorded store dir."""
+
+    @pytest.fixture
+    def ro_src(self, tmp_path):
+        src = tmp_path / "ro" / "eta"
+        (src / "scripts").mkdir(parents=True)
+        (src / "SKILL.md").write_text("---\nname: eta\n---\n\n# eta\n",
+                                      encoding="utf-8")
+        (src / "scripts" / "run.sh").write_text("echo\n", encoding="utf-8")
+        for p in (src / "SKILL.md", src / "scripts" / "run.sh"):
+            p.chmod(0o444)
+        for d in (src / "scripts", src):
+            d.chmod(0o555)
+        yield src
+        for d in (src, src / "scripts"):
+            d.chmod(0o755)
+
+    def test_a_renamed_import_of_a_read_only_dir_lands_writable(
+            self, sandbox, ro_src):
+        res = store.install_from_path(ro_src, name="eta2")
+        dest = store.skill_store_dir("eta2")
+        assert res.name == "eta2"
+        assert (dest / "SKILL.md").read_text(encoding="utf-8") == (
+            "---\nname: eta2\n---\n\n# eta\n")
+        assert lockfile.get_skill("eta2") is not None
+        for p in (dest, dest / "scripts"):
+            assert p.stat().st_mode & 0o777 == 0o755
+        assert (dest / "scripts" / "run.sh").stat().st_mode & 0o777 == 0o644
+        # the source is the user's, and keeps its modes
+        assert ro_src.stat().st_mode & 0o777 == 0o555
+        assert (ro_src / "SKILL.md").stat().st_mode & 0o777 == 0o444
+
+    def test_a_failed_read_only_import_leaves_no_store_dir(
+            self, sandbox, ro_src, monkeypatch):
+        def refuse(*a, **k):
+            raise BoostError("link refused")
+        monkeypatch.setattr(store, "link_agents", refuse)
+        with pytest.raises(BoostError, match="link refused"):
+            store.install_from_path(ro_src, name="eta2")
+        assert not os.path.lexists(store.skill_store_dir("eta2"))
+        assert [p.name for p in paths.store_dir().iterdir()
+                if p.name.startswith(util.TEMP_PREFIX)] == []
+
+    def test_own_writable_leaves_a_links_target_alone(self, tmp_path):
+        outside = tmp_path / "outside.txt"
+        outside.write_text("x", encoding="utf-8")
+        outside.chmod(0o444)
+        root = tmp_path / "copy"
+        root.mkdir()
+        (root / "link").symlink_to(outside)
+        root.chmod(0o555)
+        store._own_writable(root)
+        assert root.stat().st_mode & 0o777 == 0o755
+        assert outside.stat().st_mode & 0o777 == 0o444
+
+    def test_a_failed_copy_of_a_read_only_dir_leaves_no_staging_dir(
+            self, sandbox, ro_src):
+        # copytree stamps 0555 on the staged dir before raising the file it
+        # could not read, so the staged copy refused its own cleanup.
+        ro_src.chmod(0o755)
+        (ro_src / "secret.txt").write_text("x", encoding="utf-8")
+        (ro_src / "secret.txt").chmod(0o000)
+        ro_src.chmod(0o555)
+        try:
+            if os.access(ro_src / "secret.txt", os.R_OK):
+                pytest.skip("running as a user that ignores chmod 0o000")
+            with pytest.raises(BoostError, match="could not copy eta2"):
+                store.install_from_path(ro_src, name="eta2")
+            assert sorted(p.name for p in paths.store_dir().iterdir()) == []
+        finally:
+            (ro_src / "secret.txt").chmod(0o644)
+
+
+class TestSourceMissingMessage:
+    """``reinstall``'s skip line tells an untapped tap from a missing item."""
+
+    def test_a_configured_tap_keeps_the_update_hint(self, tap):
+        assert store.tap_configured(tap.name) is True
+        assert store.source_missing_message(
+            "rule r", "r", {"tap": tap.name}) == (
+            "rule r not found in tap %s — skipped (try `boost update`)"
+            % tap.name)
+
+    def test_an_untapped_tap_names_re_tap_and_uninstall(self, sandbox):
+        assert store.tap_configured("gone") is False
+        assert store.tap_configured(None) is False
+        assert store.tap_configured("") is False
+        url = str(paths.home() / "src" / "gone")
+        # The full path, not `~/src/gone`: quoted, a `~` no longer expands.
+        assert store.source_missing_message(
+            "x", "x", {"tap": "gone", "tap_url": url}) == (
+            "x: source missing — tap gone is no longer tapped and `boost "
+            "update` can't restore it; re-tap it with `boost tap "
+            "%s`, or `boost uninstall x`" % util.shell_arg(url))
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX shell quoting")
+    def test_a_path_with_a_space_and_an_apostrophe_is_quoted(self, sandbox):
+        url = "/src/fix ture's \u00e9"
+        msg = store.source_missing_message(
+            "x", "x", {"tap": "fix-ture's-\u00e9", "tap_url": url})
+        assert ("re-tap it with `boost tap '/src/fix ture'\"'\"'s \u00e9'`"
+                in msg), msg
+        cmd = msg.split("re-tap it with `", 1)[1].split("`", 1)[0]
+        assert shlex.split(cmd) == ["boost", "tap", url]
+
+    def test_a_wheel_url_gets_words_not_a_command(self, sandbox):
+        # `boost tap wheel://…` does not parse; say re-tap, name no command.
+        msg = store.source_missing_message(
+            "x", "x", {"tap": "gone", "tap_url": registry.WHEEL_SCHEME + "x"})
+        assert msg == ("x: source missing — tap gone is no longer tapped and "
+                       "`boost update` can't restore it; re-tap it, or "
+                       "`boost uninstall x`")
+
+    def test_no_recorded_url_still_says_what_to_do(self, sandbox):
+        assert store.source_missing_message("x", "x", {"tap": "gone"}) == (
+            "x: source missing — tap gone is no longer tapped and `boost "
+            "update` can't restore it; re-tap it, or `boost uninstall x`")
+
+
+class TestHeldRefusal:
+    """A command that writes the store copy names why a held one is away."""
+
+    def test_not_held_is_no_refusal(self):
+        assert store.held_refusal("x", None) is None
+        assert store.held_refusal("x", {"quarantined": True}) is None
+
+    def test_quarantined(self):
+        err = store.held_refusal("x", {"held_at": "/h", "quarantined": True,
+                                       "sidelined_by": "focus"})
+        assert err is not None
+        assert err.message == "x is quarantined — its store copy is held aside"
+        assert err.hint == "`boost quarantine --release x` puts it back first"
+
+    @pytest.mark.parametrize(("by", "hint"), [
+        ("focus", "`boost focus --clear` puts it back first"),
+        ("context", "`boost context disable` puts it back first"),
+        ("profile", "a `boost profile use` that includes it puts it back "
+                    "first"),
+    ])
+    def test_sidelined(self, by, hint):
+        err = store.held_refusal("x", {"held_at": "/h", "sidelined_by": by})
+        assert err is not None
+        assert err.message == (
+            "x is sidelined by `boost %s` — its store copy is held aside" % by)
+        assert err.hint == hint
+
+    def test_sidelined_by_nothing_recorded(self):
+        err = store.held_refusal("x", {"held_at": "/h"})
+        assert err is not None
+        assert err.message == "x is sidelined — its store copy is held aside"
+        assert err.hint == "relinking it puts it back first"
+
+
+class TestRestoreCarryNames:
+    """store.restore_carry_names: what a snapshot restore must not drop."""
+
+    def _store(self):
+        root = paths.store_dir()
+        for name in ("alpha", "mine"):
+            (root / name).mkdir(parents=True)
+            (root / name / "SKILL.md").write_text("# %s\n" % name,
+                                                  encoding="utf-8")
+        for name in (".skill-lock.json.lock", ".skill-lock.json.corrupt"):
+            (root / name).write_text("x", encoding="utf-8")
+        return root
+
+    def test_everything_but_the_lock_and_recorded_skills_is_carried(
+            self, sandbox):
+        root = self._store()
+        (root / ".skill-lock.json").write_text(
+            '{"version": 3, "skills": {"alpha": {}}}', encoding="utf-8")
+        assert store.restore_carry_names({"alpha": {}}) == (
+            [".skill-lock.json.corrupt", "mine"], [])
+
+    def test_a_recorded_skill_that_is_its_own_only_copy_is_carried(
+            self, sandbox, tmp_path):
+        root = self._store()
+        (root / ".skill-lock.json").write_text(
+            '{"version": 3, "skills": {"alpha": {}, "mine": {}}}',
+            encoding="utf-8")
+        own = {"tap": "local", "source_dir": str(root / "mine")}
+        ext = tmp_path / "elsewhere"
+        ext.mkdir()
+        (ext / "SKILL.md").write_text("# mine\n", encoding="utf-8")
+        # Adopted by sync: the store dir is the only copy, so it is kept.
+        assert store.restore_carry_names({"alpha": {}, "mine": own}) == (
+            [".skill-lock.json.corrupt", "mine"], [])
+        # A local skill with its source elsewhere can be put back from there.
+        assert store.restore_carry_names(
+            {"alpha": {}, "mine": {"tap": "local", "source_dir": str(ext)}}
+        ) == ([".skill-lock.json.corrupt"], [])
+        # One fetched from a URL is not its only copy either.
+        assert store.restore_carry_names(
+            {"alpha": {}, "mine": {**own, "source_url": "https://x/y"}}
+        ) == ([".skill-lock.json.corrupt"], [])
+
+    def test_an_unreadable_lock_sets_every_dir_aside(self, sandbox):
+        root = self._store()
+        (root / ".skill-lock.json").write_text("{", encoding="utf-8")
+        assert store.restore_carry_names({}) == (
+            [".skill-lock.json.corrupt"], ["alpha", "mine"])
+
+    def test_no_store_carries_nothing(self, sandbox):
+        assert store.restore_carry_names({}) == ([], [])
+
+
+class TestAGeminiAgentTheRepairCannotFixIsNotWritten:
+    """A subagent ``workflows.render_problem`` says Gemini rejects is withheld
+    from ``~/.gemini/agents``: written verbatim it was a validation error at
+    every Gemini session, while install said "→ gemini", verify said ok and
+    doctor said healthy."""
+
+    BODY = ("---\nname: mcp\ndescription: d\n"
+            "tools: Read, mcp__github__create_issue\n---\n\nBody.\n")
+    WHY = "has `tools` as a string, where Gemini requires a list"
+
+    def _entry(self, tap, body=None):
+        return _workflow_entry(tap, name="mcp", rel="agents/mcp.md",
+                               body=body or self.BODY)
+
+    def test_gemini_is_skipped_and_the_reason_returned(self, tap):
+        res = store.install(self._entry(tap))
+        assert set(res.linked) == {"claude-code", "cursor"}
+        assert res.declined == [("gemini", self.WHY)]
+        assert not (paths.home() / ".gemini" / "agents" / "mcp.md").exists()
+        # The other agents still get the tap's bytes.
+        assert (paths.home() / ".claude" / "agents" / "mcp.md").read_text(
+            encoding="utf-8") == self.BODY
+        rec = lockfile.get_workflow("mcp")
+        assert "gemini" not in {m["agent"] for m in rec["materializations"]}
+        assert rec["declined"] == [{"agent": "gemini", "slot": "agents",
+                                    "reason": self.WHY}]
+
+    def test_a_declined_agent_is_not_a_gap_sync_could_fill(self, tap):
+        store.install(self._entry(tap))
+        rec = lockfile.get_workflow("mcp")
+        assert store.unmaterialized_agents("workflow", rec) == []
+        assert store.sync_plan()["missing_materializations"] == []
+
+    def test_a_reinstall_takes_back_the_copy_an_older_install_wrote(self, tap):
+        # The pre-fix shape: the verbatim file, recorded as a gemini row.
+        good = ("---\nname: mcp\ndescription: d\ntools: [read_file]\n"
+                "---\n\nBody.\n")
+        store.install(self._entry(tap, body=good))
+        gem = paths.home() / ".gemini" / "agents" / "mcp.md"
+        assert gem.is_file()
+        res = store.install(self._entry(tap), force=True)
+        assert res.declined == [("gemini", self.WHY)]
+        assert not gem.exists()
+        rec = lockfile.get_workflow("mcp")
+        assert "gemini" not in {m["agent"] for m in rec["materializations"]}
+
+    def test_a_user_file_at_the_path_is_never_removed(self, tap):
+        gem = paths.home() / ".gemini" / "agents" / "mcp.md"
+        gem.parent.mkdir(parents=True, exist_ok=True)
+        gem.write_text("mine\n", encoding="utf-8")
+        store.install(self._entry(tap))
+        assert gem.read_text(encoding="utf-8") == "mine\n"
+
+    def test_fixed_upstream_it_is_written_again(self, tap):
+        store.install(self._entry(tap))
+        good = ("---\nname: mcp\ndescription: d\ntools: Read\n---\n\nBody.\n")
+        res = store.install(self._entry(tap, body=good), force=True)
+        assert res.declined == []
+        assert "gemini" in res.linked
+        assert "declined" not in lockfile.get_workflow("mcp")
+
+    def test_a_narrowed_reinstall_keeps_the_declined_record(self, tap):
+        store.install(self._entry(tap))
+        store.install(self._entry(tap), force=True, only_agents=["cursor"])
+        assert lockfile.get_workflow("mcp")["declined"] == [
+            {"agent": "gemini", "slot": "agents", "reason": self.WHY}]
+
+    def test_uninstall_after_a_decline(self, tap):
+        store.install(self._entry(tap))
+        info = store.uninstall("mcp")
+        assert set(info["unlinked"]) == {"claude-code", "cursor"}
+        assert lockfile.get_workflow("mcp") is None
+
+
+class TestNamespacedCommandsInstallSideBySide:
+    """``commands/frontend/test.md`` and ``commands/backend/test.md`` used to
+    both install as ``test``: the second was refused as "already installed",
+    and with ``--force`` overwrote the first. Each now keeps its namespace."""
+
+    def _both(self, tap):
+        front = _workflow_entry(tap, name="frontend/test",
+                                rel="commands/frontend/test.md",
+                                body="---\ndescription: Front\n---\nFront tests\n")
+        back = _workflow_entry(tap, name="backend/test",
+                               rel="commands/backend/test.md",
+                               body="---\ndescription: Back\n---\nBack tests\n")
+        return store.install(front), store.install(back)
+
+    def test_each_lands_in_its_own_subdir(self, tap):
+        front, back = self._both(tap)
+        home = paths.home()
+        assert set(front.linked) == set(back.linked) == {
+            "claude-code", "cursor", "gemini"}
+        assert (home / ".claude/commands/frontend/test.md").read_text(
+            encoding="utf-8").endswith("Front tests\n")
+        assert (home / ".claude/commands/backend/test.md").read_text(
+            encoding="utf-8").endswith("Back tests\n")
+        assert (home / ".gemini/commands/frontend/test.toml").read_text(
+            encoding="utf-8") == 'description = "Front"\nprompt = "Front tests"\n'
+        assert (home / ".cursor/commands/backend/test.md").is_file()
+        assert not (home / ".claude/commands/test.md").exists()
+        assert set(lockfile.installed_workflows()) >= {"frontend/test",
+                                                       "backend/test"}
+
+    def test_no_skill_copy_and_the_first_install_says_why(self, tap):
+        front, _back = self._both(tap)
+        assert front.skill_copy is None
+        assert front.skill_note == ("not written to the skill store: a "
+                                    "namespaced command has no single-word "
+                                    "skill name")
+        assert not (paths.store_dir() / "frontend").exists()
+        again = store.install(_workflow_entry(
+            tap, name="frontend/test", rel="commands/frontend/test.md",
+            body="---\ndescription: Front\n---\nFront tests\n"), force=True)
+        assert again.skill_note is None
+
+    def test_uninstall_removes_one_and_prunes_only_its_empty_dir(self, tap):
+        self._both(tap)
+        mine = paths.home() / ".claude/commands/frontend/notes.md"
+        mine.write_text("mine\n", encoding="utf-8")
+        info = store.uninstall("backend/test")
+        assert set(info["unlinked"]) == {"claude-code", "cursor", "gemini"}
+        home = paths.home()
+        assert not (home / ".claude/commands/backend").exists()
+        assert not (home / ".gemini/commands/backend").exists()
+        assert (home / ".claude/commands/frontend/test.md").is_file()
+        store.uninstall("frontend/test")
+        # The user's file keeps its dir.
+        assert mine.read_text(encoding="utf-8") == "mine\n"
+        assert not (home / ".gemini/commands/frontend").exists()
+        assert (home / ".claude/commands").is_dir()

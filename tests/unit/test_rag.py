@@ -14,6 +14,9 @@ import math
 import os
 import re
 import sqlite3
+import sys
+import time
+import types
 from pathlib import Path
 from unittest import mock
 
@@ -37,6 +40,62 @@ class TestTokenize:
 
     def test_empty(self):
         assert rag.tokenize("") == []
+
+
+class TestUnicodeFold:
+    """`résumé` in NFC, in NFD and `resume` are one term on both sides."""
+
+    NFC = "r\u00e9sum\u00e9"
+    NFD = "re\u0301sume\u0301"
+
+    def test_three_spellings_tokenize_alike(self):
+        for text in (self.NFC, self.NFD, "resume", "R\u00c9SUM\u00c9"):
+            assert rag.tokenize("Builds a %s" % text) == ["builds", "resume"]
+
+    def test_fold_text_exact(self):
+        assert rag.fold_text("ABC") == "abc"
+        assert rag.fold_text(self.NFD) == "resume"
+        # casefold before NFKD: `İ` casefolds to `i` + U+0307, which is stripped
+        assert rag.fold_text("\u0130stanbul") == "istanbul"
+        assert rag.fold_text("Stra\u00dfe") == "strasse"
+        # compatibility forms map onto plain letters (NFKD, not NFD)
+        assert rag.fold_text("\ufb01le \uff21\uff22") == "file ab"
+        # a non-Latin letter is kept, so it still separates the words around it
+        assert rag.fold_text("foo\u65e5bar") == "foo\u65e5bar"
+        assert rag.tokenize("foo\u65e5bar") == ["foo", "bar"]
+
+    def test_every_combining_block_is_stripped(self):
+        for mark in ("\u0300", "\u036f", "\u1ab0", "\u1aff", "\u1dc0",
+                     "\u1dff", "\u20d0", "\u20ff", "\ufe20", "\ufe2f"):
+            assert rag.tokenize("ab%scd" % mark) == ["abcd"], hex(ord(mark))
+        # just outside the first block: a separator, not a mark
+        assert rag.tokenize("ab\u0370cd") == ["ab", "cd"]
+
+    def test_accented_word_is_not_reported_dropped(self):
+        assert rag.dropped_terms(self.NFC) == []
+        assert rag.dropped_terms("\u00e9 ok") == ["\u00e9"]
+
+    def test_index_version_moved(self):
+        assert rag.INDEX_VERSION == 11
+
+    def test_each_spelling_finds_every_document(
+            self, tmp_path, monkeypatch, sandbox):
+        root = tmp_path / "repo"
+        entries = []
+        for name, word in (("alpha", self.NFC), ("bravo", self.NFD),
+                           ("charlie", "resume")):
+            (root / name).mkdir(parents=True)
+            (root / name / "SKILL.md").write_text(
+                "---\nname: %s\n---\n\nBuilds a %s for you.\n" % (name, word),
+                encoding="utf-8")
+            entries.append(_entry(name, skill_md="%s/SKILL.md" % name))
+        monkeypatch.setattr(rag, "_tap_paths", lambda: {"acme/skills": root})
+        monkeypatch.setattr(rag, "_tap_commits", lambda: {"acme__skills": "c1"})
+        rag.build(entries=entries, force=True)
+        for query in (self.NFC, self.NFD, "resume"):
+            names = {h["entry"]["name"]
+                     for h in rag.retrieve(query, entries=entries)}
+            assert names == {"alpha", "bravo", "charlie"}, query
 
 
 class TestSymbolLanguageAliases:
@@ -183,6 +242,32 @@ class TestDroppedTerms:
 
     def test_empty(self):
         assert rag.dropped_terms("") == []
+
+
+class TestIgnoredByDesign:
+    """A query the index ignores entirely without dropping a word worth naming."""
+
+    def test_stopwords_only(self):
+        assert rag.ignored_by_design("the and of") is True
+
+    def test_punctuation_only(self):
+        assert rag.ignored_by_design("--") is True
+
+    def test_stopwords_and_punctuation(self):
+        assert rag.ignored_by_design("how to & ...") is True
+
+    def test_one_real_term_makes_it_a_query(self):
+        assert rag.ignored_by_design("the brainstorming") is False
+
+    def test_a_dropped_term_is_the_other_branch(self):
+        # `R` is named by dropped_terms, which says more than this does.
+        assert rag.ignored_by_design("R") is False
+        assert rag.ignored_by_design("the R") is False
+        assert rag.ignored_by_design("代码审查") is False
+
+    def test_blank_is_a_usage_error_not_an_ignored_query(self):
+        assert rag.ignored_by_design("") is False
+        assert rag.ignored_by_design("  \t ") is False
 
 
 # ------------------------------------------------------------- chunk
@@ -403,22 +488,28 @@ class TestEnsure:
 class _StatTap:
     """A tap whose cache_file reports a mtime we control."""
 
-    def __init__(self, name, mtime=None):
+    def __init__(self, name, mtime=None, size=0, mtime_ns=None):
         self.name = name
         self.safe_name = name.replace("/", "__")
         self._mtime = mtime
+        self._size = size
+        self._mtime_ns = mtime_ns
 
     @property
     def cache_file(self):
-        mtime = self._mtime
+        mtime, size, mtime_ns = self._mtime, self._size, self._mtime_ns
 
         class _F:
             @staticmethod
             def stat():
                 if mtime is None:
                     raise OSError("no cache file")
-                return os.stat_result(
-                    (0, 0, 0, 0, 0, 0, 0, 0, int(mtime), 0))
+                # Not os.stat_result: built from a 10-tuple it leaves
+                # st_mtime_ns as None, which no real stat ever returns.
+                return types.SimpleNamespace(
+                    st_mtime=float(mtime), st_size=size,
+                    st_mtime_ns=(int(mtime * 1e9) if mtime_ns is None
+                                 else mtime_ns))
         return _F
 
 
@@ -478,6 +569,21 @@ class TestStale:
                   taps=[_StatTap("a/b", mtime=100)], built_at=100.0)
         assert rag.stale() is False
 
+    def test_unstamped_index_from_the_future_is_stale(self, monkeypatch):
+        # An index written before stamps existed, built while the clock ran
+        # ahead: no cache can be newer than it, so only its future mtime
+        # betrays it. Without this an upgrading user stays stuck.
+        self._fix(monkeypatch, stored={"a__b": "c1"},
+                  taps=[_StatTap("a/b", mtime=50)],
+                  built_at=time.time() + 365 * 86400)
+        assert rag.stale() is True
+
+    def test_unstamped_index_from_just_now_is_fresh(self, monkeypatch):
+        self._fix(monkeypatch, stored={"a__b": "c1"},
+                  taps=[_StatTap("a/b", mtime=50)],
+                  built_at=time.time() - 5)
+        assert rag.stale() is False
+
     def test_unreadable_index_mtime_is_stale(self, monkeypatch):
         monkeypatch.setattr(rag, "_load_raw", lambda: {"commits": {}})
         monkeypatch.setattr(rag.registry, "list_taps", lambda: [])
@@ -504,6 +610,81 @@ class TestStale:
                             lambda: [_StatTap("a/b", mtime=1)])
         assert rag.stale() is True
 
+    # -- stamps: an index that recorded each cache's (mtime_ns, size) is judged
+    # by equality, so the clock running backwards cannot hide a change.
+
+    def _stamped(self, monkeypatch, stamps, taps):
+        monkeypatch.setattr(rag, "_load_raw", lambda: {
+            "commits": {t.safe_name: "c" for t in taps}, "stamps": stamps})
+        monkeypatch.setattr(rag.registry, "list_taps", lambda: list(taps))
+
+    def test_matching_stamp_is_fresh(self, monkeypatch):
+        self._stamped(monkeypatch, {"a__b": [5, 7]},
+                      [_StatTap("a/b", mtime=1, size=7, mtime_ns=5)])
+        assert rag.stale() is False
+
+    def test_older_cache_with_a_changed_stamp_is_stale(self, monkeypatch):
+        # The reported bug: the index was built while the clock ran ahead, so
+        # the re-cached tap is *older* than it — `>` said fresh forever.
+        self._stamped(monkeypatch, {"a__b": [9_000, 7]},
+                      [_StatTap("a/b", mtime=1, size=7, mtime_ns=5)])
+        assert rag.stale() is True
+
+    def test_size_only_change_is_stale(self, monkeypatch):
+        # A rewrite inside the same mtime tick still changes the size.
+        self._stamped(monkeypatch, {"a__b": [5, 7]},
+                      [_StatTap("a/b", mtime=1, size=8, mtime_ns=5)])
+        assert rag.stale() is True
+
+    def test_stamped_cache_that_vanished_is_stale(self, monkeypatch):
+        self._stamped(monkeypatch, {"a__b": [5, 7]}, [_StatTap("a/b")])
+        assert rag.stale() is True
+
+    def test_cache_appearing_after_an_unstamped_build_is_stale(self, monkeypatch):
+        self._stamped(monkeypatch, {},
+                      [_StatTap("a/b", mtime=1, size=7, mtime_ns=5)])
+        assert rag.stale() is True
+
+    def test_no_cache_then_or_now_is_fresh(self, monkeypatch):
+        self._stamped(monkeypatch, {}, [_StatTap("a/b")])
+        assert rag.stale() is False
+
+    def test_stamps_decide_even_when_the_index_mtime_is_unreadable(
+            self, monkeypatch):
+        # The stamp path never asks for the index's own mtime.
+        self._stamped(monkeypatch, {"a__b": [5, 7]},
+                      [_StatTap("a/b", mtime=1, size=7, mtime_ns=5)])
+
+        class _P:
+            @staticmethod
+            def stat():
+                raise OSError("gone")
+        monkeypatch.setattr(rag, "index_path", lambda: _P)
+        assert rag.stale() is False
+
+    def test_real_build_records_stamps_and_ignores_a_future_index_mtime(
+            self, corpus, monkeypatch, tmp_path):
+        # End to end over real files: build, push the index's mtime a year
+        # into the future (built while the clock ran ahead), rewrite the tap's
+        # cache — stale() must say so even though the cache is "older".
+        _root, entries = corpus
+        cache = tmp_path / "acme__skills.json"
+        cache.write_text('{"commit": "c1"}', encoding="utf-8")
+        tap = types.SimpleNamespace(name="acme/skills",
+                                    safe_name="acme__skills", cache_file=cache)
+        monkeypatch.setattr(rag.registry, "list_taps", lambda: [tap])
+        rag.build(entries=entries, force=True)
+        st = cache.stat()
+        raw = json.loads(rag.index_path().read_text(encoding="utf-8"))
+        assert raw["stamps"] == {"acme__skills": [st.st_mtime_ns, st.st_size]}
+        assert rag.stale() is False
+        future = time.time() + 365 * 86400
+        os.utime(rag.index_path(), (future, future))
+        rag._CACHE.clear()
+        assert rag.stale() is False
+        cache.write_text('{"commit": "c2-moved"}', encoding="utf-8")
+        assert rag.stale() is True
+
     def test_fresh_after_a_real_build(self, corpus, monkeypatch):
         # The end-to-end shape: a real build writing a real index and its real
         # postings must leave something that reports itself current, or every
@@ -512,6 +693,8 @@ class TestStale:
         _root, entries = corpus
         monkeypatch.setattr(rag.registry, "list_taps",
                             lambda: [_StatTap("acme/skills", mtime=None)])
+        # A stat-only fake has no cache text to read a format from.
+        monkeypatch.setattr(rag, "_tap_formats", dict)
         rag.build(entries=entries, force=True)
         assert rag.ready() is True
         assert rag.stale() is False
@@ -545,6 +728,30 @@ class TestAnIndexBoostCannotSave:
             % where
         assert isinstance(ei.value.__cause__, PermissionError)
 
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="chmod can't make a directory unsearchable "
+                               "on Windows")
+    @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                        reason="root ignores mode bits")
+    def test_an_unsearchable_cache_dir_is_told_to_add_the_search_bit(
+            self, corpus, monkeypatch):
+        # At 0o600 `chmod u+w` changes nothing — measured, the same error and
+        # hint came back after running it. The missing bit is search.
+        _root, entries = corpus
+        cache = paths.cache_dir()
+        self._refuse(monkeypatch, PermissionError(
+            13, "Permission denied", str(cache / ".rag_postings.sqlite.x.tmp")))
+        cache.mkdir(parents=True, exist_ok=True)
+        cache.chmod(0o600)
+        try:
+            with pytest.raises(BoostError) as ei:
+                rag.build(entries=entries, force=True)
+        finally:
+            cache.chmod(0o700)
+        assert ei.value.message == ("could not save the search index in %s "
+                                    "(Permission denied)" % paths.tilde(cache))
+        assert ei.value.hint == "run `chmod u+wx %s`" % paths.tilde(cache)
+
     def test_search_still_degrades_rather_than_raising(self, corpus,
                                                        monkeypatch):
         # ensure() is what search calls. The build must really reach _save
@@ -553,6 +760,9 @@ class TestAnIndexBoostCannotSave:
         # frontmatter at exit 0 instead of exiting 1 on a cold cache.
         _root, entries = corpus
         monkeypatch.setattr(registry, "list_taps", lambda: ["a-tap"])
+        # The fake taps are bare names with no cache file to stamp.
+        monkeypatch.setattr(rag, "_tap_stamps", dict)
+        monkeypatch.setattr(rag, "_tap_formats", dict)
         monkeypatch.setattr(rag.catalog, "all_entries", lambda: entries)
         build, raised = rag.build, []
 
@@ -894,6 +1104,111 @@ class TestIncremental:
         stats = rag.build(entries=entries)
         assert stats["reused"] == []
         assert stats["reindexed"] == ["acme/skills"]
+
+    # -- a scanner fix rescans a cache at the SAME commit (`load_tap` backfills
+    # a stale CACHE_FORMAT); reuse keyed on the commit alone kept the old
+    # documents, so the restored text reached `info` but never `search`.
+
+    @staticmethod
+    def _cached_tap(monkeypatch, tmp_path, fmt):
+        cache = tmp_path / "acme__skills.json"
+        cache.write_text(json.dumps({"format": fmt, "commit": "c1"}),
+                         encoding="utf-8")
+        tap = types.SimpleNamespace(name="acme/skills",
+                                    safe_name="acme__skills", cache_file=cache)
+        monkeypatch.setattr(rag.registry, "list_taps", lambda: [tap])
+        return cache
+
+    @staticmethod
+    def _with_desc(entries, desc):
+        return [{**e, "description": desc} if e["name"] == "jest-runner" else e
+                for e in entries]
+
+    def test_a_cache_format_bump_reindexes_the_tap_at_the_same_commit(
+            self, corpus, monkeypatch, tmp_path):
+        _root, entries = corpus
+        cache = self._cached_tap(monkeypatch, tmp_path, 8)
+        old = self._with_desc(entries, "Use this skill when")
+        rag.build(entries=old, force=True)
+        assert rag._load_raw()["formats"] == {"acme__skills": 8}
+        assert rag.retrieve("quokkaword", entries=old) == []
+        cache.write_text(json.dumps({"format": 9, "commit": "c1"}),
+                         encoding="utf-8")
+        new = self._with_desc(entries, "Use this skill when reviewing code: "
+                                       "it checks QUOKKAWORD style")
+        stats = rag.build(entries=new)
+        assert stats["reindexed"] == ["acme/skills"]
+        assert stats["reused"] == []
+        assert rag._load_raw()["formats"] == {"acme__skills": 9}
+        assert [h["entry"]["name"]
+                for h in rag.retrieve("quokkaword", entries=new)] == [
+                    "jest-runner"]
+        # Nothing moved since: the tap is reused again, not re-indexed forever.
+        again = rag.build(entries=new)
+        assert again["reused"] == ["acme/skills"]
+        assert again["reindexed"] == []
+
+    def test_an_unchanged_format_at_the_same_commit_is_reused(
+            self, corpus, monkeypatch, tmp_path):
+        _root, entries = corpus
+        self._cached_tap(monkeypatch, tmp_path, 9)
+        rag.build(entries=entries, force=True)
+        stats = rag.build(entries=self._with_desc(entries, "QUOKKAWORD"))
+        assert stats["reused"] == ["acme/skills"]
+        assert stats["reindexed"] == []
+
+    def test_a_tap_missing_from_the_recorded_formats_is_judged_by_commit(
+            self, corpus, monkeypatch, tmp_path):
+        # A shard import whose tap had no readable cache records no format.
+        _root, entries = corpus
+        self._cached_tap(monkeypatch, tmp_path, 9)
+        monkeypatch.setattr(rag, "_tap_formats", dict)
+        rag.build(entries=entries, force=True)
+        assert rag._load_raw()["formats"] == {}
+        monkeypatch.setattr(rag, "_tap_formats",
+                            lambda: {"acme__skills": 9})
+        stats = rag.build(entries=entries)
+        assert stats["reused"] == ["acme/skills"]
+
+    def test_an_index_written_before_formats_rebuilds_once(
+            self, corpus, monkeypatch, tmp_path):
+        # No `formats` key: nothing says which scanner built these docs.
+        _root, entries = corpus
+        self._cached_tap(monkeypatch, tmp_path, 9)
+        rag.build(entries=entries, force=True)
+        raw = rag._load_raw()
+        del raw["formats"]
+        rag._save(rag._kept_docs(raw, {"acme__skills"}), raw["commits"],
+                  raw["stamps"])
+        rag._CACHE.clear()
+        assert "formats" not in rag._load_raw()
+        stats = rag.build(entries=entries)
+        assert stats["reindexed"] == ["acme/skills"]
+        assert stats["reused"] == []
+        assert rag.build(entries=entries)["reused"] == ["acme/skills"]
+
+    def test_a_cache_that_lost_its_format_reindexes(
+            self, corpus, monkeypatch, tmp_path):
+        _root, entries = corpus
+        cache = self._cached_tap(monkeypatch, tmp_path, 9)
+        rag.build(entries=entries, force=True)
+        cache.write_text(json.dumps({"commit": "c1"}), encoding="utf-8")
+        stats = rag.build(entries=entries)
+        assert stats["reindexed"] == ["acme/skills"]
+
+    def test_tap_formats_keeps_only_integer_formats(
+            self, monkeypatch, tmp_path, sandbox):
+        def tap(safe, body):
+            cache = tmp_path / (safe + ".json")
+            if body is not None:
+                cache.write_text(body, encoding="utf-8")
+            return types.SimpleNamespace(safe_name=safe, cache_file=cache)
+        taps = [tap("ok", '{"format": 9}'), tap("str", '{"format": "9"}'),
+                tap("bool", '{"format": true}'), tap("none", "{}"),
+                tap("list", "[9]"), tap("bad", "{not json"),
+                tap("missing", None)]
+        monkeypatch.setattr(rag.registry, "list_taps", lambda: taps)
+        assert rag._tap_formats() == {"ok": 9}
 
     def test_force_ignores_cached_commit(self, corpus):
         _root, entries = corpus
@@ -1392,8 +1707,14 @@ class TestPostingsAndKept:
     def test_postings_missing_key_is_empty(self):
         assert dict(rag._postings_to_doc_tf({})) == {}
 
-    def test_kept_docs_empty_when_no_docs(self):
+    def test_kept_docs_empty_when_no_docs(self, sandbox, monkeypatch):
+        # No docs means no store read at all, so a missing store cannot turn
+        # an empty index into "unreadable".
+        def boom():
+            raise AssertionError("read the postings store")
+        monkeypatch.setattr(rag, "_all_postings", boom)
         assert rag._kept_docs({}, set()) == []
+        assert rag._kept_docs({"docs": []}, {"x__y"}) == []
 
     def test_kept_docs_recovers_tf_and_defaults_empty(self):
         raw = {"docs": [{"t": "x/y", "n": "a", "f": "a/SKILL.md", "k": "skill",
@@ -2043,7 +2364,9 @@ class TestPostingsBlobLayout:
     def test_a_corrupt_blob_degrades_read_postings_to_empty(self, sandbox):
         self._corrupt_store(b"\x01\x80")
         assert rag.read_postings(["good", "bad"]) == {}
-        assert rag._all_postings() == {}
+        # None, not {}: "unreadable" must not read as "holds no postings",
+        # or an incremental build keeps docs with no term frequencies.
+        assert rag._all_postings() is None
 
     def test_an_intact_store_still_reads(self, sandbox):
         self._corrupt_store(rag._encode_plist([[2, 1]]))

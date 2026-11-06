@@ -42,7 +42,7 @@ import urllib.error
 import urllib.request
 from typing import Any
 
-from . import nethttp
+from . import nethttp, typedvalue
 
 # The environment variable that selects each API provider. A mapping rather
 # than literals inlined at each use, because `dense.fix_hint` has to name the
@@ -95,7 +95,7 @@ _model_instance: Any = None
 
 def enabled() -> bool:
     """True unless the ``BOOST_NO_EMBED`` kill-switch is set."""
-    return not os.environ.get("BOOST_NO_EMBED")
+    return not typedvalue.env_flag("BOOST_NO_EMBED", unknown=True)
 
 
 def _load_backend():
@@ -234,6 +234,17 @@ def outranking(name: str) -> tuple[str, ...]:
     return tuple(ahead)
 
 
+def any_key() -> bool:
+    """True when any embedding API key in :data:`KEY_ENV` is set.
+
+    Narrower than :func:`available`: it ignores ``BOOST_NO_EMBED`` and the
+    local model, and answers only "would an HTTP provider embed here". That is
+    the question an interpreter with no onnxruntime wheel asks, since a key
+    needs no local model at all.
+    """
+    return any(os.environ.get(env) for env in KEY_ENV.values())
+
+
 def available() -> bool:
     """True when embeddings are enabled and a provider key is present."""
     return provider() is not None
@@ -274,7 +285,7 @@ def fallback_note() -> str:
     # the command unquoted, which zsh rejects with "no matches found".
     from . import dense
     return ("dense search needs the `[rag]` extra — `%s`; using the BM25 "
-            "full-content engine" % dense.install_extra())
+            "full-content engine" % dense.extra_hint())
 
 
 def embed(texts: list[str], input_type: str | None = None,

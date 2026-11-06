@@ -3,46 +3,294 @@
 """AI agent targets: where installed skills get symlinked."""
 from __future__ import annotations
 
+import os
+import sys
 from pathlib import Path
+from typing import Any
 
 from ..errors import BoostError
-from . import config, paths
+from . import config, output, paths, typedvalue, util
 
 DISPLAY = {"claude-code": "Claude Code", "windsurf": "Windsurf",
            "cursor": "Cursor", "gemini": "Gemini CLI",
            "antigravity": "Antigravity CLI", "codex": "Codex"}
 
 
+# Rows already warned about in this process: known_agents runs dozens of
+# times per command, and one warning per row is the message.
+_WARNED_DIRLESS: set[str] = set()
+# ``agents.<name>.<flag>`` keys already warned about, for the same reason.
+_WARNED_FLAGS: set[str] = set()
+
+#: The boolean settings of an agent row, with the default each falls back to.
+#: Read through :func:`_flag`, never ``bool()``: ``config.json``'s ``agents``
+#: section is the one open section users edit by hand, and ``bool("false")``
+#: is True — a hand-written ``"enabled": "false"`` linked the agent anyway,
+#: and ``"links_skills": "false"`` gave Gemini the duplicate links the flag
+#: exists to prevent while doctor said healthy.
+FLAG_DEFAULTS: dict[str, bool] = {
+    "enabled": True, "links_skills": True, "project_scope": True,
+    "skills_only": False, "workflows": True, "dedupes_by_path": False,
+}
+
+
+#: Keys :func:`known_agents` adds that no one sets: worked out from the
+#: filesystem, so ``config set`` must not offer them (:data:`config.AGENT_KEYS`).
+DERIVED_KEYS = ("store_alias",)
+
+
+def _read_flag(name: str, key: str, value: Any) -> bool:
+    """``value`` read as a boolean, or raise :class:`typedvalue.ValueTypeError`.
+
+    The vocabulary is ``config set``'s (:func:`typedvalue.adapt`): a real
+    JSON boolean as-is, and a string such as ``"false"``/``"no"``/``"0"`` read
+    as what it says. A JSON ``0``/``1`` is read as its digit.
+    """
+    if isinstance(value, int) and not isinstance(value, bool):
+        value = str(value)
+    return typedvalue.adapt("agents.%s.%s" % (name, key), value,
+                            typedvalue.BOOL)
+
+
+def flag_default(name: str, key: str) -> bool:
+    """What ``agents.<name>.<key>`` means when it is left out: the agent's own
+    :data:`config.DEFAULTS` row first (gemini's ``links_skills`` is False),
+    then :data:`FLAG_DEFAULTS`."""
+    defaults: dict[str, dict] = config.DEFAULTS["agents"]  # type: ignore[assignment]
+    row = defaults.get(name)
+    if isinstance(row, dict) and isinstance(row.get(key), bool):
+        return row[key]
+    return FLAG_DEFAULTS[key]
+
+
+def _flag(name: str, spec: dict, key: str) -> bool:
+    """One boolean setting of an agent row; junk warns once and reads as
+    :func:`flag_default` — what the row would mean with the key left out."""
+    if key not in spec:
+        return FLAG_DEFAULTS[key]
+    default = flag_default(name, key)
+    try:
+        return _read_flag(name, key, spec[key])
+    except typedvalue.ValueTypeError as e:
+        dotted = "agents.%s.%s" % (name, key)
+        if dotted not in _WARNED_FLAGS:
+            _WARNED_FLAGS.add(dotted)
+            output.warn("%s — boost reads it as %s; fix it with `boost config "
+                        "set %s <true|false>`"
+                        % (e, str(default).lower(), dotted),
+                        stream=sys.stderr, wrap=True)
+        return default
+
+
+def bad_flags(claim: bool = False) -> list[tuple[str, str, Any]]:
+    """``(agent, key, stored value)`` for every agent flag that is not a
+    boolean, in ``config.json`` order.
+
+    :func:`known_agents` reads each as its default, with a warning. ``claim``
+    is :func:`dirless`'s: a caller that reports them itself (``boost doctor``)
+    takes the warning over.
+    """
+    found = []
+    for name, spec in (config.get("agents") or {}).items():
+        if not isinstance(spec, dict):
+            continue
+        for key in FLAG_DEFAULTS:
+            if key not in spec:
+                continue
+            try:
+                _read_flag(name, key, spec[key])
+            except typedvalue.ValueTypeError:
+                found.append((name, key, spec[key]))
+    if claim:
+        _WARNED_FLAGS.update("agents.%s.%s" % (n, k) for n, k, _v in found)
+    return found
+
+
+def aliases_store(adir: Path) -> bool:
+    """True when ``adir`` *is* the canonical store, through a symlink or not.
+
+    ``~/.cursor/skills -> ~/.agents/skills`` already shows that agent every
+    installed skill. Treated as a linking agent, every entry in its dir was a
+    real directory "not managed by boost", so install, doctor, sync and heal
+    each told the user to move or delete it — and each of those paths was the
+    store's only copy of the skill. Resolves **both** sides (a macOS ``$HOME``
+    under ``/var`` resolves to ``/private/var``), then asks by inode, which is
+    what catches a case-insensitive volume spelling the store differently.
+    Fails closed: a dir ``resolve()`` refuses is not the store.
+    """
+    try:
+        mine = adir.resolve()
+        store = paths.store_dir().resolve()
+    except (OSError, RuntimeError):
+        return False
+    if mine == store:
+        return True
+    try:
+        return os.path.samefile(mine, store)
+    except OSError:
+        return False
+
+
+class RelativeAgentDir(BoostError):
+    """An agent ``dir`` that expands to a relative path."""
+
+
+# Variables an agent itself resolves against the working directory when they
+# are relative, so boost must too or it writes where the agent never looks.
+# Measured for Codex in :func:`mcphost.config_home`; Claude Code refuses a
+# relative CLAUDE_CONFIG_DIR, so a variable is added here only once its own
+# CLI is shown to honour one.
+CWD_RELATIVE_VARS = frozenset({"CODEX_HOME"})
+
+
+def _row_dir(spec: dict) -> Path | None:
+    """The agent row's expanded ``dir``, or None when it names no directory.
+
+    ``Path("")`` is ``.``: a row with no ``dir`` (a mistyped
+    ``agents.curosr.enabled``, or an agent enabled before its dir was set)
+    used to resolve to the working directory, so `boost install` symlinked the
+    skill into whatever directory it ran from and called that agent linked.
+    Raises what :func:`paths.expand` raises for an unset ``${VAR}``, and
+    :class:`RelativeAgentDir` for a dir that is not absolute once expanded: a
+    relative one resolved against the working directory, so each directory
+    boost ran from got its own copy of that agent's skills tree. A relative
+    dir is refused, not read against ``$HOME``, because ``config set``
+    refuses it too (:func:`check_dir`) and a guessed base is a second meaning
+    for the same text.
+    """
+    raw = str(spec.get("dir") or "").strip()
+    if not raw:
+        return None
+    p = paths.expand(raw)
+    if p == Path():
+        return None
+    if not p.is_absolute():
+        # The environment made it relative, not the config: a relative
+        # CODEX_HOME is one Codex itself honours against the cwd, and any
+        # other is the variable to fix, so name it rather than the dir value
+        # (the shipped default) whose hint the user had already followed.
+        var = paths.env_source(raw)
+        if var in CWD_RELATIVE_VARS:
+            return Path(os.path.abspath(p))
+        if var:
+            raise RelativeAgentDir(
+                "%s=%r is a relative path, so %r would resolve against "
+                "whatever directory boost runs from"
+                % (var, os.environ[var], raw),
+                hint="export %s=/an/absolute/path (or ~/path)" % var)
+        raise RelativeAgentDir(
+            "%r is a relative path, which would resolve against whatever "
+            "directory boost runs from" % raw,
+            hint="use an absolute path, or one starting with ~ or ${VAR}")
+    return p
+
+
+def check_dir(raw: Any) -> str | None:
+    """Why ``raw`` cannot be an agent's ``dir``, or None when it can.
+
+    ``config set agents.<name>.dir`` asks this before saving. Only the
+    relative case is refused here: an unset ``${VAR}`` may be set by the time
+    boost reads it, and doctor names it if not.
+    """
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    try:
+        _row_dir({"dir": raw})
+    except RelativeAgentDir:
+        return ("an absolute path, or one starting with ~ or ${VAR} — a "
+                "relative dir resolves against the working directory")
+    except BoostError:
+        return None
+    return None
+
+
+def dirless(claim: bool = False) -> list[str]:
+    """Configured agents whose row names no directory, in ``config.json`` order.
+
+    :func:`known_agents` leaves these out, with a warning, rather than resolve
+    them to the cwd. ``claim`` is for a caller that reports them itself
+    (``boost doctor``), so the warning is not printed beside its own line.
+    """
+    names = []
+    for name, spec in (config.get("agents") or {}).items():
+        try:
+            if _row_dir(spec) is None:
+                names.append(name)
+        except BoostError:
+            continue  # an unresolvable dir is check()'s to report
+    if claim:
+        _WARNED_DIRLESS.update(names)
+    return names
+
+
 def known_agents() -> dict[str, dict]:
-    """{name: {"dir": Path, "enabled": bool, "links_skills": bool}} per agent."""
+    """{name: {"dir": Path, "enabled": bool, "links_skills": bool}} per agent.
+
+    A row with no ``dir`` is skipped, with a warning (:func:`_row_dir`). A
+    row whose dir is the canonical store (:func:`aliases_store`) is read as a
+    native-store agent — ``links_skills`` False, ``store_alias`` True — so
+    nothing links into it, unlinks from it, or sweeps it.
+    """
     out = {}
     for name, spec in (config.get("agents") or {}).items():
+        try:
+            adir = _row_dir(spec)
+        except BoostError as e:
+            # A disabled agent is one nothing will write into, so its
+            # unusable dir must not stop every command — disabling it was the
+            # obvious remedy and did nothing. Skip it, once, with a warning.
+            if not _flag(name, spec, "enabled"):
+                if name not in _WARNED_DIRLESS:
+                    _WARNED_DIRLESS.add(name)
+                    output.warn("agents.%s is disabled and boost skips it: %s"
+                                % (name, e.message), stream=sys.stderr,
+                                wrap=True)
+                continue
+            if not isinstance(e, RelativeAgentDir):
+                raise
+            # check() keys the error by name for doctor; a command that stops
+            # here has only this line, so it names the key to edit.
+            raise BoostError("agents.%s.dir: %s" % (name, e.message),
+                             hint=e.hint) from e
+        if adir is None:
+            if name not in _WARNED_DIRLESS:
+                _WARNED_DIRLESS.add(name)
+                output.warn("agents.%s has no dir, so boost skips it — set one "
+                            "with `boost config set agents.%s.dir <dir>`, or "
+                            "remove the row with `boost config unset agents.%s`"
+                            % (name, name, name), stream=sys.stderr, wrap=True)
+            continue
+        alias = aliases_store(adir)
         out[name] = {
-            "dir": paths.expand(str(spec.get("dir", ""))),
-            "enabled": bool(spec.get("enabled", True)),
+            "dir": adir,
+            "enabled": _flag(name, spec, "enabled"),
             # Defaults True: an agent only reads the canonical store if it
             # implements the Agent Skills standard's `~/.agents/skills` path,
             # which most do not, so the symlink is the safe assumption.
-            "links_skills": bool(spec.get("links_skills", True)),
+            "links_skills": (_flag(name, spec, "links_skills")
+                             and not alias),
+            # The dir resolves to the canonical store: the agent reads every
+            # installed skill already. See :func:`aliases_store`.
+            "store_alias": alias,
             # Defaults True: nearly every agent reads a repo-local copy of its
             # own dotdir, so a project install lands in `<repo>/.claude/skills`
             # and its siblings. False marks an agent whose project layout boost
             # does not know — see :func:`project_agents`.
-            "project_scope": bool(spec.get("project_scope", True)),
+            "project_scope": _flag(name, spec, "project_scope"),
             # Defaults False: most agents take all three kinds. True marks an
             # agent where only the skills surface is known — see
             # :func:`materializing_agents`.
-            "skills_only": bool(spec.get("skills_only", False)),
+            "skills_only": _flag(name, spec, "skills_only"),
             # Defaults True. False marks an agent whose *rules* surface is
             # verified but whose slash-command format is not, so it takes rules
             # and skills but no workflows — a finer cut than `skills_only`,
             # which turns both off. See :func:`workflow_agents`.
-            "workflows": bool(spec.get("workflows", True)),
+            "workflows": _flag(name, spec, "workflows"),
             # Defaults False: assume an agent shown the same skill through two
             # of its discovery tiers will complain about it, because Gemini CLI
             # does. True marks one that collapses them instead — see
             # :func:`dedupes_by_path`.
-            "dedupes_by_path": bool(spec.get("dedupes_by_path", False)),
+            "dedupes_by_path": _flag(name, spec, "dedupes_by_path"),
             # Defaults "": derive the repo-local dotdir from the user dir, as
             # every agent with a fixed path can. A non-empty value declares it
             # — see :func:`project_dotdir`.
@@ -67,7 +315,7 @@ def check() -> list[tuple[str, BoostError]]:
     bad = []
     for name, spec in (config.get("agents") or {}).items():
         try:
-            paths.expand(str(spec.get("dir", "")))
+            _row_dir(spec)
         except BoostError as e:
             bad.append((name, e))
     return bad
@@ -122,8 +370,9 @@ def linking_agents() -> dict[str, Path]:
     :func:`dedupes_by_path`), so there the cost is redundant work rather than
     noise; not linking is right either way.
 
-    So this is the set to iterate for anything symlink-shaped (link, unlink,
-    stale-link sweeps, coverage checks) — including the sweep in
+    So this is the set to iterate for anything symlink-shaped that *writes*
+    (link, coverage checks); unlink and the stale-link sweeps take the wider
+    :func:`unlinking_agents`, which adds disabled agents and nothing else — including the sweep in
     :func:`store.sync_plan`, whose only ownership test is ``points_into_store``:
     over a native-store agent's skills dir it would delete links boost never
     created. What materializes *into* an agent's dotdir is a different set again
@@ -132,6 +381,234 @@ def linking_agents() -> dict[str, Path]:
     """
     return {n: s["dir"] for n, s in known_agents().items()
             if s["enabled"] and s["links_skills"]}
+
+
+def unlinking_agents() -> dict[str, Path]:
+    """Every agent that links skills, *enabled or not*: the set to remove from.
+
+    :func:`linking_agents` is the set boost writes links into. Removal and the
+    broken-link sweeps need the wider one, because disabling an agent stops
+    new links without taking the old ones away: uninstalling a skill while
+    cursor was disabled left ``~/.cursor/skills/<name>`` dangling into the
+    deleted store dir, where Cursor still read it and doctor never looked.
+    A native-store agent (``links_skills: false``) stays out, for the reason
+    :func:`linking_agents` gives — boost never linked there.
+    """
+    return {n: s["dir"] for n, s in known_agents().items() if s["links_skills"]}
+
+
+def link_dirs_path() -> Path:
+    """Where boost records every skills dir it has linked into."""
+    return paths.state_dir() / "link-dirs.json"
+
+
+def remember_link_dir(agent: str, adir: Path) -> None:
+    """Record that boost linked into ``adir`` for ``agent``.
+
+    The lock records a skill's agents by name, and every removal walks each
+    agent's *current* dir. Repoint ``agents.cursor.dir`` and the links made
+    under the old one were reachable by nothing: uninstall reported cursor
+    unlinked over a link left dangling in ``~/.cursor/skills``, and doctor,
+    heal, sync and clean all looked only in the new dir. Best effort: a state
+    dir that refuses the write costs only this record.
+    """
+    import json
+    seen = _remembered_link_dirs()
+    key = str(adir)
+    if key in seen.get(agent, ()):
+        return
+    seen.setdefault(agent, []).append(key)
+    try:
+        f = link_dirs_path()
+        f.parent.mkdir(parents=True, exist_ok=True)
+        # Atomic: a torn file reads back as empty and the next write would
+        # drop every dir recorded before it.
+        util.atomic_write_text(
+            f, json.dumps(seen, indent=2, sort_keys=True) + "\n")
+    except OSError:
+        return
+
+
+def _remembered_link_dirs() -> dict[str, list[str]]:
+    import json
+    try:
+        data = json.loads(link_dirs_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {str(a): [str(d) for d in ds if isinstance(d, str)]
+            for a, ds in data.items() if isinstance(ds, list)}
+
+
+def former_link_dirs() -> list[tuple[str, Path]]:
+    """``(agent, dir)`` for skills dirs boost may have linked into before.
+
+    The dirs :func:`remember_link_dir` recorded, and each linking agent's
+    default dir from ``config.DEFAULTS`` (links made before the record
+    existed), less every dir :func:`unlinking_agents` already walks. A dir
+    that is now a native-store agent's is left out, for the reason
+    :func:`linking_agents` gives: boost never links there, so what it holds
+    belongs to someone else.
+
+    A dir that resolves to the store itself (:func:`aliases_store`) is left
+    out too: a sweep there walks the store.
+    """
+    known = known_agents()
+    # By identity, not spelling: ``~/.claude/skills`` and the
+    # ``~/dotfiles/claude-skills`` it links to, or one dir remembered as
+    # ``/private/tmp/...`` and walked now as ``/tmp/...``, are one dir. Kept
+    # apart, every sweep walked it twice — doctor counted each broken link
+    # twice and heal crashed unlinking one it had already removed.
+    current = {dir_identity(d) for d in unlinking_agents().values()}
+    native = {dir_identity(s["dir"]) for s in known.values()
+              if not s["links_skills"]}
+    found: dict[str, str] = {}
+    defaults: dict[str, dict] = config.DEFAULTS["agents"]  # type: ignore[assignment]
+    for agent, spec in defaults.items():
+        if spec.get("links_skills", True) and spec.get("dir"):
+            found.setdefault(str(paths.expand(spec["dir"])), agent)
+    for agent, dirs in _remembered_link_dirs().items():
+        for d in dirs:
+            found.setdefault(d, agent)
+    # A dir that is the store holds the store's own skills, never a link.
+    out: list[tuple[str, Path]] = []
+    seen = current | native
+    for d, agent in found.items():
+        key = dir_identity(Path(d))
+        if key in seen or aliases_store(Path(d)):
+            continue
+        seen.add(key)
+        out.append((agent, Path(d)))
+    return out
+
+
+def dir_identity(adir: Path) -> object:
+    """What makes two spellings of a directory the same directory.
+
+    ``(st_dev, st_ino)`` for a dir that exists — which also catches a
+    case-insensitive volume spelling it two ways — else its ``realpath``,
+    normalised, so a dir not created yet still compares by where it would be.
+
+    A zero ``st_ino`` is no identity: Windows reports one on volumes with no
+    file index (FAT, exFAT, some shares), and keying on it made every dir on
+    that volume one dir, so the sweep walked the first and skipped the rest.
+    """
+    try:
+        st = Path(adir).stat()
+    except OSError:
+        st = None
+    if st is None or not st.st_ino:
+        return os.path.normcase(os.path.realpath(adir))
+    return (st.st_dev, st.st_ino)
+
+
+def unique_dirs(dirs) -> list[Path]:
+    """``dirs`` in order, each physical directory once (:func:`dir_identity`)."""
+    seen: set[object] = set()
+    out: list[Path] = []
+    for d in dirs:
+        key = dir_identity(d)
+        if key not in seen:
+            seen.add(key)
+            out.append(d)
+    return out
+
+
+def remembered_native_dirs() -> list[tuple[str, Path]]:
+    """``(agent, dir)`` for a native-store agent's dir boost once linked into.
+
+    :func:`former_link_dirs` and :func:`unlinking_agents` leave native-store
+    dirs out because boost never links there -- true of a dir boost never
+    linked into, false of one :func:`remember_link_dir` recorded for that very
+    agent before its ``links_skills`` was flipped off. The links made then
+    stay: uninstall left ``~/.windsurf/skills/<name>`` dangling into the store
+    dir it had just deleted, and doctor called that "0 broken links".
+
+    Kept apart from :func:`sweep_dirs` on purpose. A native dir is where other
+    tools link into the store too (:func:`store.duplicate_discovery`), so the
+    readers of this list remove only a link to one named skill's store dir, or
+    one that dangles into the store, never a live link named for no skill.
+    """
+    # By identity, as :func:`former_link_dirs` compares: a dir remembered as
+    # ``/private/tmp/...`` and read now as ``/tmp/...`` is one dir, and an
+    # exact-string test left that agent's links dangling after uninstall.
+    remembered = {n: {dir_identity(Path(d)) for d in dirs}
+                  for n, dirs in _remembered_link_dirs().items()}
+    return [(n, s["dir"]) for n, s in known_agents().items()
+            if not s["links_skills"]
+            and dir_identity(s["dir"]) in remembered.get(n, set())
+            and not aliases_store(s["dir"])]
+
+
+def materialization_target(kind: str, name: str, entry: dict,
+                           m: dict) -> Path | None:
+    """Where the agent's *current* dir puts row ``m`` of rule/workflow
+    ``name``, or None when there is no such place to compare against.
+
+    A row records the path it was written to, and the agent's dir can move
+    after that (``agents.cursor.dir``). None for a row of an agent boost no
+    longer writes (:func:`materialization_is_written` names those), a
+    project-scope row, a workflow's store copy, a workflow row with no
+    ``slot``, and a name the target functions refuse.
+    """
+    from . import rules, workflows
+    agent = m.get("agent")
+    # User scope only. A project row's place is the repo's own layout,
+    # committed with it; repointing a dir under $HOME is no reason for sync
+    # to rewrite files in someone's repo.
+    if (not agent or entry.get("base") is not None
+            or m.get("slot") == workflows.SLOT_SKILL):
+        return None
+    writes = workflow_agents() if kind == "workflow" else materializing_agents()
+    skills_dir = writes.get(agent)
+    if skills_dir is None:
+        return None
+    try:
+        if kind == "workflow":
+            if not m.get("slot"):
+                return None
+            return workflows.workflow_target(skills_dir, m["slot"], name,
+                                             agent=agent)
+        return rules.rule_target(agent, skills_dir, name)[1]
+    except BoostError:
+        return None
+
+
+def relocated_to(kind: str, name: str, entry: dict, m: dict) -> Path | None:
+    """The path row ``m`` now belongs at, when the agent's dir moved away
+    from where it was written; None when it is where the agent reads.
+
+    Every check that read the rows asked only whether the recorded file was
+    there, and after a repointed ``agents.cursor.dir`` it was -- in the dir
+    Cursor no longer reads. doctor called the rule fully materialized, verify
+    said ok and sync moved nothing.
+    """
+    want = materialization_target(kind, name, entry, m)
+    if want is None or not m.get("path"):
+        return None
+    have = os.path.normcase(os.path.normpath(str(m["path"])))
+    if have == os.path.normcase(os.path.normpath(str(want))):
+        return None
+    # The same file by another spelling is not a move: a $HOME of /tmp/x
+    # at install and /private/tmp/x now (macOS) named every row moved, and
+    # sync then rewrote them all on every run.
+    if (os.path.normcase(os.path.realpath(have))
+            == os.path.normcase(os.path.realpath(str(want)))):
+        return None
+    return want
+
+
+def sweep_dirs() -> list[Path]:
+    """Every skills dir a broken-link sweep walks: each linking agent's
+    current dir, enabled or not, then :func:`former_link_dirs`.
+
+    Each physical directory once: two agents can share one dir
+    (``~/.cursor/skills -> ../.claude/skills``), and a sweep that walked it
+    twice reported every broken link in it twice and unlinked each twice.
+    """
+    return unique_dirs([*unlinking_agents().values(),
+                        *(d for _agent, d in former_link_dirs())])
 
 
 def project_agents() -> dict[str, Path]:
@@ -188,6 +665,10 @@ def workflow_agents(base=None) -> dict[str, Path]:
     *rewrites* a Claude `commands/*.md` into a `SKILL.md` on disk rather than
     running it as a command. A Markdown file dropped in `~/.codex/commands/`
     would be installed, reported, and never loaded.
+
+    Windsurf is the second: it documents workflows only under
+    `.windsurf/workflows/` and `~/.codeium/windsurf/global_workflows/`, not
+    the `commands/`/`agents/` slots boost writes (see :data:`config.DEFAULTS`).
     """
     return {n: d for n, d in materializing_agents(base).items()
             if known_agents()[n]["workflows"]}
@@ -215,11 +696,22 @@ def materialization_is_written(kind: str, base, agent) -> bool:
     the name there is nothing to test, and reporting a real gap is better than
     silently dropping one. ``base`` is the row's own scope, so a project rule
     is judged against :func:`project_agents` rather than the user-scope set.
+
+    A *skill* is asked too, of the set its install writes: a user-scope skill
+    links into :func:`linking_agents`, a project one copies into
+    :func:`project_agents`. A link left in a disabled agent's dir is kept (it
+    is what an uninstall removes, see :func:`unlinking_agents`), but boost no
+    longer writes it -- the same answer a rule's row gets, so `boost list`
+    stops naming the agent for one kind and not the others.
     """
     if not agent:
         return True
-    writes = (workflow_agents(base) if kind == "workflow"
-              else materializing_agents(base))
+    if kind == "skill":
+        writes = linking_agents() if base is None else project_agents()
+    elif kind == "workflow":
+        writes = workflow_agents(base)
+    else:
+        writes = materializing_agents(base)
     return agent in writes
 
 
@@ -255,6 +747,96 @@ WITHDRAWN_REASONS = (REASON_SKILLS_ONLY, REASON_NO_COMMAND_FORMAT)
 #: ladder and to none of these would be classified by silence.
 UNREMEDIED_REASONS = (REASON_UNCONFIGURED, REASON_UNKNOWN)
 
+#: The agent-row key behind each reason one flag of the row decides, so a
+#: report can say where the decision lives. The other two have no key: an
+#: agent missing from the config, and the ladder's fallback.
+REASON_FLAGS = {REASON_SKILLS_ONLY: "skills_only",
+                REASON_NO_COMMAND_FORMAT: "workflows",
+                REASON_DISABLED: "enabled",
+                REASON_NO_PROJECT_SCOPE: "project_scope"}
+
+
+def _withdrawn_by_boost(agent: str, reason: str, key: str) -> bool:
+    """Whether ``agent`` skips for a :data:`WITHDRAWN_REASONS` reason only
+    because its built-in row says so: ``key`` holds :func:`flag_default`'s
+    value. A row the config added cannot -- its default is
+    :data:`FLAG_DEFAULTS`', which takes rules and workflows -- and neither
+    can a built-in row the user set the other way."""
+    if reason not in WITHDRAWN_REASONS:
+        return False
+    spec = known_agents().get(agent)
+    return spec is not None and spec[key] == flag_default(agent, key)
+
+
+def skip_line(agent: str, reason: str, via_copy: bool = False) -> str:
+    """One agent an item was not written into, and why, for a report.
+
+    ``claude-personal: takes skills only (agents.claude-personal.skills_only)
+    — not written``. The key is named because the skip is the config's
+    decision, and the row is where to read it. Not for a format boost
+    withdrew and the row still has as boost set it -- ``antigravity``'s
+    ``skills_only``, ``windsurf``'s ``workflows: false``: flipping that writes
+    a file the agent never loads, :data:`config.DEFAULTS` says why at the key
+    itself, and a line printed on every install would read as an invitation.
+
+    ``via_copy``: the agent does reach the item, through the link to a
+    workflow's skill copy (``store.copy_link_targets``) -- so it ends "skill
+    copy only" rather than "not written", which beside the install's
+    "linked → windsurf" line read as a contradiction.
+    """
+    key = REASON_FLAGS.get(reason)
+    where = (" (agents.%s.%s)" % (agent, key)
+             if key and not _withdrawn_by_boost(agent, reason, key) else "")
+    return "%s: %s%s — %s" % (agent, reason, where,
+                              "skill copy only" if via_copy else "not written")
+
+
+def claude_profile_rows() -> list[str]:
+    """Config-added agents that look like a Claude Code profile and take
+    skills only -- the rows ``boost doctor`` offers ``skills_only false`` to.
+
+    The marker is ``.claude.json`` in the row's dotdir: Claude Code keeps it
+    at ``$CLAUDE_CONFIG_DIR/.claude.json`` for a relocated profile (and at
+    ``~/.claude.json`` otherwise, which is why ``claude-code``'s own
+    ``~/.claude`` does not hold one). A profile is Claude Code, so it reads
+    ``agents/``, ``commands/`` and ``rules/`` like ``~/.claude`` does; a row
+    copied from the ``antigravity`` template carries that agent's
+    ``skills_only`` and gets none of them. A built-in row is never asked: its
+    flags are boost's own, and :data:`config.DEFAULTS` says why at each.
+
+    The probe is :func:`os.path.isfile`, which answers False on any
+    ``OSError``. ``Path.is_file`` raises PermissionError on Python 3.12 and
+    3.13 for a path under a dir the user cannot search, and doctor asks this
+    on every run -- so a row pointing there ended the report in a crash, when
+    doctor's own agent-dir check names exactly that problem.
+    """
+    defaults: dict = config.DEFAULTS["agents"]  # type: ignore[assignment]
+    return [name for name, spec in known_agents().items()
+            if name not in defaults and spec["enabled"]
+            and spec["skills_only"]
+            and os.path.isfile(spec["dir"].parent / ".claude.json")]
+
+
+def claude_profile_note(name: str) -> str:
+    """`boost doctor`'s line for one of :func:`claude_profile_rows`.
+
+    It names ``skills_only false`` and ``boost sync``, and -- when the row
+    takes project scope, which a config-added row does unless it says
+    otherwise -- ``project_scope false`` first: in a repo Claude Code reads
+    ``<repo>/.claude/`` whatever profile it runs under, so a project install
+    for the row lands in ``<repo>/.claude-personal/``, which nothing loads.
+    Named, never set: the row is the user's (no config is rewritten).
+    """
+    spec = known_agents()[name]
+    note = ("agents.%s looks like a Claude Code profile — `boost config set "
+            "agents.%s.skills_only false` then `boost sync` gives it agents/, "
+            "commands/ and rules/" % (name, name))
+    if spec["project_scope"]:
+        note += ("; run `boost config set agents.%s.project_scope false` "
+                 "first — in a repo Claude Code reads `.claude/` under any "
+                 "profile, never `%s/`" % (name, spec["dir"].parent.name))
+    return note
+
 
 def materialization_skip_reason(kind: str, base, agent) -> str | None:
     """Why :func:`materialization_is_written` refuses, or ``None`` if it does
@@ -282,7 +864,9 @@ def materialization_skip_reason(kind: str, base, agent) -> str | None:
     spec = known_agents().get(agent)
     if spec is None:
         return REASON_UNCONFIGURED
-    if spec["skills_only"]:
+    # A skill is the one kind a skills-only agent takes, and needs no
+    # command format, so neither rung can be its reason.
+    if kind != "skill" and spec["skills_only"]:
         return REASON_SKILLS_ONLY
     if kind == "workflow" and not spec["workflows"]:
         return REASON_NO_COMMAND_FORMAT

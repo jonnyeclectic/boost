@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import json
 import sys
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 
 from ..errors import BoostError
 
@@ -308,7 +308,8 @@ def instructions(*, ai_available: bool) -> str:
                              gate, _INSTRUCTIONS_TAIL)
 
 
-def hit_line(entry: dict, *, installed: bool = False) -> str:
+def hit_line(entry: dict, *, installed: bool = False,
+             path: str | None = None) -> str:
     """One search hit rendered for an agent: name, kind, description, tap.
 
     The kind marker is the load-bearing part. ``boost_install``'s description
@@ -338,14 +339,38 @@ def hit_line(entry: dict, *, installed: bool = False) -> str:
     hit marked "not installed" that ``boost_install <name>`` then resolves to
     the item already in the lock. One notion of identity per reply, plus the
     field that resolves it, beats two that contradict each other.
+
+    ``path`` is set only when the hit's tap ships its name more than once.
+    Those copies resolve by name+tap to an ambiguity error, so the line names
+    the ``path`` argument boost_read, boost_info and boost_install take to
+    pick one — the only way to reach either copy over this surface.
     """
     kind = entry.get("kind") or "skill"
     marker = "" if kind == "skill" else " [%s]" % kind
     if installed:
         marker += " [installed]"
-    return "%s%s — %s (%s)" % (entry.get("name", "?"), marker,
+    line = "%s%s — %s (%s)" % (entry.get("name", "?"), marker,
                                entry.get("description", ""),
                                entry.get("tap", "?"))
+    return line + (" [path: %s]" % path if path else "")
+
+
+def str_arg(args: Mapping, key: str) -> str | None:
+    """``args[key]`` when it is a string, None when absent; else refuse.
+
+    Every tool's inputSchema says its fields are strings, and the handlers
+    used to ``str()`` whatever arrived: ``{"name": null}`` looked up a skill
+    called ``'None'`` and a list query was searched as its own repr. A
+    schema-violating value is the caller's mistake, so it is named — the
+    same treatment ``handle_request`` gives a non-object ``arguments``.
+    """
+    val = args.get(key)
+    if val is None and key not in args:
+        return None
+    if not isinstance(val, str):
+        raise BoostError("invalid argument: \"%s\" must be a string, got %s"
+                         % (key, "null" if val is None else type(val).__name__))
+    return val
 
 
 # `boost_read`'s budget, and it is a measured number rather than a round one.
@@ -369,8 +394,39 @@ def hit_line(entry: dict, *, installed: bool = False) -> str:
 READ_LIMIT = 12000
 
 
+def state_marks(entry: dict | None, modified: bool = False) -> str:
+    """``boost_list``'s trailing markers for one lock row.
+
+    ``[pinned]`` holds the version; ``[quarantined]`` and ``[sidelined]``
+    mean no agent loads the item at all. Without the last two a quarantined
+    item read as installed and "usable this second" under a description that
+    promises exactly that, while CLI `boost list` flagged it. ``[modified]``
+    is the caller's answer from :func:`integrity.locally_edited`: an agent
+    told an edited copy is the tap's procedure reads the wrong one.
+    """
+    e = entry or {}
+    return "".join((" [modified]" if modified else "",
+                    " [pinned]" if e.get("pinned") else "",
+                    " [quarantined]" if e.get("quarantined")
+                    else " [sidelined]" if e.get("sidelined_by") else ""))
+
+
+def held_line(name: str, entry: dict | None) -> str | None:
+    """``boost_read``'s header line for an installed item no agent loads, or
+    None. The content follows either way; this says it is not in effect."""
+    e = entry or {}
+    if e.get("quarantined"):
+        return ("quarantined: yes — no agent loads it; `boost quarantine "
+                "--release %s` puts it back" % name)
+    if e.get("sidelined_by"):
+        return ("sidelined: yes (by `boost %s`) — no agent loads it"
+                % e["sidelined_by"])
+    return None
+
+
 def read_reply(name: str, text: str, *, kind: str = "skill",
-               installed: bool = False, limit: int = READ_LIMIT) -> str:
+               installed: bool = False, limit: int = READ_LIMIT,
+               where: str | None = None, held: str | None = None) -> str:
     """`boost_read`'s reply: a header, then the item's own content.
 
     The header exists because the body alone does not say what the agent is
@@ -389,16 +445,26 @@ def read_reply(name: str, text: str, *, kind: str = "skill",
     Truncation cuts at a LINE boundary within the budget rather than mid-line.
     A Markdown body cut mid-fence or mid-sentence is text an agent has to
     guess about; a whole-line cut is unambiguously "the document continues".
-    A body whose first line already exceeds the budget has no such boundary,
-    so it falls back to a hard character cut — announced the same way.
+    When the last boundary would keep less than half the budget — no newline
+    at all, or one long line (a 1 MB ``description:`` on line 3 served 18
+    characters of 12,000) — it hard-cuts at the budget instead, inside that
+    line, announced the same way.
     """
     head = ["name: %s" % name]
     if kind != "skill":
         head.append("kind: %s" % kind)
-    head.append("installed: %s" % ("yes" if installed else "no"))
+    # ``where`` names the checkout a `--local` install lives in: "yes"
+    # alone told an agent in another repo that the item was active there.
+    head.append("installed: %s" % (("yes (project %s)" % where if where
+                                     else "yes") if installed else "no"))
+    # ``held`` (:func:`held_line`): installed, and still not in effect.
+    if held and installed:
+        head.append(held)
     body = text.strip("\n")
     if len(body) > limit:
-        cut = body[:limit].rpartition("\n")[0] or body[:limit]
+        cut = body[:limit].rpartition("\n")[0]
+        if len(cut) < limit // 2:
+            cut = body[:limit]
         body = ("%s\n\n[truncated at %d of %d characters — read the rest with "
                 "`boost cat %s`]" % (cut, len(cut), len(text), name))
     return "\n".join(head) + "\n\n" + body
@@ -410,7 +476,42 @@ def read_reply(name: str, text: str, *, kind: str = "skill",
 _KINDS = ("skill", "rule", "workflow")
 
 
-def coverage_line(installed: dict, *, tapped: int) -> str:
+def config_problem(cfg_err: str) -> str:
+    """The sentence for an unreadable config.json, shared by every tool.
+
+    ``cfg_err`` is :func:`config.check`'s answer. With the file unreadable the
+    tap list reads as DEFAULTS' empty one, so a surface keyed on
+    ``tapped == 0`` would call the machine fresh and send the agent to
+    ``boost tap --defaults`` — a write that moves the user's file aside and
+    leaves a tap list holding only what it just added. ``boost_doctor`` named
+    the real fix while ``boost_search`` and ``boost_list`` gave that advice in
+    the same session, so all three take this one sentence.
+    """
+    from . import jsonstate, paths
+    if isinstance(cfg_err, jsonstate.Unreadable):
+        # Its bytes may be intact, and every config write refuses over it, so
+        # "re-add their taps" names a command that cannot succeed.
+        return ("%s — boost is running on defaults, so the user's taps are "
+                "not listed; ask the user to %s (run `boost doctor` for "
+                "details)" % (cfg_err, jsonstate.read_remedy(
+                    cfg_err, paths.tilde)))
+    return ("%s — boost is running on defaults, so the user's taps are not "
+            "listed; ask the user to repair the file or re-add their taps "
+            "(run `boost doctor` for details)" % cfg_err)
+
+
+def needs_name(tool: str) -> str:
+    """The refusal for a blank ``name`` on a tool whose schema requires one.
+
+    Treating ``""`` as a lookup answered "no skill named ''" — and on
+    boost_install offered the first three catalog names as "closest matches",
+    a suggestion with nothing behind it.
+    """
+    return "%s needs a name — pass one as boost_search returned it" % tool
+
+
+def coverage_line(installed: dict, *, tapped: int,
+                  config_error: str | None = None) -> str:
     """``boost_list``'s closing footer: what this machine holds, per kind.
 
     ``installed`` is the ``lockfile.all_installed()`` shape — ``{kind: {name:
@@ -442,6 +543,9 @@ def coverage_line(installed: dict, *, tapped: int) -> str:
     body = " · ".join(
         "%d %s%s" % (n, kind, "" if n == 1 else "s")
         for kind, n in ((k, len(installed.get(k) or {})) for k in _KINDS))
+    # An unreadable config.json reads as no taps; see :func:`config_problem`.
+    if config_error:
+        return "%s installed here. %s." % (body, config_problem(config_error))
     if tapped > 0:
         return ("%s installed here — what this machine holds, not what exists. "
                 "boost_search reads the tapped registries themselves, across "
@@ -554,7 +658,8 @@ def echo(text: str, *, limit: int = QUERY_ECHO_CHARS) -> str:
 
 
 def no_results(query: str, *, tapped: int,
-               dropped: Sequence[str] = ()) -> str:
+               dropped: Sequence[str] = (), ignored: bool = False,
+               config_error: str | None = None) -> str:
     """The reply for a search that returned nothing.
 
     THREE different situations wore one sentence. On a configured machine
@@ -576,10 +681,20 @@ def no_results(query: str, *, tapped: int,
     happened and the rule, so a retry is possible. The setup branch still wins:
     an untapped machine could not have matched anything either way.
 
-    Both echoing branches are bounded by :func:`echo` — see
+    ``ignored`` is the fourth: the query held only stopwords and punctuation
+    (``rag.ignored_by_design``), which ``dropped`` leaves out on purpose, so
+    `the and of` used to read as a genuine miss.
+
+    Every echoing branch is bounded by :func:`echo` — see
     :data:`QUERY_ECHO_CHARS` for why the one reply an agent hits repeatedly
     must not cost it in proportion to what it typed.
+
+    ``config_error`` wins over all of them: with config.json unreadable no
+    tap is listed, and the setup branch's `boost tap --defaults` would
+    replace the user's real list (:func:`config_problem`).
     """
+    if config_error:
+        return ("nothing was searched: %s." % config_problem(config_error))
     if tapped > 0 and dropped:
         shown = ", ".join("%r" % echo(t) for t in dropped[:ECHO_TERMS])
         if len(dropped) > ECHO_TERMS:
@@ -587,6 +702,10 @@ def no_results(query: str, *, tapped: int,
         return ("%s did not reach the index, so nothing was searched — a term "
                 "needs 2 or more ASCII letters or digits. Retry with a "
                 "plain-word description of the task." % shown)
+    if tapped > 0 and ignored:
+        return ("%r holds only common words and punctuation, which the index "
+                "ignores, so nothing was searched. Retry with a plain-word "
+                "description of the task." % echo(query))
     if tapped > 0:
         return "no skills match %r" % echo(query)
     # Addressed to the user via the agent, and naming ONE command. Telling an

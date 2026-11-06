@@ -21,3 +21,24 @@ class BoostError(Exception):
         self.message = message
         self.hint = hint
         self.wrap = wrap
+
+
+class NotUTF8Error(BoostError):
+    """A file the *user* owns holds bytes that are not UTF-8.
+
+    Raised by `util.read_user_text` in place of the bare
+    ``UnicodeDecodeError`` — a ``ValueError`` that no ``except OSError``
+    stops — which turned one latin-1 byte in ``~/.claude/CLAUDE.md`` into a
+    crash report and exit 70 from install, uninstall and verify alike. Boost
+    edits a context file only as text it can write back byte for byte, so
+    the remedy is the user's: re-save the file as UTF-8.
+    """
+
+    def __init__(self, path, err: UnicodeDecodeError):
+        self.path = path
+        byte = err.object[err.start:err.start + 1]
+        super().__init__(
+            "%s is not UTF-8 (byte 0x%s at offset %d), so boost cannot edit "
+            "it without changing your bytes" % (path, byte.hex(), err.start),
+            hint="save the file as UTF-8, then run the command again",
+            wrap=True)

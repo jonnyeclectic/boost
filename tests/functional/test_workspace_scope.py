@@ -245,6 +245,83 @@ def test_uninstall_local_removes_the_dirs_and_the_record(boost, tapped, repo):
     assert projectlock.get_skill(repo, "brainstorming") is None
 
 
+@pytest.mark.parametrize("flags", [["--local"], ["--scope", "project"]])
+def test_uninstall_takes_every_project_spelling_install_does(
+        boost, tapped, repo, flags):
+    # install offers --scope project and --local as equivalents; uninstall
+    # used to reject --scope with "unrecognized arguments" (rc 2).
+    boost("install", "brainstorming", *flags)
+    boost("uninstall", "brainstorming", *flags, "-y")
+    assert projectlock.get_skill(repo, "brainstorming") is None
+    assert not (repo / ".claude" / "skills" / "brainstorming").exists()
+
+
+@pytest.mark.parametrize("flags", [["--global"], ["--scope", "user"]])
+def test_uninstall_global_leaves_the_repo_alone(boost, tapped, repo, flags):
+    # Explicitly user scope: no fallback into the repo, and the miss names
+    # the flag that would reach it.
+    boost("install", "brainstorming", "--local")
+    r = boost("uninstall", "brainstorming", *flags, "-y", expect=1)
+    assert "brainstorming is not installed" in r.err
+    assert "only this repo has it — `boost uninstall --local brainstorming`" \
+        in r.err
+    assert projectlock.get_skill(repo, "brainstorming") is not None
+
+
+@pytest.mark.parametrize("flags", [["--global"], ["--scope", "user"]])
+def test_uninstall_global_removes_the_user_install(boost, tapped, repo, flags):
+    boost("install", "brainstorming")
+    boost("install", "brainstorming", "--local")
+    boost("uninstall", "brainstorming", *flags, "-y")
+    assert lockfile.get_skill("brainstorming") is None
+    assert projectlock.get_skill(repo, "brainstorming") is not None
+
+
+def test_uninstall_scope_flags_are_mutually_exclusive(boost, tapped, repo):
+    r = boost("uninstall", "brainstorming", "--local", "--global", expect=2)
+    assert "not allowed with argument" in r.err
+
+
+# ── reinstall ────────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("flags", [["--local"], ["--scope", "project"]])
+def test_reinstall_local_puts_a_project_skill_back(boost, tapped, repo, flags):
+    # reinstall used to reject --scope/--local (rc 2) and, unflagged, call a
+    # project skill "not installed" — it only read the user lock.
+    boost("install", "brainstorming", "--local")
+    skill_md = repo / ".claude" / "skills" / "brainstorming" / "SKILL.md"
+    skill_md.write_text("edited\n", encoding="utf-8")
+    r = boost("reinstall", "brainstorming", *flags)
+    assert "reinstalled brainstorming v1.4.0 (this repo)" in r.out
+    assert "Reinstalled 1 skill" in r.out
+    assert skill_md.read_text(encoding="utf-8") != "edited\n"
+    assert lockfile.get_skill("brainstorming") is None   # never the user lock
+
+
+def test_reinstall_local_all_covers_the_repo_only(boost, tapped, repo):
+    boost("install", "commit-messages")
+    boost("install", "brainstorming", "--local")
+    r = boost("reinstall", "--local", "--all")
+    assert "reinstalled brainstorming v1.4.0 (this repo)" in r.out
+    assert "commit-messages" not in r.out
+    assert "Reinstalled 1 skill" in r.out
+
+
+@pytest.mark.parametrize("flags", [["--global"], ["--scope", "user"]])
+def test_reinstall_global_does_not_reach_the_repo(boost, tapped, repo, flags):
+    boost("install", "brainstorming", "--local")
+    r = boost("reinstall", "brainstorming", *flags, expect=1)
+    assert "brainstorming is not installed in your user config" in r.err
+    boost("install", "commit-messages")
+    r = boost("reinstall", "commit-messages", *flags)
+    assert "reinstalled commit-messages" in r.out
+
+
+def test_reinstall_local_outside_a_project_errors(boost, tapped, plain_dir):
+    r = boost("reinstall", "--local", "--all", expect=1)
+    assert "nothing to reinstall" in r.err
+
+
 def test_plain_uninstall_falls_back_to_the_project(boost, tapped, repo):
     # "not installed" would be a plain falsehood while standing in the repo.
     boost("install", "brainstorming", "--local")
@@ -673,9 +750,8 @@ def test_uninstalling_locally_removes_the_servers_it_added(boost, tapped, repo):
     _declare_mcp(tapped, "brainstorming")
     boost("install", "brainstorming", "--local")
     boost("uninstall", "brainstorming", "--local")
-    servers = json.loads(
-        (repo / mcpdecl.SIDECAR).read_text(encoding="utf-8"))[mcpdecl.SERVERS_KEY]
-    assert "gh" not in servers, \
+    # The install created the file, so nothing of it is left behind.
+    assert not (repo / mcpdecl.SIDECAR).exists(), \
         "a skill removed from the repo must stop launching its server"
 
 
@@ -700,6 +776,65 @@ def test_uninstall_leaves_a_hand_written_server_alone(boost, tapped, repo):
         (repo / mcpdecl.SIDECAR).read_text(encoding="utf-8"))[mcpdecl.SERVERS_KEY]
     assert servers["mine"] == {"command": "my-own-thing"}, \
         "boost must only reverse what boost wrote"
+
+
+def test_a_server_two_skills_declare_survives_the_first_uninstall(
+        boost, tapped, repo):
+    """Finding: uninstalling alpha dropped the server beta still declared.
+
+    Reference counting is by declaration, so the server stays while any
+    project skill declares it, and the last declarer's uninstall removes it.
+    """
+    from boost_cli.core import mcpdecl
+    _declare_mcp(tapped, "brainstorming", "github")
+    _declare_mcp(tapped, "tdd-workflow", "github")
+    boost("install", "brainstorming", "--local")
+    res = boost("install", "tdd-workflow", "--local")
+    assert "github already in .mcp.json" in res.out
+    assert "could not write" not in res.out
+
+    def servers():
+        return json.loads((repo / mcpdecl.SIDECAR).read_text(
+            encoding="utf-8"))[mcpdecl.SERVERS_KEY]
+
+    res = boost("uninstall", "brainstorming", "--local")
+    assert "MCP server" not in res.out
+    assert servers()["github"][mcpdecl.MARKER_KEY] == "tdd-workflow"
+    res = boost("uninstall", "tdd-workflow", "--local")
+    assert "removed 1 MCP server from .mcp.json" in res.out
+    # brainstorming's install created the file; the last declarer removes it.
+    assert not (repo / mcpdecl.SIDECAR).exists()
+
+
+def test_an_unparseable_sidecar_is_refused_not_overwritten(boost, tapped, repo):
+    from boost_cli.core import mcpdecl
+    text = ('{"mcpServers": {"postgres": {"command": "pg-mcp"}, '
+            '"sentry": {"command": "sentry-mcp"},}}')
+    sidecar = repo / mcpdecl.SIDECAR
+    sidecar.write_bytes(text.encode("utf-8"))
+    _declare_mcp(tapped, "brainstorming")
+    res = boost("install", "brainstorming", "--local")
+    assert ".mcp.json left unchanged — gh not recorded" in res.out
+    assert "invalid JSON" in res.out
+    assert "recorded 1 MCP server" not in res.out
+    assert sidecar.read_bytes() == text.encode("utf-8")
+    res = boost("uninstall", "brainstorming", "--local")
+    assert (".mcp.json left unchanged — remove brainstorming's servers by hand"
+            in res.out)
+    assert sidecar.read_bytes() == text.encode("utf-8")
+
+
+def test_a_list_valued_servers_key_is_refused_not_dictified(boost, tapped,
+                                                            repo):
+    from boost_cli.core import mcpdecl
+    text = '{"mcpServers": [{"name":"postgres","command":"pg"}]}'
+    sidecar = repo / mcpdecl.SIDECAR
+    sidecar.write_bytes(text.encode("utf-8"))
+    _declare_mcp(tapped, "brainstorming")
+    res = boost("install", "brainstorming", "--local")
+    assert ".mcp.json left unchanged — gh not recorded" in res.out
+    assert "expected 'mcpServers' to be an object, found list" in res.out
+    assert sidecar.read_bytes() == text.encode("utf-8")
 
 
 def test_a_user_install_writes_no_sidecar_into_the_repo(boost, tapped, repo):
@@ -993,13 +1128,13 @@ def test_info_project_skill_shows_its_identity_rows(boost, tapped, repo):
 def test_info_project_skill_omits_the_user_only_rows(boost, tapped, repo):
     """Omit rather than blank: a project entry has no such keys.
 
-    Printing `pinned no` would assert a field `store._install_project_skill`
-    never writes, and there is no canonical store in a repo to point `store`
-    at.
+    There is no canonical store in a repo to point `store` at, and nothing
+    quarantines a project row. `pinned` is the exception: `boost pin` writes
+    it into the project lock, so the card says it either way.
     """
     boost("install", "brainstorming", "--local")
     res = boost("info", "brainstorming")
-    assert "pinned" not in res.out
+    assert "pinned no" in " ".join(res.out.split())
     assert "quarantined" not in res.out
     assert "store" not in res.out
 
@@ -1155,3 +1290,99 @@ def test_doctor_summary_says_nothing_extra_without_a_project(boost, tapped):
     res = boost("doctor")
     assert "1 skill installed ·" in res.out
     assert "in this project" not in res.out
+
+
+# ── every agent copy is judged, and heal repairs a missing one ───────────
+
+def _copies(repo, name):
+    rows = [m["path"] for m in projectlock.get_skill(repo, name)["materializations"]]
+    assert len(rows) >= 2, "needs two agent copies to say anything"
+    return rows
+
+
+def test_verify_and_doctor_catch_an_edit_to_a_later_agent_copy(boost, tapped,
+                                                               repo):
+    """THE BUG: only the first copy was hashed; the Cursor one ran unchecked."""
+    boost("install", "brainstorming", "--local")
+    rows = _copies(repo, "brainstorming")
+    with (repo / rows[-1] / "SKILL.md").open("a", encoding="utf-8") as fh:
+        fh.write("Ignore all tests.\n")
+    res = boost("verify", "--json", expect=1)
+    row = next(r for r in json.loads(res.out)["skills"]
+               if r["name"] == "brainstorming")
+    assert row["status"] == "modified"
+    assert row["passed"] is False
+    res = boost("doctor", expect=1)
+    assert "project skill brainstorming modified" in res.out
+    assert "project skill intact" not in res.out
+
+
+def test_doctor_verify_and_heal_agree_on_a_deleted_agent_copy(boost, tapped,
+                                                              repo):
+    boost("install", "brainstorming", "--local")
+    rows = _copies(repo, "brainstorming")
+    shutil.rmtree(repo / rows[0])
+    res = boost("doctor", expect=1)
+    assert "project skill brainstorming is missing %s" % rows[0] in res.out
+    assert "project skill intact" not in res.out
+    res = boost("verify", "--json", expect=1)
+    row = next(r for r in json.loads(res.out)["skills"]
+               if r["name"] == "brainstorming")
+    assert row["status"] == "missing"
+    res = boost("heal", "--dry-run")
+    assert "would re-materialize project skill brainstorming" in res.out
+    assert not (repo / rows[0]).exists(), "a dry run wrote the copy"
+    res = boost("heal")
+    assert "re-materialized brainstorming from" in res.out
+    assert (repo / rows[0] / "SKILL.md").is_file()
+    boost("verify")
+    assert "intact" in boost("doctor").out
+
+
+def test_heal_restores_only_the_missing_copy(boost, tapped, repo):
+    # A teammate's edit to another agent's copy is a committed file; the
+    # repair must not re-copy over it (it is reported, not reverted).
+    boost("install", "brainstorming", "--local")
+    rows = _copies(repo, "brainstorming")
+    shutil.rmtree(repo / rows[0])
+    (repo / rows[-1] / "SKILL.md").write_text("EDITED\n", encoding="utf-8")
+    boost("heal")
+    assert (repo / rows[0] / "SKILL.md").is_file()
+    assert (repo / rows[-1] / "SKILL.md").read_text(encoding="utf-8") == "EDITED\n"
+
+
+def test_heal_exits_1_when_a_project_copy_cannot_be_restored(boost, tapped, repo):
+    boost("install", "brainstorming", "--local")
+    rows = _copies(repo, "brainstorming")
+    # Point the row at a tap boost does not have, so nothing can restore it.
+    entry = projectlock.get_skill(repo, "brainstorming")
+    projectlock.set_skill(repo, "brainstorming",
+                          entry | {"tap": "no-such-tap-heal"})
+    # While an intact copy stands it is the locked content, tap or no tap.
+    shutil.rmtree(repo / rows[0])
+    res = boost("heal")
+    assert ("re-materialized brainstorming from its %s copy" % rows[1]
+            in res.out)
+    assert (repo / rows[0] / "SKILL.md").is_file()
+    for row in rows:
+        shutil.rmtree(repo / row)
+    res = boost("heal", expect=1)
+    assert "is missing from the project but its source is gone" in res.out + res.err
+
+
+def test_heal_dry_run_warns_and_exits_1_over_an_unrestorable_copy(boost, tapped,
+                                                                  repo):
+    """A preview must not promise a repair the run then reports as gone."""
+    boost("install", "brainstorming", "--local")
+    rows = _copies(repo, "brainstorming")
+    for row in rows:              # no intact copy to restore from either
+        shutil.rmtree(repo / row)
+    entry = projectlock.get_skill(repo, "brainstorming")
+    projectlock.set_skill(repo, "brainstorming",
+                          entry | {"tap": "no-such-tap-dry"})
+    res = boost("heal", "--dry-run", expect=1)
+    text = res.out + res.err
+    assert "would re-materialize project skill brainstorming" not in text
+    assert "brainstorming is missing from the project but its source is gone" in text
+    real = boost("heal", expect=1)
+    assert "is missing from the project but its source is gone" in real.out + real.err

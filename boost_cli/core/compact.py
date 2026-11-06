@@ -29,7 +29,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
-from . import gitutil, util
+from . import gitutil, lockfile, projectlock, scopes, util
 
 
 @dataclass(frozen=True)
@@ -118,9 +118,48 @@ def tracked_files(repo: Path) -> set[str]:
     return {p for p in out.split("\0") if p}
 
 
+def keep_dirs(start=None) -> dict[str, list[str]]:
+    """``{tap: [source_dir, ...]}`` that every lock in view still needs.
+
+    `compact` re-materializes these after narrowing, so routine hashing
+    (`outdated`, `drift`, `doctor`) stays offline once the freight is gone.
+    Reading only the user lock missed a project-scope install: compact
+    narrowed its `scripts/` away, the next `drift` put them back through
+    `store.source_dir_for`, and every compact "freed" the same bytes again.
+    The project is the one the cwd (or ``start``) resolves to, as `boost list`
+    finds it — boost records no list of every project on the machine.
+    """
+    keep: dict[str, list[str]] = {}
+
+    def add(entry: object) -> None:
+        if not isinstance(entry, dict):
+            return
+        rel = entry.get("source_dir")
+        if not rel or not isinstance(rel, str):
+            return
+        dirs = keep.setdefault(str(entry.get("tap", "")), [])
+        if rel not in dirs:
+            dirs.append(rel)
+
+    for section in lockfile.all_installed().values():
+        for entry in section.values():
+            add(entry)
+    base = scopes.resolve_base(scopes.SCOPE_PROJECT, start=start)
+    if base is not None:
+        for entry in projectlock.installed(base).values():
+            add(entry)
+    return keep
+
+
 def _kept_prefixes(keep_dirs: list[str]) -> tuple[str, ...]:
-    """`source_dir` entries as directory prefixes, e.g. `skills/demo/`."""
-    return tuple("%s/" % d.strip("/") for d in keep_dirs)
+    """`source_dir` entries as directory prefixes, e.g. `skills/demo/`.
+
+    A skill at the repo root (``"."``) keeps the whole tree, which ``compact``
+    re-materializes as ``/*``, so its prefix is the empty string: ``./``
+    matched no path and the preview promised to free every byte it keeps.
+    """
+    return tuple("" if d.strip("/") in ("", ".") else "%s/" % d.strip("/")
+                 for d in keep_dirs)
 
 
 def _off_cone_files(repo: Path, keep_dirs: list[str]):
@@ -155,15 +194,22 @@ def freight_bytes(repo: Path, keep_dirs: list[str]) -> int:
     An untracked file outside the cone survives and must not be promised — the
     defect this function was rewritten to fix.
 
-    It is an upper bound in one case left uncorrected: git also declines to
-    remove a tracked path with local modifications. Chasing that would cost a
-    `git status` over the clone for a state a tap should never be in (boost
-    only ever reads a tap's tree), and it fails safe — over-promising by the
-    size of a file the user edited by hand, not by a megabyte of build output.
+    git also declines to remove a tracked path with local modifications. In a
+    clone boost owns, `gitutil.narrow` puts such a file back to the commit
+    first, so it is freed and counted. Anywhere else narrow leaves it, so it
+    is not promised: the dry run promised it, and the real run freed nothing.
     """
     tracked = tracked_files(repo)
+    if not gitutil.owned_clone(repo):
+        tracked -= modified_files(repo)
     return sum(size for rel, size in _off_cone_files(repo, keep_dirs)
                if rel in tracked)
+
+
+def modified_files(repo: Path) -> set[str]:
+    """Tracked paths whose working-tree copy differs from the index."""
+    out = gitutil.run(["-C", str(repo), "ls-files", "-m", "-z"]).stdout
+    return {p for p in out.split("\0") if p}
 
 
 def worktree_freight_bytes(repo: Path, keep_dirs: list[str]) -> int:

@@ -94,6 +94,13 @@ class TestInt:
         assert str(e.value) == "min_quality_score expects a whole number, got 'abc'"
 
 
+    def test_a_caller_can_name_a_narrower_expectation(self):
+        e = tv.ValueTypeError("k", "9", tv.INT, expected="a whole number from 0 to 5")
+        assert e.expected == "a whole number from 0 to 5"
+        assert e.spec == tv.INT
+        assert str(e) == "k expects a whole number from 0 to 5, got '9'"
+
+
 class TestIntOrNone:
     @pytest.mark.parametrize("raw", ["", "null", "none", "NULL", " None "])
     def test_the_no_limit_words(self, raw):
@@ -129,14 +136,22 @@ class TestList:
         # out of policy check AND out of install.
         assert tv.coerce("blocked_skills", "42", tv.LIST) == ["42"]
 
-    def test_a_json_object_is_not_mistaken_for_a_list(self):
-        assert tv.coerce("blocked_skills", '{"a": 1}', tv.LIST) == ['{"a": 1}']
+    @pytest.mark.parametrize("raw", ['{"a": 1}', ' {"cowboy-coding": true}',
+                                     "{", "[1,", "[a, b"])
+    def test_json_that_is_not_an_array_is_refused(self, raw):
+        # A JSON object used to become the one-item list ['{"a": 1}'] — a
+        # blocklist naming no skill, stored behind a check mark.
+        with pytest.raises(tv.ValueTypeError) as e:
+            tv.coerce("blocked_skills", raw, tv.LIST)
+        assert e.value.expected == tv.describe(tv.LIST)
+        assert e.value.key == "blocked_skills"
 
-    def test_a_list_key_never_raises(self):
-        # Its documented surface is a comma list, so every string is a legal
-        # one. This is the one spec with no failure mode.
-        for raw in ("", "x", "42", "true", "{", "[1,"):
-            assert isinstance(tv.coerce("blocked_skills", raw, tv.LIST), list)
+    def test_any_other_text_is_a_comma_list(self):
+        # Its documented surface is a comma list, so text that does not open
+        # like JSON is always a legal one.
+        for raw, want in (("", []), ("x", ["x"]), ("42", ["42"]),
+                          ("true", ["true"]), ("a{b", ["a{b"]), ("x,[y", ["x", "[y"])):
+            assert tv.coerce("blocked_skills", raw, tv.LIST) == want
 
 
 class TestStr:

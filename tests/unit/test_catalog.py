@@ -6,12 +6,14 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import sys
+import threading
 from pathlib import Path
 
 import pytest
 
-from boost_cli.core import catalog, config, paths, registry
+from boost_cli.core import catalog, config, paths, rag, registry
 from boost_cli.errors import BoostError
 
 FIXTURE_NAMES = ["brainstorming", "commit-messages", "cowboy-coding",
@@ -116,6 +118,118 @@ class TestScanDir:
         write_skill(root / "s", "---\nname: My Cool Skill\n---")
         (e,) = catalog.scan_dir(root)
         assert e["name"] == "my-cool-skill"
+
+    def test_two_cjk_names_get_two_names_from_their_dirs(self, tmp_path):
+        # Every non-ASCII name slugged to `skill`, so one tap shipping two
+        # different names read as one name shipped twice.
+        root = tmp_path / "tap"
+        write_skill(root / "skills" / "jp", "---\nname: \u65e5\u672c\u8a9e\n---")
+        write_skill(root / "skills" / "kr", "---\nname: \ud55c\uad6d\uc5b4\n---")
+        assert [e["name"] for e in catalog.scan_dir(root)] == ["jp", "kr"]
+
+    def test_original_non_ascii_name_resolves(self, tmp_path):
+        root = tmp_path / "tap"
+        write_skill(root / "skills" / "jp", "---\nname: \u65e5\u672c\u8a9e\n---")
+        entries = catalog.scan_dir(root, tap_name="t")
+        (hit,) = catalog.find("\u65e5\u672c\u8a9e", entries=entries)
+        assert hit["name"] == "jp"
+        assert catalog.find("t:\u65e5\u672c\u8a9e", entries=entries) == [hit]
+        assert catalog.find("jp", entries=entries) == [hit]
+
+    def test_non_ascii_rule_and_workflow_resolve_by_file_name(self, tmp_path):
+        # A rule or workflow is named by its file and has no meta name, so the
+        # meta-name alias never covered it: `boost install déploy` failed.
+        root = tmp_path / "tap"
+        (root / "rules").mkdir(parents=True)
+        (root / "commands" / "\u00e9quipe").mkdir(parents=True)
+        (root / "rules" / "na\u00efve.mdc").write_text(
+            "---\ndescription: r\n---\nrule\n", encoding="utf-8")
+        (root / "commands" / "d\u00e9ploy.md").write_text(
+            "---\ndescription: w\n---\ncmd\n", encoding="utf-8")
+        (root / "commands" / "\u00e9quipe" / "go.md").write_text(
+            "---\ndescription: n\n---\ncmd\n", encoding="utf-8")
+        (root / "rules" / "plain.mdc").write_text(
+            "---\ndescription: p\n---\nrule\n", encoding="utf-8")
+        entries = catalog.scan_dir(root, tap_name="t")
+        by = {e["name"]: e for e in entries}
+        assert sorted(by) == ["deploy", "equipe/go", "naive", "plain"]
+        assert by["naive"]["original_name"] == "na\u00efve"
+        assert by["deploy"]["original_name"] == "d\u00e9ploy"
+        assert by["equipe/go"]["original_name"] == "\u00e9quipe/go"
+        assert "original_name" not in by["plain"]
+        assert catalog.find("na\u00efve", entries=entries) == [by["naive"]]
+        assert catalog.find("d\u00e9ploy", entries=entries) == [by["deploy"]]
+        assert catalog.find("\u00e9quipe/go", entries=entries) == [by["equipe/go"]]
+        # typed in NFD (pasted from a macOS filename): the same entry
+        assert catalog.find("de\u0301ploy", entries=entries) == [by["deploy"]]
+        assert catalog.find("t:de\u0301ploy", entries=entries) == [by["deploy"]]
+
+    def test_nfd_file_name_is_stored_and_found_as_nfc(self, tmp_path):
+        root = tmp_path / "tap"
+        (root / "rules").mkdir(parents=True)
+        nfd = root / "rules" / "nai\u0308ve.mdc"
+        nfd.write_text("---\ndescription: r\n---\nrule\n", encoding="utf-8")
+        (e,) = catalog.scan_dir(root, tap_name="t")
+        assert e["name"] == "naive"
+        assert e["original_name"] == "na\u00efve"
+        assert catalog.find("na\u00efve", entries=[e]) == [e]
+        assert catalog.find("nai\u0308ve", entries=[e]) == [e]
+
+    def test_nfd_skill_name_aliases_and_slugs_as_nfc(self, tmp_path):
+        root = tmp_path / "tap"
+        write_skill(root / "skills" / "c", "---\nname: cafe\u0301\n---")
+        (e,) = catalog.scan_dir(root, tap_name="t")
+        assert e["name"] == "cafe"
+        assert e["original_name"] == "caf\u00e9"
+        assert catalog.find("caf\u00e9", entries=[e]) == [e]
+        assert catalog.find("cafe\u0301", entries=[e]) == [e]
+
+    def test_original_name_alias_without_meta(self):
+        # `original_name` alone is enough: no meta name to fall back on.
+        e = dict(_entry("naive", "t"), original_name="na\u00efve")
+        assert catalog.find("na\u00efve", entries=[e]) == [e]
+        # ... but a safe original is never an alias
+        e2 = dict(_entry("y", "t"), original_name="other")
+        assert catalog.find("other", entries=[e2]) == []
+        # ... and an empty one is never indexed, so `find("")` stays empty
+        e3 = dict(_entry("z", "t"), original_name="")
+        assert catalog.find("", entries=[e3]) == []
+
+    def test_cache_format_moved(self):
+        assert catalog.CACHE_FORMAT == 10
+
+    def test_alias_never_indexes_a_safe_name(self, tmp_path):
+        # A safe frontmatter name IS the entry name; indexing it as an alias of
+        # a differently-named entry would let it shadow that name.
+        e = _entry("x", "t", meta={"name": "other"})
+        assert catalog.find("other", entries=[e]) == []
+        assert catalog.find("x", entries=[e]) == [e]
+
+    def test_alias_ignores_non_dict_meta(self):
+        e = dict(_entry("x", "t"), meta="garbage")
+        assert catalog.find("x", entries=[e]) == [e]
+
+    def test_entry_slug_cases(self):
+        slug = catalog._entry_slug
+        assert slug("ok_name-1.2", "d") == "ok_name-1.2"
+        assert slug("My Cool Skill", "d") == "my-cool-skill"
+        assert slug("caf\u00e9", "d") == "cafe"
+        # Nothing slug-able at all is the no-survivor case too, not `skill`.
+        assert slug("!!!", "d") == "d"
+        assert slug("\U0001f680", "e1") == "e1"
+        assert slug("\U0001f680", "..") != slug("\U0001f525", "..")
+        assert slug("\U0001f680", "..").startswith("skill-")
+        assert slug("\u65e5\u672c\u8a9e", "jp") == "jp"
+        # A directory that is no safe name either: a stable hash of the name.
+        assert slug("\u65e5\u672c\u8a9e", "\u65e5\u672c") == "skill-77710aed"
+        assert slug("\u65e5\u672c\u8a9e", "..") == "skill-77710aed"
+        # Partly lost: what survives, plus the hash, so two do not collide.
+        assert slug("\u65e5\u672c\u8a9e tools", "d") == "tools-0bb94d74"
+        assert slug("\ud55c\uad6d\uc5b4 tools", "d") != "tools-0bb94d74"
+        # Hash of the name as written, not of its accent-folded form.
+        assert slug("caf\u00e9 \u65e5\u672c", "d") == "cafe-5ce3bbb3"
+        # ... in NFC, so the NFD spelling of the same name slugs identically
+        assert slug("cafe\u0301 \u65e5\u672c", "d") == "cafe-5ce3bbb3"
 
     def test_name_without_spaces_kept_verbatim(self, tmp_path):
         root = tmp_path / "tap"
@@ -229,6 +343,63 @@ class TestScanRulesAndWorkflows:
         (e,) = catalog.scan_dir(root)
         assert e["kind"] == "workflow"
         assert e["name"] == "review"
+
+    def test_a_commands_frontmatter_name_does_not_rename_it(self, tmp_path):
+        # Claude Code names a command after its file and ignores `name` on
+        # one; installing this as `code-review-helper` left no `/review`.
+        root = tmp_path / "tap"
+        (root / "commands").mkdir(parents=True)
+        (root / "commands" / "review.md").write_text(
+            "---\nname: Code Review Helper\ndescription: Review code\n---\nX\n",
+            encoding="utf-8")
+        (e,) = catalog.scan_dir(root)
+        assert e["name"] == "review"
+        assert e["meta"]["name"] == "Code Review Helper"
+
+    def test_a_namespaced_command_keeps_its_namespace(self, tmp_path):
+        root = tmp_path / "tap"
+        for ns in ("frontend", "backend"):
+            (root / "commands" / ns).mkdir(parents=True)
+            (root / "commands" / ns / "test.md").write_text(
+                "---\ndescription: %s tests\n---\nX\n" % ns, encoding="utf-8")
+        (root / "commands" / "a" / "b").mkdir(parents=True)
+        (root / "commands" / "a" / "b" / "deep.md").write_text(
+            "---\ndescription: d\n---\nX\n", encoding="utf-8")
+        names = sorted(e["name"] for e in catalog.scan_dir(root))
+        assert names == ["a/b/deep", "backend/test", "frontend/test"]
+
+    def test_namespace_parts_are_slugged_one_by_one(self, tmp_path):
+        root = tmp_path / "tap"
+        (root / "commands" / "My Space").mkdir(parents=True)
+        (root / "commands" / "My Space" / "do it.md").write_text(
+            "---\ndescription: d\n---\nX\n", encoding="utf-8")
+        (e,) = catalog.scan_dir(root)
+        assert e["name"] == "my-space/do-it"
+
+    @pytest.mark.parametrize("rel, want", [
+        ("commands/review.md", "review"),
+        ("commands/frontend/test.md", "frontend/test"),
+        ("plugins/x/commands/test.md", "test"),
+        ("workflows/ci/run.md", "ci/run"),
+        ("Commands/Front/t.md", "Front/t"),
+        ("loose.md", "loose"),
+        ("agents/helper.md", None),
+        ("commands/agents/helper.md", None),
+    ])
+    def test_command_name(self, rel, want):
+        assert catalog.command_name(rel) == want
+
+    def test_a_subagent_still_takes_its_frontmatter_name(self, tmp_path):
+        root = tmp_path / "tap"
+        (root / "agents" / "team").mkdir(parents=True)
+        (root / "agents" / "team" / "b.md").write_text(
+            "---\nname: backend-architect\ndescription: d\n---\nX\n",
+            encoding="utf-8")
+        (e,) = catalog.scan_dir(root)
+        assert e["name"] == "backend-architect"
+
+    def test_the_cache_format_moved_so_old_caches_rescan(self):
+        assert catalog.CACHE_FORMAT >= 8
 
     def test_workflow_under_claude_agents_dir(self, tmp_path):
         root = tmp_path / "tap"
@@ -621,6 +792,94 @@ class TestTapMatches:
         # ("" tap) would satisfy an empty qualifier by string equality.
         assert catalog.tap_matches("", "") is False
 
+    def test_case_folded_spelling_selects_the_tap(self):
+        # `boost update Beta` acts on tap `beta` (registry.get's last tier),
+        # so `Beta:x` must select it too.
+        assert catalog.tap_matches("beta", "Beta") is True
+        assert catalog.tap_matches("Obra/Superpowers", "obra/superpowers") \
+            is True
+
+    def test_safe_name_selects_the_tap(self):
+        assert catalog.tap_matches("acme/fix", "acme__fix") is True
+
+    def test_case_fold_does_not_widen_the_tail(self):
+        # registry.get folds the full name only; `Skills` is not a tail tier.
+        assert catalog.tap_matches("trailofbits/skills", "Skills") is False
+
+
+class TestFindTapTiers:
+    def test_case_variant_qualifier_finds_the_tap(self, sandbox):
+        _fake_taps(("beta", [_entry("x", "beta", desc="b")]))
+        assert [e["tap"] for e in catalog.find("Beta:x")] == ["beta"]
+        assert catalog.resolve_one("Beta:x")["tap"] == "beta"
+
+    # A corpus passed in directly: two taps that differ only by case or by
+    # `/` vs `__` share one cache file on disk, so they cannot both be faked.
+    def test_exact_spelling_beats_a_case_variant(self):
+        pool = [_entry("x", "beta", desc="lower"),
+                _entry("x", "Beta", desc="upper")]
+        assert [e["description"] for e in catalog.find("Beta:x", entries=pool)] \
+            == ["upper"]
+        assert [e["description"] for e in catalog.find("beta:x", entries=pool)] \
+            == ["lower"]
+
+    def test_safe_name_beats_a_tail_and_a_fold(self):
+        pool = [_entry("x", "other/acme__fix", desc="tail"),
+                _entry("x", "acme/fix", desc="safe"),
+                _entry("x", "ACME__FIX", desc="fold")]
+        assert [e["description"]
+                for e in catalog.find("acme__fix:x", entries=pool)] == ["safe"]
+
+    def test_tail_beats_a_fold(self):
+        pool = [_entry("x", "Fix", desc="fold"),
+                _entry("x", "acme/fix", desc="tail")]
+        assert [e["description"] for e in catalog.find("fix:x", entries=pool)] \
+            == ["tail"]
+
+    def test_unmatched_qualifier_finds_nothing(self, sandbox):
+        _fake_taps(("beta", [_entry("x", "beta", desc="b")]))
+        assert catalog.find("gamma:x") == []
+
+
+_A = {"name": "x", "tap": "acme/fix", "version": "1.0.2"}
+_B = {"name": "x", "tap": "other", "version": "9.0.0"}
+_FIX = {"action": "install", "tap": "acme/fix"}
+_OTHER = {"action": "install", "tap": "other"}
+_UNTAPPED = {"action": "uninstall"}
+_EVENTS = [_FIX, _OTHER, _UNTAPPED]
+
+
+class TestForLock:
+
+    def test_the_lock_tap_row_wins_over_the_first_match(self):
+        assert catalog.for_lock([_A, _B], {"tap": "other"}) is _B
+
+    def test_no_row_from_the_lock_tap_is_none_not_another_tap(self):
+        assert catalog.for_lock([_A], {"tap": "other"}) is None
+
+    def test_a_tapless_lock_keeps_the_first_match(self):
+        assert catalog.for_lock([_A, _B], {"version": "1"}) is _A
+
+    def test_no_lock_keeps_the_first_match(self):
+        assert catalog.for_lock([_B, _A], None) is _B
+
+    def test_no_matches_is_none(self):
+        assert catalog.for_lock([], {"tap": "other"}) is None
+
+
+class TestEventsForTap:
+    def test_no_qualifier_counts_every_event(self):
+        assert catalog.events_for_tap(_EVENTS, None, None) == _EVENTS
+
+    def test_a_qualifier_keeps_only_its_taps_events(self):
+        assert catalog.events_for_tap(_EVENTS, "fix", None) == [_FIX]
+
+    def test_untapped_events_count_when_the_qualifier_is_the_installed_tap(
+            self):
+        lock = {"tap": "other"}
+        assert catalog.events_for_tap(_EVENTS, "other", lock) == [
+            _OTHER, _UNTAPPED]
+
 
 class TestAllEntriesAndFind:
     def test_all_entries_config_order(self, sandbox):
@@ -879,6 +1138,15 @@ class TestResolveOne:
         assert ("boost install MemPalace/mempalace:mempalace --path "
                 "skills/mempalace") in ei.value.hint
 
+    def test_a_namespaced_typo_is_a_miss_not_the_path_grammar(self, sandbox):
+        # `frontend/test` is a real name now (a namespaced command), so a
+        # slash in the tail is only the grammar misread when its leaf exists.
+        _fake_taps(("t", [_entry("frontend/test", "t", rel_dir="commands/frontend")]))
+        with pytest.raises(BoostError) as ei:
+            catalog.resolve_one("t:frontend/tset")
+        assert "not a path" not in ei.value.message
+        assert catalog.resolve_one("t:frontend/test")["name"] == "frontend/test"
+
     def test_the_suggested_command_actually_resolves(self, sandbox):
         """Run the hint, do not just match its text.
 
@@ -1108,7 +1376,55 @@ class TestResolveOneVendoredCopies:
         with pytest.raises(BoostError) as excinfo:
             catalog.resolve_one("dbg")
         hint = excinfo.value.hint or ""
-        assert "boost install dbg --path" in hint
+        assert "boost install t:dbg --path" in hint
+
+    def test_the_hinted_command_resolves_when_another_tap_ships_it(self, sandbox):
+        """The hint dropped the qualifier, so with the name in a second tap
+        the suggested `install dbg --path a/dbg` failed with the cross-tap
+        error and pointed at the wrong tap. Following it now resolves."""
+        _fake_taps(("alpha", [_entry("dbg", "alpha", desc="alpha's",
+                                     rel_dir="a/dbg")]),
+                   ("t", [_entry("dbg", "t", desc="python", rel_dir="a/dbg"),
+                          _entry("dbg", "t", desc="rust", rel_dir="b/dbg")]))
+        with pytest.raises(catalog.SameTapAmbiguity) as excinfo:
+            catalog.resolve_one("t:dbg")
+        assert excinfo.value.hint == (
+            "that registry ships one name twice — install one with `boost "
+            "install t:dbg --path <one of the above>`, then retry; raise it "
+            "with the tap")
+        assert excinfo.value.qualified == "t:dbg"
+        got = catalog.resolve_one(excinfo.value.qualified, path="a/dbg")
+        assert (got["tap"], got["description"]) == ("t", "python")
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX shell quoting")
+    def test_the_ambiguity_hint_quotes_a_tap_name_with_an_apostrophe(
+            self, sandbox):
+        tap = "fix-ture's-\u00e9"
+        _fake_taps((tap, [_entry("dbg", tap, desc="python", rel_dir="a/dbg"),
+                          _entry("dbg", tap, desc="rust", rel_dir="b/dbg")]))
+        with pytest.raises(catalog.SameTapAmbiguity) as excinfo:
+            catalog.resolve_one("dbg")
+        assert excinfo.value.hint == (
+            "that registry ships one name twice — install one with `boost "
+            "install 'fix-ture'\"'\"'s-\u00e9:dbg' --path <one of the above>`, "
+            "then retry; raise it with the tap")
+        cmd = excinfo.value.hint.split("`")[1].split(" --path")[0]
+        assert shlex.split(cmd) == ["boost", "install", "%s:dbg" % tap]
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX shell quoting")
+    def test_the_path_grammar_hint_quotes_tap_and_path(self, sandbox):
+        # `tap:dir/skill` misreads the grammar; the suggested `--path` form
+        # must paste as-is when the tap name carries an apostrophe.
+        tap = "o'tap"
+        _fake_taps((tap, [_entry("dbg", tap, rel_dir="a b/dbg")]))
+        with pytest.raises(BoostError) as excinfo:
+            catalog.resolve_one("%s:a b/dbg" % tap)
+        hint = excinfo.value.hint or ""
+        assert hint == (
+            "`tap:skill` picks the registry; to pick a copy inside one, use "
+            "--path: `boost install 'o'\"'\"'tap:dbg' --path 'a b/dbg'`")
+        assert shlex.split(hint.split("`")[3]) == [
+            "boost", "install", "o'tap:dbg", "--path", "a b/dbg"]
 
     def test_the_ambiguity_message_names_the_entry_s_own_kind(self, sandbox):
         """A workflow sharing a name inside one tap was still reported as
@@ -1123,6 +1439,22 @@ class TestResolveOneVendoredCopies:
             catalog.resolve_one("csharp-reviewer")
         assert "different workflows in" in excinfo.value.message
         assert "different skills in" not in excinfo.value.message
+
+    def test_the_ambiguity_message_names_each_kind_when_they_differ(
+            self, sandbox):
+        """A skill, a command and a rule sharing a name were reported as
+        "3 different workflows" — the first match's kind for all three."""
+        sk = _entry("dual", "t", desc="a", rel_dir="skills/dual")
+        wf = _entry("dual", "t", desc="b", rel_dir="commands")
+        wf["kind"] = "workflow"
+        ru = _entry("dual", "t", desc="c", rel_dir="rules")
+        ru["kind"] = "rule"
+        _fake_taps(("t", [wf, ru, sk]))
+        with pytest.raises(BoostError) as excinfo:
+            catalog.resolve_one("dual")
+        assert excinfo.value.message == (
+            "'dual' matches 3 different items in t: commands (workflow), "
+            "rules (rule), skills/dual (skill)")
 
     def test_the_ambiguity_message_defaults_to_skill_when_kind_is_absent(self, sandbox):
         """A cache written before `kind` was recorded must not crash or claim
@@ -1721,6 +2053,27 @@ class TestMatchesAndFilterByCategory:
         e = _entry("x", "t")
         assert not catalog.matches_category(e, "ai")
 
+    def test_missing_category_is_filed_as_uncategorized(self):
+        e = _entry("x", "t")
+        assert catalog.matches_category(e, "uncategorized")
+        assert catalog.matches_category(e | {"category": ""}, "Uncategorized")
+
+    def test_a_categorised_entry_is_not_uncategorized(self):
+        e = _entry("x", "t") | {"category": "ai"}
+        assert not catalog.matches_category(e, "uncategorized")
+
+    def test_tap_fallback_files_a_categoryless_entry(self):
+        e = _entry("x", "acme/tap")
+        cats = {"acme/tap": "Testing"}
+        assert catalog.matches_category(e, "testing", cats)
+        assert not catalog.matches_category(e, "uncategorized", cats)
+
+    def test_filter_by_category_passes_the_tap_fallback(self):
+        entries = [_entry("a", "acme/tap"), _entry("b", "other/tap")]
+        got = catalog.filter_by_category(entries, "testing",
+                                         {"acme/tap": "testing"})
+        assert [e["name"] for e in got] == ["a"]
+
     def test_filter_by_category_narrows_the_list(self):
         entries = [_entry("a", "t") | {"category": "ai"},
                   _entry("b", "t") | {"category": "ui"},
@@ -1731,6 +2084,47 @@ class TestMatchesAndFilterByCategory:
     def test_filter_by_category_empty_is_a_no_op(self):
         entries = [_entry("a", "t"), _entry("b", "t")]
         assert catalog.filter_by_category(entries, "") == entries
+
+
+class TestInstalledRow:
+    """One tap can ship a name as a skill and a workflow; the installed one's
+    row is the one with its tap, its kind and its recorded source."""
+
+    def _matches(self):
+        return [{"name": "wf", "tap": "t", "kind": "skill", "rel_dir": "skills/wf",
+                 "skill_md": "skills/wf/SKILL.md", "description": "skill"},
+                {"name": "wf", "tap": "t", "kind": "workflow", "rel_dir": "a",
+                 "skill_md": "a/wf.md", "description": "first workflow"},
+                {"name": "wf", "tap": "t", "kind": "workflow", "rel_dir": "b",
+                 "skill_md": "b/wf.md", "description": "second workflow"},
+                {"name": "wf", "tap": "other", "kind": "workflow",
+                 "rel_dir": "b", "skill_md": "b/wf.md",
+                 "description": "other tap"}]
+
+    def test_kind_and_source_file_pick_the_row(self):
+        row = catalog.installed_row(self._matches(), "workflow",
+                                    {"tap": "t", "source_file": "b/wf.md"})
+        assert row is not None
+        assert row["description"] == "second workflow"
+
+    def test_a_skill_never_takes_a_workflow_row(self):
+        row = catalog.installed_row(self._matches()[1:], "skill",
+                                    {"tap": "t", "source_dir": "skills/wf"})
+        assert row is None
+
+    def test_a_kindless_row_counts_as_a_skill(self):
+        matches = [{"name": "x", "tap": "t", "rel_dir": "x", "description": "d"}]
+        assert catalog.installed_row(matches, "skill",
+                                     {"tap": "t", "source_dir": "x"}) is matches[0]
+        assert catalog.installed_row(matches, "workflow", {"tap": "t"}) is None
+
+    def test_another_taps_row_is_not_this_items(self):
+        row = catalog.installed_row(self._matches(), "workflow",
+                                    {"tap": "other", "source_file": "b/wf.md"})
+        assert row is not None
+        assert row["description"] == "other tap"
+        assert catalog.installed_row(self._matches(), "workflow",
+                                     {"tap": "gone"}) is None
 
 
 class TestSelectLockSource:
@@ -1794,6 +2188,363 @@ class TestSelectLockSource:
             matches, {"source_file": "two/x.mdc", "source_dir": "one"})
         assert entry["skill_md"] == "two/x.mdc"
         assert warning is None
+
+
+class TestCatalogueLookupIndex:
+    """`find` resolves a name through a per-corpus index, not a scan of the
+    whole catalogue per name — `boost outdated` over 308 installed skills spent
+    1.2 s of 1.4 s in those scans. The answers must not change."""
+
+    def test_unchanged_taps_return_the_same_concatenation(self, sandbox):
+        _fake_taps(("t1", [_entry("a", "t1")]), ("t2", [_entry("b", "t2")]))
+        first = catalog.all_entries()
+        assert [e["name"] for e in first] == ["a", "b"]
+        assert catalog.all_entries() is first
+
+    def test_an_empty_uncached_tap_does_not_defeat_the_memo(self, sandbox):
+        # load_tap hands back a fresh [] for an uncloned tap with no cache;
+        # compared by identity alone, one such tap would mean no hit ever.
+        _fake_taps(("t1", [_entry("a", "t1")]), ("t2", [_entry("b", "t2")]))
+        registry.Tap(name="t2", url="").cache_file.unlink()
+        first = catalog.all_entries()
+        assert [e["name"] for e in first] == ["a"]
+        assert catalog.all_entries() is first
+
+    def test_a_rewritten_cache_is_seen_by_the_next_lookup(self, sandbox):
+        _fake_taps(("t1", [_entry("a", "t1")]), ("t2", [_entry("b", "t2")]))
+        before = catalog.all_entries()
+        assert catalog.find("c") == []
+        registry.Tap(name="t2", url="").cache_file.write_text(
+            json.dumps({"skills": [_entry("b", "t2"), _entry("c", "t2")]}),
+            encoding="utf-8")
+        after = catalog.all_entries()
+        assert after is not before
+        assert [e["name"] for e in after] == ["a", "b", "c"]
+        assert [e["tap"] for e in catalog.find("c")] == ["t2"]
+
+    def test_a_dropped_tap_is_not_served_from_the_memo(self, sandbox):
+        _fake_taps(("t1", [_entry("a", "t1")]), ("t2", [_entry("b", "t2")]))
+        catalog.all_entries()
+        _fake_taps(("t1", [_entry("a", "t1")]))
+        assert [e["name"] for e in catalog.all_entries()] == ["a"]
+        assert catalog.find("b") == []
+
+    def test_many_lookups_read_each_tap_cache_once(self, sandbox, monkeypatch):
+        _fake_taps(("t1", [_entry("a", "t1"), _entry("dup", "t1")]),
+                   ("t2", [_entry("dup", "t2"), _entry("b", "t2")]))
+        real = catalog.jsonstate.read_object
+        reads = []
+        monkeypatch.setattr(catalog.jsonstate, "read_object",
+                            lambda p, *a, **k: reads.append(p) or real(p, *a, **k))
+        for _ in range(5):
+            assert [e["tap"] for e in catalog.find("dup")] == ["t1", "t2"]
+            assert [e["tap"] for e in catalog.find("b")] == ["t2"]
+        cache = paths.cache_dir()
+        assert sorted(p.name for p in reads if p.parent == cache) == [
+            "t1.json", "t2.json"]
+
+    def test_the_index_is_built_once_per_corpus(self):
+        pool = [_entry("a", "t"), _entry("b", "t")]
+        index = catalog._name_index(pool)
+        assert catalog._name_index(pool) is index
+        assert {k: [e["tap"] for e in v] for k, v in index.items()} == {
+            "a": ["t"], "b": ["t"]}
+
+    def test_an_appended_corpus_is_reindexed(self):
+        pool = [_entry("a", "t")]
+        assert catalog.find("b", None, pool) == []
+        pool.append(_entry("b", "u"))
+        assert [e["tap"] for e in catalog.find("b", None, pool)] == ["u"]
+
+    def test_matches_are_a_copy_the_caller_may_mutate(self):
+        pool = [_entry("a", "t1"), _entry("a", "t2")]
+        got = catalog.find("a", None, pool)
+        got.clear()
+        assert [e["tap"] for e in catalog.find("a", None, pool)] == ["t1", "t2"]
+
+    def test_results_match_a_linear_scan_in_order(self):
+        pool = [_entry("dup", "owner/alpha", rel_dir="x"),
+                _entry("solo", "beta"),
+                _entry("dup", "beta"),
+                _entry("dup", "owner/alpha", rel_dir="y"),
+                _entry("Dup", "beta"),
+                _entry("dup", "gamma/alpha")]
+
+        def linear(name, tap=None):
+            q, bare = catalog.split_name(name)
+            if q is not None:
+                tap, name = q, bare
+            m = [e for e in pool if e["name"] == name]
+            if tap:
+                m = ([e for e in m if e["tap"] == tap]
+                     or [e for e in m if e["tap"].split("/")[-1] == tap])
+            return m
+
+        for name, tap in (("dup", None), ("Dup", None), ("solo", None),
+                          ("dup", "alpha"), ("dup", "owner/alpha"),
+                          ("beta:dup", None), ("alpha:dup", None),
+                          ("dup", "nowhere"), ("missing", None)):
+            got = catalog.find(name, tap, pool)
+            assert got == linear(name, tap), (name, tap)
+            assert [id(e) for e in got] == [id(e) for e in linear(name, tap)]
+        assert [e["rel_dir"] for e in catalog.find("dup", "owner/alpha", pool)
+                ] == ["x", "y"]
+
+    def test_the_index_keeps_a_bounded_number_of_corpora(self, monkeypatch):
+        monkeypatch.setattr(catalog, "_NAME_INDEX", {})
+        pools = [[_entry("n%d" % i, "t")] for i in range(6)]
+        for pool in pools:
+            catalog._name_index(pool)
+        assert len(catalog._NAME_INDEX) == catalog._NAME_INDEX_SLOTS == 4
+        # Oldest out first; the most recent corpora stay indexed.
+        assert [v[0] for v in catalog._NAME_INDEX.values()] == pools[2:]
+        # A hit on a held corpus neither evicts nor grows anything.
+        held = catalog._name_index(pools[5])
+        assert catalog._name_index(pools[5]) is held
+        assert len(catalog._NAME_INDEX) == 4
+
+    def test_concurrent_eviction_does_not_raise(self, monkeypatch):
+        # `boost serve` answers from a ThreadingHTTPServer, so two requests
+        # can evict the same oldest slot at once; unlocked, one of them got a
+        # KeyError instead of its skill.
+        monkeypatch.setattr(catalog, "_NAME_INDEX", {})
+        old = sys.getswitchinterval()
+        sys.setswitchinterval(1e-6)
+        pools = [[_entry("n%d" % i, "t")] for i in range(12)]
+        errors: list[str] = []
+
+        def hammer():
+            try:
+                for _ in range(400):
+                    for i, pool in enumerate(pools):
+                        got = catalog._name_index(pool)
+                        assert list(got) == ["n%d" % i]
+            except Exception as exc:
+                errors.append(repr(exc))
+
+        threads = [threading.Thread(target=hammer) for _ in range(8)]
+        try:
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+        finally:
+            sys.setswitchinterval(old)
+        assert errors == []
+        assert len(catalog._NAME_INDEX) == catalog._NAME_INDEX_SLOTS
+
+
+class TestSearchHint:
+    """The next step after a failed lookup must be one that can succeed."""
+
+    def test_no_taps_points_at_tapping(self, sandbox, monkeypatch):
+        from boost_cli.core import builtin
+        monkeypatch.setattr(builtin, "configured_tap_count", lambda: 0)
+        assert catalog.search_hint("brainstorming") == (
+            "no taps configured — start with `boost tap --defaults`")
+        assert catalog.search_hint("x") == catalog.NO_TAPS_HINT
+
+    def test_with_a_tap_points_at_search(self, sandbox, monkeypatch):
+        from boost_cli.core import builtin
+        monkeypatch.setattr(builtin, "configured_tap_count", lambda: 1)
+        assert catalog.search_hint("brainstorming") == \
+            "try `boost search brainstorming`"
+
+
+class TestResolveRecorded:
+    """cohort apply / profile use / snapshot rollback took `find()[0]`: an
+    ambiguous name installed whichever tap sorted first, and a profile whose
+    tap was gone came back from another tap, blamed on "its tap has moved"."""
+
+    def _two(self):
+        _fake_taps(("alpha", [_entry("cm", "alpha", desc="a")]),
+                   ("beta", [_entry("cm", "beta", desc="b"),
+                             _entry("solo", "beta", desc="s")]))
+
+    def test_no_tap_ships_it_is_none(self, sandbox):
+        self._two()
+        assert catalog.resolve_recorded("nope") is None
+        assert catalog.resolve_recorded("nope", "alpha") is None
+
+    def test_an_ambiguous_bare_name_is_refused(self, sandbox):
+        self._two()
+        with pytest.raises(BoostError) as e:
+            catalog.resolve_recorded("cm")
+        assert e.value.message == "'cm' exists in multiple taps: alpha, beta"
+        assert e.value.hint == "qualify it, e.g. `alpha:cm`"
+
+    def test_a_unique_or_qualified_name_resolves(self, sandbox):
+        self._two()
+        assert catalog.resolve_recorded("solo")["tap"] == "beta"
+        assert catalog.resolve_recorded("beta:cm")["description"] == "b"
+
+    def test_the_recorded_tap_wins_over_the_first(self, sandbox):
+        self._two()
+        assert catalog.resolve_recorded("cm", "beta")["description"] == "b"
+        assert catalog.resolve_recorded("cm", "Beta")["description"] == "b"
+
+    def test_an_untapped_recorded_tap_is_never_swapped(self, sandbox):
+        _fake_taps(("alpha", [_entry("cm", "alpha", desc="a")]))
+        with pytest.raises(BoostError) as e:
+            catalog.resolve_recorded("cm", "beta")
+        assert e.value.message == \
+            "cm was recorded from tap beta, which is no longer tapped"
+        assert e.value.hint == "`boost tap` it again, or install it from: alpha"
+
+    def test_a_local_record_is_not_swapped_for_a_tap_copy(self, sandbox):
+        _fake_taps(("alpha", [_entry("cm", "alpha", desc="a")]))
+        with pytest.raises(BoostError) as e:
+            catalog.resolve_recorded("cm", "local")
+        assert e.value.message == "cm was installed from a local path, not a tap"
+        assert e.value.hint == \
+            "it is shipped by: alpha — install one by name to switch"
+
+    def test_a_recorded_tap_that_dropped_it(self, sandbox):
+        self._two()
+        with pytest.raises(BoostError) as e:
+            catalog.resolve_recorded("solo", "alpha")
+        assert e.value.message == "solo is no longer in tap alpha"
+        assert e.value.hint == "it is shipped by: beta"
+
+    @staticmethod
+    def _skill_and_workflow():
+        wf = dict(_entry("tdd", "beta", desc="cmd", rel_dir="commands"),
+                  kind="workflow")
+        _fake_taps(("beta", [_entry("tdd", "beta", desc="skill",
+                                    rel_dir="skills/tdd"), wf]))
+
+    def test_a_skill_record_takes_the_skill_beside_a_workflow(self, sandbox):
+        # A profile/snapshot keeps skills only; `find()[0]` restored the
+        # tap's same-named workflow, and resolve_one alone refuses the pair.
+        self._skill_and_workflow()
+        for tap in ("beta", None):
+            got = catalog.resolve_recorded("tdd", tap, kind="skill")
+            assert (got["description"], got["rel_dir"]) == ("skill",
+                                                            "skills/tdd")
+            with pytest.raises(catalog.SameTapAmbiguity):
+                catalog.resolve_recorded("tdd", tap)
+
+    def test_a_skill_record_never_takes_another_kind(self, sandbox):
+        wf = dict(_entry("tdd", "beta", desc="cmd", rel_dir="commands"),
+                  kind="workflow")
+        _fake_taps(("beta", [wf]))
+        for tap in ("beta", None):
+            with pytest.raises(BoostError) as e:
+                catalog.resolve_recorded("tdd", tap, kind="skill")
+            assert e.value.message == "tdd is no longer shipped as a skill"
+            assert e.value.hint == "what answers to it now: beta (workflow)"
+        assert catalog.resolve_recorded("tdd", "beta")["kind"] == "workflow"
+
+    def test_two_skills_of_the_kind_still_go_through_resolve_one(self, sandbox):
+        _fake_taps(("alpha", [_entry("cm", "alpha", desc="a")]),
+                   ("beta", [_entry("cm", "beta", desc="b")]))
+        with pytest.raises(BoostError) as e:
+            catalog.resolve_recorded("cm", kind="skill")
+        assert e.value.message == "'cm' exists in multiple taps: alpha, beta"
+
+
+class TestDescriptionClamp:
+    """A description is bounded at scan time, so every sink is bounded."""
+
+    def test_short_description_is_untouched(self):
+        d = "x" * catalog.DESCRIPTION_MAX
+        assert catalog.clamp_description(d) == d
+
+    def test_long_description_is_cut_at_a_word_with_an_ellipsis(self):
+        out = catalog.clamp_description("testing " * 131072)
+        assert len(out) <= catalog.DESCRIPTION_MAX
+        assert out == ("testing " * 127).rstrip() + "…"
+        assert len(out) == 1016
+
+    def test_one_long_token_is_hard_cut(self):
+        out = catalog.clamp_description("a " + "b" * 5000)
+        assert out == "a " + "b" * (catalog.DESCRIPTION_MAX - 3) + "…"
+        assert len(out) == catalog.DESCRIPTION_MAX
+
+    def test_space_at_three_quarters_is_used(self):
+        budget = catalog.DESCRIPTION_MAX - 1
+        at = budget * 3 // 4
+        d = "a" * at + " " + "b" * 2000
+        assert catalog.clamp_description(d) == "a" * at + "…"
+        d2 = "a" * (at - 1) + " " + "b" * 2000
+        assert catalog.clamp_description(d2) == d2[:budget] + "…"
+
+    def test_scan_clamps_entry_meta_and_blob(self, sandbox):
+        root = sandbox / "tap"
+        write_skill(root / "hugedesc",
+                    "---\nname: hugedesc\ndescription: %s\n---" % ("testing " * 131072))
+        (e,) = catalog.scan_dir(root)
+        assert e["description"] == ("testing " * 127).rstrip() + "…"
+        assert e["meta"]["description"] == e["description"]
+        assert e["meta"]["name"] == "hugedesc"
+        assert len(e["search_blob"]) < 3 * catalog.DESCRIPTION_MAX
+        assert len(json.dumps(e)) < 6 * catalog.DESCRIPTION_MAX
+
+    def test_scan_leaves_a_short_description_meta_alone(self, sandbox):
+        root = sandbox / "tap"
+        write_skill(root / "s", "---\nname: s\ndescription: short one\n---")
+        (e,) = catalog.scan_dir(root)
+        assert e["description"] == "short one"
+        assert e["meta"] == {"name": "s", "description": "short one"}
+
+    def test_describe_matches_the_scan(self):
+        long = "word " * 1000
+        assert catalog.describe({"description": long}, "") == (
+            catalog.clamp_description(long.strip()))
+
+
+class TestBinaryFilesAreNotItems:
+    def test_is_binary(self):
+        assert catalog.is_binary(b"a\0b")
+        # Not UTF-8 is not binary: a Latin-1 file is still text.
+        assert not catalog.is_binary(b"\xff\xfe plain")
+        assert not catalog.is_binary("café — ok".encode())
+        assert not catalog.is_binary(b"")
+        # The NUL window is git's: one past it does not make the file binary.
+        assert catalog.is_binary(b"x" * (catalog.util.BINARY_SNIFF - 1) + b"\0")
+        assert not catalog.is_binary(b"x" * catalog.util.BINARY_SNIFF + b"\0")
+
+    def test_binary_workflow_is_skipped_and_text_survives(self, sandbox):
+        root = sandbox / "tap"
+        (root / "commands").mkdir(parents=True)
+        (root / "commands" / "binary.md").write_bytes(
+            b"---\ndescription: x\n---\n\0" + os.urandom(2000))
+        (root / "commands" / "latin.md").write_bytes(b"caf\xe9 means coffee\n")
+        (root / "commands" / "ok.md").write_text(
+            "---\ndescription: fine — really\n---\nbody\n", encoding="utf-8")
+        got = {e["name"]: e for e in catalog.scan_dir(root)}
+        assert sorted(got) == ["latin", "ok"]
+        assert (got["ok"]["kind"], got["ok"]["description"]) == (
+            "workflow", "fine — really")
+        assert got["latin"]["description"] == "caf\ufffd means coffee"
+
+    def test_binary_rule_is_skipped(self, sandbox):
+        root = sandbox / "tap"
+        (root / ".cursor" / "rules").mkdir(parents=True)
+        (root / ".cursor" / "rules" / "bad.mdc").write_bytes(b"\0\x01\x02")
+        assert catalog.scan_dir(root) == []
+
+    def test_binary_skill_md_still_claims_its_dir(self, sandbox):
+        root = sandbox / "tap"
+        (root / "s").mkdir(parents=True)
+        (root / "s" / "SKILL.md").write_bytes(b"\0binary")
+        (root / "s" / "commands").mkdir()
+        (root / "s" / "commands" / "x.md").write_text("x\n", encoding="utf-8")
+        assert catalog.scan_dir(root) == []
+
+    def test_crlf_body_digest_matches_the_index_text(self, sandbox):
+        # Reading bytes must not drop read_text's universal newlines: a
+        # frontmatter-less CRLF rule kept its \r in the body and hashed to a
+        # digest rag.read_body (which reads text) never reproduces.
+        root = sandbox / "tap"
+        root.mkdir()
+        (root / ".cursorrules").write_bytes(b"# Rules\r\nuse tabs\rno spaces\r\n")
+        (e,) = catalog.scan_dir(root, "t")
+        text = rag.read_body(e, {"t": root})
+        assert text == "%s\n%s\n# Rules\nuse tabs\nno spaces" % (
+            e["name"], e["description"])
+        assert e["content"] == catalog._content_digest(
+            e["name"], e["description"], "# Rules\nuse tabs\nno spaces\n")
 
 
 class TestATapRecategorisedSinceItsCacheWasWritten:

@@ -4,15 +4,20 @@ name: sonarcloud
 # coverage overlay in one dashboard, with a pass/fail quality gate decorating
 # each PR. Free for public repositories.
 #
-# NON-BLOCKING, and inert until onboarded. Two things are needed, both outside
+# NON-BLOCKING, and inert until onboarded. Three things are needed, all outside
 # this repo:
 #
 #   1. Import the repo at https://sonarcloud.io (Analysis Method: GitHub Actions).
 #   2. Add the generated token as the SONAR_TOKEN repo secret.
+#   3. Set the repository variable SONAR_ENABLED to `true`.
 #
-# Until then every job here skips — `if` reads the token through env, because a
-# secret cannot be referenced directly in an `if`. That makes this file a no-op
-# rather than a permanently-red check.
+# Until then the job does not start. It used to start and skip only the scan
+# step, because a secret cannot be read in a job-level `if`: every PR push and
+# every merge still ran the whole unit + functional suite serially on one
+# runner (14-20 min, inside the account's 20-job cap) to produce a report that
+# nothing read. By 2026-11-02 that suite outgrew the 20-minute timeout, and
+# main's run 41387655240 was cancelled, opening tracker #1302 about nothing.
+# A repository variable CAN be read at job level, so it gates the runner.
 #
 # Settings live in sonar-project.properties. Do NOT add this to branch
 # protection's required checks: boost's own gates (ruff, mypy, pyright, vulture,
@@ -41,6 +46,8 @@ concurrency:
 
 jobs:
   sonar-analyze:
+    # See the header: no runner at all until the project is onboarded.
+    if: vars.SONAR_ENABLED == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -62,7 +69,7 @@ jobs:
           # detection; a shallow clone makes both wrong.
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
       - name: install test deps

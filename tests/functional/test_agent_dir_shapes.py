@@ -188,7 +188,7 @@ class TestADotdirWithNoSearchBit:
         doc = boost("doctor", expect=1).out
         dry = boost("heal", "--dry-run", expect=1).out
         healed = boost("heal", expect=1).out
-        synced = boost("sync").out
+        synced = boost("sync", expect=1).out
         cursor.chmod(0o700)
         assert "agent dir ~/.cursor is not searchable" in doc
         assert "`chmod u+wx ~/.cursor`" in doc
@@ -209,7 +209,7 @@ class TestADotdirWithNoSearchBit:
         cursor.chmod(0o600)
         health = boost("health", expect=None)
         doc = boost("doctor", expect=1)
-        synced = boost("sync")
+        synced = boost("sync", expect=1)
         cursor.chmod(0o700)
         assert health.rc in (0, 1), health.err
         assert "unexpected error" not in health.err + doc.err + synced.err
@@ -327,7 +327,8 @@ class TestADotdirWithNoSearchBit:
         boost("uninstall", "brainstorming", expect=1)
         cursor.chmod(0o700)
         link = cursor / "skills" / "brainstorming"
-        assert link.is_symlink() and link.exists()
+        # Still there, but dangling: the copy it led to is held aside.
+        assert link.is_symlink() and not link.exists()
         boost("uninstall", "brainstorming")
         assert not os.path.lexists(link)
 
@@ -340,7 +341,8 @@ class TestADotdirWithNoSearchBit:
         boost("uninstall", "brainstorming", expect=1)
         cursor.chmod(0o700)
         link = cursor / "skills" / "brainstorming"
-        assert link.is_symlink() and link.exists()
+        # Still there, but dangling: the copy it led to is held aside.
+        assert link.is_symlink() and not link.exists()
         boost("uninstall", "brainstorming")
         assert not os.path.lexists(link)
 
@@ -379,6 +381,46 @@ class TestADotdirWithNoSearchBit:
         assert lockfile.get_skill("brainstorming") is not None
         assert (paths.home() / ".claude" / "skills" / "brainstorming"
                 ).is_symlink()
+
+
+class TestAClaudeDirWithNoSearchBit:
+    """``~/.claude`` or ``~/.claude/plugins`` at 0o600, on Python 3.12/3.13
+    semantics: reading Claude Code's plugin records took sync, heal, doctor
+    and the MCP doctor down at exit 70 — with no plugin enabled at all."""
+
+    @pytest.fixture()
+    def claude(self, sandbox):
+        d = paths.home() / ".claude"
+        (d / "plugins").mkdir(parents=True, exist_ok=True)
+        yield d
+        d.chmod(0o700)
+        (d / "plugins").chmod(0o700)
+
+    def _run(self, boost, *commands):
+        return [boost(*c, expect=None) for c in commands]
+
+    def test_an_unsearchable_plugins_dir(self, boost, tapped, claude, strict_stat):
+        boost("install", "brainstorming")
+        (claude / "plugins").chmod(0o600)
+        runs = self._run(boost, ("sync",), ("heal",), ("doctor",))
+        from boost_cli.commands import configuration
+        text, _ = configuration._tool_doctor({})    # MCP's boost_doctor
+        (claude / "plugins").chmod(0o700)
+        for r in runs:
+            assert r.rc in (0, 1), r.err
+            assert "unexpected error" not in r.err
+        assert "Permission denied" not in text
+
+    def test_an_unsearchable_claude_dir(self, boost, tapped, claude, strict_stat):
+        # doctor's own read of ~/.claude/settings.json crashed here before
+        # this module existed; sync and heal did not, and must not now.
+        boost("install", "brainstorming")
+        claude.chmod(0o600)
+        runs = self._run(boost, ("sync",), ("heal",))
+        claude.chmod(0o700)
+        for r in runs:
+            assert r.rc in (0, 1), r.err
+            assert "unexpected error" not in r.err
 
 
 class TestALinkNoRewriteCanSeeIsNotForgotten:
@@ -508,7 +550,7 @@ class TestAMissingSkillsDirUnderAReadOnlyDotdir:
         inst = " ".join(boost("install", "brainstorming").out.split())
         doc = " ".join(boost("doctor", expect=1).out.split())
         dry = " ".join(boost("heal", "--dry-run", expect=1).out.split())
-        synced = " ".join(boost("sync").out.split())
+        synced = " ".join(boost("sync", expect=1).out.split())
         cursor.chmod(0o700)
         assert ("not linked: ~/.cursor is not writable — `chmod u+w "
                 "~/.cursor`") in inst
@@ -722,7 +764,7 @@ class TestADirectoryAtARulesFilePath:
         dry = " ".join(boost("heal", "--dry-run", expect=1).out.split())
         assert line in dry
         assert "would re-materialize" not in dry
-        synced = " ".join(boost("sync").out.split())
+        synced = " ".join(boost("sync", expect=1).out.split())
         assert line in synced
         assert "everything in sync" not in synced
 
@@ -771,15 +813,20 @@ class TestAReadOnlyStore:
         assert ("~/.agents/skills is not writable — heal does not change "
                 "permissions") in dry
 
-    def test_heal_does_not_tick_a_repair_it_did_not_make(self, boost, tap,
-                                                         installed, cursor):
+    # `entry`, not `installed`: `installed` taps the session fixture, a second
+    # repo also named `fixture-tap`, which `tap` already claimed — and a name
+    # taken by a different repo is refused rather than silently skipped.
+    def test_heal_does_not_tick_a_repair_it_did_not_make(self, boost, entry,
+                                                         tap, cursor):
+        store.install(entry)
         store.install(_rule(tap))
         (cursor / "rules" / "house.mdc").unlink()
         store_dir = paths.store_dir()
         store_dir.chmod(0o500)
         try:
             healed = boost("heal", expect=1).out
-            synced = boost("sync").out
+            # A repair sync could not make fails it, as it fails heal.
+            synced = boost("sync", expect=1).out
         finally:
             store_dir.chmod(0o700)
         for said in (healed, synced):
@@ -787,8 +834,8 @@ class TestAReadOnlyStore:
                         if "was not re-materialized" in ln)
             assert "✓" not in line and "!" in line
 
-    def test_a_real_repair_is_still_ticked(self, boost, tap, installed,
-                                           cursor):
+    def test_a_real_repair_is_still_ticked(self, boost, entry, tap, cursor):
+        store.install(entry)
         store.install(_rule(tap))
         (cursor / "rules" / "house.mdc").unlink()
         line = next(ln for ln in boost("heal").out.splitlines()
@@ -876,7 +923,7 @@ class TestQuarantineSaysWhatItCouldNotUnlink:
         rec["refused_agents"] = ["cursor"]
         lockfile.set_skill("brainstorming", rec)
         res = boost("quarantine", "brainstorming")
-        assert "quarantined brainstorming (store intact, links removed)" \
+        assert "quarantined brainstorming (store copy held aside, links removed)" \
             in res.out
         assert "may still load" not in res.out + res.err
         assert not any(self._links().values())

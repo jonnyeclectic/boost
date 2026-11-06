@@ -15,6 +15,7 @@ must match — and Tab took over selection.
 """
 from __future__ import annotations
 
+import dataclasses
 import typing
 
 import pytest
@@ -28,6 +29,13 @@ def _e(name, description="", tap="o/r", kind="skill", version="1.0.0", **kw):
          "skill_md": "%s/SKILL.md" % name, "meta": {}}
     d.update(kw)
     return d
+
+
+def _dl(*a, **kw):
+    """``detail_lines`` flattened to one ``(role, text)`` per line — what a
+    line says, for the assertions that only care about the words."""
+    return [(browse.line_role(ln), browse.line_text(ln))
+            for ln in browse.detail_lines(*a, **kw)]
 
 
 CORPUS = [
@@ -124,7 +132,7 @@ class TestIndexedFiltering:
         for scope in browse.SCOPES:
             idx = browse.index_entries(CORPUS, scope)
             for q in ("", "co", "code review", "zzz", "beta"):
-                assert browse.matches_indexed(idx, q) == \
+                assert browse.matches_indexed(idx, q, scope) == \
                     browse.matches(CORPUS, q, scope), (scope, q)
 
 
@@ -376,7 +384,7 @@ class TestInstallStatusLine:
 
     def test_the_detail_pane_shows_the_live_state_over_the_static_one(self):
         e = _e("x")
-        text = " ".join(t for _r, t in browse.detail_lines(
+        text = " ".join(t for _r, t in _dl(
             e, installed=False, state=browse.BUSY))
         assert "installing" in text
         assert "not installed" not in text
@@ -446,7 +454,7 @@ class TestDetailLines:
 
     def test_it_reports_the_essentials(self):
         e = _e("code-review", "Review a PR", tap="acme/quality", version="2.1.0")
-        text = " ".join(t for _role, t in browse.detail_lines(e))
+        text = " ".join(t for _role, t in _dl(e))
         for fact in ("code-review", "2.1.0", "acme/quality", "Review a PR"):
             assert fact in text, fact
 
@@ -454,36 +462,36 @@ class TestDetailLines:
         """"the entire frontmatter users can scroll through" — so an unknown
         key must survive rather than being filtered to a known allowlist."""
         e = _e("x", meta={"license": "MIT", "custom-key": "custom-value"})
-        text = " ".join(t for _role, t in browse.detail_lines(e))
+        text = " ".join(t for _role, t in _dl(e))
         assert "license" in text and "MIT" in text
         assert "custom-key" in text and "custom-value" in text
 
     def test_a_list_valued_key_renders_readably(self):
         e = _e("x", meta={"tags": ["a", "b", "c"]})
-        text = " ".join(t for _role, t in browse.detail_lines(e))
+        text = " ".join(t for _role, t in _dl(e))
         assert "a" in text and "b" in text and "c" in text
         assert "['a'" not in text, "a Python repr is not a rendering"
 
     def test_every_line_carries_a_role_for_theming(self):
-        for role, _text in browse.detail_lines(_e("x", "d")):
+        for role, _text in _dl(_e("x", "d")):
             assert isinstance(role, str) and role
 
     def test_it_never_raises_on_a_sparse_entry(self):
-        assert browse.detail_lines({"name": "bare"})
+        assert _dl({"name": "bare"})
 
     def test_long_values_are_wrapped_to_the_pane_width(self):
         e = _e("x", "word " * 80)
-        lines = browse.detail_lines(e, width=30)
+        lines = _dl(e, width=30)
         assert all(len(t) <= 30 for _r, t in lines), "detail text must wrap"
 
     def test_installed_state_is_surfaced_when_known(self):
         e = _e("code-review")
-        text = " ".join(t for _r, t in browse.detail_lines(e, installed=True))
+        text = " ".join(t for _r, t in _dl(e, installed=True))
         assert "installed" in text.lower()
 
 
 def _render(w=100, h=24, query="", scope="all", focus="list", sel=0,
-            detail=True, entries=None):
+            detail=True, entries=None, summary=None):
     """Draw one frame into a text grid.
 
     The draw helpers take `put` as a parameter, so a recording `put` renders
@@ -508,6 +516,7 @@ def _render(w=100, h=24, query="", scope="all", focus="list", sel=0,
     found = browse.matches(ents, query, scope)
     lay = browse.layout(w, h, detail=detail)
     discovery._draw_frame(put, th, lay, focus)
+    discovery._draw_status(put, th, lay, focus, summary)
     discovery._draw_query(put, th, lay, query, focus, len(found), len(ents), 0)
     discovery._draw_scopes(put, th, lay, scope, focus)
     discovery._draw_rows(put, th, lay, found, sel, set(), query, focus,
@@ -523,14 +532,17 @@ class TestFrameRendering:
     def test_all_four_corners_are_drawn(self):
         g = _render()
         assert g[0][0] == "╭" and g[0][-1] == "╮"
-        assert g[-1][0] == "╰" and g[-1][-1] == "╯"
+        bottom = browse.layout(100, 24, detail=True).bottom
+        assert bottom == len(g) - 2, "the status bar owns the last row"
+        assert g[bottom][0] == "╰" and g[bottom][-1] == "╯"
 
     def test_both_side_borders_are_drawn_on_every_body_row(self):
         """The right border sat in the last column, which the old clip bound
         made unwritable — the frame drew with three sides."""
         g = _render()
-        sep = browse.layout(100, 24, detail=True).body_y - 1
-        for y in range(1, len(g) - 1):
+        lay = browse.layout(100, 24, detail=True)
+        sep = lay.body_y - 1
+        for y in range(1, lay.bottom):
             if y == sep:                       # the ├───┤ chrome/body rule
                 assert g[y][0] == "├" and g[y][-1] == "┤"
                 continue
@@ -542,8 +554,8 @@ class TestFrameRendering:
         lay = browse.layout(110, 24, detail=True)
         x = lay.detail_x - 1
         assert g[lay.body_y - 1][x] == "┬"
-        assert g[-1][x] == "┴"
-        for y in range(lay.body_y, len(g) - 1):
+        assert g[lay.bottom][x] == "┴"
+        for y in range(lay.body_y, lay.bottom):
             assert g[y][x] == "│", "divider broken at row %d" % y
 
     @pytest.mark.parametrize("w,h", [(60, 20), (80, 24), (100, 30), (160, 50)])
@@ -554,27 +566,42 @@ class TestFrameRendering:
     def test_the_title_appears_in_the_top_rule(self):
         assert "boost browse" in _render()[0]
 
-    def test_the_help_row_never_ends_mid_word(self):
+    def test_the_status_bar_never_ends_mid_word(self):
         """A clipped hint ends on `esc`, which reads as a key not a fragment."""
-        for w in (56, 60, 70, 80, 100, 140):
-            lay = browse.layout(w, 24, detail=True)
-            help_row = _render(w=w, h=24)[lay.body_y - 2]
-            assert "esc" not in help_row or "esc quit" in help_row, w
+        for focus in browse.PANES:
+            for w in (40, 56, 60, 70, 80, 100, 140):
+                bar = _render(w=w, h=24, focus=focus)[-1]
+                assert "esc quit" in bar, (focus, w)
+                assert browse.MODES[focus] in bar, (focus, w)
+
+    def test_the_status_bar_carries_the_session_chip(self):
+        bar = _render(w=100, h=24, summary=("ok_line", "✓ 2 installed"))[-1]
+        assert bar.rstrip().endswith("✓ 2 installed")
+        assert "esc quit" in bar
+
+    def test_a_short_terminal_keeps_the_frame_and_drops_the_bar(self):
+        lay = browse.layout(80, 7, detail=False)
+        assert not lay.has_status
+        assert lay.bottom == 6
+        g = _render(w=80, h=7, detail=False)
+        assert g[-1][0] == "╰" and g[-1][-1] == "╯"
 
 
 class TestScopeRadios:
     """Item 8 — the search-scope toggles are visible and show which is on."""
 
-    def test_exactly_one_radio_is_filled(self):
+    def test_exactly_one_toggle_is_filled(self):
         row = _render(scope="name")[2]
-        assert row.count("(●)") == 1
-        assert row.count("( )") == len(browse.SCOPES) - 1
+        assert row.count("●") == 1
+        for scope in browse.SCOPES:
+            assert browse.scope_label(scope) in row, scope
 
-    def test_the_filled_radio_tracks_the_active_scope(self):
+    def test_the_filled_toggle_tracks_the_active_scope(self):
+        """The dot, not just the colour, says which scope is on."""
         for scope in browse.SCOPES:
             row = _render(scope=scope)[2]
-            i = row.index("(●)")
-            assert row[i + 4:].startswith(browse.scope_label(scope))
+            i = row.index("●")
+            assert row[i + 2:].startswith(browse.scope_label(scope))
 
 
 class TestFocusIsVisible:
@@ -699,7 +726,7 @@ class TestInstallStatusInThePane:
         for state, needle in ((browse.BUSY, "installing"),
                               (browse.OK, "installed"),
                               (browse.FAILED, "✗")):
-            lines = browse.detail_lines(CORPUS[0], width=40, installed=False,
+            lines = _dl(CORPUS[0], width=40, installed=False,
                                         state=state, message="boom")
             assert any(needle in t for _r, t in lines), state
 
@@ -785,7 +812,8 @@ class TestEmptyLines:
         # Exact bytes: a drifted keycap ("^t") or a mangled template would
         # pass any substring check while lying about the keys.
         lines = browse.empty_lines("q", "all", hidden=22379)
-        assert lines[1][1] == "→ backspace widens · ^T scope"
+        assert lines[1][1] == \
+            "→ backspace widens · ^T scope · ^G ^R ^K filters"
         assert lines[2][1] == "→ ^D shows 22,379 hidden duplicates"
 
     def test_a_single_hidden_duplicate_still_gets_the_hint(self):
@@ -1025,7 +1053,10 @@ class TestGradientRuleInTheFrame:
         assert "boost browse" in g[0]
 
 
-class TestSessionChipInTheFrame:
+class TestSessionChipInTheStatusBar:
+    """The install chip moved out of the bottom rule, where it fought the
+    divider's tee for the same cells, into the status bar under the frame."""
+
     def _grid(self, summary, w=100, h=24):
         from boost_cli.commands import discovery
 
@@ -1042,24 +1073,26 @@ class TestSessionChipInTheFrame:
                 return 0
 
         lay = browse.layout(w, h, detail=True)
-        discovery._draw_frame(put, _Theme(), lay, "list", summary=summary)
+        discovery._draw_frame(put, _Theme(), lay, "list")
+        discovery._draw_status(put, _Theme(), lay, "list", summary)
         return ["".join(r) for r in grid], lay
 
-    def test_the_chip_lands_in_the_bottom_rule(self):
-        g, _lay = self._grid(("ok_line", "✓ 2 installed"))
-        assert "✓ 2 installed" in g[-1]
-        assert g[-1][0] == "╰" and g[-1][-1] == "╯"
+    def test_the_chip_lands_in_the_status_bar(self):
+        g, lay = self._grid(("ok_line", "✓ 2 installed"))
+        assert "✓ 2 installed" in g[lay.status_y]
+        assert "✓ 2 installed" not in g[lay.bottom]
 
-    def test_no_summary_keeps_the_idle_rule_byte_identical(self):
-        g, lay = self._grid(None)
-        expected = list("╰" + "─" * (lay.w - 2) + "╯")
-        expected[lay.detail_x - 1] = "┴"
-        assert g[-1] == "".join(expected)
+    def test_the_bottom_rule_is_plain_whatever_the_session_did(self):
+        for summary in (None, ("failed", "✗ " + "x" * 200)):
+            g, lay = self._grid(summary)
+            expected = list("╰" + "─" * (lay.w - 2) + "╯")
+            expected[lay.detail_x - 1] = "┴"
+            assert g[lay.bottom] == "".join(expected), summary
 
-    def test_the_chip_never_overwrites_the_divider_tee(self):
+    def test_a_huge_chip_stays_inside_the_bar(self):
         g, lay = self._grid(("failed", "✗ " + "x" * 200))
-        assert g[-1][lay.detail_x - 1] == "┴"
-        assert g[-1][-1] == "╯"
+        assert len(g[lay.status_y]) == lay.w
+        assert g[lay.status_y].startswith(" LIST ")
 
 
 class TestListScrollbar:
@@ -1083,10 +1116,11 @@ class TestBadgeRailAlignment:
         lay = browse.layout(100, 24, detail=True)
         row = g[lay.body_y]
         # CORPUS[0] is code-review from acme/quality: the rail ends with the
-        # tap badge, whose closing bracket sits one column short of the
-        # divider gap.
-        assert row[lay.list_x + lay.list_w - 2] == "]"
-        assert "[acme/quality]" in row
+        # version badge, whose last digit sits one column short of the divider
+        # gap — and the tap shows as its repo name alone.
+        assert row[lay.list_x + lay.list_w - 2] == "0"
+        assert "quality v1.0.0" in row
+        assert "acme/" not in row
 
     def test_the_kind_badge_text_matches_the_search_vocabulary(self):
         from boost_cli.core import output as out
@@ -1100,7 +1134,7 @@ def test_a_status_message_keeps_a_backticked_command_whole():
     # which leaves a command no one can copy.
     msg = ("not linked: ~/.cursor/skills is not writable — "
            "`chmod u+w ~/.cursor/skills`, then `boost sync` adds the link")
-    lines = [t for role, t in browse.detail_lines(
+    lines = [t for role, t in _dl(
         {"name": "x", "description": "d"}, width=30, state="ok", message=msg)
         if "chmod" in t or "sync" in t or "linked" in t]
     assert any("`chmod u+w ~/.cursor/skills`" in t for t in lines), lines
@@ -1111,7 +1145,7 @@ def test_a_status_token_wider_than_the_pane_still_fits_it():
     # output.wrap lets an over-wide token run long; in a curses pane that
     # drew over the frame and cut the tail off.
     msg = "installed ~/.agents/skills/" + "a-very-long-skill-name" * 3
-    lines = [t for role, t in browse.detail_lines(
+    lines = [t for role, t in _dl(
         {"name": "x"}, width=30, state="ok", message=msg)]
     assert all(len(t) <= 30 for t in lines), lines
     assert "".join(lines).count("a-very-long-skill-name") >= 1
@@ -1124,7 +1158,7 @@ def test_a_command_exactly_as_wide_as_the_pane_is_not_split_by_its_comma():
     cmd = "`chmod u+w ~/.windsurf/skills`"
     assert len(cmd) == 30
     msg = "not linked: ~/.windsurf/skills is not writable — %s, then `boost sync`" % cmd
-    lines = [t for role, t in browse.detail_lines(
+    lines = [t for role, t in _dl(
         {"name": "x"}, width=30, state="ok", message=msg)]
     assert cmd in lines, lines
     assert all(len(t) <= 30 for t in lines), lines
@@ -1181,3 +1215,1063 @@ class TestBrowseInstallTargetLines:
         line = self._targets(sandbox)["rule"]
         assert "~/.claude/CLAUDE.md" in line
         assert "skills/CLAUDE.md" not in line
+
+
+# ------------------------------------------------------------------ reskin
+
+
+class TestRanking:
+    """Matches rank by how the *name* meets the query; catalogue order breaks
+    ties. Each test isolates one tier boundary, so a `<` / `<=` slip in
+    match_tier cannot survive."""
+
+    @pytest.mark.parametrize("name,query,tier", [
+        ("code-review", "code-review", browse.EXACT),
+        ("code-review", "code review", browse.EXACT),     # space == hyphen
+        ("Code-Review", "code review", browse.EXACT),     # case-folded
+        ("code-review-pro", "code review", browse.PREFIX),
+        ("code-review-pro", "code-review", browse.PREFIX),
+        ("my-code-review", "code review", browse.SUBSTRING),
+        ("review-the-code", "code review", browse.SUBSTRING),  # any order
+        ("cxoxdxe", "code", browse.FUZZY),
+        ("unrelated", "code", browse.ELSEWHERE),
+        ("code", "code zzz", browse.ELSEWHERE),           # every token counts
+    ])
+    def test_tiers(self, name, query, tier):
+        assert browse.match_tier(name, browse.tokens(query)) == tier
+
+    def test_no_tokens_is_the_lowest_tier(self):
+        assert browse.match_tier("anything", []) == browse.ELSEWHERE
+
+    def test_the_tiers_are_ordered_best_first(self):
+        assert (browse.EXACT < browse.PREFIX < browse.SUBSTRING
+                < browse.FUZZY < browse.ELSEWHERE)
+
+    @pytest.mark.parametrize("better,worse", [
+        ("twin", "twin-tool"),                # exact beats prefix
+        ("twin-tool", "the-twin"),            # prefix beats substring
+        ("the-twin", "t-w-i-n"),              # substring beats fuzzy
+        ("t-w-i-n", "other"),                 # fuzzy beats description-only
+    ])
+    def test_each_boundary_decides_the_order(self, better, worse):
+        rows = [_e(worse, "twin"), _e(better, "twin")]
+        got = [e["name"] for e in browse.rank(rows, "twin")]
+        assert got == [better, worse]
+
+    def test_ties_keep_catalogue_order(self):
+        rows = [_e("b-twin", ""), _e("a-twin", ""), _e("c-twin", "")]
+        assert [e["name"] for e in browse.rank(rows, "twin")] == \
+            ["b-twin", "a-twin", "c-twin"]
+
+    def test_an_empty_query_is_left_untouched(self):
+        rows = [_e("b"), _e("a")]
+        assert browse.rank(rows, "  ") is rows
+
+    def test_matches_come_back_ranked(self):
+        rows = [_e("aaa-eight-twins-helper", ""), _e("eight-twins", ""),
+                _e("eagle", "eight twins in prose")]
+        got = [e["name"] for e in browse.matches(rows, "eight-twins")]
+        assert got[0] == "eight-twins"
+        assert got[1] == "aaa-eight-twins-helper"
+
+
+class TestCategoryScope:
+    def test_category_is_a_scope(self):
+        assert "category" in browse.SCOPES
+        assert browse.scope_label("category") == "category"
+
+    def test_the_entry_category_beats_the_tap_fallback(self):
+        e = _e("x", tap="a/b", category="testing")
+        assert browse.entry_category(e, {"a/b": "devops"}) == "testing"
+
+    def test_the_tap_fallback_fills_a_missing_category(self):
+        assert browse.entry_category(_e("x", tap="a/b"), {"a/b": "devops"}) \
+            == "devops"
+
+    def test_no_category_anywhere_is_empty(self):
+        assert browse.entry_category(_e("x", tap="a/b"), None) == ""
+        assert browse.entry_category(_e("x", tap="a/b"), {"a/b": None}) == ""
+
+    def test_the_category_scope_searches_only_the_category(self):
+        rows = [_e("devops-thing", "", tap="a/b"),
+                _e("plain", "", tap="c/d", category="devops")]
+        got = [e["name"] for e in browse.matches(rows, "devops", "category")]
+        assert got == ["plain"]
+
+    def test_the_category_scope_uses_the_tap_fallback(self):
+        rows = [_e("plain", "", tap="a/b")]
+        assert browse.matches(rows, "devops", "category", {"a/b": "devops"})
+        assert not browse.matches(rows, "devops", "category", {})
+
+    def test_all_includes_the_category(self):
+        hay = browse.haystack(_e("x", tap="a/b"), "all", {"a/b": "devops"})
+        assert "devops" in hay
+
+
+class TestShortTap:
+    @pytest.mark.parametrize("tap,want", [
+        ("trailofbits/skills", "skills"),
+        ("fixture-tap", "fixture-tap"),
+        ("a/b/c", "c"),
+        ("", ""),
+        (None, ""),
+    ])
+    def test_short_tap(self, tap, want):
+        assert browse.short_tap(tap) == want
+
+
+class TestStatusBar:
+    def test_every_pane_has_a_mode_and_hints_that_end_in_quit(self):
+        for pane in browse.PANES:
+            assert browse.MODES[pane]
+            assert browse.HINTS[pane][-1] == ("esc", "quit")
+
+    def test_fit_hints_keeps_everything_that_fits(self):
+        hints = (("a", "one"), ("b", "two"))
+        # "a one" (5) + gap (2) + "b two" (5) == 12
+        assert browse.fit_hints(hints, 12) == list(hints)
+        assert browse.fit_hints(hints, 11) == [("b", "two")]
+
+    def test_fit_hints_drops_from_the_middle_and_keeps_the_last(self):
+        hints = (("1", "a"), ("2", "b"), ("3", "c"), ("esc", "quit"))
+        kept = browse.fit_hints(hints, 12)   # "1 a" + 2 + "esc quit" == 13
+        assert kept == [("esc", "quit")]
+        kept = browse.fit_hints(hints, 13)
+        assert kept == [("1", "a"), ("esc", "quit")]
+
+    def test_fit_hints_gives_up_whole_rather_than_clipping(self):
+        assert browse.fit_hints((("esc", "quit"),), 7) == []
+        assert browse.fit_hints((("esc", "quit"),), 8) == [("esc", "quit")]
+
+    def test_spans_start_with_the_pill(self):
+        spans = browse.status_spans("detail", 80)
+        assert spans[0] == (0, "pill", " DETAIL ")
+        assert spans[1] == (9, "key", "↑↓")
+        assert spans[2] == (12, "hint", "scroll")
+
+    def test_keys_and_labels_alternate_and_do_not_overlap(self):
+        spans = browse.status_spans("list", 200)
+        end = 0
+        for x, _role, text in spans:
+            assert x >= end
+            end = x + len(text)
+        assert end <= 199
+
+    def test_the_summary_sits_at_the_right_edge(self):
+        spans = browse.status_spans("list", 80, ("ok_line", "✓ 3 installed"))
+        x, _role, text = next(s for s in spans if s[1] == "ok_line")
+        assert x + len(text) == 79
+        assert text == "✓ 3 installed"
+        hint_end = max(sx + len(t) for sx, r, t in spans
+                       if r in ("key", "hint"))
+        assert hint_end <= x - 2, "hints give way to the chip"
+
+    def test_a_summary_with_no_room_is_clipped_not_dropped_onto_the_pill(self):
+        spans = browse.status_spans("list", 12, ("failed", "✗ 9 failed"))
+        x, _r, text = next(s for s in spans if s[1] == "failed")
+        assert x >= len(" LIST ")
+        assert x + len(text) <= 11
+
+    def test_no_width_no_spans(self):
+        assert browse.status_spans("list", 0) == []
+
+    def test_an_unknown_focus_falls_back_to_list(self):
+        spans = browse.status_spans("nonsense", 80)
+        assert spans[0][2] == " LIST "
+
+
+class TestPalette:
+    @pytest.mark.parametrize("can_change,colors,level", [
+        (True, 256, browse.CUSTOM),
+        (True, 16 + browse.CUSTOM_SLOTS, browse.CUSTOM),
+        (True, 16 + browse.CUSTOM_SLOTS - 1, browse.BASE),
+        (False, 256, browse.XTERM256),
+        (False, 255, browse.BASE),
+        (False, 8, browse.BASE),
+    ])
+    def test_palette_level(self, can_change, colors, level):
+        assert browse.palette_level(can_change, colors) == level
+
+    def test_kind_hues_never_collide_at_any_level(self):
+        """Two kinds in one colour read as one kind. On base, violet and pink
+        are both magenta — so they may not both be used."""
+        base_of = {"cyan": "cyan", "violet": "magenta", "pink": "magenta",
+                   "yellow": "yellow"}
+        for level in (browse.CUSTOM, browse.XTERM256, browse.BASE):
+            hues = [browse.kind_hue(k, level) for k in
+                    ("skill", "rule", "workflow")]
+            assert len(set(hues)) == 3, level
+            if level == browse.BASE:
+                assert len({base_of[h] for h in hues}) == 3
+
+    def test_kind_hue_falls_back_to_the_skill_hue(self):
+        assert browse.kind_hue("mystery", browse.CUSTOM) == "cyan"
+        assert browse.kind_hue("rule", "nonsense") == \
+            browse.kind_hue("rule", browse.BASE)
+
+    @pytest.mark.parametrize("rgb,index", [
+        ((0, 0, 0), 16),
+        ((255, 255, 255), 231),
+        ((95, 215, 215), 80),          # exact cube point
+        ((0x40, 0xcb, 0xe3), 80),      # Aurora cyan
+        ((128, 128, 128), 244),        # grey ramp beats the cube
+        ((8, 8, 8), 232),              # bottom of the ramp
+        ((238, 238, 238), 255),        # top of the ramp
+        ((255, 0, 0), 196),
+        ((0, 0, 255), 21),
+    ])
+    def test_xterm256(self, rgb, index):
+        assert browse.xterm256(rgb) == index
+
+    def test_the_slate_is_a_dark_grey_not_a_hue(self):
+        assert 232 <= browse.xterm256(browse.SLATE) <= 240
+
+
+class TestDetailSpans:
+    def test_line_text_and_role(self):
+        line = [("label", "kind     "), ("field", "skill")]
+        assert browse.line_text(line) == "kind     skill"
+        assert browse.line_role(line) == "label"
+        assert browse.line_role([]) == "blank"
+
+    def test_clip_spans(self):
+        line = [("a", "abc"), ("b", "defg"), ("c", "h")]
+        assert browse.clip_spans(line, 5) == [("a", "abc"), ("b", "de")]
+        assert browse.clip_spans(line, 3) == [("a", "abc")]
+        assert browse.clip_spans(line, 8) == line
+        assert browse.clip_spans(line, 0) == []
+
+    def test_a_field_is_a_dim_label_and_a_bright_value(self):
+        (line,) = browse.field_lines("tap", "acme/quality", 40)
+        assert line == [("label", "tap      "), ("field", "acme/quality")]
+
+    def test_a_wrapped_value_stays_in_its_column(self):
+        lines = browse.field_lines("tap", "word " * 20, 30)
+        assert len(lines) > 1
+        col = len(lines[0][0][1])
+        assert col == 9
+        for ln in lines:
+            assert len(browse.line_text(ln)) <= 30
+        for ln in lines[1:]:
+            assert ln[0] == ("label", " " * col)
+            assert not ln[1][1].startswith(" ")
+
+    def test_a_long_key_is_never_truncated(self):
+        (line, *_rest) = browse.field_lines("custom-long-key", "v", 40)
+        assert line[0] == ("label", "custom-long-key ")
+
+    def test_an_empty_value_still_renders_its_label(self):
+        assert browse.field_lines("k", "", 40) == [
+            [("label", "k        "), ("field", "")]]
+
+    def test_chips_carry_kind_version_category_and_curated(self):
+        e = _e("x", kind="rule", version="2.0", tap="a/b", curated=True)
+        chips = browse.chips(e, {"a/b": "qa"})
+        assert browse.line_text(chips) == "rule · v2.0 · #qa · ★ curated"
+        assert chips[0] == ("kind_rule", "rule")
+        assert ("star", "★ curated") in chips
+        assert ("category", "#qa") in chips
+
+    def test_chips_leave_out_what_is_unknown(self):
+        e = {"name": "x"}
+        assert browse.line_text(browse.chips(e)) == "skill"
+
+    def test_the_title_no_longer_carries_the_version(self):
+        lines = browse.detail_lines(_e("code-review", version="2.1.0"))
+        assert browse.line_text(lines[0]) == "code-review"
+        assert "v2.1.0" in browse.line_text(lines[1])
+        assert browse.line_role(lines[2]) == "rule"
+
+    def test_frontmatter_does_not_repeat_what_is_shown_above(self):
+        e = _e("x", "the description", meta={
+            "name": "x", "description": "the description", "version": "1",
+            "model": "inherit"})
+        text = [t for _r, t in _dl(e)]
+        assert sum("the description" in t for t in text) == 1
+        assert any(t.startswith("model") for t in text)
+        assert not any(t.startswith("name ") for t in text)
+
+    def test_frontmatter_with_only_shown_keys_has_no_section(self):
+        e = _e("x", "d", meta={"name": "x", "description": "d"})
+        assert not any(t == "FRONTMATTER" for _r, t in _dl(e))
+
+    def test_curated_moved_to_the_chips(self):
+        e = _e("x", curated=True)
+        text = [t for _r, t in _dl(e)]
+        assert any("★ curated" in t for t in text)
+        assert not any(t.startswith("curated") for t in text)
+
+    def test_the_chips_line_is_clipped_to_the_pane(self):
+        e = _e("x", kind="workflow", version="10.20.30", category="c" * 40,
+               curated=True)
+        lines = browse.detail_lines(e, width=20)
+        assert len(browse.line_text(lines[1])) <= 20
+
+    def test_every_span_carries_a_role(self):
+        for line in browse.detail_lines(_e("x", "d", meta={"k": "v"}),
+                                        install_to="~/.agents/skills"):
+            assert line
+            for role, _text in line:
+                assert isinstance(role, str) and role
+
+
+class TestLayoutStatusRow:
+    def test_a_default_layout_puts_the_bar_under_the_frame(self):
+        lay = browse.layout(100, 24, detail=True)
+        assert (lay.body_y, lay.bottom, lay.status_y) == (4, 22, 23)
+        assert lay.body_h == 18
+        assert lay.has_status
+
+    def test_the_bar_needs_eight_rows(self):
+        assert browse.layout(80, 8).has_status
+        assert not browse.layout(80, 7).has_status
+        assert browse.layout(80, 7).bottom == 6
+        assert browse.layout(80, 7).body_h == 2
+
+    def test_a_hand_built_layout_defaults_to_the_last_row(self):
+        lay = browse.Layout(w=10, h=10, body_y=4, body_h=5, list_x=1,
+                            list_w=8, detail_x=10, detail_w=0)
+        assert lay.bottom == 9
+        assert not lay.has_status
+
+    def test_a_degenerate_terminal_never_goes_negative(self):
+        lay = browse.layout(0, 0)
+        assert lay.body_h == 0 and lay.bottom >= -1
+
+
+# ------------------------------------------------------------------ scoring
+
+
+def _names(rows):
+    return [e["name"] for e in rows]
+
+
+class TestFold:
+    def test_every_separator_becomes_a_space(self):
+        assert browse.fold("A-b_c/d.e:f(g h") == "a b c d e f g h"
+
+    def test_positions_survive(self):
+        for text in ("code-review", "owner/repo", "x(y)", ""):
+            assert len(browse.fold(text)) == len(text)
+
+    def test_the_haystack_is_folded(self):
+        assert browse.haystack(_e("Code-Review"), "name") == "code review"
+        assert browse.haystack(_e("x", tap="a/b"), "tap") == "a b"
+
+
+class TestWordStarts:
+    def test_a_word_starts_at_the_beginning_or_after_a_space(self):
+        assert browse._word_start("ab cd", 0)
+        assert browse._word_start("ab cd", 3)
+        assert not browse._word_start("ab cd", 1)
+        assert not browse._word_start("ab cd", 4)
+
+    @pytest.mark.parametrize("hay,s,i,want", [
+        ("code review", "rev", 0, 5),
+        ("code review", "cod", 0, 0),
+        ("code review", "cod", 1, -1),       # only word starts at or after i
+        ("xcode code", "code", 0, 6),        # mid-word occurrences are skipped
+        ("ab ab", "ab", 1, 3),
+        ("ab ab", "ab", 3, 3),               # a start exactly at i counts
+        ("ab ab", "ab", 4, -1),
+        ("", "a", 0, -1),
+    ])
+    def test_next_word_start(self, hay, s, i, want):
+        assert browse._next_word_start(hay, s, i) == want
+
+
+class TestAlignment:
+    def test_a_long_name_aligns_to_its_words_not_one_letter_per_word(self):
+        # The reported failure: `arch` used to be fished out one letter at a
+        # time after taking the `a` of `agent`.
+        hay = "bmad agent architect"
+        assert browse._align_words("bmadarch", hay) == [0, 1, 2, 3, 11, 12, 13, 14]
+        assert browse.match_positions("bmadarch", "bmad-agent-architect") == \
+            [0, 1, 2, 3, 11, 12, 13, 14]
+
+    def test_a_run_is_continued_before_any_jump(self):
+        assert browse._align_words("cod", "code cod") == [0, 1, 2]
+
+    def test_a_letter_found_nowhere_at_a_word_start_falls_back_to_anywhere(self):
+        assert browse._align_words("bs", "brainstorm") == [0, 5]
+
+    def test_no_fit_is_none(self):
+        assert browse._align_words("zz", "abc") is None
+        assert browse._align_plain("zz", "abc") is None
+        assert browse._align_substring("zz", "abc") is None
+
+    def test_plain_alignment_takes_first_occurrences(self):
+        assert browse._align_plain("om", "brainstorm") == [7, 9]
+
+    def test_a_substring_prefers_its_word_start_occurrence(self):
+        assert browse._align_substring("rev", "prev rev") == [5, 6, 7]
+        assert browse._align_substring("rev", "prev") == [1, 2, 3]
+
+    def test_align_takes_the_better_of_its_candidates(self):
+        # Word-aware wins here...
+        _sc, pos = browse.align("ar", "a b ar")
+        assert pos == [4, 5]
+        # ...and a substring short-circuits.
+        assert browse.align("view", "review")[1] == [2, 3, 4, 5]
+        assert browse.align("", "x") is None
+        assert browse.align("q", "x") is None
+
+    def test_runs(self):
+        assert browse.runs([]) == []
+        assert browse.runs([0, 1, 2, 5, 7, 8]) == [(0, 3), (5, 1), (7, 2)]
+
+
+class TestScoreWeights:
+    """Each pair flips if one weight moves the wrong way, so a mutated
+    constant cannot survive by leaving every ordering intact."""
+
+    def test_empty_scores_zero(self):
+        assert browse.score_positions([], "abc") == 0
+
+    def test_the_exact_arithmetic(self):
+        # c(0): word + first; o(1): run; r(5): word, gap 3; v(7): gap 1
+        assert browse.score_positions([0, 1, 5, 7], "code review") == \
+            (browse._BONUS_WORD + browse._BONUS_FIRST) + browse._BONUS_RUN \
+            + (browse._BONUS_WORD - 3) - 1
+
+    def test_the_gap_penalty_is_capped(self):
+        near = browse.score_positions([0, 5], "a" * 10)
+        far = browse.score_positions([0, 9], "a" * 10)
+        assert near == far == browse._BONUS_WORD + browse._BONUS_FIRST \
+            - browse._GAP_CAP
+
+    def test_a_shorter_gap_beats_a_longer_one_under_the_cap(self):
+        assert browse.score_positions([0, 2], "a" * 5) > \
+            browse.score_positions([0, 3], "a" * 5)
+
+    def test_a_word_start_beats_mid_word(self):
+        assert browse.score_positions([2], "a bc") > \
+            browse.score_positions([3], "a bc")
+
+    def test_the_first_word_beats_a_later_one(self):
+        assert browse.score_positions([0], "ab ab") > \
+            browse.score_positions([3], "ab ab")
+
+    def test_a_run_beats_a_jump_to_a_word(self):
+        # `co` as one run in `code` versus `c` + the `o` of a later word.
+        assert browse.score_positions([0, 1], "code o") > \
+            browse.score_positions([0, 5], "code o")
+
+    @pytest.mark.parametrize("name", [
+        "code-review", "a-code-review", "xcode", "pr review", "code review pro",
+        "ccode-c", "c", "review-code", "co-de", "x",
+    ])
+    @pytest.mark.parametrize("tok", [
+        "c", "co", "code", "code review", "e r", "review", "ode", "o", "xc",
+        "crv", "zz",
+    ])
+    def test_the_fast_score_agrees_with_the_alignment(self, name, tok):
+        fn, ft = browse.fold(name), browse.fold(tok)
+        hit = browse.align(ft, fn)
+        assert browse._score(fn, [ft]) == (hit[0] if hit else 0)
+
+    def test_scores_sum_across_tokens(self):
+        fn = "code review"
+        assert browse._score(fn, ["code", "review"]) == \
+            browse._score(fn, ["code"]) + browse._score(fn, ["review"])
+
+
+def _pieces_reference(needle, hay, min_piece=3):
+    """Every split of needle into >= min_piece runs, each starting a word of
+    hay after the last — tried by brute force."""
+    starts = [i for i in range(len(hay)) if i == 0 or hay[i - 1] == " "]
+
+    def go(j, i):
+        if j == len(needle):
+            return True
+        for cut in range(j + min_piece, len(needle) + 1):
+            piece = needle[j:cut]
+            for k in starts:
+                if k >= i and hay.startswith(piece, k) and go(cut, k + len(piece)):
+                    return True
+        return False
+
+    return go(0, 0)
+
+
+class TestTight:
+    @pytest.mark.parametrize("needle,hay,want", [
+        ("view", "a review tool", True),          # a substring, mid-word too
+        ("codrev", "code review", True),          # two word-starting pieces
+        ("crv", "create react vite", False),      # one letter a word is thin
+        ("coderev", "my code and reviews", True),
+        ("codrev", "xcode review", False),        # `cod` must start a word
+        ("abcdef", "abx abcd ef", False),         # `ef` is too short a piece
+        ("abcdefg", "abx abcd efg", True),        # needs the shorter `abcd`
+        ("ab", "a b", False),                     # too short to be pieces
+        ("", "anything", True),
+    ])
+    def test_cases(self, needle, hay, want):
+        assert browse.tight(needle, hay) is want
+
+    def test_the_minimum_piece(self):
+        assert browse._MIN_PIECE == 3
+        assert browse.tight("abcdef", "abc def")
+        assert not browse.tight("abcde", "abc de")
+
+    def test_it_agrees_with_a_brute_force_reference(self):
+        hays = ["code review tool", "abx abcd efg", "re rev review",
+                "aaa aaa aaa", "test driven development", "x"]
+        needles = ["codrev", "abcdefg", "rerev", "aaaaaa", "testdev",
+                   "tesdridev", "revrev", "aaaaaaaaa", "xyz", "coder"]
+        for h in hays:
+            for n in needles:
+                if n in h:
+                    continue
+                assert browse._pieces(n, h) == _pieces_reference(n, h), (n, h)
+
+    def test_repeated_words_do_not_blow_up(self):
+        # Memoised: without it this is exponential in the word count.
+        hay = " ".join(["abc"] * 60) + " zzz"
+        assert not browse.tight("abcabcabcabcabcabcq", hay)
+
+
+class TestTokenMatching:
+    def test_loose_text_per_scope(self):
+        assert browse.loose_text("name", "hay", "nm") == "hay"
+        assert browse.loose_text("tap", "hay", "nm") == "hay"
+        assert browse.loose_text("category", "hay", "nm") == "hay"
+        assert browse.loose_text("all", "hay", "nm") == "nm"
+        assert browse.loose_text("description", "hay", "nm") is None
+
+    def test_a_substring_always_matches(self):
+        assert browse.token_matches("view", "a review", None)
+
+    def test_not_a_subsequence_never_matches(self):
+        assert not browse.token_matches("zq", "a review", "a review")
+
+    def test_a_scattered_subsequence_needs_the_loose_text(self):
+        hay = "create react vite"
+        assert browse.token_matches("crv", hay, hay)
+        assert not browse.token_matches("crv", hay, None)
+        assert not browse.token_matches("crv", hay, "other")
+
+    def test_word_pieces_match_without_the_loose_text(self):
+        assert browse.token_matches("codrev", "code review", None)
+
+
+class TestThinSpread:
+    """The user-visible behaviour: letters spread one per word stop matching
+    prose, and stop outranking the name the user was typing."""
+
+    def test_a_scattered_description_match_is_dropped_in_all(self):
+        rows = [_e("alpha", "create a react based vite starter")]
+        assert not browse.matches(rows, "crv", "all")
+
+    def test_a_scattered_name_match_survives_in_all(self):
+        rows = [_e("create-react-vite", "")]
+        assert _names(browse.matches(rows, "crv", "all")) == \
+            ["create-react-vite"]
+
+    def test_the_description_scope_is_strict(self):
+        rows = [_e("x", "create react vite"), _e("y", "code review notes")]
+        assert _names(browse.matches(rows, "crv", "description")) == []
+        assert _names(browse.matches(rows, "codrev", "description")) == ["y"]
+
+    def test_tap_and_category_keep_acronyms(self):
+        rows = [_e("x", tap="anthropics/skills", category="data-science")]
+        assert browse.matches(rows, "as", "tap")
+        assert browse.matches(rows, "dsci", "category")
+
+    def test_scope_is_required(self):
+        with pytest.raises(TypeError):
+            browse.matches_indexed(browse.index_entries(CORPUS, "all"), "x")  # type: ignore[call-arg]
+
+    def test_the_index_carries_the_folded_name(self):
+        (_entry, hay, fname), = browse.index_entries([_e("Code-Review", "d")], "all")
+        assert fname == "code review"
+        assert hay.startswith("code review d")
+
+    def test_an_empty_query_returns_every_row(self):
+        idx = browse.index_entries(CORPUS, "all")
+        assert browse.matches_indexed(idx, " ", "all") == CORPUS
+
+
+class TestScoredRanking:
+    def test_the_word_aligned_name_outranks_the_scattered_one(self):
+        rows = [_e("bagisto-datagrid-development", ""), _e("tdd-developer", "")]
+        assert _names(browse.matches(rows, "tdddev", "all"))[0] == \
+            "tdd-developer"
+
+    def test_a_mid_word_substring_does_not_jump_the_tier(self):
+        rows = [_e("accrual-schedule", ""), _e("cc-review", "")]
+        assert browse.match_tier("accrual-schedule", ["ccr"]) == browse.FUZZY
+        assert browse.match_tier("cc-review", ["cc"]) == browse.PREFIX
+        assert _names(browse.matches(rows, "ccr", "all")) == \
+            ["cc-review", "accrual-schedule"]
+
+    def test_a_word_start_substring_is_the_substring_tier(self):
+        assert browse.match_tier("my-code-review", ["review"]) == \
+            browse.SUBSTRING
+        assert browse.match_tier("prereview", ["review"]) == browse.FUZZY
+
+    def test_within_a_tier_the_better_alignment_leads(self):
+        rows = [_e("gxixtx-wxf", ""), _e("git-workflow", "")]
+        assert _names(browse.rank(rows, "gitwf")) == ["git-workflow",
+                                                      "gxixtx-wxf"]
+
+    def test_a_shorter_name_breaks_a_score_tie(self):
+        rows = [_e("code-review-for-monorepos", ""), _e("code-review-pro", "")]
+        assert _names(browse.rank(rows, "code review")) == \
+            ["code-review-pro", "code-review-for-monorepos"]
+
+    def test_rows_the_name_did_not_score_keep_catalogue_order(self):
+        rows = [_e("zz-long-name", "code review"), _e("aa", "code review")]
+        assert _names(browse.rank(rows, "code review")) == ["zz-long-name", "aa"]
+        assert browse.rank_key("aa", ["code"]) == (browse.ELSEWHERE, 0, 0)
+
+    def test_a_partial_name_match_outranks_a_description_only_one(self):
+        rows = [_e("other", "code review"), _e("code-helper", "a review")]
+        assert _names(browse.matches(rows, "code review", "all")) == \
+            ["code-helper", "other"]
+
+    def test_the_rank_key_shape(self):
+        tier, neg, length = browse.rank_key("code-review", ["code"])
+        assert tier == browse.PREFIX and neg < 0 and length == 11
+
+    def test_highlighting_follows_the_ranking_alignment(self):
+        assert browse.highlight_positions("arch", "bmad-agent-architect") == \
+            {11, 12, 13, 14}
+        assert browse.highlight_positions("code rev", "Code-Review") == \
+            {0, 1, 2, 3, 5, 6, 7}
+
+
+# ------------------------------------------------------------------ categories
+
+
+class TestCategories:
+    ROWS: typing.ClassVar[list[dict]] = [
+        _e("a", category="testing"), _e("b", category="Testing"),
+        _e("c", tap="x/y"), _e("d", tap="p/q"), _e("e", category="ai")]
+    CATS: typing.ClassVar[dict[str, str]] = {"x/y": "devops"}
+
+    def test_category_of_lowercases_and_names_the_empty_one(self):
+        assert browse.category_of(self.ROWS[1]) == "testing"
+        assert browse.category_of(self.ROWS[2], self.CATS) == "devops"
+        assert browse.category_of(self.ROWS[3], self.CATS) == \
+            browse.UNCATEGORIZED
+
+    def test_counts_largest_first_then_by_name(self):
+        assert browse.category_counts(self.ROWS, self.CATS) == [
+            ("testing", 2), ("ai", 1), ("devops", 1),
+            (browse.UNCATEGORIZED, 1)]
+
+    def test_counts_add_up_to_the_total(self):
+        assert sum(n for _c, n in browse.category_counts(self.ROWS)) == \
+            len(self.ROWS)
+
+    def test_in_category(self):
+        assert browse.in_category(self.ROWS[0], "TESTING ")
+        assert browse.in_category(self.ROWS[2], "devops", self.CATS)
+        assert not browse.in_category(self.ROWS[2], "devops")
+        assert browse.in_category(self.ROWS[3], browse.UNCATEGORIZED)
+        assert not browse.in_category(self.ROWS[4], "testing")
+
+    def test_no_category_is_no_filter(self):
+        assert all(browse.in_category(e, "") for e in self.ROWS)
+
+
+class TestPicker:
+    def test_rows_lead_with_everything_then_sort_a_to_z(self):
+        rows = browse.picker_rows(TestCategories.ROWS, TestCategories.CATS)
+        assert rows == [("", 5), ("ai", 1), ("devops", 1), ("testing", 2),
+                        (browse.UNCATEGORIZED, 1)]
+
+    def test_rows_by_count_still_pin_uncategorized_last(self):
+        rows = browse.picker_rows(TestCategories.ROWS, TestCategories.CATS,
+                                  order="count")
+        assert rows == [("", 5), ("testing", 2), ("ai", 1), ("devops", 1),
+                        (browse.UNCATEGORIZED, 1)]
+
+    def test_it_opens_on_the_active_category(self):
+        rows = [("", 9), ("testing", 5), ("ai", 4)]
+        assert browse.picker_index(rows, "AI") == 2
+        assert browse.picker_index(rows, "") == 0
+        assert browse.picker_index(rows, "gone") == 0
+
+    @pytest.mark.parametrize("sel,n,visible,want", [
+        (0, 5, 10, 0),        # everything fits
+        (0, 30, 10, 0),
+        (5, 30, 10, 0),       # centred, clamped at the top
+        (15, 30, 10, 10),     # centred
+        (29, 30, 10, 20),     # clamped at the bottom
+        (3, 30, 0, 0),        # no room
+        (10, 10, 10, 0),      # exactly fits
+    ])
+    def test_top(self, sel, n, visible, want):
+        assert browse.picker_top(sel, n, visible) == want
+
+    def test_line_layout(self):
+        line = browse.picker_line("testing", 1234, 20, True)
+        assert line == "● testing      1,234"
+        assert len(line) == 20
+        assert browse.picker_line("", 5, 10, False) == "  all    5"
+
+    def test_a_long_label_is_cut_before_the_count(self):
+        line = browse.picker_line("a" * 40, 12, 16, False)
+        assert line.endswith(" 12") and len(line) == 16
+
+    def test_a_zero_width_line_is_empty(self):
+        assert browse.picker_line("x", 1, 0, False) == ""
+
+    def test_query_chip(self):
+        assert browse.query_chip("testing") == "#testing"
+        assert browse.query_chip("") == ""
+
+    def test_the_picker_has_a_mode_and_cancels_rather_than_quits(self):
+        assert browse.MODES["picker"] == "FILTER"
+        assert browse.FACET_MODES == {"category": "CATEGORY", "tap": "TAP",
+                                      "kind": "KIND"}
+        assert browse.HINTS["picker"] == (
+            ("a-z", "filter"), ("↑↓", "move"), ("↵", "apply"),
+            ("⇥", "facet"), ("^T", "sort"), ("esc", "cancel"))
+        assert "picker" not in browse.PANES
+
+    def test_the_search_and_list_bars_advertise_every_facet_key(self):
+        for pane in ("search", "list"):
+            for facet, key in browse.FACET_KEYS.items():
+                assert (key, facet) in browse.HINTS[pane]
+        assert browse.FACET_KEYS == {"category": "^G", "tap": "^R",
+                                     "kind": "^K"}
+
+    def test_the_mode_override_names_the_facet_in_the_pill(self):
+        spans = browse.status_spans("picker", 80, mode="TAP")
+        assert spans[0] == (0, "pill", " TAP ")
+        assert browse.status_spans("picker", 80)[0] == (0, "pill", " FILTER ")
+
+
+class TestEmptyLinesCategory:
+    def test_the_category_is_named_with_the_query(self):
+        head = browse.empty_lines("zz", "name", category="testing")[0][1]
+        assert head == "○ no matches for 'zz' in name · #testing"
+
+    def test_an_empty_category_says_so(self):
+        assert browse.empty_lines("", "all", category="testing")[0][1] == \
+            "○ nothing in #testing"
+
+
+# ------------------------------------------------------------------ facets
+
+
+_F = [_e("a", tap="Acme/Quality", category="testing"),
+      _e("b", tap="acme/quality", kind="rule", category="Testing"),
+      _e("c", tap="beta/ai", kind="workflow", category="ai"),
+      _e("d", tap="", kind="", category="")]
+
+
+class TestFacetValues:
+    def test_each_facet_files_an_entry_lowercased(self):
+        assert [browse.facet_value(e, "category") for e in _F] == [
+            "testing", "testing", "ai", browse.UNCATEGORIZED]
+        assert [browse.facet_value(e, "tap") for e in _F] == [
+            "acme/quality", "acme/quality", "beta/ai", browse.UNTAPPED]
+        assert [browse.facet_value(e, "kind") for e in _F] == [
+            "skill", "rule", "workflow", "skill"]
+
+    def test_an_unknown_facet_files_nothing(self):
+        assert browse.facet_value(_F[0], "colour") == ""
+
+    def test_a_blank_kind_is_a_skill(self):
+        assert browse.facet_value(_e("w", kind="  "), "kind") == "skill"
+        assert browse.facet_value(_e("w", tap="  "), "tap") == browse.UNTAPPED
+
+    def test_category_uses_the_tap_fallback(self):
+        e = _e("z", tap="p/q", category="")
+        assert browse.facet_value(e, "category", {"p/q": "DevOps"}) == "devops"
+
+    def test_counts(self):
+        assert browse.facet_counts(_F, "tap") == {
+            "acme/quality": 2, "beta/ai": 1, browse.UNTAPPED: 1}
+
+    def test_next_facet_wraps_both_ways(self):
+        assert browse.next_facet("category") == "tap"
+        assert browse.next_facet("kind") == "category"
+        assert browse.next_facet("category", -1) == "kind"
+        assert browse.next_facet("bogus") == "category"
+
+
+class TestNarrow:
+    def test_filters_and_together(self):
+        got = browse.narrow(_F, {"category": "testing", "kind": "rule"})
+        assert [e["name"] for e in got] == ["b"]
+
+    def test_values_are_normalised_once(self):
+        got = browse.narrow(_F, {"tap": " ACME/Quality ", "kind": ""})
+        assert [e["name"] for e in got] == ["a", "b"]
+
+    def test_no_filter_keeps_everything_as_a_new_list(self):
+        got = browse.narrow(_F, dict.fromkeys(browse.FACETS, ""))
+        assert got == _F and got is not _F
+        assert browse.narrow(_F, None) == _F
+
+    def test_an_unknown_facet_filter_keeps_nothing(self):
+        assert browse.narrow(_F, {"colour": "red"}) == []
+
+    def test_the_has_none_values_are_filters_too(self):
+        assert [e["name"] for e in
+                browse.narrow(_F, {"tap": browse.UNTAPPED})] == ["d"]
+
+
+class TestSortFacetRows:
+    ROWS: typing.ClassVar[list[tuple[str, int]]] = [
+        ("web", 1), (browse.UNCATEGORIZED, 50), ("AI", 3), ("ai", 3),
+        ("data", 9), ("Design", 9)]
+
+    def test_a_to_z_is_case_insensitive_with_the_none_value_last(self):
+        assert browse.sort_facet_rows(self.ROWS, "category") == [
+            ("AI", 3), ("ai", 3), ("data", 9), ("Design", 9), ("web", 1),
+            (browse.UNCATEGORIZED, 50)]
+
+    def test_by_count_breaks_ties_by_name(self):
+        assert browse.sort_facet_rows(self.ROWS, "category", "count") == [
+            ("data", 9), ("Design", 9), ("AI", 3), ("ai", 3), ("web", 1),
+            (browse.UNCATEGORIZED, 50)]
+
+    def test_only_a_facets_own_none_value_is_pinned(self):
+        rows = [(browse.UNCATEGORIZED, 1), ("a", 1), (browse.UNTAPPED, 1)]
+        assert browse.sort_facet_rows(rows, "tap") == [
+            ("a", 1), (browse.UNCATEGORIZED, 1), (browse.UNTAPPED, 1)]
+        assert browse.sort_facet_rows(rows, "kind") == [
+            ("a", 1), (browse.UNCATEGORIZED, 1), (browse.UNTAPPED, 1)]
+        assert browse.sort_facet_rows(rows, "category") == [
+            ("a", 1), (browse.UNTAPPED, 1), (browse.UNCATEGORIZED, 1)]
+
+    def test_order_label(self):
+        assert browse.order_label("az") == "A–Z"
+        assert browse.order_label("count") == "by count"
+        assert browse.order_label("x") == "x"
+
+
+def _pk(active="", order="az", **kw):
+    counts = [("testing", 4), ("ai", 2), ("data-science", 3),
+              ("devops", 1), (browse.UNCATEGORIZED, 5)]
+    p = browse.open_picker("category", counts, 15, active, order)
+    return dataclasses.replace(p, **kw) if kw else p
+
+
+def _step(p, *keys):
+    act = None
+    for k in keys:
+        p, act = browse.picker_step(p, k, page=2)
+    return p, act
+
+
+class TestPickerState:
+    def test_opens_sorted_on_the_value_in_force(self):
+        p = _pk(" DevOps ")
+        assert browse.picker_visible(p) == [
+            ("", 15), ("ai", 2), ("data-science", 3), ("devops", 1),
+            ("testing", 4), (browse.UNCATEGORIZED, 5)]
+        assert p.active == "devops"
+        assert p.sel == 3 and browse.picker_value(p) == "devops"
+        assert _pk().sel == 0 and browse.picker_value(_pk()) == ""
+
+    def test_typing_filters_with_the_label_matcher_and_hides_all(self):
+        p, act = _step(_pk(), "d", "s")
+        assert act is None and p.query == "ds"
+        # A subsequence is enough in a label, as in the name scope: `ds` is
+        # data-science's initials and also fits d-evop-s. `all` is gone while
+        # a query is typed.
+        assert browse.picker_visible(p) == [("data-science", 3), ("devops", 1)]
+        assert p.sel == 0
+
+    def test_the_all_row_leaves_while_a_query_is_typed(self):
+        p, _ = _step(_pk(), "a")
+        assert ("", 15) not in browse.picker_visible(p)
+        assert browse.picker_value(p) == "ai"
+
+    def test_tokens_and_together(self):
+        p, _ = _step(_pk(), *"dat sci")
+        assert browse.picker_visible(p) == [("data-science", 3)]
+
+    def test_no_match_leaves_nothing_and_enter_does_nothing(self):
+        p, _ = _step(_pk(), "z", "z")
+        assert browse.picker_visible(p) == []
+        assert browse.picker_value(p) is None
+        assert browse.picker_step(p, "enter") == (p, None)
+
+    def test_backspace_edits_and_an_empty_query_returns_to_the_active_row(
+            self):
+        p, _ = _step(_pk("testing"), "a", "i")
+        assert p.query == "ai" and p.sel == 0
+        p, _ = _step(p, "backspace")
+        assert p.query == "a"
+        p, _ = _step(p, "backspace")
+        assert p.query == "" and browse.picker_value(p) == "testing"
+        p, act = _step(p, "backspace")          # nothing left to delete
+        assert p.query == "" and act is None
+
+    def test_esc_clears_a_query_first_then_cancels(self):
+        p, act = _step(_pk("ai"), "t", "e", "esc")
+        assert act is None and p.query == ""
+        assert browse.picker_value(p) == "ai"
+        assert browse.picker_step(p, "esc") == (p, "cancel")
+
+    def test_moves_clamp_to_the_visible_rows(self):
+        p = _pk()
+        assert _step(p, "up")[0].sel == 0
+        assert _step(p, "down", "down", "down")[0].sel == 3
+        assert _step(p, "pgdn")[0].sel == 2
+        assert _step(p, "pgdn", "pgdn", "pgdn", "pgdn")[0].sel == 5
+        assert _step(p, "pgdn", "pgdn", "pgup")[0].sel == 2
+        # `d` keeps data-science, devops and uncategorized (a label takes
+        # any subsequence), so three downs clamp on the third.
+        q, _ = _step(p, "d")
+        assert len(browse.picker_visible(q)) == 3
+        assert _step(q, "down", "down", "down")[0].sel == 2
+        z, _ = _step(p, "z", "z")
+        assert _step(z, "down")[0].sel == 0
+
+    def test_enter_applies_the_selected_value(self):
+        p, act = _step(_pk(), "d", "e", "v", "enter")
+        assert act == "apply" and browse.picker_value(p) == "devops"
+        p, act = _step(_pk("ai"), "up", "enter")
+        assert act == "apply" and browse.picker_value(p) == ""
+
+    def test_sort_toggles_and_the_selection_follows_its_value(self):
+        p, act = _step(_pk("ai"), "sort")
+        assert act is None and p.order == "count"
+        assert browse.picker_visible(p) == [
+            ("", 15), ("testing", 4), ("data-science", 3), ("ai", 2),
+            ("devops", 1), (browse.UNCATEGORIZED, 5)]
+        assert browse.picker_value(p) == "ai" and p.sel == 3
+        p, _ = _step(p, "sort")
+        assert p.order == "az" and browse.picker_value(p) == "ai"
+        assert _step(_pk(order="bogus"), "sort")[0].order == "az"
+
+    def test_sort_under_a_query_keeps_the_query(self):
+        p, _ = _step(_pk(), "d", "down", "sort")
+        assert p.query == "d" and p.order == "count"
+        assert browse.picker_value(p) == "devops"
+
+    def test_facet_keys_switch_or_close(self):
+        assert _step(_pk(), "facet:category")[1] == "cancel"
+        assert _step(_pk(), "facet:tap")[1] == "facet:tap"
+        assert _step(_pk(), "next")[1] == "next"
+        assert _step(_pk(), "prev")[1] == "prev"
+
+    def test_an_unknown_key_changes_nothing(self):
+        p = _pk()
+        assert browse.picker_step(p, "f12") == (p, None)
+        assert browse.picker_step(p, "\x01") == (p, None)
+
+    def test_space_types_into_the_query(self):
+        assert _step(_pk(), "d", " ", "s")[0].query == "d s"
+
+
+class TestPickerDrawingHelpers:
+    def test_marks_offset_past_the_dot_lead(self):
+        # "  devops ... 1": label starts at column 2.
+        assert browse.picker_marks("dev", "devops", 1, 20) == [2, 3, 4]
+        assert browse.picker_marks("", "devops", 1, 20) == []
+
+    def test_marks_light_the_all_label(self):
+        assert browse.picker_marks("al", "", 5, 20) == [2, 3]
+
+    def test_marks_stop_at_the_cut(self):
+        # width 10, count "12": room = 10 - 3 - 2 = 5 label columns.
+        assert browse.picker_marks("abcdefg", "abcdefg", 12, 10) == [
+            2, 3, 4, 5, 6]
+        assert browse.picker_line("abcdefg", 12, 10, False) == "  abcde 12"
+
+    def test_tail_counts_values_not_the_all_row(self):
+        assert browse.picker_tail(_pk()) == "5/5"
+        assert browse.picker_tail(_step(_pk(), "d", "e", "v")[0]) == "1/5"
+        assert browse.picker_tail(_step(_pk(), "z", "z")[0]) == "0/5"
+
+    def test_empty_lines(self):
+        assert browse.picker_empty(" zz  q ") == [
+            ("muted", "○ no match for 'zz q'"),
+            ("muted", "→ backspace edits · esc clears")]
+
+    def test_chips_read_with_the_colour_off(self):
+        f = {"category": "testing", "tap": "acme/quality", "kind": "rule"}
+        assert browse.query_chips(f) == ["#testing", "@acme/quality",
+                                         "kind:rule"]
+        assert browse.query_chips({"kind": "rule", "tap": ""}) == ["kind:rule"]
+        assert browse.query_chips(None) == []
+        assert browse.facet_chip("tap", "") == ""
+        assert browse.facet_chip("colour", "red") == "colour:red"
+
+    def test_empty_lines_name_every_filter(self):
+        f = {"category": "testing", "tap": "", "kind": "rule"}
+        assert browse.empty_lines("zz", "all", filters=f)[0][1] == \
+            "○ no matches for 'zz' in all · #testing kind:rule"
+        assert browse.empty_lines("", "all", filters=f)[0][1] == \
+            "○ nothing in #testing kind:rule"
+        assert browse.empty_lines("", "all", filters={})[0][1] == \
+            "○ nothing here"
+
+
+class TestWideTextFitsThePane:
+    """The detail pane wrapped by codepoint count, so 30 full-width characters
+    were "30 wide", drew across 60 columns and ran over the list pane."""
+
+    CJK = "全角文字の説明文です。" * 6
+
+    def test_a_cjk_description_wraps_by_display_columns(self):
+        from boost_cli.core import output
+        lines = browse.detail_lines(_e("x", self.CJK), width=30, installed=False)
+        desc = [browse.line_text(ln) for ln in lines
+                if browse.line_role(ln) == "desc"]
+        assert desc[0] == "全角文字の説明文です。全角文字"
+        assert [output.visible_len(t) for t in desc] == [30, 30, 30, 30, 12]
+        assert "".join(desc) == self.CJK                 # nothing clipped away
+        assert max(output.visible_len(browse.line_text(ln))
+                   for ln in lines) <= 30
+
+    def test_a_cjk_frontmatter_value_stays_inside_the_pane(self):
+        from boost_cli.core import output
+        lines = browse.field_lines("note", self.CJK, 30)
+        assert [output.visible_len(browse.line_text(ln)) for ln in lines] == \
+            [29] * 6 + [21]                 # a wide char never straddles col 30
+        assert lines[1][1] == ("field", "。全角文字の説明文で")
+
+    def test_ascii_wraps_exactly_as_textwrap_did(self):
+        import textwrap
+
+        from boost_cli.core import output
+        text = "a well-behaved sentence, long enough to wrap at a hyphen-ated word"
+        assert output.wrap_columns(text, 12) == textwrap.wrap(text, width=12)
+
+    def test_mixed_text_breaks_at_spaces_before_characters(self):
+        from boost_cli.core import output
+        assert output.wrap_columns("ab 全角 cd", 7) == ["ab 全角", "cd"]
+        assert output.wrap_columns("ab 全角文字", 6) == ["ab", "全角文", "字"]
+        assert output.wrap_columns("é", 0) == ["é"]
+        assert output.wrap_columns("  ", 5) == []
+
+    def test_clip_spans_counts_columns(self):
+        line = [("a", "全角"), ("b", "文字")]
+        assert browse.clip_spans(line, 3) == [("a", "全")]
+        assert browse.clip_spans(line, 5) == [("a", "全角")]
+        assert browse.clip_spans(line, 6) == [("a", "全角"), ("b", "文")]
+        assert browse.clip_spans([("a", ""), ("b", "xy")], 5) == [
+            ("a", ""), ("b", "xy")]
+
+
+class TestInstallSession:
+    def test_an_empty_session_asked_for_nothing(self):
+        s = browse.InstallSession()
+        assert (s.requested(), s.exit_code(), s.landed()) == (False, 0, [])
+        assert s.interrupted is None
+
+    def test_landed_is_the_installed_entries_in_order(self):
+        a, b = _e("a"), _e("b")
+        s = browse.InstallSession(installed=[(a, "res-a"), (b, "res-b")])
+        assert s.landed() == [a, b]
+        assert (s.requested(), s.exit_code()) == (True, 0)
+
+    def test_a_failure_is_exit_1_and_a_cancel_is_still_a_request(self):
+        assert browse.InstallSession(
+            failed=[(_e("a"), "no", "")]).exit_code() == 1
+        cancelled = browse.InstallSession(cancelled=[_e("a")])
+        assert (cancelled.requested(), cancelled.exit_code()) == (True, 0)
+        # Sessions never share their lists.
+        assert browse.InstallSession().cancelled is not \
+            browse.InstallSession().cancelled

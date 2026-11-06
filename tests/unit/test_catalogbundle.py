@@ -332,10 +332,11 @@ class TestTheArchiveIsTreatedAsHostile:
     """
 
     @staticmethod
-    def _hostile(path, member_name: str, data: bytes = b"{}") -> None:
+    def _hostile(path, member_name: str, data: bytes = b"{}",
+                 taps=()) -> None:
         manifest = json.dumps({
             "format": catalogbundle.BUNDLE_FORMAT, "generated": "2026-01-01",
-            "taps": [], "entries": 0}).encode("utf-8")
+            "taps": list(taps), "entries": 0}).encode("utf-8")
         with tarfile.open(path, "w:gz") as tar:
             info = tarfile.TarInfo(catalogbundle.MANIFEST_NAME)
             info.size = len(manifest)
@@ -422,9 +423,74 @@ class TestTheArchiveIsTreatedAsHostile:
         # Decompression bomb: small on the wire, unbounded on disk.
         monkeypatch.setattr(catalogbundle, "MAX_MEMBER_BYTES", 8)
         bundle = tmp_path / "bomb.tgz"
-        self._hostile(bundle, "catalog/big.json", data=b"{}" + b" " * 100)
-        with pytest.raises(BoostError):
+        self._hostile(bundle, "catalog/big.json", data=b"{}" + b" " * 100,
+                      taps=[{"name": "big", "url": ""}])
+        with pytest.raises(BoostError) as ei:
             catalogbundle.import_bundle(bundle)
+        assert ei.value.message == (
+            "bundle member catalog/big.json is 102 bytes, over the 8 cap")
+
+    @pytest.mark.parametrize("leaf", sorted(
+        f for f in paths.INTERNAL_CACHE_FILES if f.endswith(".json")))
+    def test_boosts_own_cache_files_are_never_overwritten(
+            self, sandbox, tmp_path, leaf):
+        # A bundle carrying catalog/discovery.json replaced the discovery
+        # index and crashed `boost discover` at rc 70. Refused even when the
+        # manifest claims a tap whose cache file would have that name.
+        paths.ensure_dirs()
+        target = paths.cache_dir() / leaf
+        target.write_bytes(b"ORIGINAL")
+        bundle = tmp_path / "evil.tgz"
+        self._hostile(bundle, "catalog/" + leaf, data=b'{"items":[1,2]}',
+                      taps=[{"name": leaf[:-len(".json")], "url": ""}])
+        with pytest.raises(BoostError) as ei:
+            catalogbundle.import_bundle(bundle)
+        assert ei.value.message == (
+            "bundle member catalog/%s would overwrite boost's own %s"
+            % (leaf, leaf))
+        assert target.read_bytes() == b"ORIGINAL"
+
+    def test_a_member_no_manifest_tap_accounts_for_is_refused(
+            self, sandbox, tmp_path):
+        bundle = tmp_path / "evil.tgz"
+        self._hostile(bundle, "catalog/stray.json",
+                      taps=[{"name": "acme/skills", "url": "",
+                             "file": "stray.json"}])
+        with pytest.raises(BoostError) as ei:
+            catalogbundle.import_bundle(bundle)
+        assert ei.value.message == (
+            "bundle member catalog/stray.json belongs to no tap in its manifest")
+        assert not (paths.cache_dir() / "stray.json").exists()
+
+    def test_a_member_named_for_a_manifest_tap_is_written(
+            self, sandbox, tmp_path):
+        bundle = tmp_path / "ok.tgz"
+        self._hostile(bundle, "catalog/acme__skills.json", data=b'{"x":1}',
+                      taps=[{"name": "acme/skills", "url": ""}])
+        stats = catalogbundle.import_bundle(bundle)
+        assert stats["files"] == 1
+        assert (paths.cache_dir() / "acme__skills.json").read_bytes() == \
+            b'{"x":1}'
+
+
+class TestManifestFiles:
+    def test_each_tap_name_maps_to_its_safe_cache_leaf(self):
+        assert catalogbundle.manifest_files({"taps": [
+            {"name": "acme/skills"}, {"name": "fix"}]}) == {
+                "acme__skills.json", "fix.json"}
+
+    def test_the_rows_own_file_field_is_ignored(self):
+        assert catalogbundle.manifest_files({"taps": [
+            {"name": "fix", "file": "discovery.json"}]}) == {"fix.json"}
+
+    def test_internal_cache_names_are_never_accounted_for(self):
+        assert catalogbundle.manifest_files({"taps": [
+            {"name": "discovery"}, {"name": "rag_index"}]}) == set()
+
+    def test_malformed_rows_are_skipped(self):
+        assert catalogbundle.manifest_files({"taps": [
+            "fix", {"name": ""}, {"name": 3}, {}]}) == set()
+        assert catalogbundle.manifest_files({}) == set()
 
 
 class TestTheErrorPathsAreReachable:
@@ -520,3 +586,84 @@ class TestTheErrorPathsAreReachable:
 
         assert stats["added"] == 1
         assert [t.name for t in registry.list_taps()] == ["acme/skills"]
+
+
+_OK_ROW = {"name": "fixture", "url": "https://github.com/a/fixture"}
+_FMT = catalogbundle.BUNDLE_FORMAT
+
+
+class TestMalformedManifest:
+    """A manifest of the wrong *shape* is refused before anything is written.
+
+    Each of these crashed `catalog --import` at rc 70 — a string row died in
+    the config merge after ``catalog/fixture.json`` had already landed in the
+    cache, owned by no tap.
+    """
+
+    @staticmethod
+    def _bundle(path, manifest) -> None:
+        raw = json.dumps(manifest).encode("utf-8")
+        with tarfile.open(path, "w:gz") as tar:
+            info = tarfile.TarInfo(catalogbundle.MANIFEST_NAME)
+            info.size = len(raw)
+            tar.addfile(info, io.BytesIO(raw))
+            info = tarfile.TarInfo("catalog/fixture.json")
+            info.size = 2
+            tar.addfile(info, io.BytesIO(b"{}"))
+
+    @pytest.mark.parametrize("manifest, why", [
+        ([1, 2], "expected an object, got list"),
+        ({"format": _FMT, "taps": {"name": "fixture"}},
+         "`taps` must be a list, got dict"),
+        ({"format": _FMT, "taps": [_OK_ROW, "oops"]},
+         "taps[1] must be an object, got str"),
+        ({"format": _FMT, "taps": [{"name": ["x"]}]},
+         "taps[0] needs a non-empty string `name`"),
+        ({"format": _FMT, "taps": [{"name": ""}]},
+         "taps[0] needs a non-empty string `name`"),
+        ({"format": _FMT, "taps": [{"url": "u"}]},
+         "taps[0] needs a non-empty string `name`"),
+        ({"format": _FMT, "taps": [{"name": "fixture", "url": 7}]},
+         "taps[0].url must be a string"),
+        ({"format": _FMT, "taps": [{"name": "fixture", "commit": 7}]},
+         "taps[0].commit must be a string"),
+        ({"format": _FMT, "taps": [_OK_ROW], "entries": "9"},
+         "`entries` must be an integer"),
+        ({"format": _FMT, "taps": [_OK_ROW], "entries": True},
+         "`entries` must be an integer"),
+        ({"format": _FMT, "taps": [_OK_ROW], "generated": 5},
+         "`generated` must be a string"),
+    ])
+    def test_is_refused_with_nothing_written(self, sandbox, tmp_path,
+                                             manifest, why):
+        bundle = tmp_path / "bad.tgz"
+        self._bundle(bundle, manifest)
+        with pytest.raises(BoostError) as ei:
+            catalogbundle.import_bundle(bundle)
+        assert ei.value.message == "bundle manifest is malformed: " + why
+        assert ei.value.hint == ("re-export it with "
+                                 "`boost catalog --export <file>`")
+        assert not (paths.cache_dir() / "fixture.json").exists()
+        assert not paths.config_path().exists()
+        # --show reads the same manifest and must refuse it the same way.
+        with pytest.raises(BoostError) as ei:
+            catalogbundle.read_manifest(bundle)
+        assert ei.value.message == "bundle manifest is malformed: " + why
+
+    def test_optional_fields_may_be_absent_or_null(self, sandbox, tmp_path):
+        bundle = tmp_path / "ok.tgz"
+        self._bundle(bundle, {"format": _FMT, "entries": None,
+                              "taps": [{"name": "fixture", "commit": None}]})
+        stats = catalogbundle.import_bundle(bundle)
+        assert stats["files"] == 1 and stats["added"] == 1
+        assert stats["entries"] == 0 and stats["generated"] == ""
+        assert [t.name for t in registry.list_taps()] == ["fixture"]
+
+    def test_taps_may_be_absent(self, sandbox, tmp_path):
+        raw = json.dumps({"format": _FMT}).encode("utf-8")
+        bundle = tmp_path / "empty.tgz"
+        with tarfile.open(bundle, "w:gz") as tar:
+            info = tarfile.TarInfo(catalogbundle.MANIFEST_NAME)
+            info.size = len(raw)
+            tar.addfile(info, io.BytesIO(raw))
+        assert catalogbundle.import_bundle(bundle)["taps"] == 0

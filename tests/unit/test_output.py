@@ -20,6 +20,7 @@ def clean_env(monkeypatch):
     monkeypatch.delenv("CLICOLOR_FORCE", raising=False)
     monkeypatch.delenv("BOOST_COLOR", raising=False)
     monkeypatch.delenv("BOOST_ASSUME_YES", raising=False)
+    monkeypatch.delenv("TERM", raising=False)
     monkeypatch.setattr(sys, "argv", ["boost"])
 
 
@@ -82,6 +83,77 @@ class TestUseColor:
 
     def test_stream_without_isatty_false(self):
         assert output.use_color(object()) is False
+
+    def test_term_dumb_tty_is_plain(self, monkeypatch):
+        # Emacs shell buffers and some CI log viewers are a TTY that prints
+        # escapes as junk; TERM=dumb is how they say so.
+        monkeypatch.setenv("TERM", "dumb")
+        assert output.use_color(FakeStream(tty=True)) is False
+        assert output.color_level(FakeStream(tty=True)) == 0
+
+    def test_term_dumb_beats_colorterm(self, monkeypatch):
+        monkeypatch.setenv("TERM", "dumb")
+        monkeypatch.setenv("COLORTERM", "truecolor")
+        assert output.color_level(FakeStream(tty=True)) == 0
+
+    def test_other_term_keeps_color_on_a_tty(self, monkeypatch):
+        monkeypatch.setenv("TERM", "xterm-256color")
+        assert output.use_color(FakeStream(tty=True)) is True
+
+    def test_boost_color_always_beats_term_dumb(self, monkeypatch):
+        monkeypatch.setenv("TERM", "dumb")
+        monkeypatch.setenv("BOOST_COLOR", "always")
+        assert output.use_color(FakeStream(tty=True)) is True
+
+    def test_clicolor_force_beats_term_dumb(self, monkeypatch):
+        monkeypatch.setenv("TERM", "dumb")
+        monkeypatch.setenv("CLICOLOR_FORCE", "1")
+        assert output.use_color(FakeStream(tty=True)) is True
+
+
+class TestStdinIsTty:
+    """`sys.stdin.isatty()` raised AttributeError under `<&-`, where Python
+    sets sys.stdin to None — rc 70 and a crash report from `boost uninstall`.
+    """
+
+    def test_tty(self, monkeypatch):
+        monkeypatch.setattr(sys, "stdin", FakeStream(tty=True))
+        assert output.stdin_is_tty() is True
+
+    def test_pipe(self, monkeypatch):
+        monkeypatch.setattr(sys, "stdin", FakeStream(tty=False))
+        assert output.stdin_is_tty() is False
+
+    def test_closed_at_launch_is_none(self, monkeypatch):
+        monkeypatch.setattr(sys, "stdin", None)
+        assert output.stdin_is_tty() is False
+
+    def test_closed_stream(self, monkeypatch):
+        s = io.StringIO()
+        s.close()       # isatty() on a closed file raises ValueError
+        monkeypatch.setattr(sys, "stdin", s)
+        assert output.stdin_is_tty() is False
+
+    def test_detached_stream_oserror(self, monkeypatch):
+        class Gone:
+            def isatty(self):
+                raise OSError("bad fd")
+        monkeypatch.setattr(sys, "stdin", Gone())
+        assert output.stdin_is_tty() is False
+
+    def test_an_explicit_stream_beats_sys_stdin(self, monkeypatch):
+        monkeypatch.setattr(sys, "stdin", FakeStream(tty=False))
+        assert output.stdin_is_tty(FakeStream(tty=True)) is True
+        monkeypatch.setattr(sys, "stdin", FakeStream(tty=True))
+        assert output.stdin_is_tty(None) is False     # passed-in closed stdin
+        assert output.stdin_is_tty() is True
+
+    def test_truthy_non_bool_is_coerced(self, monkeypatch):
+        class Odd:
+            def isatty(self):
+                return 1
+        monkeypatch.setattr(sys, "stdin", Odd())
+        assert output.stdin_is_tty() is True
 
 
 class TestC:
@@ -550,6 +622,24 @@ class TestPtyWidth:
         return primary, os.fdopen(secondary, "w", buffering=1,
                                   encoding="utf-8")
 
+    @staticmethod
+    def _read_until(fd, done, timeout=5.0):
+        """Read the pty's other end until ``done(text)`` or ``timeout`` s.
+
+        One ``os.read`` is not enough: Linux hands what the slave side wrote to
+        the master through a workqueue, so under load a read straight after
+        the flush returned only the first folded line (``assert 1 > 1`` on an
+        ubuntu cell running ``-n auto``).
+        """
+        import select
+        text, deadline = "", time.monotonic() + timeout
+        while not done(text):
+            left = deadline - time.monotonic()
+            if left <= 0 or not select.select([fd], [], [], left)[0]:
+                break
+            text += os.read(fd, 65536).decode()
+        return text
+
     def test_a_streams_own_terminal_is_measured(self, monkeypatch):
         monkeypatch.delenv("COLUMNS", raising=False)
         primary, tty = self._pty(200)
@@ -584,7 +674,7 @@ class TestPtyWidth:
         try:
             output.warn(" ".join(["remedy"] * 40), stream=narrow, wrap=True)
             narrow.flush()
-            got = os.read(p2, 65536).decode()
+            got = self._read_until(p2, lambda text: text.count("remedy") == 40)
         finally:
             wide.close()
             narrow.close()
@@ -693,6 +783,40 @@ class TestVisibleLenWideChars:
         # one terminal column, not two codepoints' worth.
         assert output.visible_len("e\u0301") == 1
         assert output._char_width("\u0301") == 0
+
+
+class TestVisibleLenAsciiFastPath:
+    """ASCII skips the per-character ``unicodedata`` walk, which was most of a
+    non-TTY ``boost browse`` over a 63k-row catalogue. The width must be what
+    the walk would have said."""
+
+    @staticmethod
+    def _walk(s):
+        return sum(output._char_width(ch) for ch in output._ANSI_RE.sub("", s))
+
+    @pytest.mark.parametrize("s", [
+        "", "hello", "a b\tc", "\033[31mhi\033[0m", "\033[1m\033[0m",
+        "\033[38;2;34;211;238mx\033[0m tail", "bare \033 escape",
+        "\033[31", "名称", "e\u0301", "🎉 ok", "\033[31m名\033[0m",
+        "café",
+    ])
+    def test_agrees_with_the_character_walk(self, s):
+        assert output.visible_len(s) == self._walk(s)
+
+    def test_ascii_never_consults_unicodedata(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(output, "_char_width",
+                            lambda ch: calls.append(ch) or 1)
+        assert output.visible_len("plain ascii") == 11
+        assert output.visible_len("\033[31mred\033[0m") == 3
+        assert calls == []
+
+    def test_non_ascii_still_takes_the_walk(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(output, "_char_width",
+                            lambda ch: calls.append(ch) or 2)
+        assert output.visible_len("\033[31ma名\033[0m") == 4
+        assert calls == ["a", "名"]
 
 
 class TestClipVisibleWideChars:
@@ -1366,13 +1490,80 @@ class TestPlain:
         assert output.plain("a\x00b\x07c\x7fd\x9be") == "abcde"
 
     def test_ordinary_text_is_untouched(self):
-        # Including the whitespace the table layer folds itself, and non-ASCII,
-        # which must not be mistaken for a control byte.
-        assert output.plain("skills/naïve-café/SKILL.md — 3\tcopies\n") == (
-            "skills/naïve-café/SKILL.md — 3\tcopies\n")
+        # Non-ASCII must not be mistaken for a control byte.
+        assert output.plain("skills/naïve-café/SKILL.md — 3 copies") == (
+            "skills/naïve-café/SKILL.md — 3 copies")
+
+    def test_tab_and_newline_become_one_space_each(self):
+        # Not dropped: the word boundary survives. Not kept: frontmatter
+        # decodes a quoted "\n", and a newline in a one-line field starts a
+        # fresh line that can impersonate boost's own `✓ installed` output.
+        assert output.plain("ok\n✓ installed evil\tx\n") == (
+            "ok ✓ installed evil x ")
+
+    def test_carriage_return_is_dropped(self):
+        # \r returns the cursor to column 0, so the text after it overwrites
+        # the line boost just printed.
+        assert output.plain("ok\rFAKE") == "okFAKE"
+
+    def test_an_osc_title_and_csi_sequences_leave_inert_text(self):
+        raw = "Clean desc \x1b]0;PWNED\x07\x1b[2J\x1b[31mRED\x1b[0m end"
+        assert output.plain(raw) == "Clean desc ]0;PWNED[2J[31mRED[0m end"
+
+    def test_a_one_byte_c1_csi_goes(self):
+        assert output.plain("1.0.0\x9b2J") == "1.0.02J"
 
     def test_a_non_string_is_coerced(self):
         assert output.plain(42) == "42"
+
+    @pytest.mark.parametrize("ch", ["\u202a", "\u202b", "\u202c", "\u202d",
+                                    "\u202e", "\u2066", "\u2067", "\u2068",
+                                    "\u2069", "\u061c", "\u200e", "\u200f"])
+    def test_bidi_overrides_and_isolates_go(self, ch):
+        # An unclosed U+202E renders the rest of the line right to left,
+        # boost's own later columns included.
+        assert output.plain("a%sb" % ch) == "ab"
+
+    def test_the_bidi_range_ends_where_it_should(self):
+        # Neighbours of the ranges are ordinary text: U+2029/U+202F and
+        # U+2065/U+206A are not reordering controls, nor is U+061B, and
+        # U+200D is the zero-width joiner that emoji sequences depend on.
+        raw = "\u2029\u202f\u2065\u206a\u061b\u061d\u200d\u2010"
+        assert output.plain(raw) == raw
+
+    def test_rtl_letters_survive(self):
+        assert output.plain("שלום مرحبا") == "שלום مرحبا"
+
+
+class TestPlainFields:
+    """Display copies of whole records, for render paths reading many fields."""
+
+    def test_strings_are_sanitised_at_every_depth(self):
+        rec = {"version": "9.9\x1b[8m-hidden",
+               "tags": ["a\x1b[41m", "b"],
+               "meta": {"category": ("x\x07y",)}}
+        assert output.plain_fields(rec) == {
+            "version": "9.9[8m-hidden", "tags": ["a[41m", "b"],
+            "meta": {"category": ("xy",)}}
+
+    def test_keys_are_sanitised_too(self):
+        assert output.plain_fields({"a\x1bb": 1}) == {"ab": 1}
+
+    def test_non_strings_pass_through_unchanged(self):
+        rec = {"pinned": True, "n": 3, "none": None}
+        got = output.plain_fields(rec)
+        assert got == rec
+        assert got["pinned"] is True and got["none"] is None
+
+    def test_containers_keep_their_type(self):
+        assert type(output.plain_fields(("a",))) is tuple
+        assert type(output.plain_fields(["a"])) is list
+        assert output.plain_fields(None) is None
+
+    def test_the_input_is_not_mutated(self):
+        rec = {"tags": ["a\x1b"]}
+        output.plain_fields(rec)
+        assert rec == {"tags": ["a\x1b"]}
 
     def test_info_empty_is_blank_line(self, capsys):
         output.info()
@@ -1823,6 +2014,46 @@ class TestTableWidthAware:
         assert line == "a     10"  # left-aligned via numeric column index too
 
 
+def _confirm_hint_line() -> str:
+    return output._CONFIRM_BYPASS_HINT + "\n"
+
+
+class TestTolerateUndecodableStdin:
+    @staticmethod
+    def _wrapped(data: bytes, errors: str = "strict") -> io.TextIOWrapper:
+        return io.TextIOWrapper(io.BytesIO(data), encoding="utf-8",
+                                errors=errors)
+
+    def test_strict_stdin_now_replaces(self, monkeypatch):
+        stream = self._wrapped(b"caf\xe9\n")
+        monkeypatch.setattr(sys, "stdin", stream)
+        output.tolerate_undecodable_stdin()
+        assert stream.errors == "replace"
+        assert stream.readline() == "caf\ufffd\n"
+
+    def test_explicit_stream_argument_is_used(self):
+        stream = self._wrapped(b"x\n")
+        output.tolerate_undecodable_stdin(stream)
+        assert stream.errors == "replace"
+
+    def test_a_non_strict_handler_is_left_alone(self):
+        stream = self._wrapped(b"x\n", errors="surrogateescape")
+        output.tolerate_undecodable_stdin(stream)
+        assert stream.errors == "surrogateescape"
+
+    def test_closed_or_odd_stdin_does_not_raise(self, monkeypatch):
+        monkeypatch.setattr(sys, "stdin", None)
+        output.tolerate_undecodable_stdin()          # fd 0 closed: no-op
+
+        class _NoReconfigure:
+            errors = "strict"
+        output.tolerate_undecodable_stdin(_NoReconfigure())
+
+        closed = self._wrapped(b"")
+        closed.close()
+        output.tolerate_undecodable_stdin(closed)
+
+
 class TestConfirm:
     def test_assume_yes_env_wins(self, monkeypatch):
         monkeypatch.setenv("BOOST_ASSUME_YES", "1")
@@ -1830,15 +2061,50 @@ class TestConfirm:
         monkeypatch.setattr(sys, "stdin", FakeStream(tty=False))
         assert output.confirm("go?", default=False) is True
 
-    def test_yes_flag_in_argv(self, monkeypatch):
-        monkeypatch.setattr(sys, "argv", ["boost", "uninstall", "--yes"])
+    # A -y in the process argv is the *command's* flag, which each caller
+    # passes as `args.yes or confirm(...)`. Reading it here let `protocol open
+    # -y` and `import -y` also approve the default-No MCP-registration prompt.
+    @pytest.mark.parametrize("flag", ["--yes", "-y"])
+    def test_yes_flag_in_argv_does_not_answer(self, monkeypatch, capsys, flag):
+        monkeypatch.delenv("BOOST_ASSUME_YES", raising=False)
+        monkeypatch.setattr(sys, "argv", ["boost", "import", "x", flag])
         monkeypatch.setattr(sys, "stdin", FakeStream(tty=False))
-        assert output.confirm("go?", default=False) is True
+        assert output.confirm("go?", default=False) is False
+        assert capsys.readouterr().out == _confirm_hint_line()
 
-    def test_short_y_flag_in_argv(self, monkeypatch):
-        monkeypatch.setattr(sys, "argv", ["boost", "-y"])
+    def test_custom_hint_replaces_the_default(self, monkeypatch, capsys):
         monkeypatch.setattr(sys, "stdin", FakeStream(tty=False))
-        assert output.confirm("go?", default=False) is True
+        assert output.confirm("go?", hint="pass -y to skip this prompt") is False
+        assert capsys.readouterr().out == "pass -y to skip this prompt\n"
+
+    # hint="" is "no flag answers this": the MCP-registration offer prints the
+    # commands it would have run instead. Each decline path is pinned, since
+    # each has its own `and hint` guard.
+    def test_empty_hint_prints_nothing_off_a_tty(self, monkeypatch, capsys):
+        monkeypatch.setattr(sys, "stdin", FakeStream(tty=False))
+        assert output.confirm("go?", hint="") is False
+        assert capsys.readouterr().out == ""
+
+    def test_empty_hint_prints_nothing_on_a_typed_no(self, monkeypatch,
+                                                     capsys):
+        monkeypatch.setattr(output, "stdin_is_tty", lambda *a: True)
+        monkeypatch.setattr("builtins.input", lambda prompt: "n")
+        assert output.confirm("go?", hint="") is False
+        assert capsys.readouterr().out == ""
+
+    def test_empty_hint_prints_nothing_on_eof(self, monkeypatch, capsys):
+        monkeypatch.setattr(output, "stdin_is_tty", lambda *a: True)
+
+        def eof(prompt):
+            raise EOFError
+        monkeypatch.setattr("builtins.input", eof)
+        assert output.confirm("go?", hint="") is False
+        assert capsys.readouterr().out == "\n"
+
+    def test_empty_hint_still_returns_a_typed_yes(self, monkeypatch):
+        monkeypatch.setattr(output, "stdin_is_tty", lambda *a: True)
+        monkeypatch.setattr("builtins.input", lambda prompt: "y")
+        assert output.confirm("go?", hint="") is True
 
     def test_non_tty_returns_default_true(self, monkeypatch):
         monkeypatch.setattr(sys, "stdin", FakeStream(tty=False))
@@ -1847,6 +2113,12 @@ class TestConfirm:
     def test_non_tty_returns_default_false(self, monkeypatch):
         monkeypatch.setattr(sys, "stdin", FakeStream(tty=False))
         assert output.confirm("go?", default=False) is False
+
+    def test_closed_stdin_returns_default_with_hint(self, monkeypatch, capsys):
+        monkeypatch.setattr(sys, "stdin", None)
+        assert output.confirm("go?", default=False) is False
+        assert capsys.readouterr().out == _confirm_hint_line()
+        assert output.confirm("go?", default=True) is True
 
     def test_default_is_false_when_unspecified(self, monkeypatch):
         # safety: with no explicit default, an unattended (non-tty) confirm must
@@ -1919,6 +2191,15 @@ class TestConfirm:
         assert output.confirm("go?", default=True, quiet=True) is False
         out = capsys.readouterr().out
         assert out.startswith("\n")  # the newline after ^D still prints
+        assert output._CONFIRM_BYPASS_HINT not in out
+
+    @pytest.mark.parametrize("answer", ["n", EOFError()])
+    def test_tty_decline_prints_the_custom_hint(self, monkeypatch, capsys,
+                                                answer):
+        self._tty(monkeypatch, answer)
+        assert output.confirm("go?", hint="custom hint") is False
+        out = capsys.readouterr().out
+        assert out.endswith("custom hint\n")
         assert output._CONFIRM_BYPASS_HINT not in out
 
     def test_tty_gibberish_is_no(self, monkeypatch):
@@ -2272,6 +2553,17 @@ class TestFormatSearchRow:
                     + "[skill]".ljust(len("[workflow]")) + "  "
                     + output.truncate(self.DESC, self._lay(60).desc_w))
         assert row == expected
+
+    def test_tap_text_is_sanitised_before_it_is_measured(self):
+        """Name, description and tap are a tap's text. A raw `\\x1b[31m` was
+        also counted as zero cells by `visible_len`, so the row was laid out
+        as if the escape were boost's own color."""
+        lay = output.search_layout(None, ["raw[1Aansi"], ["skill"], ["tap"])
+        row = output.format_search_row(
+            "raw\x1b[1Aansi", "Clean \x1b]0;PWNED\x07\x1b[2Jend", "skill",
+            "t\x07ap", 1.0, curated=False, installed=False, lay=lay)
+        assert row == ("▰▰▰▰   raw[1Aansi  [skill]  tap  "
+                       "Clean ]0;PWNED[2Jend")
 
     def test_curated_tail_is_verbatim_with_two_space_lead(self):
         row = output.format_search_row(

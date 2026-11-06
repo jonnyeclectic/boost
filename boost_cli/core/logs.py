@@ -18,7 +18,7 @@ Verbosity is resolved once, in this order (first wins):
   1. ``--debug`` flag / ``BOOST_DEBUG=1``      -> console shows DEBUG + tracebacks
   2. ``--verbose`` / ``-v`` flag              -> console shows INFO
   3. ``--quiet`` / ``-q`` flag                -> console stays silent
-  4. ``BOOST_LOG_LEVEL=DEBUG|INFO|WARNING|…`` -> explicit console level
+  4. ``BOOST_LOG_LEVEL=OFF|DEBUG|INFO|…``   -> explicit console level
   5. config ``logging.level`` (default ``OFF`` -> console silent)
 
 The console diagnostic channel is *off by default* — user-facing messages
@@ -44,6 +44,7 @@ collector instead of needing a regex. It is the same JSONL shape
 from __future__ import annotations
 
 import contextlib
+import io
 import json
 import logging
 import logging.handlers
@@ -56,7 +57,7 @@ import traceback
 from datetime import UTC, datetime
 from pathlib import Path
 
-from . import paths
+from . import paths, typedvalue
 
 LOGGER_NAME = "boost"
 MAX_BYTES = 1_000_000  # ~1 MB per file …
@@ -65,6 +66,11 @@ KEEP_CRASH_REPORTS = 20
 
 _LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
 _FORMATS = ("text", "json")
+#: What `config set logging.level` / `logging.format` accept: ``OFF`` is the
+#: default and silences the console, so it is a valid level even though
+#: :mod:`logging` has no such name.
+LEVEL_CHOICES = ("OFF", *_LEVELS)
+FORMAT_CHOICES = _FORMATS
 _TEXT_FMT = "%(asctime)s %(levelname)-7s %(name)s: %(message)s"
 _DATE_FMT = "%Y-%m-%dT%H:%M:%SZ"
 
@@ -79,7 +85,15 @@ def _stamp() -> str:
 
 
 def _file_stamp() -> str:
-    return datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    """The unique part of a crash report's name: microsecond time plus pid.
+
+    One-second resolution let two crashes in the same second share one file,
+    the second overwriting the first while both runs printed its path. The pid
+    separates concurrent processes; the microseconds keep sort order newest
+    last for :func:`_prune_crash_reports` and doctor's "newest".
+    """
+    return "%s-%d" % (datetime.now(UTC).strftime("%Y%m%dT%H%M%S.%fZ"),
+                      os.getpid())
 
 
 def log_path() -> Path:
@@ -100,15 +114,26 @@ def _console_level(verbose: bool, debug: bool, quiet: bool) -> int | None:
     for, so a normal run leaves stderr clean while the file keeps the full
     DEBUG trail.
     """
-    if debug or os.environ.get("BOOST_DEBUG"):
+    if debug or typedvalue.env_flag("BOOST_DEBUG"):
         return logging.DEBUG
     if verbose:
         return logging.INFO
     if quiet:
         return None
+    # A set BOOST_LOG_LEVEL decides, whatever config says: `OFF` was missing
+    # from the levels read here, so it fell through and a configured DEBUG
+    # still printed — env silencing config is the documented order. An
+    # unrecognised value silences too, and says so, rather than letting the
+    # config level it was presumably meant to override win.
     env = (os.environ.get("BOOST_LOG_LEVEL") or "").strip().upper()
     if env in _LEVELS:
         return getattr(logging, env)
+    if env:
+        if env != "OFF":
+            sys.stderr.write("! BOOST_LOG_LEVEL=%r is not one of %s — "
+                             "treating it as OFF\n"
+                             % (env, ", ".join(LEVEL_CHOICES)))
+        return None
     from . import config
     cfg = str(config.get("logging.level", "OFF") or "OFF").upper()
     return getattr(logging, cfg) if cfg in _LEVELS else None
@@ -163,10 +188,14 @@ def _formatter(fmt_name: str) -> logging.Formatter:
 
 
 def _file_enabled() -> bool:
-    if os.environ.get("BOOST_NO_LOG"):
+    if typedvalue.env_flag("BOOST_NO_LOG", unknown=True):
         return False
     from . import config
     return bool(config.get("logging.file", True))
+
+
+#: ``os.O_BINARY`` where it exists (Windows), else no flag.
+_O_BINARY: int = getattr(os, "O_BINARY", 0)
 
 
 class _BestEffortFileHandler(logging.handlers.RotatingFileHandler):
@@ -183,8 +212,43 @@ class _BestEffortFileHandler(logging.handlers.RotatingFileHandler):
     for every logger in the process.
     """
 
+    _rollover_failed = False
+
     def handleError(self, record: logging.LogRecord) -> None:
         pass
+
+    def _open(self) -> io.TextIOWrapper:
+        # Created 0600: the trail records every command line, and it is the
+        # file users are asked to attach to bug reports — not one for every
+        # account on the machine to read. A file left 0644 by an older boost
+        # is tightened too, best-effort.
+        # O_BINARY (Windows only): an fd os.open makes there is CRT text mode,
+        # which would turn the TextIOWrapper's "\r\n" into "\r\r\n".
+        fd = os.open(self.baseFilename,
+                     os.O_WRONLY | os.O_CREAT | os.O_APPEND | _O_BINARY, 0o600)
+        with contextlib.suppress(OSError):
+            os.chmod(self.baseFilename, 0o600)
+        # "a", not self.mode: a rotating handler with a size cap is always
+        # append mode, and the literal keeps the return type a TextIOWrapper.
+        return open(fd, "a", encoding=self.encoding, errors=self.errors)
+
+    def doRollover(self) -> None:
+        """Rotate, or keep appending to the current file when rotation fails.
+
+        Rotation renames files, which needs a writable *directory*. When the
+        logs dir is read-only the base class has already closed the stream
+        when the rename raises, so every later record was dropped — the log
+        stopped at ``MAX_BYTES`` for good, silently. Appending past the cap is
+        the lesser harm; ``boost doctor`` names the unwritable directory.
+        """
+        if self._rollover_failed:
+            return
+        try:
+            super().doRollover()
+        except OSError:
+            self._rollover_failed = True
+            if self.stream is None:
+                self.stream = self._open()
 
 
 def get_logger() -> logging.Logger:
@@ -217,7 +281,7 @@ def configure(verbose: bool = False, debug: bool = False,
     logger.setLevel(logging.DEBUG)  # handlers do the real filtering
     logger.propagate = False
 
-    _debug_console = bool(debug or os.environ.get("BOOST_DEBUG"))
+    _debug_console = bool(debug or typedvalue.env_flag("BOOST_DEBUG"))
 
     if _configured:
         return logger
@@ -231,7 +295,7 @@ def configure(verbose: bool = False, debug: bool = False,
     # File handler — always DEBUG, best-effort (never break the CLI over a log).
     if _file_enabled():
         with contextlib.suppress(OSError):
-            paths.logs_dir().mkdir(parents=True, exist_ok=True)
+            paths.logs_dir().mkdir(mode=0o700, parents=True, exist_ok=True)
             fh = _BestEffortFileHandler(
                 log_path(), maxBytes=MAX_BYTES, backupCount=BACKUP_COUNT,
                 encoding="utf-8", delay=True,
@@ -261,7 +325,7 @@ def log_invocation(argv: list[str]) -> None:
     """
     get_logger().info(
         "invoke: boost %s [pid=%d ppid=%d py=%s]",
-        " ".join(argv), os.getpid(), os.getppid(), sys.executable)
+        " ".join(redact_argv(argv)), os.getpid(), os.getppid(), sys.executable)
 
 
 def log_completion(argv: list[str], rc: int, elapsed_ms: float) -> None:
@@ -272,7 +336,7 @@ def log_completion(argv: list[str], rc: int, elapsed_ms: float) -> None:
     """
     level = logging.INFO if rc == 0 else logging.WARNING
     get_logger().log(level, "done: boost %s -> rc=%d in %dms",
-                     " ".join(argv), rc, round(elapsed_ms))
+                     " ".join(redact_argv(argv)), rc, round(elapsed_ms))
 
 
 def _boost_version() -> str:
@@ -316,7 +380,95 @@ def _redact(name: str, value: str) -> str:
     if (len(value) >= 40 and not set(value) & set(" \t/\\")
             and re.fullmatch(r"[A-Za-z0-9_.+=-]+", value)):
         return REDACTED
-    return value
+    return redact_url(value)
+
+
+#: ``scheme://user:pass@`` — greedy up to the last ``@`` before the path, so a
+#: password that itself contains ``@`` is withheld whole. Not anchored: argv
+#: tokens carry URLs after a ``--flag=``.
+#:
+#: The lookbehind is what keeps this linear. Without it a scheme may start at
+#: *every* letter of a run, and each start scans the rest of the run looking
+#: for ``://`` — ``boost search <200,000 x's>`` spent minutes here, twice per
+#: command, before the search itself had run. A scheme now starts only where
+#: the previous character could not have continued one, so each character is
+#: scanned by one start. A run may open with digits or ``+.-``, which cannot
+#: start a scheme but did not stop one starting at the next letter: the
+#: leading ``[0-9+.-]*`` keeps that match (``1https://u:p@h`` leaked its
+#: password through a bare lookbehind) and is carried through verbatim.
+_URL_USERINFO = re.compile(
+    r"(?<![a-z0-9+.-])([0-9+.-]*[a-z][a-z0-9+.-]*://)[^/\s]+@", re.IGNORECASE)
+#: A query parameter's ``?name=`` / ``&name=``. The name may not contain the
+#: next ``?`` or ``&``, so every start scans only to the next delimiter — the
+#: old single pattern let one name run across every ``?`` and backtracked
+#: through an alternation at each, quadratic on ``?a?a?a…``.
+_QUERY_NAME = re.compile(r"[?&][^=&#?\s]*=")
+_QUERY_VALUE = re.compile(r"[^&#\s]*")
+#: A parameter name that says it carries a credential (``?token=``,
+#: ``&api_key=``, ``&X-Amz-Signature=``).
+_MASKED_NAME = re.compile(r"key|token|secret|password|passwd|auth|sig",
+                           re.IGNORECASE)
+
+
+def _mask_query_params(value: str) -> str:
+    """``value`` with the value of every credential-named query parameter
+    withheld. A secret's value runs to the next ``&``, ``#`` or space, and a
+    parameter that starts inside it is part of what was withheld."""
+    parts: list[str] = []
+    pos = 0
+    for m in _QUERY_NAME.finditer(value):
+        if m.start() < pos or not _MASKED_NAME.search(m.group()):
+            continue
+        end = _QUERY_VALUE.match(value, m.end())
+        parts += [value[pos:m.end()], REDACTED]
+        pos = end.end() if end else m.end()
+    parts.append(value[pos:])
+    return "".join(parts)
+
+
+def redact_url(value: str) -> str:
+    """``value`` with URL userinfo and credential query parameters withheld.
+
+    Host and path survive: they are what a bug report needs, and the
+    credential is what it must not carry. Linear in ``len(value)``: it runs
+    over every argv token, and a token is whatever the user typed.
+    """
+    value = _URL_USERINFO.sub(r"\1" + REDACTED + "@", value)
+    return _mask_query_params(value)
+
+
+def redact_argv(argv: list[str]) -> list[str]:
+    """``argv`` as it may be written to the log or a crash report.
+
+    The terminal never shows what a log keeps: git strips userinfo from the
+    URL it echoes, so ``boost tap https://user:ghp_…@host/x`` left the token in
+    exactly one place — ``boost.log``, the file users attach to bug reports.
+    Withheld per token: a credential-shaped value, the value of a
+    ``--token=``/``--api-key`` style option (both ``=`` and next-token forms),
+    and URL userinfo or query secrets anywhere. The env snapshot's 40-char
+    opaque-run rule is deliberately not applied — ``boost tap --at <sha>`` is a
+    documented command and a pinned SHA is exactly what a trail should keep.
+    """
+    out: list[str] = []
+    secret_next = False
+    for tok in argv:
+        if secret_next:
+            secret_next = False
+            out.append(REDACTED)
+            continue
+        # A length floor: a credential is long, and `sk-`/`pa-` are also how
+        # a short skill name can start.
+        if len(tok) >= 20 and _SECRET_VALUE.match(tok):
+            out.append(REDACTED)
+            continue
+        name, eq, _ = tok.partition("=")
+        if tok.startswith("-") and _SECRET_NAME.search(name):
+            if eq:
+                out.append(name + "=" + REDACTED)
+                continue
+            secret_next = True
+        out.append(redact_url(tok))
+    return out
 
 
 def _env_snapshot() -> list[str]:
@@ -339,7 +491,7 @@ def write_crash_report(exc: BaseException, argv: list[str]) -> Path | None:
         "version:  %s" % _boost_version(),
         "python:   %s" % sys.version.split()[0],
         "platform: %s" % platform.platform(),
-        "command:  boost %s" % " ".join(argv),
+        "command:  boost %s" % " ".join(redact_argv(argv)),
         "",
         "environment:",
         *("  " + line for line in (_env_snapshot() or ["  (none)"])),
@@ -352,13 +504,58 @@ def write_crash_report(exc: BaseException, argv: list[str]) -> Path | None:
     with contextlib.suppress(Exception):
         get_logger().error("crash: %s: %s", type(exc).__name__, exc)
     try:
-        paths.logs_dir().mkdir(parents=True, exist_ok=True)
-        report = paths.logs_dir() / ("crash-%s.log" % _file_stamp())
-        report.write_text(body, encoding="utf-8")
-        _prune_crash_reports()
-        return report
+        paths.logs_dir().mkdir(mode=0o700, parents=True, exist_ok=True)
+        report = _create_exclusive(paths.logs_dir(), _file_stamp(),
+                                   body.encode("utf-8"))
     except OSError:
         return None
+    _prune_crash_reports()
+    return report
+
+
+def _create_exclusive(ldir: Path, stamp: str, data: bytes) -> Path:
+    """Write ``data`` to a new ``crash-<stamp>[-N].log``, never over another.
+
+    ``O_EXCL`` makes a name collision an error instead of an overwrite, so a
+    report a user was told about is still there to attach. Created 0600, like
+    the log: a traceback carries local paths and argument values.
+    """
+    for n in range(100):
+        report = ldir / ("crash-%s%s.log" % (stamp, "-%d" % n if n else ""))
+        try:
+            fd = os.open(report,
+                         os.O_WRONLY | os.O_CREAT | os.O_EXCL | _O_BINARY,
+                         0o600)
+        except FileExistsError:
+            continue
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+        return report
+    raise FileExistsError(str(ldir / ("crash-%s.log" % stamp)))
+
+
+def dir_writable() -> bool:
+    """Whether new files can be created in the logs dir (and so renamed there).
+
+    Log rotation and crash reports both need this, and an append-open of
+    ``boost.log`` — doctor's other check — succeeds without it. A missing dir
+    counts as writable: it is created on demand, and a refusal to create it
+    is reported by doctor's own directory check.
+    """
+    ldir = paths.logs_dir()
+    if not ldir.is_dir():
+        return True
+    probe = ldir / (".probe-%d" % os.getpid())
+    try:
+        fd = os.open(probe, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        return True
+    except OSError:
+        return False
+    os.close(fd)
+    with contextlib.suppress(OSError):
+        probe.unlink()
+    return True
 
 
 def _prune_crash_reports() -> None:

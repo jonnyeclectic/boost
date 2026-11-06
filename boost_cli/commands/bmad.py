@@ -78,7 +78,7 @@ from pathlib import Path
 from .. import cliparse
 from ..core import bmad as core
 from ..core import claude_settings as cs
-from ..core import hookhost, journal, paths, util
+from ..core import hookhost, journal, jsonstate, paths, util
 from ..core import output as out
 from ..errors import BoostError
 
@@ -105,7 +105,7 @@ def cmd_bmad(argv) -> int:
     p.add_argument("-s", "--scope", choices=("project", "global"), default=None,
                    help="target scope (on/off default: global; personas and "
                         "status: both; others: project)")
-    p.add_argument("--modules", default=DEFAULT_MODULES,
+    p.add_argument("--modules", type=util.nonempty_str, default=DEFAULT_MODULES,
                    help="BMAD modules to install (default: %s)" % DEFAULT_MODULES)
     p.add_argument("-y", "--yes", action="store_true",
                    help="skip confirmation prompts")
@@ -163,9 +163,26 @@ def _on_off(value) -> str:
     return "on" if value else "off"
 
 
+def _project_root() -> Path:
+    """The directory project-scope personas, hooks and state all belong to.
+
+    The same root ``cs.settings_path("project")`` writes hooks under: the
+    enclosing repo when there is one. Personas and state used to follow the
+    raw cwd while hooks followed the repo root, so ``bmad on --scope project``
+    from ``src/deep`` split one install across two directories and ``doctor``
+    at the root and in the subdirectory disagreed about it. The cwd fallback
+    only answers in ``$HOME``, where a project write refuses anyway.
+
+    BMAD's skills and ``_bmad/`` are not routed here: ``npx bmad-method
+    install`` lays them out under the cwd it is given, and ``_skills_dir``
+    has to look where the installer put them.
+    """
+    return cs.project_base() or Path.cwd()
+
+
 def _agents_dir(scope) -> Path:
     """Where Claude Code reads subagent definitions for a scope."""
-    base = paths.home() if scope == "global" else Path.cwd()
+    base = paths.home() if scope == "global" else _project_root()
     return base / ".claude" / "agents"
 
 
@@ -219,6 +236,12 @@ def _hook_hosts(scope: str, requested=None, force: bool = False) -> list[str]:
     `on` installs two hooks, and a host list that decided itself twice said
     "skipping Codex CLI" twice for one decision.
     """
+    # A path computation that refuses project scope with no project, asked
+    # for Claude because every branch below writes somewhere: the other hosts
+    # are only probed when they are candidates, and an explicit `--host`
+    # never probed at all, so `on --scope project` from $HOME wrote personas
+    # into ~/.claude/agents before `add_hook` refused.
+    cs.settings_path(scope, host=hookhost.CLAUDE)
     if requested not in (None, "auto"):
         cs.refuse_escape(scope, str(requested), force=force)
         return [str(requested)]
@@ -421,8 +444,10 @@ def _read_hook_stdin() -> dict:
     prints nothing, which reads like a broken install.)
     """
     try:
-        if sys.stdin.isatty():
-            return {}       # interactive: don't block waiting for an EOF
+        if out.stdin_is_tty() or sys.stdin is None:
+            # Interactive: don't block waiting for an EOF. None: fd 0 was
+            # closed at launch (`<&-`), so there is nothing to read.
+            return {}
         raw = sys.stdin.read().strip()
     except (OSError, ValueError, UnicodeDecodeError):
         return {}
@@ -554,22 +579,50 @@ def _require_npx() -> None:
             hint="install Node.js 20.12+ (e.g. `brew install node`), then retry")
 
 
-def _run_installer(directory: Path, modules: str) -> subprocess.CompletedProcess:
+def _run_installer(directory: Path, modules: str,
+                   hint: str | None = None) -> subprocess.CompletedProcess:
+    """Run the BMAD installer into `directory`.
+
+    ``hint`` replaces the default "run it yourself" one: a global install
+    stages into a temp dir that is deleted before the error is printed, so a
+    command naming it would install into nothing the user keeps.
+    """
     cmd = ["npx", "--yes", "bmad-method@%s" % core.BMAD_VERSION, "install",
            "--yes", "--directory", str(directory),
            "--tools", "claude-code", "--modules", modules,
            "--user-name", _whoami()]
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
+        # The resolved path, not the bare name: npx is an npx.cmd shim on
+        # Windows, which CreateProcess cannot launch by its bare name.
+        proc = subprocess.run(util.resolve_exe(cmd), capture_output=True,
+                              text=True, encoding="utf-8", errors="replace",
+                              timeout=900)
     except (OSError, subprocess.TimeoutExpired) as e:
         raise BoostError("bmad install failed: %s" % e,
-                         hint="run it yourself: " + " ".join(cmd)) from e
+                         hint=hint or _run_it_yourself(cmd)) from e
     if proc.returncode != 0:
         tail = (proc.stderr or proc.stdout or "").strip().splitlines()
         raise BoostError(
             "bmad install failed: %s" % (tail[-1] if tail else "unknown error"),
-            hint="run it yourself: " + " ".join(cmd))
+            hint=hint or _run_it_yourself(cmd))
     return proc
+
+
+def _run_it_yourself(cmd: list[str]) -> str:
+    """The hint naming the installer argv, quoted so it pastes as one command.
+
+    Backticked because the hint folds to the pane and only a backtick span is
+    atomic: a fold at the space inside `'/h/my proj'` pastes as a dangling quote.
+    """
+    return "run it yourself: `%s`" % util.shell_join(cmd)
+
+
+def _global_retry_hint(modules: str) -> str:
+    """What to re-run after a failed global install, whose stage is gone."""
+    argv = ["boost", "bmad", "install", "--scope", "global"]
+    if modules != DEFAULT_MODULES:
+        argv += ["--modules", modules]
+    return "once npx works, re-run `%s`" % util.shell_join(argv)
 
 
 def _whoami() -> str:
@@ -642,7 +695,8 @@ def _copy_global_skills(modules) -> tuple[str, list[str]]:
     """
     stage = Path(tempfile.mkdtemp(prefix="boost-bmad-"))
     try:
-        proc = _run_installer(stage, modules)
+        proc = _run_installer(stage, modules,
+                              hint=_global_retry_hint(modules))
         ver = _parse_version((proc.stdout or "") + (proc.stderr or ""))
         src = stage / ".claude" / "skills"
         dest = _skills_dir("global")
@@ -759,23 +813,47 @@ def _status(scope) -> int:
 
 def _uninstall(scope, yes, force: bool = False) -> int:
     scope = scope or "project"
-    if not (yes or out.confirm(
-            "Remove BMAD (%s)? deletes bmad-* skills%s" % (
-                scope, " + _bmad/, _bmad-output/" if scope == "project" else ""))):
+    skills, kept = core.skill_dirs(_skills_dir(scope))
+    extras: list[Path] = []
+    linked_extras: list[Path] = []
+    for extra in ("_bmad", "_bmad-output") if scope == "project" else ():
+        pth = Path.cwd() / extra
+        if pth.is_symlink():
+            linked_extras.append(pth)    # remove_dirs never follows a link
+        elif pth.is_dir():
+            extras.append(pth)
+    # The confirm names what it deletes: "deletes bmad-* skills" was all a
+    # user approved, which hid both a count of nothing and a symlink the run
+    # then could not remove.
+    doomed = [*skills, *extras]
+    what = ("deletes %s" % ", ".join(paths.tilde(p) for p in doomed)
+            if doomed else "no bmad-* skills to delete")
+    if not (yes or out.confirm("Remove BMAD (%s)? %s" % (scope, what))):
         out.info("aborted")
         return 1
-    _remove_hook_everywhere(scope, _ORIENT_HOOK, _ROUTE_HOOK, force=force)
-    removed = _rm_skills(_skills_dir(scope))
+    hooks = _remove_hook_everywhere(scope, _ORIENT_HOOK, _ROUTE_HOOK,
+                                    force=force)
+    removed = len(core.remove_dirs(skills))
     removed += len(core.remove_personas(_agents_dir(scope)))
-    if scope == "project":
-        for extra in ("_bmad", "_bmad-output"):
-            pth = Path.cwd() / extra
-            if pth.exists():
-                shutil.rmtree(pth, ignore_errors=True)
-                removed += 1
+    removed += len(core.remove_dirs(extras))
+    for entry in kept:
+        out.info(out.role("kept %s — not a BMAD install (a %s); `boost "
+                          "uninstall %s` removes one boost installed"
+                          % (paths.tilde(entry), "symlink" if entry.is_symlink()
+                             else "file", entry.name), "muted"), wrap=True)
+    for entry in linked_extras:
+        # Not a skill, so `boost uninstall <name>` is no answer for it: the
+        # link may well lead to the user's real BMAD runtime elsewhere.
+        out.info(out.role("kept %s — a symlink, and uninstall never deletes "
+                          "through one; remove it yourself if it is BMAD's"
+                          % paths.tilde(entry), "muted"), wrap=True)
     _clear_scope_state(scope)
+    if not (removed or hooks):
+        out.info("nothing of BMAD's to remove (%s)" % scope)
+        return 0
     journal.log("bmad-uninstall", scope, count=removed)
-    out.ok("removed BMAD (%s): %d item(s)" % (scope, removed))
+    out.ok("removed BMAD (%s): %d item(s)%s" % (
+        scope, removed, ", %d hook(s)" % hooks if hooks else ""))
     return 0
 
 
@@ -845,7 +923,7 @@ def _doctor() -> int:
                % (_on_off(live), personas, _where(router_hosts), briefing))
         out.kv("  workflows", "skills=%d  installed=%s"
                % (_count_skills(_skills_dir(scope)), _on_off(st.get("installed"))))
-    out.dim("  project = %s" % Path.cwd())
+    out.dim("  project = %s" % _project_root())
     if not any(_get_scope_state(s).get("autopilot") for s in ("global", "project")):
         out.dim("  turn it on with `boost bmad on`", wrap=True)
     return 0
@@ -899,15 +977,6 @@ def _count_skills(skills_dir: Path) -> int:
     return sum(1 for d in skills_dir.glob("bmad-*") if d.is_dir())
 
 
-def _rm_skills(skills_dir: Path) -> int:
-    n = 0
-    if skills_dir.exists():
-        for d in sorted(skills_dir.glob("bmad-*")):
-            shutil.rmtree(d, ignore_errors=True)
-            n += 1
-    return n
-
-
 def _quarantine_dir(scope) -> Path:
     key = "global" if scope == "global" else _fs_slug(str(Path.cwd().resolve()))
     return paths.state_dir() / "bmad-quarantine" / key
@@ -923,22 +992,37 @@ def _state_path() -> Path:
     return paths.state_dir() / "bmad.json"
 
 
-def _state_read() -> dict:
+def _state_load() -> tuple[dict, str | None]:
+    """``(state, None)``, or ``(defaults, message)`` for an unusable file.
+
+    The router hook reads this on every prompt, so a corrupt file degrades
+    to "autopilot off" rather than raising; the message is for the writer,
+    which quarantines the file instead of writing over it. ``[]``, non-UTF-8
+    bytes or a ``"global"`` that is not an object used to crash `bmad status`
+    at exit 70.
+    """
     p = _state_path()
-    if not p.exists():
-        return {"global": {}, "projects": {}}
-    try:
-        d = json.loads(p.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return {"global": {}, "projects": {}}
+    d, err = jsonstate.read_object(p)
+    if d is not None:
+        bad = ("'global' is not an object"
+               if not isinstance(d.get("global", {}), dict)
+               else jsonstate.object_map_error(d, "projects"))
+        err = None if bad is None else "%s: %s" % (p, bad)
+    if d is None or err is not None:
+        return {"global": {}, "projects": {}}, err
     d.setdefault("global", {})
     d.setdefault("projects", {})
-    return d
+    return d, None
+
+
+def _state_read() -> dict:
+    return _state_load()[0]
 
 
 def _state_write(d: dict) -> None:
-    paths.ensure_dirs()
-    _state_path().write_text(json.dumps(d, indent=2) + "\n", encoding="utf-8")
+    p = _state_path()
+    jsonstate.save(p, json.dumps(d, indent=2) + "\n",
+                   corrupt=_state_load()[1] is not None)
 
 
 SESSIONS_KEPT = 200
@@ -969,7 +1053,7 @@ def _sessions_write(sessions: dict) -> None:
 
 
 def _proj_key(project=None) -> str:
-    return str(Path(project or Path.cwd()).resolve())
+    return str(Path(project or _project_root()).resolve())
 
 
 def _get_scope_state(scope, project=None) -> dict:
@@ -1002,9 +1086,17 @@ def _set_scope_state(scope, **patch) -> None:
 
 
 def _clear_scope_state(scope) -> None:
-    d = _state_read()
+    """Forget ``scope``'s BMAD state, writing nothing when there is none.
+
+    An uninstall on a machine BMAD never touched used to create
+    ``bmad.json`` just to record that nothing was there. A corrupt file is
+    still written through, which is what quarantines it.
+    """
+    d, err = _state_load()
     if scope == "global":
+        held = bool(d["global"])
         d["global"] = {}
     else:
-        d["projects"].pop(_proj_key(), None)
-    _state_write(d)
+        held = d["projects"].pop(_proj_key(), None) is not None
+    if held or err is not None:
+        _state_write(d)

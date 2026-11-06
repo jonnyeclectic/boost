@@ -7,6 +7,8 @@ see docs/roadmap/items/audit-cohort-findings.md.
 """
 from __future__ import annotations
 
+import pytest
+
 from boost_cli.core import cohort
 
 
@@ -69,3 +71,81 @@ class TestApplyExitCode:
 
     def test_missing_alongside_a_present_is_zero(self):
         assert cohort.apply_exit_code(0, 1, 1) == 0
+
+
+class TestShapeError:
+    def test_well_formed_map_is_fine(self):
+        assert cohort.shape_error({}) is None
+        assert cohort.shape_error(
+            {"c": {"skills": ["a"], "percent": 0, "created": "x"}}) is None
+
+    def test_non_object_cohort(self):
+        assert cohort.shape_error({"c1": "x"}) == (
+            "cohort 'c1' is a str, not an object")
+
+    @pytest.mark.parametrize("skills", [None, "a,b", ["a", 1], {"a": 1}])
+    def test_skills_must_be_a_list_of_names(self, skills):
+        spec = {"percent": 5} if skills is None else {"skills": skills,
+                                                       "percent": 5}
+        assert cohort.shape_error({"c": spec}) == (
+            "cohort 'c' has no list of skill names")
+
+    @pytest.mark.parametrize("percent", [None, "50", 5.0, True])
+    def test_percent_must_be_an_integer(self, percent):
+        spec = {"skills": []} if percent is None else {"skills": [],
+                                                       "percent": percent}
+        assert cohort.shape_error({"c": spec}) == (
+            "cohort 'c' has no integer percent")
+
+    def test_first_bad_cohort_is_named_after_good_ones(self):
+        assert cohort.shape_error({
+            "good": {"skills": [], "percent": 1}, "bad": []}) == (
+            "cohort 'bad' is a list, not an object")
+
+
+class TestLoad:
+    def test_missing_file_is_no_cohorts(self, tmp_path):
+        assert cohort.load(tmp_path / "cohorts.json") == ({}, None)
+
+    def test_valid_file_round_trips(self, tmp_path):
+        p = tmp_path / "cohorts.json"
+        p.write_text('{"c": {"skills": ["a"], "percent": 50}}',
+                     encoding="utf-8")
+        assert cohort.load(p) == ({"c": {"skills": ["a"], "percent": 50}},
+                                  None)
+
+    def test_shape_error_names_the_file(self, tmp_path):
+        p = tmp_path / "cohorts.json"
+        p.write_text('{"c1": "x"}', encoding="utf-8")
+        assert cohort.load(p) == (
+            {}, "%s: cohort 'c1' is a str, not an object" % p)
+
+    @pytest.mark.parametrize("raw", [b"[]", b"{\"a\": 1,}", b"{\"a\": \"\xff\"}"])
+    def test_unparseable_file_is_an_error(self, tmp_path, raw):
+        p = tmp_path / "cohorts.json"
+        p.write_bytes(raw)
+        data, err = cohort.load(p)
+        assert data == {}
+        assert err.startswith("%s: " % p)
+
+
+class TestFailedMembers:
+    def test_summary_names_failures_last(self):
+        assert cohort.apply_summary(1, 2, 3, 4) == (
+            "applied: 1 installed, 2 already present, 3 not found, 4 failed")
+
+    def test_summary_without_failures_is_unchanged(self):
+        assert cohort.apply_summary(1, 0, 0, 0) == (
+            "applied: 1 installed, 0 already present")
+
+    def test_summary_failure_without_missing(self):
+        assert cohort.apply_summary(0, 0, 0, 1) == (
+            "applied: 0 installed, 0 already present, 1 failed")
+
+    def test_any_failure_is_one_even_beside_installs(self):
+        assert cohort.apply_exit_code(5, 5, 0, 1) == 1
+        assert cohort.apply_exit_code(0, 0, 0, 1) == 1
+
+    def test_no_failure_keeps_the_old_rule(self):
+        assert cohort.apply_exit_code(1, 0, 1, 0) == 0
+        assert cohort.apply_exit_code(0, 0, 1, 0) == 1

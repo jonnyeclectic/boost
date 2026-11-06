@@ -21,7 +21,7 @@ does, so the two can never disagree again.
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Container, Sequence
 from dataclasses import dataclass
 
 
@@ -32,7 +32,7 @@ def as_list(value) -> list[str]:
     value ("declares nothing") — the shared contract ``requires:`` and
     ``conflicts:`` both use.
     """
-    if value in (None, "", False):
+    if value in (None, "", False) or isinstance(value, dict):
         return []
     if isinstance(value, list):
         return [str(x).strip() for x in value if str(x).strip()]
@@ -44,15 +44,10 @@ def requirement_names(meta: dict | None) -> list[str]:
     lists.
 
     Deliberately blind to the MCP-server shape a ``requires:`` block can also
-    carry (``requires: {mcp: [...]}`` in an author's source) — boost's
-    stdlib-only frontmatter parser has no nested-mapping support, so a value
-    written that way never survives parsing as a mapping at all: it is
-    hoisted, leaving the *parsed* ``requires`` empty and the MCP names on the
-    top-level ``mcp`` key instead (see :mod:`boost_cli.core.mcpdecl`'s module
-    docstring). That is precisely why a plain ``requires:`` reader must not
-    also expect a mapping here — there is never one to find — and why an MCP
-    requirement is a separate fact, read from ``mcp`` via
-    :mod:`boost_cli.core.mcpdecl`, not from this function.
+    carry (``requires: {mcp: [...]}``). The frontmatter parser keeps that as a
+    dict under ``requires``, which :func:`as_list` reads as naming no items; an
+    MCP requirement is a separate fact, read by :mod:`boost_cli.core.mcpdecl`,
+    not by this function.
 
     Values that cannot be an item name are dropped by
     :func:`classify_token`. That is a fix rather than tidying: of the 101
@@ -76,7 +71,8 @@ def conflict_names(meta: dict | None) -> list[str]:
     return as_list((meta or {}).get("conflicts"))
 
 
-def requirement_row(name: str, have: set, sub_names: Sequence[str] = ()) -> dict:
+def requirement_row(name: str, have: Container[str],
+                    sub_names: Sequence[str] = ()) -> dict:
     """One ``{name, installed, requires}`` record.
 
     The shape both ``boost deps <name>`` (top level and nested, one level
@@ -87,12 +83,17 @@ def requirement_row(name: str, have: set, sub_names: Sequence[str] = ()) -> dict
     invisibly to any JSON consumer. ``requires`` is always present (``[]``
     when ``sub_names`` is empty) rather than omitted, matching the envelope
     shape this command already committed to.
+
+    ``have`` is only asked ``name in have``, so a ``tap:name`` requirement is
+    judged by whatever membership the caller's container implements —
+    :class:`boost_cli.core.prereq.InstalledSet` holds it against the tap the
+    lock recorded.
     """
     return {"name": name, "installed": name in have,
             "requires": [requirement_row(n, have) for n in sub_names]}
 
 
-def conflict_row(name: str, have: set) -> dict:
+def conflict_row(name: str, have: Container[str]) -> dict:
     """One ``{name, installed}`` conflict record."""
     return {"name": name, "installed": name in have}
 

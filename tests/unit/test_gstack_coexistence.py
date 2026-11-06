@@ -99,13 +99,53 @@ class TestBoostRefusesToHalfInstallIt:
                   if e.get("self_installing")]
         assert marked == [GSTACK], marked
 
-    @pytest.mark.parametrize("tap", [GSTACK, "gstack"])
-    def test_the_tap_resolves_by_full_name_or_bare_clone_dir(self, tap):
-        assert config.self_installing_command(tap)
+    def test_the_full_name_resolves(self, row):
+        assert config.self_installing_command(GSTACK) == row["self_installing"]
 
-    @pytest.mark.parametrize("tap", ["", "obra/superpowers", "gstack-other"])
-    def test_an_ordinary_tap_is_not_refused(self, tap):
-        assert config.self_installing_command(tap) is None
+    @pytest.mark.parametrize("url", [
+        "https://github.com/garrytan/gstack",
+        "https://github.com/garrytan/gstack.git",
+        "git@github.com:Garrytan/GStack.git",
+    ])
+    def test_a_bare_name_resolves_by_its_url(self, row, url):
+        assert config.self_installing_command("gstack", url) \
+            == row["self_installing"]
+
+    @pytest.mark.parametrize("tap,url", [
+        ("", ""),
+        ("", "https://github.com/garrytan/gstack"),
+        ("obra/superpowers", ""),
+        ("gstack-other", ""),
+        # The bare tail is not an identity: the user's own repo, or a fork.
+        ("gstack", ""),
+        ("gstack", "/home/me/work/gstack"),
+        ("gstack", "https://github.com/someone/gstack"),
+        ("someone/gstack", "https://github.com/someone/gstack"),
+        ("gstack", "https://gitlab.com/garrytan/gstack"),
+    ])
+    def test_an_ordinary_tap_is_not_refused(self, tap, url):
+        assert config.self_installing_command(tap, url) is None
+
+    def test_a_local_tap_named_gstack_is_not_refused(self, sandbox):
+        # Measured: a local `~/work/gstack` tapped and installed from was
+        # refused with "comes from gstack, which installs itself" and told to
+        # clone garrytan/gstack into ~/.claude/skills.
+        local = paths.home() / "work" / "gstack"
+        config.save({"taps": [{"name": "gstack", "url": str(local)}]})
+        assert store._refuse_self_installing(
+            {"name": "deploy-notes", "tap": "gstack"}) is None
+
+    def test_a_tap_cloned_from_gstack_is_refused_under_any_name(self, sandbox,
+                                                                row):
+        config.save({"taps": [{"name": "gstack", "url":
+                               "https://github.com/garrytan/gstack.git"}]})
+        with pytest.raises(BoostError) as exc:
+            store._refuse_self_installing({"name": "review", "tap": "gstack"})
+        assert exc.value.message == (
+            "review comes from gstack, which installs itself — boost would "
+            "copy its Markdown and leave a skill that cannot run")
+        assert exc.value.hint == ("run the registry's own installer: %s"
+                                  % row["self_installing"])
 
     @pytest.mark.parametrize("kind", ["skill", "rule", "workflow"])
     def test_install_refuses_every_kind_it_ships(self, sandbox, kind):

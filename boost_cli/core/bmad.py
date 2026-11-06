@@ -1068,3 +1068,43 @@ def remove_personas(agents_dir: Path) -> list[str]:
             continue
         removed.append(slug)
     return removed
+
+
+def skill_dirs(skills_dir: Path) -> tuple[list[Path], list[Path]]:
+    """``(removable, kept)`` among the ``bmad-*`` entries of ``skills_dir``.
+
+    Removable is a real directory, which is what BMAD's installer writes.
+    Kept is anything else under the name: a symlink — boost's own install of
+    a skill that happens to be called ``bmad-notes`` is one, and its store
+    copy is `boost uninstall`'s to remove — or a plain file. Uninstall used to
+    hand every entry to ``rmtree``, which refuses a symlink; the refusal was
+    swallowed and the entry still counted as removed.
+    """
+    skills_dir = Path(skills_dir)
+    removable: list[Path] = []
+    kept: list[Path] = []
+    if not skills_dir.is_dir():
+        return removable, kept
+    for entry in sorted(skills_dir.glob("bmad-*")):
+        (removable if entry.is_dir() and not entry.is_symlink()
+         else kept).append(entry)
+    return removable, kept
+
+
+def remove_dirs(dirs: list[Path]) -> list[Path]:
+    """Delete each real directory in ``dirs``; return the ones now gone.
+
+    Counted by looking afterwards, not by having tried: a tree with a file
+    boost may not delete survives ``rmtree(ignore_errors=True)``, and a count
+    of attempts reported it removed.
+    """
+    import shutil
+
+    gone = []
+    for d in dirs:
+        if d.is_symlink() or not d.is_dir():
+            continue
+        shutil.rmtree(d, ignore_errors=True)
+        if not d.exists():
+            gone.append(d)
+    return gone

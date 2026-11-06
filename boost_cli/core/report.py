@@ -20,7 +20,10 @@ becomes a glyph or a row.
 arguments**, so routing an existing command through this changes nothing a
 reader sees. That is what lets a command adopt it without rewriting its tests,
 and it is the property to protect — a collector that reformats is a rewrite of
-every command that adopts it.
+every command that adopts it. The one thing prose adds is ``out.plain``:
+a message can carry a store dir's or a link's on-disk name, and only the
+terminal copy has its control bytes dropped — the payload keeps the message as
+recorded, so ``--json`` is unchanged.
 
 **``note`` does not raise the issue count, and that is load-bearing rather than
 an oversight.** ``doctor`` deliberately reports foreign symlinks, foreign hooks
@@ -73,7 +76,7 @@ class Report:
         if not self.as_json:
             # `out.ok` takes no `wrap` — it is a short confirmation, and the
             # commands never asked it to fold.
-            out.ok(message)
+            out.ok(out.plain(message))
 
     def issue(self, name: str, message: str, *, hint: str | None = None,
               wrap: bool = False) -> None:
@@ -81,7 +84,7 @@ class Report:
         self.issues += 1
         self._record(name, ISSUE, message, hint)
         if not self.as_json:
-            out.warn(message, wrap=wrap)
+            out.warn(out.plain(message), wrap=wrap)
 
     def warn(self, name: str, message: str, *, hint: str | None = None,
              wrap: bool = False) -> None:
@@ -96,7 +99,7 @@ class Report:
         """
         self._record(name, WARN, message, hint)
         if not self.as_json:
-            out.warn(message, wrap=wrap)
+            out.warn(out.plain(message), wrap=wrap)
 
     def note(self, name: str, message: str, *, hint: str | None = None,
              wrap: bool = False) -> None:
@@ -107,7 +110,7 @@ class Report:
         """
         self._record(name, INFO, message, hint)
         if not self.as_json:
-            out.info(message, wrap=wrap)
+            out.info(out.plain(message), wrap=wrap)
 
     def verdict(self, ok: bool, message: str) -> None:
         """Record the closing dashboard line."""

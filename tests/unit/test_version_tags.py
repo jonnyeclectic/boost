@@ -80,7 +80,7 @@ class TestRuntimeFallback:
         import inspect
 
         import boost_cli
-        src = inspect.getsource(boost_cli._detect_version)
+        src = inspect.getsource(boost_cli._describe)
         assert '"--match"' in src and '"v[0-9]*"' in src, (
             "the git-describe fallback must exclude non-version tags exactly "
             "as pyproject's git_describe_command does")

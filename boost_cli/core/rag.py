@@ -27,8 +27,10 @@ import os
 import re
 import sqlite3
 import tempfile
+import time
+import unicodedata
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from functools import lru_cache
 from pathlib import Path
 from typing import cast
@@ -48,6 +50,7 @@ from . import (
     jsonstate,
     paths,
     registry,
+    typedvalue,
     util,
 )
 
@@ -70,7 +73,11 @@ from . import (
 # postings read in 1.17 s instead of 3.31 s; `scripts/measure_keyword_index.py`
 # re-derives the table. A v9 file read by the v10 reader would decode row
 # integers as blobs, so the bump is what keeps the two from ever meeting.
-INDEX_VERSION = 10
+# v11: `tokenize` folds Unicode first (`fold_text`: casefold, NFKD, combining
+# marks dropped), so `résumé` in NFC, in NFD and `resume` are one term. A v10
+# store split NFC `résumé` into `sum` and NFD into `re`+`sume`, so it holds
+# none of the folded terms a v11 query asks for.
+INDEX_VERSION = 11
 ENGINE = "bm25"
 
 # Chunking defaults (documented in docs/rag-architecture.md §4).
@@ -156,8 +163,34 @@ _ALIAS_RE = re.compile(
                for k in sorted(SYMBOL_ALIASES, key=len, reverse=True)))
 
 
+#: The combining-mark blocks `fold_text` strips after NFKD. A range class
+#: rather than a per-character ``unicodedata.combining`` test because this runs
+#: over every chunk of every tap at index time; these blocks hold every mark
+#: NFKD splits off a Latin, Greek or Cyrillic letter.
+_COMBINING_RE = re.compile(
+    "[\u0300-\u036f\u1ab0-\u1aff\u1dc0-\u1dff\u20d0-\u20ff\ufe20-\ufe2f]+")
+
+
+def fold_text(text: str) -> str:
+    """``text`` casefolded, NFKD-decomposed and stripped of combining accents.
+
+    Without it the same word landed under three disjoint index terms: NFC
+    ``résumé`` split at each ``é`` into ``sum``, NFD (what macOS filenames and
+    some editors produce) kept the marks as separators and gave ``re`` +
+    ``sume``, and ``resume`` was ``resume`` — so no spelling found another's
+    documents. Casefold runs first because it can itself emit a combining mark
+    (``İ`` -> ``i`` + U+0307); NFKD also maps compatibility forms (``ﬁ``,
+    full-width ``ＡＢＣ``) onto plain letters. Pure ASCII is returned lowered
+    without the Unicode work, which is nearly every chunk.
+    """
+    if text.isascii():
+        return text.lower()
+    return _COMBINING_RE.sub("", unicodedata.normalize("NFKD", text.casefold()))
+
+
 def tokenize(text: str) -> list[str]:
-    """Lowercase, split on non-alphanumerics, drop stopwords and 1-char noise.
+    """Fold (:func:`fold_text`), split on non-alphanumerics, drop stopwords
+    and 1-char noise.
 
     :data:`SYMBOL_ALIASES` is folded in first, and on the **index** side as
     well as the query side — that symmetry is the whole point. A query-only map
@@ -170,7 +203,7 @@ def tokenize(text: str) -> list[str]:
     gate is what says whether it costs anything measurable.
     """
     lowered = _ALIAS_RE.sub(lambda m: " %s " % SYMBOL_ALIASES[m.group(0)],
-                            text.lower())
+                            fold_text(text))
     return [t for t in re.split(r"[^a-z0-9]+", lowered)
             if len(t) >= 2 and t not in _STOPWORDS]
 
@@ -197,7 +230,7 @@ def dropped_terms(text: str) -> list[str]:
     for word in text.split():
         if tokenize(word):
             continue
-        parts = [p for p in re.split(r"[^a-z0-9]+", word.lower()) if p]
+        parts = [p for p in re.split(r"[^a-z0-9]+", fold_text(word)) if p]
         if parts and all(p in _STOPWORDS for p in parts):
             continue
         # `isalnum` rather than the ASCII class above: a CJK query has no
@@ -207,6 +240,21 @@ def dropped_terms(text: str) -> list[str]:
             continue
         out.append(word)
     return list(dict.fromkeys(out))
+
+
+def ignored_by_design(text: str) -> bool:
+    """True when ``text`` has content and the index ignores all of it on purpose.
+
+    :func:`dropped_terms` leaves stopwords and bare punctuation out
+    deliberately, so a query made of nothing else (`the and of`, `--`) never
+    reached the "no searchable terms" branch: it tokenized to nothing, named
+    nothing as dropped, and was reported as a real miss with a hint to search
+    GitHub for it. This is the complement — no token survived, and nothing
+    the user would recognise as a lost word was dropped either. Blank text is
+    False: an empty query is a usage error for the caller to refuse, not a
+    query that happened to match nothing.
+    """
+    return bool(text.strip()) and not tokenize(text) and not dropped_terms(text)
 
 
 def tokenizer_is_the_only_reader() -> bool:
@@ -284,6 +332,83 @@ def _tap_commits() -> dict[str, str]:
             commit = gitutil.head_commit(t.path)
         commits[t.safe_name] = commit
     return commits
+
+
+# Recorded for a tap whose documents predate format tracking; no cache's
+# ``format`` is negative, so `_reusable` never matches it.
+_UNKNOWN_FORMAT = -1
+
+
+def _tap_formats() -> dict[str, int]:
+    """Map safe tap name -> the ``CACHE_FORMAT`` its catalog cache was scanned at.
+
+    Reuse in :func:`build` was keyed on the commit alone, but a scanner fix
+    rescans a cache at the *same* commit (``load_tap`` backfills a stale
+    ``format``), so the fixed entries reached ``boost info`` while the index
+    kept the old documents: 11c4e7b1 (format 7) and 3b249ecc (format 8) both
+    shipped at one INDEX_VERSION, and the text they restored stayed
+    unsearchable until upstream moved or the user ran ``reindex --force``.
+    A tap whose cache is missing or carries no integer format is left out.
+    Kept apart from :func:`_tap_commits` so a caller faking one still gets
+    the other, as with :func:`_tap_stamps`.
+    """
+    formats: dict[str, int] = {}
+    for t in registry.list_taps():
+        with contextlib.suppress(OSError, ValueError):
+            data = json.loads(t.cache_file.read_text(encoding="utf-8"))
+            fmt = data.get("format") if isinstance(data, dict) else None
+            if isinstance(fmt, int) and not isinstance(fmt, bool):
+                formats[t.safe_name] = fmt
+    return formats
+
+
+def _reusable(safe: str, commit: str, old: dict,
+              formats: dict[str, int]) -> bool:
+    """Whether ``safe``'s documents in index ``old`` still describe its cache.
+
+    Same commit, and the same cache format. An index with no ``formats``
+    key at all was written before formats were recorded, so nothing says
+    which scanner its documents came from: it is rebuilt once, or the first
+    CACHE_FORMAT bump after upgrading would hit this bug one last time. A
+    tap missing from a recorded map (a shard import whose tap had no
+    readable cache) is judged by commit alone.
+    """
+    if not commit or (old.get("commits") or {}).get(safe) != commit:
+        return False
+    old_formats = old.get("formats")
+    if not isinstance(old_formats, dict):
+        return False
+    if safe not in old_formats:
+        return True
+    return old_formats[safe] == formats.get(safe)
+
+
+def _stamp_of(path: Path) -> list[int] | None:
+    """A cache file's ``[st_mtime_ns, st_size]``, or None when it cannot be stat'd.
+
+    A list, not a tuple, because it round-trips through the index JSON and
+    ``[1, 2] != (1, 2)`` — comparing a stored stamp with a fresh tuple would
+    call every index stale and rebuild it on every search.
+    """
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    return [st.st_mtime_ns, st.st_size]
+
+
+def _tap_stamps() -> dict[str, list[int]]:
+    """Map safe tap name -> the stamp of the catalog cache this build consumed.
+
+    Kept apart from :func:`_tap_commits` so a caller faking one (tests do)
+    still gets the other.
+    """
+    stamps: dict[str, list[int]] = {}
+    for t in registry.list_taps():
+        stamp = _stamp_of(t.cache_file)
+        if stamp is not None:
+            stamps[t.safe_name] = stamp
+    return stamps
 
 
 def entry_path(entry: dict, tap_paths: dict[str, Path] | None = None
@@ -473,20 +598,31 @@ def _postings_to_doc_tf(raw: dict) -> dict[int, dict[str, int]]:
     return doc_tf
 
 
-def _kept_docs(raw: dict, keep_safe: set) -> list[dict]:
+def _kept_docs(raw: dict, keep_safe: set) -> list[dict] | None:
     """Recover cached docs (with term freqs) for taps that did not change.
 
     Term frequencies live in the SQLite postings store since they left the JSON
     index, so an index without an inline ``postings`` key is normal rather than
     empty — this is the caller that reaches for the store, explicitly.
     """
+    docs = raw.get("docs", [])
+    if not docs:
+        # Nothing to reuse, so nothing to ask the store: reading it here would
+        # turn a missing store into "unreadable" for an index with no docs.
+        return []
     # Key ABSENCE, not falsiness: an index carrying an explicit empty
     # `postings` is stating it has none, and must not be answered from the
     # store. Only an index with no such key predates the SQLite move.
-    doc_tf = _postings_to_doc_tf(
-        raw if "postings" in raw else {"postings": _all_postings()})
+    stored = raw if "postings" in raw else {"postings": _all_postings()}
+    if stored["postings"] is None:
+        # Unreadable store (or a corrupt blob the one-row readiness probe
+        # cannot see): reusing these docs would keep them with no term
+        # frequencies, i.e. searchable by nothing. None tells `build` to
+        # re-index those taps instead.
+        return None
+    doc_tf = _postings_to_doc_tf(stored)
     return [{**meta, "tf": doc_tf.get(doc_id, {})}
-            for doc_id, meta in enumerate(raw.get("docs", []))
+            for doc_id, meta in enumerate(docs)
             if meta["t"].replace("/", "__") in keep_safe]
 
 
@@ -498,22 +634,34 @@ def build(entries: list[dict] | None = None, force: bool = False) -> dict:
     entries = catalog.all_entries() if entries is None else entries
     tap_paths = _tap_paths()
     commits = _tap_commits()
+    # After the caches were loaded, not before: `load_tap` may rewrite a stale
+    # cache while loading it, and a stamp taken earlier would then call this
+    # index stale on the very next search.
+    stamps = _tap_stamps()
+    formats = _tap_formats()
 
     old = _load_raw()
     reused_safe: set = set()
+    # Reuse needs the old docs' term frequencies, which live in the SQLite
+    # store unless the index predates it. A corrupt or missing store used to
+    # read as "no postings", so the kept docs came back with empty `tf` and a
+    # plain `boost reindex` reported "reused N unchanged taps" over an index
+    # that matched nothing; only `--force` recovered. Rebuild everything.
+    if old is not None and "postings" not in old and not postings_readable():
+        old = None
     if old is not None and not force:
-        old_commits = old.get("commits", {})
-        for safe, commit in commits.items():
-            if commit and old_commits.get(safe) == commit:
-                reused_safe.add(safe)
+        reused_safe = {safe for safe, commit in commits.items()
+                       if _reusable(safe, commit, old, formats)}
 
+    kept = _kept_docs(old, reused_safe) if old is not None and reused_safe else []
+    if kept is None:
+        reused_safe = set()
+        kept = []
     fresh = [e for e in entries
              if e["tap"].replace("/", "__") not in reused_safe]
-    docs = _make_docs(fresh, tap_paths)
-    if old is not None and reused_safe:
-        docs = _kept_docs(old, reused_safe) + docs
+    docs = kept + _make_docs(fresh, tap_paths)
 
-    saved = _save(docs, commits)
+    saved = _save(docs, commits, stamps, formats)
     reindexed = sorted({e["tap"] for e in fresh})
     # `reindexed` names taps by their real name ("owner/repo"); `reused_safe`
     # is keyed by the safe name ("owner__repo") that `_tap_commits` uses to
@@ -540,6 +688,19 @@ def build(entries: list[dict] | None = None, force: bool = False) -> dict:
 
 def postings_path() -> Path:
     return paths.cache_dir() / "rag_postings.sqlite"
+
+
+def _postings_ro_uri() -> str:
+    """A read-only SQLite URI for the postings store, percent-encoded.
+
+    ``"file:%s?mode=ro" % path`` breaks on a home directory containing ``#``,
+    ``?`` or ``%``: SQLite cuts the path at the first ``#``/``?``, drops
+    ``mode=ro`` with it, and opens (creating) some other file — so
+    ``postings_readable`` would read a healthy store as corrupt and every
+    search would rebuild the index. ``as_uri`` escapes those and spells a
+    Windows drive path as ``file:///C:/...``.
+    """
+    return postings_path().absolute().as_uri() + "?mode=ro"
 
 
 def _encode_plist(plist: Sequence[Sequence[int]]) -> bytes:
@@ -697,7 +858,7 @@ def read_postings(terms: Sequence[str]) -> dict[str, list[list[int]]]:
     if not uniq:
         return {}
     try:
-        con = sqlite3.connect("file:%s?mode=ro" % postings_path(), uri=True)
+        con = sqlite3.connect(_postings_ro_uri(), uri=True)
     except sqlite3.Error:
         return {}
     out: dict[str, list[list[int]]] = {}
@@ -755,7 +916,7 @@ def stem_expansions(terms: Sequence[str]) -> dict[str, str]:
     if not missing:
         return {}
     try:
-        con = sqlite3.connect("file:%s?mode=ro" % postings_path(), uri=True)
+        con = sqlite3.connect(_postings_ro_uri(), uri=True)
     except sqlite3.Error:
         return {}
     out: dict[str, str] = {}
@@ -781,12 +942,17 @@ def stem_expansions(terms: Sequence[str]) -> dict[str, str]:
     return out
 
 
-def _all_postings() -> dict[str, list[list[int]]]:
-    """Every posting — only the incremental rebuild path needs this."""
+def _all_postings() -> dict[str, list[list[int]]] | None:
+    """Every posting — only the incremental rebuild path needs this.
+
+    ``None`` when the store cannot be read, never ``{}``: "unreadable" and
+    "holds no postings" are different answers, and conflating them is how an
+    incremental build kept docs with no term frequencies.
+    """
     try:
-        con = sqlite3.connect("file:%s?mode=ro" % postings_path(), uri=True)
+        con = sqlite3.connect(_postings_ro_uri(), uri=True)
     except sqlite3.Error:
-        return {}
+        return None
     out: dict[str, list[list[int]]] = {}
     try:
         for term, blob in con.execute(
@@ -794,13 +960,52 @@ def _all_postings() -> dict[str, list[list[int]]]:
                 "JOIN terms t ON p.term_id = t.id"):
             out[term] = _decode_plist(blob)
     except (sqlite3.Error, ValueError):
-        return {}
+        return None
     finally:
         con.close()
     return out
 
 
-def _save(docs: list[dict], commits: dict[str, str]) -> dict:
+def postings_readable() -> bool:
+    """True when the postings store opens and answers a one-row probe.
+
+    ``postings_path().exists()`` was the old test, and a file full of garbage
+    exists: every search then read ``{}`` from it and answered "no matches"
+    for an exact skill name, rc 0, while doctor said healthy. ``connect``
+    succeeds lazily on a non-database, so only a query proves the file is one.
+    Cheap enough for the search path: one indexed probe, no scan.
+    """
+    try:
+        con = sqlite3.connect(_postings_ro_uri(), uri=True)
+    except sqlite3.Error:
+        return False
+    try:
+        con.execute("SELECT t.term FROM postings p "
+                    "JOIN terms t ON p.term_id = t.id LIMIT 1").fetchall()
+    except sqlite3.Error:
+        return False
+    finally:
+        con.close()
+    return True
+
+
+def postings_fault() -> str | None:
+    """Why an index that has documents cannot score them, or ``None``.
+
+    For ``boost doctor``: a docs index over an unreadable postings store is a
+    search that matches nothing, which no other check would notice.
+    """
+    raw = _load_raw()
+    if not (raw and raw.get("docs")) or postings_readable():
+        return None
+    if not postings_path().exists():
+        return "the BM25 postings store is missing"
+    return "the BM25 postings store is unreadable"
+
+
+def _save(docs: list[dict], commits: dict[str, str],
+          stamps: dict[str, list[int]] | None = None,
+          formats: dict[str, int] | None = None) -> dict:
     """Persist the index and return the ``stats`` block it wrote.
 
     Returning the stats rather than recomputing them in :func:`build` keeps one
@@ -842,6 +1047,18 @@ def _save(docs: list[dict], commits: dict[str, str]) -> dict:
         "stats": stats,
         "docs": meta_docs,
     }
+    if stamps is not None:
+        # Each consumed tap cache's [mtime_ns, size], which `stale()` compares
+        # for equality. Written even when empty: key presence is what tells
+        # `stale()` this index can be judged by stamps at all. A writer that
+        # cannot vouch for the caches passes None and leaves the key out, so
+        # the index falls back to the mtime rule instead of being called
+        # stale on every search.
+        payload["stamps"] = stamps
+    if formats is not None:
+        # Each tap's cache format at build time, which `build` compares
+        # before reusing that tap's documents (see `_tap_formats`).
+        payload["formats"] = formats
     p = index_path()
     # Atomic swap: a bare write_text here can leave a truncated/corrupt index
     # on disk if the process dies mid-write or a query reads concurrently.
@@ -868,13 +1085,14 @@ def _unsaved(e: OSError) -> BoostError:
     ~/.boost names ~/.boost. `reindex` only gets here in that state because
     catalog.rebuild_tap tolerates the same refused mkdir while loading taps.
     chmod is offered only for a permission error, since it cannot help a full
-    or read-only disk.
+    or read-only disk, and it is :func:`paths.chmod_command`'s: a cache dir at
+    ``0o600`` lacks the search bit, which ``chmod u+w`` leaves exactly as
+    stuck — the hint used to repeat itself after being followed.
     """
-    where = paths.tilde(Path(e.filename).parent if e.filename
-                        else paths.cache_dir())
+    d = Path(e.filename).parent if e.filename else paths.cache_dir()
     return BoostError("could not save the search index in %s (%s)"
-                      % (where, e.strerror or e),
-                      hint=("run `chmod u+w %s`" % where
+                      % (paths.tilde(d), e.strerror or e),
+                      hint=("run `%s`" % paths.chmod_command(d)
                             if isinstance(e, PermissionError) else None))
 
 
@@ -1040,15 +1258,50 @@ def import_shards(batch: Sequence[tuple[dict, str]]
     new_safe = {tap.replace("/", "__") for tap in accepted}
     commits: dict[str, str] = {}
     docs: list[dict] = []
+    # Stamps carry over for the taps kept as they were; an imported tap gets
+    # its cache's stamp now. An old index with no stamps stays without them,
+    # so `stale()` keeps judging it by mtime rather than by an empty map that
+    # would call every cached tap changed on every search.
+    stamps: dict[str, list[int]] | None = None
+    formats: dict[str, int] = {}
     if old is not None:
         commits = {k: v for k, v in (old.get("commits") or {}).items()
                    if k not in new_safe}
+        old_formats = old.get("formats")
+        if isinstance(old_formats, dict):
+            formats = dict(old_formats)
+        else:
+            # An index from before formats were recorded: its kept taps are
+            # unvouched, and leaving them out of the map written below would
+            # let `_reusable` judge them by commit alone. A format no cache
+            # carries makes the next build re-index them once instead.
+            formats = dict.fromkeys(old.get("commits") or {}, _UNKNOWN_FORMAT)
+        old_stamps = old.get("stamps")
+        if isinstance(old_stamps, dict):
+            stamps = dict(old_stamps)
         keep = {d["t"].replace("/", "__") for d in old.get("docs", [])}
-        docs = _kept_docs(old, keep - new_safe)
+        kept = _kept_docs(old, keep - new_safe)
+        if kept is None:
+            # The other taps' term frequencies are unreadable, so keeping
+            # their docs would keep rows no query can reach. Drop them with
+            # their commits: `stale()` then sees those taps missing and the
+            # next search re-indexes them.
+            commits, kept = {}, []
+        docs = kept
+    if stamps is not None:
+        current = _tap_stamps()
+        stamps = {k: v for k, v in stamps.items() if k in commits}
+        stamps |= {k: current[k] for k in new_safe if k in current}
+    # Kept taps keep the format their docs were built against; an imported
+    # tap is recorded at its cache's format now, so the next build does not
+    # throw the import away. A tap with no readable cache stays unrecorded.
+    current_formats = _tap_formats()
+    formats = {k: v for k, v in formats.items() if k in commits}
+    formats |= {k: current_formats[k] for k in new_safe if k in current_formats}
     for tap, shard in accepted.items():
         commits[tap.replace("/", "__")] = str(shard["commit"])
         docs.extend({**d, "c": 0} for d in shard["docs"])
-    _save(docs, commits)
+    _save(docs, commits, stamps, formats)
     return results
 
 
@@ -1119,11 +1372,13 @@ def ready() -> bool:
     """True when a usable index exists on disk.
 
     Both halves are required: the JSON carries the documents, the SQLite file
-    carries the postings, and scoring needs both. A docs-only index reports not
-    ready rather than silently returning zero hits for every query.
+    carries the postings, and scoring needs both. A docs-only index — or one
+    whose store exists but is not a readable database — reports not ready
+    rather than silently returning zero hits for every query, so ``ensure``
+    rebuilds it.
     """
     raw = _load_raw()
-    return bool(raw and raw.get("docs") and postings_path().exists())
+    return bool(raw and raw.get("docs") and postings_readable())
 
 
 def index_completeness() -> dict | None:
@@ -1190,13 +1445,21 @@ def stale() -> bool:
 
     * the tap set must still match the set the index recorded (catches a tap
       added or removed, neither of which need touch an existing cache file);
-    * no tap's catalog cache may be newer than the index (catches a tap whose
-      contents moved, since ``build()`` writes the index only after every
-      catalog cache it consumed).
+    * every tap's catalog cache must still carry the ``(mtime_ns, size)``
+      stamp it had when ``build()`` consumed it (catches a tap whose contents
+      moved and were re-cached).
 
-    The residual gap is a cache rewritten inside the same filesystem mtime tick
-    as the index; the next tap operation catches it, and paying a full parse on
-    every search to close it is the worse trade.
+    The stamp is compared for **equality**, never ordered against the index's
+    own mtime. "Cache newer than index" only works while the clock never runs
+    backwards: an index built while the clock ran ahead stayed "fresh" until
+    the wall clock caught up with it, and every tap update in between went
+    unsearchable while doctor said healthy. Equality also closes the gap where
+    a cache was rewritten inside the index's own mtime tick.
+
+    An index written before stamps were recorded has no ``stamps`` key and is
+    judged the old way, so upgrading does not force a full rebuild; its next
+    build records stamps. The one exception is such an index whose mtime is in
+    the future, which the old rule can never call stale: it rebuilds once.
     """
     raw = _load_raw()
     if raw is None:
@@ -1204,9 +1467,22 @@ def stale() -> bool:
     taps = registry.list_taps()
     if {t.safe_name for t in taps} != set(raw.get("commits") or {}):
         return True
+    stamps = raw.get("stamps")
+    if isinstance(stamps, dict):
+        # A tap recorded with no stamp had no cache at build time; one that
+        # has a cache now is new content. A recorded stamp whose file is gone
+        # is a change too. `.get` on both sides makes those two cases fall out
+        # of the same inequality.
+        return any(_stamp_of(t.cache_file) != stamps.get(t.safe_name)
+                   for t in taps)
     try:
         built_at = index_path().stat().st_mtime
     except OSError:
+        return True
+    if built_at > time.time():
+        # An index stamped in the future was built while the clock ran ahead,
+        # and nothing can be "newer" than it until the clock catches up — the
+        # bug stamps fix. Rebuild once; that build records stamps.
         return True
     for t in taps:
         try:
@@ -1493,6 +1769,32 @@ def collapse_near_duplicate_hits(hits: list[Hit],
     return out[:limit]
 
 
+def name_key(text: str) -> str:
+    """``text`` as a name comparison key: case-folded, runs of ``-``, ``_``
+    and whitespace folded to one ``-``, ends trimmed — so ``code_review``,
+    ``Code-Review`` and ``code review`` are one key."""
+    return re.sub(r"[\s_-]+", "-", text.casefold()).strip("-")
+
+
+def promote_exact_name(hits: list[Hit], query: str) -> list[Hit]:
+    """``hits`` with every hit whose name is the query moved to the front.
+
+    Ranking is BM25 (or fused ranks), where a name is only a 3x-weighted
+    field: a keyword-denser competitor outscored the item the user typed the
+    exact name of — installed, even — and `boost search code_review` listed
+    it second. Stable within both groups, so several items sharing the name
+    keep their relative order, and scores are left as ranked: the score says
+    how well the text matched, the position says what the user asked for.
+    """
+    want = name_key(query)
+    if not want:
+        return hits
+    exact = [h for h in hits if name_key(str(h["entry"].get("name") or "")) == want]
+    if not exact:
+        return hits
+    return exact + [h for h in hits if name_key(str(h["entry"].get("name") or "")) != want]
+
+
 def _windowed(hits: list[Hit], terms: Sequence[str]) -> list[Hit]:
     """Window each hit's raw stored snip onto the query terms.
 
@@ -1506,7 +1808,7 @@ def _windowed(hits: list[Hit], terms: Sequence[str]) -> list[Hit]:
 
 def _retrieve_from_index(docs: list[dict], scores: dict[int, float],
                          terms: list[str], k: int, kind: str | None,
-                         ) -> list[Hit] | None:
+                         want: str = "") -> list[Hit] | None:
     """Rank from the index's own doc metadata — no full-catalogue parse.
 
     The slow path builds a ``live`` map by parsing every tap cache on the
@@ -1540,8 +1842,11 @@ def _retrieve_from_index(docs: list[dict], scores: dict[int, float],
         prev = best.get(key)
         if prev is None or score > prev[0]:
             best[key] = (score, d["snip"], d.get("h", ""), d["n"])
+    # An exact name match sorts first (see `promote_exact_name`), and does so
+    # here, before the `k` cut, so it cannot be truncated away.
     ranked = sorted(best.items(),
-                    key=lambda kv: (-kv[1][0], kv[1][3], kv[0]))
+                    key=lambda kv: (name_key(kv[1][3]) != want, -kv[1][0],
+                                    kv[1][3], kv[0]))
     # The shadow entry carries exactly what downstream code reads before
     # materialisation: `source_rank` consults tap + curated, and the loop
     # below reads tap + skill_md. Nothing else — an extra field here would
@@ -1593,8 +1898,9 @@ def retrieve(query: str, k: int = 60, kind: str | None = None,
         terms = [substitutions.get(t, t) for t in terms]
     docs = raw["docs"]
     scores = _bm25(terms, raw, read_postings(terms))
+    want = name_key(query)
     if entries is None:
-        fast = _retrieve_from_index(docs, scores, terms, k, kind)
+        fast = _retrieve_from_index(docs, scores, terms, k, kind, want)
         if fast is not None:
             return fast
         # An entry vanished between index and cache: answer from the full
@@ -1618,7 +1924,8 @@ def retrieve(query: str, k: int = 60, kind: str | None = None,
     # (tap, path), and ordering by it would silently reshuffle equal-scoring
     # results relative to every previous release.
     ranked = sorted(best.items(),
-                    key=lambda kv: (-kv[1][0], live[kv[0]]["name"], kv[0]))
+                    key=lambda kv: (name_key(live[kv[0]]["name"]) != want,
+                                    -kv[1][0], live[kv[0]]["name"], kv[0]))
     # Over-fetch, then collapse byte-identical copies before taking k — the
     # duplicates have to be removed from the pool, not from the visible page,
     # or they still consume the slots they were removed from.
@@ -1704,7 +2011,7 @@ def rerank(query: str, hits: list[Hit], limit: int = 10,
         "- %s [%s]: %s" % (h["entry"]["name"], h["entry"].get("kind", "skill"),
                            (h["snippet"] or h["entry"].get("description", ""))[:180])
         for h in top)
-    caching = not os.environ.get("BOOST_NO_RERANK_CACHE")
+    caching = not typedvalue.env_flag("BOOST_NO_RERANK_CACHE", unknown=True)
     cache_key = hashlib.sha256(
         ("%s\n%d\n%s" % (query, limit, listing)).encode("utf-8", "replace")
     ).hexdigest()
@@ -1717,18 +2024,50 @@ def rerank(query: str, hits: list[Hit], limit: int = 10,
             system="You rank AI coding skills by how well they fit a task.",
             max_tokens=400)
         order = _json_array(reply)
-        if not order:
-            # The model answered but not with a JSON array, so the ordering
-            # falls back to whatever retrieval produced — and so must the
+        if not order or not names_any(hits, order, lambda h: h["entry"]["name"]):
+            # The model answered but not with a JSON array — or with one that
+            # names no candidate, which reorders nothing — so the ordering
+            # falls back to whatever retrieval produced, and so must the
             # label. Not cached: a degrade reply is a retry, not an answer.
+            if reply:
+                ai.note_bad_reply("no JSON array of names" if not order
+                                  else "named none of the candidates", reply)
             return hits[:limit], engine
         if caching:
             _rerank_cache_put(cache_key, [str(n) for n in order])
-    by_name = {h["entry"]["name"]: h for h in hits}
-    picked = [by_name[str(n)] for n in order if str(n) in by_name]
-    rest = [h for h in hits if h["entry"]["name"]
-            not in {str(n) for n in order}]
-    return (picked + rest)[:limit], LLM_RANKER
+    return (reorder_by_names(hits, order, lambda h: h["entry"]["name"])[:limit],
+            LLM_RANKER)
+
+
+def names_any(items: list, order: Sequence, name_of) -> bool:
+    """True when the LLM's name ``order`` names at least one of ``items``.
+
+    :func:`reorder_by_names` always returns a permutation, so a reply of
+    invented names hands back the input order unchanged — and a caller that
+    labelled that "ranked by the AI" credited it with retrieval's order.
+    """
+    names = {str(name_of(it)) for it in items}
+    return any(str(n) in names for n in order)
+
+
+def reorder_by_names(items: list, order: Sequence, name_of) -> list:
+    """``items`` reordered by an LLM's name ``order``, losing none of them.
+
+    The model answers with names, but a name is not an identity: two taps can
+    ship different skills both called ``brainstorming``, and a rule and a skill
+    can share one. Mapping each name to a *single* item kept the last homonym
+    and dropped the others, so a rerank meant to reorder the shortlist shrank
+    it. Each name therefore selects every item carrying it, in their incoming
+    (retrieval) order; a name the model repeats or invents selects nothing new;
+    items it did not name follow in their incoming order. The output is always
+    a permutation of the input.
+    """
+    groups: dict[str, list] = {}
+    for it in items:
+        groups.setdefault(str(name_of(it)), []).append(it)
+    named = list(dict.fromkeys(str(n) for n in order))
+    picked = [it for n in named for it in groups.pop(n, [])]
+    return picked + [it for it in items if str(name_of(it)) in groups]
 
 
 # The damping constant from the original reciprocal-rank-fusion paper. It is
@@ -1859,11 +2198,71 @@ def retrieve_any(query: str, k: int = 60, kind: str | None = None,
         hits, engine = bm25_hits[:k], "BM25 full-content"     # already deduped
     else:
         return None, ""
+    # Again after fusion: RRF can still seat a competitor first (BM25 #2 +
+    # dense #1 outranks BM25 #1 + dense #5), and dense alone never saw it.
+    hits = promote_exact_name(hits, query)
     if collapse_near_duplicates and hits and dense.ready():
         vectors = dense.entry_vectors([entry_key(h["entry"]) for h in hits])
         if vectors:
             hits = collapse_near_duplicate_hits(hits, vectors, k)
     return hits, engine
+
+
+#: How far :func:`retrieve_filtered` widens the pool before giving up: a
+#: filter matching nothing in the first 16k hits is answered as capped rather
+#: than ranking the whole catalogue (70k+ entries on a real machine).
+FILTER_POOL_CEILING = 16384
+
+
+def retrieve_filtered(query: str, k: int, want: int,
+                      keep: Callable[[dict], bool], kind: str | None = None,
+                      collapse_near_duplicates: bool = False,
+                      ceiling: int = FILTER_POOL_CEILING,
+                      ) -> tuple[list[Hit] | None, str, int]:
+    """:func:`retrieve_any`, widened until ``want`` hits pass ``keep``.
+
+    Returns ``(hits, engine, k)`` — every hit of the last round, *unfiltered*,
+    and the ``k`` that round used, so the caller still knows whether the
+    final pool hit its cap. ``boost search --category`` filtered one page of
+    ``max(60, limit * 4)`` and returned whatever of it passed: 10 of a
+    category's 20 matches against a ``--limit`` of 15, with nothing saying
+    the rest sat past the cut. The pool grows fourfold until enough pass, the
+    engine runs out (fewer than ``k`` came back), or ``ceiling`` is reached.
+    """
+    while True:
+        hits, engine = retrieve_any(query, k=k, kind=kind,
+                                    collapse_near_duplicates=collapse_near_duplicates)
+        if hits is None:
+            return None, engine, k
+        if (sum(1 for h in hits if keep(h["entry"])) >= want
+                or len(hits) < k or k >= ceiling):
+            return hits, engine, k
+        k = min(k * 4, ceiling)
+
+
+HEURISTIC_ENGINE = "heuristic relevance"
+
+
+def retrieve_or_fallback(query: str, k: int, kind: str | None = None,
+                         ) -> tuple[list[Hit], str]:
+    """``retrieve_any`` with ``boost search``'s fallback: never ``None``.
+
+    For a library caller that has no "no index" branch of its own. When the
+    index cannot be made current (:func:`ensure` swallows every build failure
+    and answers False — a read-only cache dir, a corrupt postings file) or no
+    index answers, rank with ``catalog.search`` exactly as ``cmd_search`` does,
+    narrowed to ``kind`` and cut to ``k``. Returning ``[]`` there instead told
+    a chain "nothing matches" about items the CLI found on the same machine.
+    An empty list therefore means nothing matched or nothing is tapped.
+    """
+    if ensure():
+        hits, engine = retrieve_any(query, k=k, kind=kind)
+        if hits is not None:
+            return hits, engine
+    scored = [(e, s) for e, s in catalog.search(query)
+              if kind is None or e.get("kind", "skill") == kind]
+    return ([Hit(entry=e, score=float(s)) for e, s in scored[:k]],
+            HEURISTIC_ENGINE)
 
 
 def search(query: str, limit: int = 10, kind: str | None = None,

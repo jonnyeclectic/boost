@@ -15,9 +15,12 @@ import contextlib
 import os
 import re
 import sys
+import textwrap
 import unicodedata
 from collections.abc import Sequence
 from dataclasses import dataclass
+
+from . import typedvalue
 
 RESET = "\033[0m"
 BOLD = "\033[1m"
@@ -48,6 +51,48 @@ def harden_console_encoding() -> None:
                 reconfigure(encoding="utf-8", errors="replace")
 
 
+_STDIN = object()   # "read sys.stdin at call time" — None means fd 0 closed
+
+
+def stdin_is_tty(stream: object = _STDIN) -> bool:
+    """True when standard input is an interactive terminal.
+
+    The one test every "is someone there to answer?" check goes through.
+    A bare ``sys.stdin.isatty()`` crashed with AttributeError when fd 0 was
+    closed at launch (``boost uninstall x <&-``), because Python then sets
+    ``sys.stdin`` to None; a stream closed or detached later raises
+    ValueError/OSError instead. Every one of those means nobody is typing,
+    so each answers False — the same as a pipe.
+
+    ``stream`` lets a caller pass the stdin it already holds (a module that
+    reads both streams off its own ``sys``); it defaults to ``sys.stdin``
+    read at call time, not import time, so a swapped stdin is honoured.
+    """
+    if stream is _STDIN:
+        stream = sys.stdin
+    try:
+        return bool(stream.isatty())  # type: ignore[attr-defined]
+    except (AttributeError, ValueError, OSError):
+        return False
+
+
+def tolerate_undecodable_stdin(stream: object = _STDIN) -> None:
+    """Make a line read from stdin replace bytes it cannot decode.
+
+    Python 3.12–3.14 open a piped stdin with ``errors="strict"`` outside UTF-8
+    mode, so one Latin-1 byte (``printf 'caf\\xe9' | boost chat``) raised
+    UnicodeDecodeError out of ``input()`` and into the crash handler. A
+    question with a U+FFFD in it is still a question. A stream that cannot be
+    reconfigured (closed, already read, not a TextIOWrapper) is left alone.
+    """
+    if stream is _STDIN:
+        stream = sys.stdin
+    if getattr(stream, "errors", None) != "strict":
+        return
+    with contextlib.suppress(AttributeError, ValueError, OSError):
+        stream.reconfigure(errors="replace")  # type: ignore[attr-defined]
+
+
 def use_color(stream=None) -> bool:
     """True when ANSI color should be emitted on `stream` (default stdout).
 
@@ -65,8 +110,14 @@ def use_color(stream=None) -> bool:
         return True
     if os.environ.get("NO_COLOR"):
         return False
-    if os.environ.get("CLICOLOR_FORCE"):
+    if typedvalue.env_flag("CLICOLOR_FORCE"):
         return True
+    # TERM=dumb (Emacs shell/compile buffers, some CI log viewers) is a TTY
+    # that renders escapes as junk: no color, and — since color_level() and
+    # the spinner build on this — no in-place animation either. Checked after
+    # the explicit overrides, so BOOST_COLOR=always / CLICOLOR_FORCE still win.
+    if os.environ.get("TERM") == "dumb":
+        return False
     stream = stream or sys.stdout
     return hasattr(stream, "isatty") and stream.isatty()
 
@@ -116,7 +167,7 @@ def color_level(stream=None) -> int:
     env = os.environ.get("COLORTERM", "").lower()
     if "truecolor" in env or "24bit" in env:
         return 2
-    if os.environ.get("CLICOLOR_FORCE"):
+    if typedvalue.env_flag("CLICOLOR_FORCE"):
         return 2
     return 1
 
@@ -350,25 +401,69 @@ def info(msg: str = "", stream=None, wrap: bool = False) -> None:
     print("  " + msg if msg else "", file=stream)
 
 
-# C0 and C1 controls, minus the tab/newline the table layer already folds. ESC
-# is the one that matters: `\x1b[1A\x1b[2K` moves the cursor up and erases, so a
-# single crafted field can rewrite rows already printed above it.
-_CONTROL_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+# C0 and C1 controls and DEL. ESC is the one that matters: `\x1b[1A\x1b[2K`
+# moves the cursor up and erases, so a single crafted field can rewrite rows
+# already printed above it; `\x1b]0;…\x07` retitles the window, `\x1b[8m`
+# hides what follows, and C1 `\x9b` is a one-byte CSI on terminals that honor
+# 8-bit controls. Tab and newline are matched separately so they can become a
+# space rather than vanish — see `plain`.
+#
+# The Unicode bidi embeddings, overrides and isolates (U+202A-202E,
+# U+2066-2069) and the directional marks (U+200E/U+200F, Arabic U+061C) go
+# too. They are not terminal controls, but a bidi-aware terminal obeys them:
+# an unclosed U+202E in a version cell renders the rest of the line right to
+# left, the columns boost printed after it included. RTL *letters* are untouched — only the
+# invisible formatting characters that reorder their neighbours are removed.
+_CONTROL_RE = re.compile(
+    r"[\x00-\x08\x0b-\x1f\x7f-\x9f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]")
+_FOLD_RE = re.compile(r"[\t\n]")
 
 
 def plain(text: object) -> str:
-    """Strip terminal control characters from text boost did not author.
+    """Make text boost did not author safe to print to a terminal.
 
-    Anything that arrives from a network response, a tapped repo's frontmatter,
-    or a filename is untrusted for display purposes even when it is harmless as
-    data. Rendering it into a table is what makes it executable-ish: the
-    terminal, not boost, decides what an escape sequence means.
+    The one helper for every print path that echoes tap data: frontmatter
+    name, description, version, tags and category, file and symlink names,
+    and anything from a network response. Harmless as data, such text is
+    executable-ish once rendered — the terminal, not boost, decides what an
+    escape sequence means — so it is sanitised at the point of display and
+    never at scan time, which would change what ``--json`` reports.
+
+    The control *byte* is removed, not the whole sequence: every CSI/OSC/DCS
+    needs its ESC (or C1) introducer, so dropping that one byte leaves the rest
+    inert text (``]0;PWNED``, ``[31m``) and is not bypassable the way a parser
+    of each terminator grammar would be. Tab and newline become one space
+    rather than passing through: frontmatter decodes ``"a\\nb"`` in a quoted
+    scalar, and a newline in a one-line field would let it start a fresh line
+    that impersonates boost's own ``✓ installed`` output; a space keeps the
+    word boundary either way. ``\r`` is a control like any other and goes.
+
+    Apply it to the raw field *before* coloring, truncating or padding it —
+    boost's own SGR codes must be the only escapes in the result.
 
     Typed ``object`` rather than ``str`` because the callers are feeding it
     parsed JSON — a field that is documented as a string is still whatever the
     remote sent, and coercing here beats a TypeError at render time.
     """
-    return _CONTROL_RE.sub("", str(text))
+    return _CONTROL_RE.sub("", _FOLD_RE.sub(" ", str(text)))
+
+
+def plain_fields(value):
+    """:func:`plain` over every string inside a catalog entry or lock row.
+
+    For a render path that reads many fields off one record (``boost info``,
+    ``boost list``), where wrapping each read is how one gets missed. Dicts,
+    lists and tuples are rebuilt with their strings sanitised, keys included;
+    numbers, bools and None pass through untouched, so ``e.get("pinned")``
+    still reads the same. Display copies only — never write one back.
+    """
+    if isinstance(value, str):
+        return plain(value)
+    if isinstance(value, dict):
+        return {plain_fields(k): plain_fields(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return type(value)(plain_fields(v) for v in value)
+    return value
 
 
 def dim(msg: str, wrap: bool = False, indent: int = 0) -> None:
@@ -544,7 +639,14 @@ def visible_len(s: str) -> int:
     which is what silently misaligned a table the moment a cell held an emoji
     or CJK text — the column budget was measured a codepoint short of what
     the terminal actually draws.
+
+    ASCII skips the per-character walk: no ASCII codepoint is wide or
+    combining, so its width *is* its length once escapes are gone. The walk
+    through ``unicodedata`` was most of a non-TTY ``boost browse`` of a
+    63k-row catalogue (752k calls here, 7.4M ``_char_width`` calls).
     """
+    if s.isascii():
+        return len(_ANSI_RE.sub("", s)) if "\033" in s else len(s)
     return sum(_char_width(ch) for ch in _ANSI_RE.sub("", s))
 
 
@@ -655,6 +757,45 @@ def wrap(text: str, width: int | None = None, indent: str = "") -> list[str]:
     lines.append(cur)
     return [lines[0]] + [indent + ln for ln in lines[1:]]
 
+
+
+def wrap_columns(text: str, width: int) -> list[str]:
+    """Wrap prose to ``width`` display columns, breaking inside a word when
+    one word is wider than the line.
+
+    The prose twin of :func:`wrap`. That one emits an over-wide token whole
+    because its long tokens are commands; this one is for text a pane must
+    hold, where nothing may run past the edge. ``textwrap.wrap`` counts
+    codepoints, so 30 full-width characters were "30 wide" and drew across 60
+    columns — over the frame and onto the pane beside it. And CJK prose has
+    no spaces to break at, so it is split between characters, by column.
+
+    ASCII text takes ``textwrap.wrap`` exactly: every ASCII character is one
+    column, so the codepoint count is the right one and the output is the
+    same lines as before, hyphen breaks included.
+    """
+    width = max(1, width)
+    if text.isascii():
+        return textwrap.wrap(text, width=width)
+    lines: list[str] = []
+    cur, cur_w = "", 0
+    for word in text.split():
+        word_w = visible_len(word)
+        if cur and cur_w + 1 + word_w <= width:
+            cur, cur_w = cur + " " + word, cur_w + 1 + word_w
+            continue
+        if cur:
+            lines.append(cur)
+            cur, cur_w = "", 0
+        for ch in word:
+            ch_w = _char_width(ch)
+            if cur and cur_w + ch_w > width:
+                lines.append(cur)
+                cur, cur_w = "", 0
+            cur, cur_w = cur + ch, cur_w + ch_w
+    if cur:
+        lines.append(cur)
+    return lines
 
 #: Alias for callers that take a ``wrap`` keyword argument of their own, which
 #: would otherwise shadow the function inside their own body.
@@ -926,7 +1067,11 @@ def format_search_row(name: str, desc: str, kind: str, tap: str, frac: float,
     meter glyph count never varies with color state; the installed mark's
     column is reserved either way so names align; a curated row pays for its
     pinned ``  ★ curated`` tail out of its own description.
+
+    ``name``, ``desc`` and ``tap`` are a tap's own text, so each goes through
+    :func:`plain` before it is measured or colored.
     """
+    name, desc, tap = plain(name), plain(desc), plain(tap)
     row = (aurora(meter(frac), meter_hue(frac)) + " "
            + (role("●", "success") if installed else " ") + " "
            + _pad(role(truncate(name, lay.name_w), "accent"), lay.name_w))
@@ -1250,34 +1395,49 @@ def table(rows, headers=None, stream=None, keep=(), text=(),
 _CONFIRM_BYPASS_HINT = "pass -y or set BOOST_ASSUME_YES=1 to skip this prompt"
 
 
-def confirm(prompt: str, default: bool = False, quiet: bool = False) -> bool:
+def confirm(prompt: str, default: bool = False, quiet: bool = False,
+            hint: str | None = None) -> bool:
     """Ask a yes/no question and return the answer as a bool.
 
-    BOOST_ASSUME_YES or --yes/-y force True; non-TTY stdin and an empty
-    answer return `default`; EOF or Ctrl-C returns False.
+    BOOST_ASSUME_YES forces True; non-TTY stdin and an empty answer return
+    `default`; EOF or Ctrl-C returns False.
+
+    A command's own ``-y``/``--yes`` is NOT read here: each caller passes its
+    parsed flag as ``args.yes or out.confirm(...)``. This used to scan
+    ``sys.argv`` for either spelling, which made one flag answer every prompt
+    a run reached — `protocol open -y` and `import -y`, whose -y means "skip
+    this command's prompt", also said yes to the separate, default-No
+    "register MCP servers for every project on this machine?" question. A
+    prompt that needs its own consent can only get it from a caller that
+    asks for it by name.
 
     Every path that resolves to a decline (as opposed to `default` being
     True) prints the bypass hint here, once, so callers inherit it instead
     of each command growing its own reminder — see the confirm-bypass-hints
     roadmap item. ``quiet`` suppresses that hint — for a caller that is about
     to print its own machine-readable (``--json``) result on a decline, where
-    the hint would land as a stray prose line ahead of it.
+    the hint would land as a stray prose line ahead of it. ``hint`` replaces
+    the default wording, and ``hint=""`` prints none: for a prompt no flag
+    answers, where any bypass line would name something that changes nothing
+    or advertise a blanket yes the caller means to keep out of sight.
     """
-    if os.environ.get("BOOST_ASSUME_YES") or "--yes" in sys.argv or "-y" in sys.argv:
+    if typedvalue.env_flag("BOOST_ASSUME_YES"):
         return True
-    if not sys.stdin.isatty():
-        if not default and not quiet:
-            dim(_CONFIRM_BYPASS_HINT)
+    if hint is None:
+        hint = _CONFIRM_BYPASS_HINT
+    if not stdin_is_tty():
+        if not default and not quiet and hint:
+            dim(hint)
         return default
     suffix = " [Y/n] " if default else " [y/N] "
     try:
         answer = input(prompt + suffix).strip().lower()
     except (EOFError, KeyboardInterrupt):
         print()
-        if not quiet:
-            dim(_CONFIRM_BYPASS_HINT)
+        if not quiet and hint:
+            dim(hint)
         return False
     result = answer in ("y", "yes") if answer else default
-    if not result and not quiet:
-        dim(_CONFIRM_BYPASS_HINT)
+    if not result and not quiet and hint:
+        dim(hint)
     return result

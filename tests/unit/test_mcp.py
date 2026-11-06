@@ -857,6 +857,24 @@ class TestTheEmptyCatalogAnswersDifferentlyFromAMiss:
         reply = mcp.no_results("R", tapped=0, dropped=["R"])
         assert "boost tap --defaults" in reply
 
+    def test_a_stopword_only_query_says_nothing_was_searched(self):
+        assert mcp.no_results("the and of", tapped=4, ignored=True) == (
+            "'the and of' holds only common words and punctuation, which the "
+            "index ignores, so nothing was searched. Retry with a plain-word "
+            "description of the task.")
+
+    def test_setup_state_outranks_an_ignored_query(self):
+        reply = mcp.no_results("the", tapped=0, ignored=True)
+        assert "boost tap --defaults" in reply
+
+    def test_dropped_terms_outrank_ignored(self):
+        reply = mcp.no_results("R", tapped=4, dropped=["R"], ignored=True)
+        assert reply.startswith("'R' did not reach the index")
+
+    def test_ignored_query_echo_is_bounded(self):
+        reply = mcp.no_results("the " * 100000, tapped=4, ignored=True)
+        assert len(reply) < 400
+
 
 class TestTheMissReplyDoesNotCostWhatTheQueryCost:
     """The miss is the reply an agent hits repeatedly while it rephrases, and
@@ -1637,6 +1655,200 @@ class TestDoctorToolOnAnItemMaterializedNowhere:
         assert integrity.STATUS_UNREACHABLE == "unreachable"
 
 
+class TestDoctorToolOnStoreDirsBoostDidNotInstall:
+    """The MCP doctor counts these as CLI doctor does, and words them as sync.
+
+    It printed every plan bucket as an issue and as a ``repr``; a dir boost
+    leaves alone by design held it red, and a copy read as a Python tuple.
+    """
+
+    @pytest.fixture()
+    def installed(self, sandbox, fixture_tap_src):
+        from boost_cli.core import catalog, registry, store
+        catalog.rebuild_tap(registry.add(str(fixture_tap_src)))
+        store.install(catalog.resolve_one("brainstorming"))
+
+    def test_a_dir_that_is_not_a_skill_is_listed_and_not_counted(self, installed):
+        from boost_cli.commands import configuration
+        from boost_cli.core import paths
+        (paths.store_dir() / "synced").mkdir()
+        text, is_error = configuration._tool_doctor({})
+        assert ("~/.agents/skills/synced holds no SKILL.md, so it is not a skill "
+                "— left alone") in text
+        assert "healthy — no issues found" in text
+        assert is_error is False
+
+    def test_a_copy_is_worded_and_its_prune_left_to_the_user(self, installed):
+        from boost_cli.commands import configuration
+        from boost_cli.core import paths
+        for d in (paths.home() / ".cursor" / "skills-cursor", paths.store_dir()):
+            (d / "automate").mkdir(parents=True, exist_ok=True)
+            (d / "automate" / "SKILL.md").write_text("# a\n", encoding="utf-8")
+        text, is_error = configuration._tool_doctor({})
+        assert ("automate copies a skill from Cursor's built-ins "
+                "(~/.cursor/skills-cursor), not boost's — remove with "
+                "`boost sync --prune`") in text
+        assert "('automate'" not in text
+        assert ("1 issue(s) — 1 needs `boost sync --prune`, which deletes or "
+                "unlinks, so ask the user first") in text
+        assert is_error is True
+
+    def test_a_skill_added_by_hand_is_one_issue_sync_fixes(self, installed):
+        from boost_cli.commands import configuration
+        from boost_cli.core import paths
+        (paths.store_dir() / "pr-me").mkdir()
+        (paths.store_dir() / "pr-me" / "SKILL.md").write_text("# m\n",
+                                                              encoding="utf-8")
+        text, _ = configuration._tool_doctor({})
+        assert ("pr-me was added outside boost — `boost sync` records it as a "
+                "local skill and links it") in text
+        assert "1 issue(s) — run `boost sync` to fix" in text
+        assert "--prune" not in text
+
+    def test_a_blocked_link_is_worded_with_who_moves_it(self, installed):
+        from boost_cli.commands import configuration
+        from boost_cli.core import paths
+        link = paths.home() / ".cursor" / "skills" / "brainstorming"
+        link.unlink()
+        link.mkdir()
+        text, is_error = configuration._tool_doctor({})
+        assert ("brainstorming not linked for cursor: ~/.cursor/skills/"
+                "brainstorming is in the way and is not boost's — ask the user "
+                "to move or delete it, then run `boost sync`") in text
+        assert "('brainstorming'" not in text and is_error is True
+
+    def test_a_link_outside_the_scope_is_worded_with_its_prune(self, installed):
+        from boost_cli.commands import configuration
+        from boost_cli.core import lockfile
+        e = lockfile.get_skill("brainstorming")
+        e["only_agents"] = ["cursor"]
+        lockfile.set_skill("brainstorming", e)
+        text, _ = configuration._tool_doctor({})
+        assert ("brainstorming is linked for claude-code, outside its declared "
+                "scope — `boost sync --prune` removes the link") in text
+        assert "('brainstorming'" not in text
+
+    def test_a_dir_boost_cannot_name_a_skill_by_is_a_note(self, installed):
+        import shutil
+
+        from boost_cli.commands import configuration
+        from boost_cli.core import paths
+        shutil.copytree(paths.store_dir() / "brainstorming",
+                        paths.store_dir() / "brainstorming copy")
+        text, is_error = configuration._tool_doctor({})
+        assert ("~/.agents/skills/brainstorming copy: boost cannot record a "
+                "skill by that name") in text
+        assert is_error is False
+
+    def test_a_lost_lock_is_one_sync_re_records(self, installed):
+        from boost_cli.commands import configuration
+        from boost_cli.core import paths
+        paths.lockfile_path().unlink()
+        text, _ = configuration._tool_doctor({})
+        assert ("1 store dir the lock file has lost (brainstorming) — `boost "
+                "sync` re-records it") in text
+        assert "boost replay" not in text
+
+    def test_a_corrupt_lock_is_the_users_to_restore(self, installed):
+        from boost_cli.commands import configuration
+        from boost_cli.core import lockfile, paths
+        paths.lockfile_path().write_text("{oops", encoding="utf-8")
+        text, is_error = configuration._tool_doctor({})
+        # One install, so no snapshot before it: nothing to roll back to.
+        assert not lockfile.has_history()
+        fix = "rebuild it from the store with `boost sync --rebuild-lock`"
+        assert ("the lock file is corrupt — ask the user to %s" % fix) in text
+        assert ("1 store dir the lock file cannot be read about (brainstorming) "
+                "— %s, and it will know whose they are" % fix) in text
+        assert "boost replay" not in text
+        # Neither is sync's to fix, so the verdict must not prescribe it.
+        assert ("2 issue(s) — 2 are the user's to change, and `boost sync` "
+                "leaves them") in text
+        assert "re-records" not in text and is_error is True
+
+    def test_a_schema_lock_that_records_everything_is_not_healthy(self, installed):
+        # It answered "healthy" while CLI `doctor` and `heal` exited 1.
+        import json
+
+        from boost_cli.commands import configuration
+        from boost_cli.core import paths
+        lock = paths.lockfile_path()
+        raw = json.loads(lock.read_text(encoding="utf-8"))
+        raw["version"] = 4
+        lock.write_text(json.dumps(raw), encoding="utf-8")
+        text, is_error = configuration._tool_doctor({})
+        assert ("the lock file is schema v4, newer than this boost's v3 — ask "
+                "the user to upgrade boost with `boost self-update`") in text
+        assert "boost replay" not in text
+        assert ("1 issue(s) — 1 is the user's to change, and `boost sync` "
+                "leaves it") in text
+        assert "healthy" not in text and is_error is True
+
+    def test_a_plugin_variant_is_listed_and_not_counted(self, installed,
+                                                        claude_plugin):
+        from boost_cli.commands import configuration
+        claude_plugin(body="# theirs\n")
+        text, is_error = configuration._tool_doctor({})
+        assert "ships a different skill by that name" in text
+        assert is_error is False
+
+
+class TestDoctorVerdict:
+    """Which issues `boost sync` fixes, named per kind.
+
+    "Run `boost sync` to fix" over a lock only `boost replay` restores and a
+    file only the user can move sent an agent round a loop: it ran sync, saw
+    nothing change, and was told the same again.
+    """
+
+    @staticmethod
+    def _verdict(total, lock_bad=False, lost=False, **buckets):
+        from boost_cli.commands import configuration
+        return configuration._doctor_verdict(buckets, total, lock_bad, lost)
+
+    def test_only_what_sync_fixes(self, sandbox):
+        assert self._verdict(2, missing_links=[1, 2]) == (
+            "2 issue(s) — run `boost sync` to fix")
+
+    def test_a_lost_lock_is_sync_s_to_re_record(self, sandbox):
+        assert self._verdict(1, lost=True, unrecorded_store=["a"]) == (
+            "1 issue(s) — run `boost sync` to fix")
+
+    def test_each_kind_present_is_named(self, sandbox):
+        got = self._verdict(
+            7, lock_bad=True, missing_links=[1],
+            foreign_store=[("a", "o", "/x/a", "identical")],
+            out_of_scope_links=[("b", "cursor")],
+            plugin_duplicates=[("c", "p@m", "/y", "identical"),
+                               ("d", "p@m", "/z", "differs")],
+            blocked_links=[("e", "cursor", "/w")],
+            unreadable_store=[("f", "/v")])
+        assert got == (
+            "7 issue(s) — `boost sync` fixes 1; 3 need `boost sync --prune`, "
+            "which deletes or unlinks, so ask the user first; 3 are the "
+            "user's to change, and `boost sync` leaves them")
+
+    def test_a_newer_plugin_copy_is_prunes_and_an_older_one_is_a_note(self, sandbox):
+        got = self._verdict(1, plugin_duplicates=[
+            ("c", "p@m", "/y", "newer-in-plugin:git"),
+            ("d", "p@m", "/z", "newer-in-boost:upper-bound")])
+        assert got == ("1 issue(s) — 1 needs `boost sync --prune`, which "
+                       "deletes or unlinks, so ask the user first")
+
+    def test_one_of_each_reads_in_the_singular(self, sandbox):
+        assert self._verdict(2, foreign_store=[("a", "o", "/x/a", "differs")],
+                             unrecorded_store=["b"]) == (
+            "2 issue(s) — 1 needs `boost sync --prune`, which deletes or "
+            "unlinks, so ask the user first; 1 is the user's to change, and "
+            "`boost sync` leaves it")
+
+    def test_a_repository_is_the_users_not_prunes(self, sandbox):
+        from boost_cli.core import paths
+        (paths.store_dir() / "r" / ".git").mkdir(parents=True)
+        assert self._verdict(1, foreign_store=[("r", "Codex", "/x/r", "differs")]) == (
+            "1 issue(s) — 1 is the user's to change, and `boost sync` leaves it")
+
+
 class TestTheStatedCostIsPricedPerMachine:
     """boost_search quoted "10-15 seconds — an LLM reranks every match" on every
     machine, while `rag.rerank` returns the retrieval order without an LLM call
@@ -1938,3 +2150,74 @@ class TestReadLine:
                 raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
 
         assert mcp.read_line(NotUtf8()) == (None, False)
+
+
+class TestSearchAndListOnACorruptConfig:
+    """boost_search and boost_list read a corrupt config.json as "nothing is
+    tapped" and told the agent to run `boost tap --defaults` — a write that
+    moves the user's file aside and leaves a tap list holding only the
+    defaults. They now say what boost_doctor says, in its words."""
+
+    ERR = "/x/config.json: invalid JSON"
+    SENTENCE = ("/x/config.json: invalid JSON — boost is running on defaults, "
+                "so the user's taps are not listed; ask the user to repair the "
+                "file or re-add their taps (run `boost doctor` for details)")
+
+    def test_config_problem_is_the_doctor_sentence(self):
+        assert mcp.config_problem(self.ERR) == self.SENTENCE
+
+    def test_no_results_names_the_file_not_the_setup_command(self):
+        assert mcp.no_results("widgets", tapped=0, config_error=self.ERR) == (
+            "nothing was searched: " + self.SENTENCE + ".")
+
+    def test_it_outranks_every_other_branch(self):
+        for kw in ({"tapped": 3}, {"tapped": 3, "dropped": ["R"]},
+                   {"tapped": 3, "ignored": True}):
+            assert mcp.no_results("R", config_error=self.ERR, **kw) == (
+                "nothing was searched: " + self.SENTENCE + ".")
+
+    def test_no_error_keeps_the_old_replies(self):
+        assert mcp.no_results("widgets", tapped=4, config_error=None) == \
+            "no skills match 'widgets'"
+        assert "boost tap --defaults" in mcp.no_results(
+            "widgets", tapped=0, config_error="")
+
+    def test_coverage_line_names_the_file(self):
+        line = mcp.coverage_line({"skill": {"a": {}}}, tapped=0,
+                                 config_error=self.ERR)
+        assert line == ("1 skill · 0 rules · 0 workflows installed here. "
+                        + self.SENTENCE + ".")
+
+    def test_coverage_line_without_an_error_is_unchanged(self):
+        assert "boost tap --defaults" in mcp.coverage_line(
+            {"skill": {}}, tapped=0, config_error=None)
+
+    def test_the_tools_carry_it_end_to_end(self, sandbox):
+        from boost_cli.commands import configuration
+        from boost_cli.core import paths
+        paths.ensure_dirs()
+        paths.config_path().write_text("{not json", encoding="utf-8")
+        for text, is_error in (configuration._tool_search({"query": "testing"}),
+                               configuration._tool_list({})):
+            assert is_error is False
+            assert "invalid JSON" in text and "config.json" in text
+            assert "repair the file or re-add their taps" in text
+            assert "boost tap --defaults" not in text
+
+
+class TestBlankNameIsRefused:
+    """boost_info and boost_install treated a missing name as a lookup for
+    '' — install even offered three "closest matches". Every tool whose
+    schema requires a name now refuses a blank one the way boost_read did."""
+
+    def test_the_sentence(self):
+        assert mcp.needs_name("boost_info") == (
+            "boost_info needs a name — pass one as boost_search returned it")
+
+    @pytest.mark.parametrize("tool", ["boost_info", "boost_install",
+                                      "boost_read"])
+    @pytest.mark.parametrize("args", [{}, {"name": "   "}, {"name": ""}])
+    def test_each_tool_refuses_it(self, sandbox, tool, args):
+        from boost_cli.commands import configuration
+        handler = getattr(configuration, "_tool_" + tool.removeprefix("boost_"))
+        assert handler(args) == (mcp.needs_name(tool), True)

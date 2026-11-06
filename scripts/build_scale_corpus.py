@@ -47,7 +47,17 @@ THE SELECTION RULE, and why it is not "the biggest registries".
      required list's own header records what that costs — `boost tap --defaults`
      taps only skill repos and scores 0.000 on every rule and workflow query.
 
-  3. Stop at a target expressed in `est_items`. The default is arbitrary and
+  3. No one distractor may carry more than MAX_SHARE of the target. Largest-
+     first is a fine rule while the largest registry is a few percent of the
+     target and a bad one once a single repository is a fifth of it: the
+     corpus then measures that repository's vocabulary, and the required
+     corpus already shows the cost — one third-party repo is 62% of its
+     entries. Holding the selection hostage to that was the only reason
+     `jeremylongshore/tons-of-skills-marketplace` sat at `est_items` 1 against
+     a measured 4,253. A registry over the cap is skipped, named in the
+     header, and the next largest is taken.
+
+  4. Stop at a target expressed in `est_items`. The default is arbitrary and
      says so; it is chosen to land the same order of magnitude as a real install
      while keeping the clone count survivable on a CI runner.
 
@@ -83,6 +93,12 @@ EST_TO_ACTUAL = 71_655 / 28_225
 #: Default target, in est_items. Arbitrary, and the header says why no number
 #: here can be principled — it buys one more point on a curve with no plateau.
 DEFAULT_TARGET = 20_000
+
+#: The most of the target one distractor may carry. 5% of 20,000 is 1,000:
+#: above every registry the selection already took (the largest is 880), so the
+#: cap moves nothing that was measured, and below the 4,253 that would otherwise
+#: be a fifth of the corpus on its own.
+MAX_SHARE = 0.05
 
 #: Round-robin order. Rules are scarcest in the curated set and score worst when
 #: absent, so they are drawn first each cycle rather than last.
@@ -120,14 +136,28 @@ def candidates(registries: Sequence[dict], exclude: Sequence[str]
     return out
 
 
-def select(pools: dict[str, list[tuple[str, int]]], target: int
-           ) -> list[tuple[str, int]]:
+def oversized(pools: dict[str, list[tuple[str, int]]], cap: int | None
+              ) -> list[tuple[str, int]]:
+    """The candidates over ``cap``, largest first — what `select` will skip."""
+    if cap is None:
+        return []
+    return sorted(((n, e) for pool in pools.values() for n, e in pool if e > cap),
+                  key=lambda pair: (-pair[1], pair[0]))
+
+
+def select(pools: dict[str, list[tuple[str, int]]], target: int,
+           cap: int | None = None) -> list[tuple[str, int]]:
     """Round-robin across types, largest first within each, until ``target``.
+
+    A candidate whose ``est_items`` exceeds ``cap`` is skipped; ``None`` means
+    no cap, which is what the pure-selection tests below want.
 
     Deterministic: the pools are already sorted, and the cycle order is fixed.
     Two runs over the same committed data must produce the same file or the
     ``--check`` gate is meaningless.
     """
+    if cap is not None:
+        pools = {k: [(n, e) for n, e in v if e <= cap] for k, v in pools.items()}
     cursors = dict.fromkeys(pools, 0)
     picked: list[tuple[str, int]] = []
     total = 0
@@ -172,7 +202,9 @@ def existing_pins(text: str) -> dict[str, str]:
 
 
 def render(required: Sequence[str], picked: Sequence[tuple[str, int]],
-           target: int, pinned: dict[str, str] | None = None) -> str:
+           target: int, pinned: dict[str, str] | None = None, *,
+           skipped: Sequence[tuple[str, int]] = (),
+           cap: int | None = None) -> str:
     """The taps-scale.txt text, header included.
 
     The required corpus's size is summed from the rows being copied, never
@@ -214,6 +246,16 @@ def render(required: Sequence[str], picked: Sequence[tuple[str, int]],
         "# registries largest-first WITHIN each type, round-robin across types —",
         "# straight largest-first lets the 341-strong skill tail crowd out the 26",
         "# rule registries, and a corpus that is 95% skills is not an install.",
+    ]
+    if cap is not None:
+        lines += [
+            "#",
+            "# No one distractor may carry more than %s est items (%d%% of the"
+            % (f"{cap:,}", round(cap * 100 / target) if target else 0),
+            "# target), so the corpus is not one registry's vocabulary. Skipped:",
+        ]
+        lines += ["#   %s (%s)" % (n, f"{e:,}") for n, e in skipped] or ["#   none"]
+    lines += [
         "",
         "# --- the required corpus, verbatim (holds every golden target) ---",
     ]
@@ -229,7 +271,9 @@ def build(target: int) -> str:
     required = required_rows(REQUIRED_TAPS.read_text(encoding="utf-8"))
     pools = candidates(registries, [repo_of(r) for r in required])
     prior = existing_pins(OUT.read_text(encoding="utf-8")) if OUT.exists() else {}
-    return render(required, select(pools, target), target, prior)
+    cap = int(target * MAX_SHARE)
+    return render(required, select(pools, target, cap), target, prior,
+                  skipped=oversized(pools, cap), cap=cap)
 
 
 def main(argv=None) -> int:

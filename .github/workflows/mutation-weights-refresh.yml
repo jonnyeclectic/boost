@@ -62,33 +62,59 @@ jobs:
   # required checks on the name alone, and scripts/check_required_checks.py
   # fails the build on the ambiguity.
   rebalance:
-    # A red `ci` run has nothing to offer: the "refresh balance hints" step runs
-    # after the gate passes, so a failed run uploaded no artifact and the
-    # download below would be the only thing that noticed.
+    # No condition on the run's conclusion: whether the run measured anything
+    # is the `mutation-weights` artifact's to say, and the download below
+    # already treats its absence as the ordinary case. The "refresh balance
+    # hints" upload sits after `mutation_gate.py --min 80` in the `mutation`
+    # job, so a red *gate* uploads nothing -- but a run can be red outside it.
+    # A push's lint or tests can fail beside a green full mutation run, and a
+    # nightly or dispatch is also ci.yml's `tests-extended`, whose one red
+    # leg fails the run after `mutation` passed and uploaded. Requiring
+    # `success` threw those measurements away, and with a 7-day retention the
+    # next fully green whole-codebase run may come after they expire.
     #
-    # The other two conditions are the fork guard publish.yml and sbom.yml both
+    # The conditions below are the fork guard publish.yml and sbom.yml both
     # carry, and for the same reason: `branches: [main]` above filters on the
     # TRIGGERING run's head_branch, not on the event type and not on the
     # repository. ci.yml runs `on: pull_request`, so a fork PR opened from a
     # branch named `main` produces a ci run whose head_branch is `main` and
     # satisfies that filter — and this job holds contents:write plus
-    # pull-requests:write. Requiring the triggering run to be a `push` from THIS
-    # repository closes it. The `workflow_dispatch` arm stays first: on a manual
-    # dispatch `github.event.workflow_run` is null and every field under it
-    # evaluates empty.
+    # pull-requests:write. Requiring the triggering run to be a `push`,
+    # `schedule` or `workflow_dispatch` run from THIS repository closes it: a
+    # pull request can start none of the three. The `workflow_dispatch` arm
+    # stays first: on a manual dispatch of THIS workflow
+    # `github.event.workflow_run` is null and every field under it evaluates
+    # empty.
+    #
+    # Why three events and not `push` alone. ci.yml's `mutation-weights`
+    # upload comes only from a full whole-codebase run, and a push to main
+    # whose tree a green PR run already tested now skips the shards (its plan
+    # is `none`), so most pushes carry no weights at all. A hand-started ci
+    # run (`workflow_dispatch`) always plans the full run, and the nightly
+    # (`schedule`) does too unless it is idle -- main still at the commit and
+    # tree of a green full run under 7 days old, which it inherits and
+    # uploads no weights for (the `mutated-tree-` marker is how to tell a
+    # real run from such a skip). Without them the weights would refresh only
+    # on the rare unproven push. `head_branch == 'main'` is stated again even though
+    # `branches: [main]` above already filters on it, because a ci dispatch
+    # may name any branch, and weights measured on a feature branch's tree
+    # must not be packed into main's.
     if: >-
       github.event_name == 'workflow_dispatch' ||
-      (github.event.workflow_run.conclusion == 'success' &&
-       github.event.workflow_run.event == 'push' &&
+      ((github.event.workflow_run.event == 'push' ||
+        github.event.workflow_run.event == 'schedule' ||
+        github.event.workflow_run.event == 'workflow_dispatch') &&
+       github.event.workflow_run.head_branch == 'main' &&
        github.event.workflow_run.head_repository.full_name == github.repository)
     runs-on: ubuntu-latest
     # Nothing here embeds, runs tests, or clones a corpus — it downloads 16 KB,
-    # bin-packs the 66 mutatable files of boost_cli/core into 223 units
-    # (catalog.py, registry.py and store.py are each split per top-level
-    # function at this width; `__init__.py` is excluded, which is the 67th)
-    # twice, and opens a PR. The unit count moves with `--shards` and with the
-    # weights — it was 156 when one file split and 183 at eight shards — so it
-    # is here to size the job, not as a figure to rely on.
+    # bin-packs the 74 mutatable files of boost_cli/core into 530 units
+    # (catalog.py, gitutil.py, registry.py and store.py are each split per
+    # top-level function at twenty-four shards; `__init__.py` is excluded,
+    # which is the 75th) twice, and opens a PR. The unit count moves with
+    # `--shards` and with the weights — it was 156 when one file split, 183 at
+    # eight shards and 223 at sixteen — so it is here to size the job, not as a
+    # figure to rely on.
     timeout-minutes: 15
     permissions:
       contents: write            # push the branch carrying the refreshed hints
@@ -98,14 +124,22 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
       - name: which run measured the mutants
         id: source
         # `github.event.workflow_run.id` is empty on a manual dispatch, so that
-        # path asks for the most recent successful `ci` on main instead. Both
-        # end at a run id, which is the only thing the download needs.
+        # path has to find a run. "The newest green `ci` on main" is the wrong
+        # one now: most pushes are proven by their PR run and upload no
+        # weights, so it asks each candidate's artifacts instead of guessing
+        # which event carries them, and takes the newest that holds an
+        # unexpired `mutation-weights`. Completed, not only green: as on the
+        # workflow_run path (the guard's comment), a run red outside the gate
+        # can hold a measurement. Only the three events the workflow_run
+        # guard accepts -- `--branch main` also matches a fork PR raised from a
+        # branch called main. Finding none leaves the id empty, and the
+        # download below waits for one.
         env:
           GH_TOKEN: ${{ github.token }}
           TRIGGERING: ${{ github.event.workflow_run.id }}
@@ -114,18 +148,32 @@ jobs:
           set -euo pipefail
           id="$TRIGGERING"
           if [ -z "$id" ]; then
-            id="$(gh run list --repo "$REPO" --workflow ci.yml --branch main \
-                    --status success --limit 1 --json databaseId \
-                    -q '.[0].databaseId')"
+            candidates="$(gh run list --repo "$REPO" --workflow ci.yml --branch main \
+                    --status completed --limit 30 --json databaseId,event \
+                    -q '.[] | select(.event == "push" or .event == "schedule" or .event == "workflow_dispatch") | .databaseId')"
+            for candidate in $candidates; do
+              held="$(gh api "repos/$REPO/actions/runs/$candidate/artifacts?name=mutation-weights" \
+                        -q '[.artifacts[] | select(.expired | not)] | length')"
+              if [ "${held:-0}" -gt 0 ]; then id="$candidate"; break; fi
+            done
           fi
           echo "run-id=$id" >> "$GITHUB_OUTPUT"
-          echo "measuring run $id"
+          if [ -n "$id" ]; then
+            echo "measuring run $id"
+          else
+            echo "no completed ci run on main holds an unexpired mutation-weights artifact"
+          fi
       - name: download the measured hints
         id: fetch
+        if: steps.source.outputs.run-id != ''
         # `continue-on-error`, because "that run did not reach the mutation
         # gate" is the ordinary case, not a fault: ci.yml skips the whole gate
-        # when nothing mutable changed, and then there is no artifact to take.
-        # Failing the job there would alert on a docs-only merge every time.
+        # when nothing mutable changed, and runs no shards on a push whose tree
+        # a green PR run already tested, nor on an idle nightly (it plans
+        # none, and runs only `tests-extended` beside it, so it may also be
+        # red), and then there is no artifact to take; nor when the gate itself
+        # failed, which the job's `if:` no longer filters out. Failing the job
+        # there would alert on most merges.
         continue-on-error: true
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -138,10 +186,20 @@ jobs:
         env:
           RUN_ID: ${{ steps.source.outputs.run-id }}
         run: |
+          if [ -z "$RUN_ID" ]; then
+            {
+              echo "No completed \`ci\` run on main among the newest thirty holds an"
+              echo "unexpired \`mutation-weights\` artifact; run the whole-codebase"
+              echo "mutation run (dispatch ci.yml on main) and try again."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           {
             echo "Run \`$RUN_ID\` published no \`mutation-weights\` artifact —"
-            echo "it did not reach the mutation gate (nothing mutable changed),"
-            echo "or the artifact has passed its 7-day retention."
+            echo "it ran no full mutation run (nothing mutable changed, a push"
+            echo "proven by its PR run, or an idle nightly that inherited the"
+            echo "last real one), its mutation gate failed, or the artifact has"
+            echo "passed its 7-day retention."
           } >> "$GITHUB_STEP_SUMMARY"
       - name: is the committed plan far enough behind to be worth a PR
         id: drift
@@ -149,7 +207,7 @@ jobs:
         run: |
           python3 scripts/mutation_shards.py drift \
             --candidate candidate/mutation_weights.json \
-            --shards 12 \
+            --shards 24 \
             --summary-md "$RUNNER_TEMP/drift.md" \
             --github-output "$GITHUB_OUTPUT"
           # `|| true` even though `cmd_drift` now writes --summary-md on
@@ -180,8 +238,10 @@ jobs:
             echo "The hints are an **optimisation, never a correctness input**:"
             echo "a stale file costs shard balance and can no more change the"
             echo "mutation score than a missing one can. What it does change is"
-            echo "headroom — the slowest shard carries \`timeout-minutes: 75\`,"
-            echo "and #1000 lost a required check to a shard that ran 75.6."
+            echo "headroom — the slowest shard's mutate step carries"
+            echo "\`timeout-minutes: 190\`,"
+            echo "and #1000 lost a required check to a shard that ran 75.6"
+            echo "under the 75 it carried then."
             echo
             echo "**This PR arrives with no check runs** unless \`BOT_PR_TOKEN\`"
             echo "exists: a \`GITHUB_TOKEN\` push never triggers workflows, so"

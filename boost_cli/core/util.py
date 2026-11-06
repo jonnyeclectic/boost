@@ -8,22 +8,24 @@ import getpass
 import hashlib
 import os
 import re
+import shlex
 import shutil
 import stat
 import sys
 import tempfile
 import time
+import unicodedata
 from datetime import UTC, datetime
 from pathlib import Path
 
-from ..errors import BoostError
+from ..errors import BoostError, NotUTF8Error
 from . import output as out
 from . import paths
 
 IGNORED = {".git", "__pycache__", ".DS_Store"}
 
 
-def _clear_readonly_and_retry(func, path, exc) -> None:
+def _clear_readonly_and_retry(func, path, exc, root=None) -> None:
     """Clear a read-only bit and retry the failed operation — never on a link.
 
     ``os.chmod`` follows symlinks, and the path handed to this hook is the one
@@ -50,11 +52,45 @@ def _clear_readonly_and_retry(func, path, exc) -> None:
     directory survived with its contents, and the target's mode went 0o755 to
     0o200. Re-raising restores ``shutil``'s own "Cannot call rmtree on a
     symbolic link" instead of that silent success.
+
+    Only a removal is retried. ``shutil.rmtree`` also reports a failed
+    ``os.open`` or ``os.scandir`` here — a subdir it may not list — and
+    calling ``os.open(path)`` again raised ``TypeError`` (it needs flags),
+    which no caller catches: `boost sync --prune` exited 70 halfway through a
+    delete. A read-only bit is never why those fail, so the error is raised.
     """
-    if os.path.islink(path):
+    if os.path.islink(path) or func not in _RETRYABLE:
         raise exc
-    os.chmod(path, stat.S_IWRITE)
+    # On POSIX the *parent's* write bit is what gates an unlink or rmdir, so
+    # a skill copied from a read-only package (a 0o555 ``assets/``) could not
+    # be uninstalled: chmod-ing the file it held changed nothing and the retry
+    # failed again. Only a parent inside ``root``, the tree being deleted: the
+    # directory that *holds* the tree is not this delete's to unlock (a
+    # read-only skill store is a refusal doctor reports, not a mode to undo),
+    # and never through a link.
+    parent = os.path.normpath(os.path.dirname(path))
+    if (root is not None and _inside_tree(parent, root)
+            and not os.path.islink(parent)):
+        os.chmod(parent, os.lstat(parent).st_mode | stat.S_IWUSR)
+    # OR the bit in: setting the mode to exactly S_IWRITE also stripped read
+    # and search, so a retry that failed anyway (a read-only *parent*) left a
+    # ``d-w-------`` directory behind that every later walk of it crashed on.
+    os.chmod(path, os.lstat(path).st_mode | stat.S_IWRITE)
     func(path)
+
+
+#: The removals a cleared read-only bit can unblock.
+_RETRYABLE = (os.unlink, os.remove, os.rmdir)
+
+
+def _inside_tree(path: str, root: str) -> bool:
+    """True if ``path`` is ``root`` or under it, compared as spelled.
+
+    Lexical on purpose: ``shutil.rmtree`` builds every path it reports by
+    joining onto the ``root`` it was given, so no resolving is needed.
+    """
+    root = os.path.normpath(root)
+    return path == root or path.startswith(root.rstrip(os.sep) + os.sep)
 
 
 def rmtree(path) -> None:
@@ -64,9 +100,12 @@ def rmtree(path) -> None:
     owner unlink a read-only file (permission lives on the directory), but
     Windows refuses outright. Clear the read-only bit and retry once per
     failure. ``onexc`` is the 3.12+ spelling; the ``onerror`` branch this used
-    to carry was dead the moment the floor moved to 3.12.
+    to carry was dead the moment the floor moved to 3.12. A read-only
+    directory *inside* the tree is unlocked too; the one holding it is not.
     """
-    shutil.rmtree(str(path), onexc=_clear_readonly_and_retry)
+    root = str(path)
+    shutil.rmtree(root, onexc=lambda func, p, exc:
+                  _clear_readonly_and_retry(func, p, exc, root=root))
 
 
 def remove_path(path) -> bool:
@@ -200,6 +239,95 @@ def try_lock(path, stale_after: float = 300.0):
             path.unlink()
 
 
+#: How long :func:`file_lock` waits before giving up, in seconds. What it
+#: guards is a read-modify-write of one small file (or one `git
+#: sparse-checkout add`), so a wait this long means a stuck process.
+FILE_LOCK_TIMEOUT = 30.0
+_FILE_LOCK_POLL = 0.05
+
+
+def _os_lock(fd: int) -> bool:
+    """Try once to take an exclusive lock on ``fd``; True when taken."""
+    if sys.platform == "win32":
+        import msvcrt
+        try:
+            os.lseek(fd, 0, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        except OSError:
+            return False
+        return True
+    import fcntl
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return False
+    return True
+
+
+def _os_unlock(fd: int) -> None:
+    if sys.platform == "win32":
+        import msvcrt
+        os.lseek(fd, 0, os.SEEK_SET)
+        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+    else:
+        import fcntl
+        fcntl.flock(fd, fcntl.LOCK_UN)
+
+
+@contextlib.contextmanager
+def file_lock(path, timeout: float | None = None, *, what: str = "it",
+              strict: bool = True):
+    """Hold an exclusive advisory lock on ``path`` for the ``with`` body.
+
+    Unlike :func:`try_lock` this **waits**, up to ``timeout`` seconds
+    (:data:`FILE_LOCK_TIMEOUT` by default), and then raises a BoostError
+    naming ``what``: its callers are read-modify-writes that must not be
+    skipped, where two boost processes overlapping used to drop one update
+    while both reported success.
+
+    The lock is the OS's — ``flock`` on POSIX, ``msvcrt.locking`` on
+    Windows — so it dies with its process and a killed boost can never leave
+    it wedged. ``path`` is a dedicated sidecar, never the file being
+    guarded: that one is swapped by ``os.replace``, which would leave the
+    lock on an orphaned inode. The sidecar is never deleted either; unlinking
+    it while another process waits on it would hand the next process a
+    fresh, unlocked file. Not re-entrant: a nested ``file_lock`` on the same
+    path in one process waits on itself.
+
+    ``strict=False`` runs the body unlocked when the sidecar cannot be
+    created at all (a read-only dir): the write it guards then fails with
+    its own, better-worded error, and a lock that cannot be taken must not
+    be what reports it.
+    """
+    path = Path(path)
+    wait = FILE_LOCK_TIMEOUT if timeout is None else timeout
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(str(path), os.O_RDWR | os.O_CREAT, 0o644)
+    except OSError:
+        if strict:
+            raise
+        yield
+        return
+    try:
+        deadline = time.monotonic() + wait
+        while not _os_lock(fd):
+            if time.monotonic() >= deadline:
+                raise BoostError(
+                    "another boost process has held %s for over %gs"
+                    % (what, wait),
+                    hint="wait for the other boost command to finish, then "
+                         "retry (the lock is %s)" % paths.tilde(path))
+            time.sleep(_FILE_LOCK_POLL)
+        try:
+            yield
+        finally:
+            with contextlib.suppress(OSError):
+                _os_unlock(fd)
+    finally:
+        os.close(fd)
+
+
 def atomic_write_text(path: Path, text: str, encoding: str = "utf-8") -> None:
     """Write ``text`` to ``path`` so a reader never sees a partial file.
 
@@ -236,21 +364,135 @@ def atomic_write_text(path: Path, text: str, encoding: str = "utf-8") -> None:
     spelled. That test arrived with this change, so it corroborates the pin
     rather than independently motivating it.
     """
-    path = Path(path)
+    _replace_atomically(Path(path), text, encoding, mode=None)
+
+
+#: How often, and how far apart, :func:`replace` retries on Windows.
+REPLACE_ATTEMPTS = 20
+REPLACE_PAUSE = 0.05
+
+
+def replace(src: str | Path, dst: str | Path) -> None:
+    """``os.replace``, retried briefly where Windows refuses it.
+
+    Windows will not replace a file another process holds open without
+    ``FILE_SHARE_DELETE`` -- which is every plain ``open()`` -- and says
+    ``PermissionError`` (WinError 5) for what is only a reader of the old
+    lock mid-``read``. Two boost processes, one reading the project lock and
+    one rewriting it, failed the write outright. The reader lets go within
+    milliseconds, so wait for it rather than fail; anywhere else the error
+    is real and raised at once.
+    """
+    for attempt in range(REPLACE_ATTEMPTS):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if sys.platform != "win32" or attempt == REPLACE_ATTEMPTS - 1:
+                raise
+            time.sleep(REPLACE_PAUSE)
+
+
+def _replace_atomically(path: Path, text: str, encoding: str,
+                        mode: int | None) -> None:
+    """The temp-file + fsync + ``os.replace`` core of both writers.
+
+    ``mode`` of ``None`` keeps ``mkstemp``'s 0600, which is right for the
+    files boost owns; :func:`write_user_file` passes the mode to keep.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
+    # A short fixed prefix, not the file's own name: ``.<name>.XXXXXXXX.tmp``
+    # is 14 bytes longer than ``<name>``, so a name that fits the 255-byte
+    # component limit as a final path still failed here with ENAMETOOLONG —
+    # out of the CLI as a crash, rc 70, for a 246-character workflow.
     fd, tmp = tempfile.mkstemp(dir=str(path.parent),
-                               prefix="." + path.name + ".", suffix=".tmp")
+                               prefix=TEMP_PREFIX, suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding=encoding, newline="\n") as f:
             f.write(text)
             f.flush()
             os.fsync(f.fileno())
-        os.replace(tmp, str(path))
+        if mode is not None:
+            os.chmod(tmp, mode)
+        replace(tmp, str(path))
     except BaseException:
         # Never leave a temp turd behind, and never mask the original error.
         with contextlib.suppress(OSError):
             Path(tmp).unlink()
         raise
+
+
+def current_umask() -> int:
+    """The process umask, read the only way POSIX offers: set it and put it
+    back. Used for the mode a file *created* on the user's behalf gets."""
+    mask = os.umask(0)
+    os.umask(mask)
+    return mask
+
+
+def user_file_target(path: Path, base=None) -> Path:
+    """The file :func:`write_user_file` would write for ``path``, checked.
+
+    A symlink resolves through every hop; a plain path is itself. With
+    ``base``, a target outside the repo raises :class:`BoostError` here, so a
+    caller changing several files can ask about every one before it changes
+    the first: raising at the write itself left an uninstall half-applied.
+    """
+    path = Path(path)
+    target = Path(os.path.realpath(path)) if path.is_symlink() else path
+    if base is not None:
+        from . import scopes  # local: scopes -> projectlock -> util
+        scopes.ensure_in_base(base, target)
+    return target
+
+
+def read_user_text(path: Path) -> str:
+    """Read a file the *user* owns exactly as it is on disk.
+
+    The reading half of :func:`write_user_file`. ``read_text`` opens in
+    universal-newline mode, which folds every CRLF to LF, so a rule install
+    that read ``AGENTS.md`` that way and wrote it back turned a Windows
+    checkout's committed file into a whole-file diff. ``newline=""`` keeps
+    the line endings, and the writer emits the text unchanged.
+
+    Bytes that are not UTF-8 raise :class:`NotUTF8Error`, a `BoostError`
+    naming the file, rather than a ``UnicodeDecodeError`` no caller stops.
+    """
+    with Path(path).open(encoding="utf-8", newline="") as f:
+        try:
+            return f.read()
+        except UnicodeDecodeError as err:
+            raise NotUTF8Error(path, err) from None
+
+
+def write_user_file(path: Path, text: str, base=None) -> Path:
+    """Atomically rewrite a file the *user* owns, keeping its link and mode.
+
+    :func:`atomic_write_text` is for boost's own files, and two of its
+    properties are wrong for a context file such as ``~/.claude/CLAUDE.md``
+    or a repo's ``GEMINI.md``. ``os.replace`` swaps out the path itself, so
+    a symlink to a dotfiles checkout (or ``GEMINI.md -> AGENTS.md``) became a
+    detached regular copy, the rule never reached the file the user edits,
+    and uninstall could not restore the link. And ``mkstemp`` is always
+    0600, so a 0644 ``AGENTS.md`` came back private — a mode change git
+    reports on a committed file.
+
+    So a symlink is followed and the write lands on its target, through
+    every hop, and the link stays a link. The target keeps its existing
+    permission bits; a new file gets ``0o666 & ~umask``, what a plain
+    ``open()`` would have given it. With ``base`` (project scope), the
+    *resolved* target must still sit inside the repo: a committed link
+    pointing out of it is refused rather than written through, the same
+    boundary :func:`scopes.ensure_in_base` holds for every project write.
+    Returns the path actually written.
+    """
+    target = user_file_target(path, base)
+    try:
+        mode = stat.S_IMODE(target.stat().st_mode)
+    except FileNotFoundError:
+        mode = 0o666 & ~current_umask()
+    _replace_atomically(target, text, "utf-8", mode=mode)
+    return target
 
 
 def positive_int(s: str) -> int:
@@ -319,6 +561,86 @@ def score_int(s: str) -> int:
     return v
 
 
+def nonempty_str(s: str) -> str:
+    """argparse ``type=`` for a NAME, path or value that was given explicitly.
+
+    An empty string is not the same as an omitted argument, but every handler
+    that branches on ``if args.name:`` treats it as one: ``attest --verify ""``
+    verified every skill, ``cohort apply ""`` applied every cohort, ``tap ""``
+    and ``import ""`` read ``Path("")`` as the current directory, and
+    ``export -o ""`` wrote the default filename. ``boost attest "$UNSET"`` in a
+    script is the usual way to get here, and it went green having done the
+    wrong thing. Rejecting it at parse time makes it a usage error (exit 2)
+    naming the argument; an *omitted* optional NAME keeps meaning "all",
+    because argparse never runs ``type=`` on a missing positional.
+
+    The value is returned unchanged -- whitespace inside a real value is the
+    caller's business; only a value that is nothing *but* whitespace is
+    refused. A string ``default=`` is passed through ``type=`` too, so an
+    argument using this must default to ``None``, never ``""``.
+    """
+    import argparse
+
+    if not s.strip():
+        raise argparse.ArgumentTypeError("must not be empty")
+    return s
+
+
+def resolve_exe(argv: list[str]) -> list[str]:
+    """``argv`` with ``argv[0]`` swapped for the path ``shutil.which`` finds.
+
+    On Windows npm installs ``npx``, ``gemini`` and an npm-installed
+    ``claude`` only as ``.cmd`` shims. ``shutil.which`` honours PATHEXT and
+    finds them, but ``CreateProcess`` appends only ``.exe`` to a bare name, so
+    launching the bare name raises ``FileNotFoundError`` right after the
+    ``which`` check said the tool exists. Launching the resolved path runs the
+    shim. Unresolvable names pass through unchanged, so the caller's own
+    ``OSError`` handling still reports them. Returns a new list.
+    """
+    found = shutil.which(argv[0]) if argv else None
+    return [found, *argv[1:]] if found else argv.copy()
+
+
+# A history id's stamp and optional same-second serial, read off the END of
+# the filename so a prefix (``gemini-project-``, ``snap-``) cannot match:
+# ``lock-20261024T060813Z-2.json``, ``user-20261024T060813Z.json``,
+# ``snap-20261024-060839-10.tar.gz``.
+_HISTORY_ID = re.compile(
+    r"(\d{8})[T-]?(\d{6})Z?(?:-(\d+))?(?:\.json|\.tar\.gz)$")
+
+
+def history_key(path: Path) -> tuple:
+    """Sort key putting history files in creation order, oldest first.
+
+    Every history writer (lock history, ``snapshot save``, settings history)
+    names a file by a second-resolution stamp and gives a same-second
+    successor a ``-2``, ``-3``, ... suffix, so the name itself carries the
+    order: ``(stamp, serial)``, the bare base being serial 1. The key used to
+    be ``(mtime, name)``, which is wrong exactly where the suffix exists: on a
+    filesystem with 1-second mtimes (or after a copy that reset them)
+    same-second entries tie, and by name ``X-2.json`` sorts *before*
+    ``X.json`` (``-`` is 0x2D, ``.`` 0x2E) and ``X-10`` before ``X-2``. Lists
+    then showed the older state as newest and prune deleted the newer one.
+
+    A name that carries no stamp sorts before every one that does, in the old
+    ``(mtime, name)`` order among themselves; mtime and name also break a tie
+    between equal ids (two prefixes sharing one stamp).
+    """
+    try:
+        mtime = path.stat().st_mtime_ns
+    except OSError:
+        mtime = 0       # vanished since the glob: order it, don't crash
+    m = _HISTORY_ID.search(path.name)
+    if m is None:
+        return ("", 0, mtime, path.name)
+    return (m.group(1) + m.group(2), int(m.group(3) or 1), mtime, path.name)
+
+
+def sorted_history(files, *, newest_first: bool = False) -> list[Path]:
+    """``files`` in creation order (see :func:`history_key`)."""
+    return sorted(files, key=history_key, reverse=newest_first)
+
+
 def now_iso() -> str:
     """Return UTC now as ``'2026-07-16T01:00:00Z'`` (what ``rel_time`` parses)."""
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -333,6 +655,22 @@ def user() -> str:
         return "unknown"
 
 
+def iso_from_epoch(when: float) -> str:
+    """A Unix time in :func:`now_iso`'s format."""
+    return datetime.fromtimestamp(when, UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def epoch_from_iso(iso) -> float | None:
+    """A :func:`now_iso`-format time as a Unix time; None for anything else."""
+    if not isinstance(iso, str):
+        return None
+    try:
+        return datetime.strptime(iso, "%Y-%m-%dT%H:%M:%SZ").replace(
+            tzinfo=UTC).timestamp()
+    except ValueError:
+        return None
+
+
 def rel_time(iso: str) -> str:
     """'2026-07-16T01:00:00Z' -> '3h ago' (best effort)."""
     try:
@@ -340,6 +678,11 @@ def rel_time(iso: str) -> str:
     except (ValueError, TypeError):
         return iso or "?"
     secs = (datetime.now(UTC) - then).total_seconds()
+    if secs < 0:
+        # A stamp from a machine whose clock runs ahead (the feed is shared
+        # via `boost onboard`). Floored, it read "1s ago" however far ahead
+        # it was; a minute of skew is "just now", more is said plainly.
+        return "just now" if secs > -60 else "in the future"
     for limit, size, unit in ((60, 1, "s"), (3600, 60, "m"),
                               (86400, 3600, "h"), (604800, 86400, "d")):
         if secs < limit:
@@ -408,12 +751,190 @@ def head_lines(text: str, cap: int) -> tuple[list[str], int]:
 
 
 def _slug_or_none(name: str) -> str | None:
-    return re.sub(r"[^a-z0-9-]+", "-", name.strip().lower()).strip("-") or None
+    """``name`` as ``[a-z0-9-]``, accents folded to their base letter, or None.
+
+    Folded under NFKD before the character class applies, so one typed name is
+    one slug however its bytes arrived: a precomposed ``é`` (NFC) used to be
+    dropped outright while ``e`` + U+0301 (NFD, what a macOS paste often
+    produces) kept its ``e`` — ``profile save café`` wrote a file one letter
+    short of the ``cafe.json`` that ``profile show café`` looked for. The same fold the
+    catalog applies to a frontmatter name (``catalog._entry_slug``).
+    """
+    folded = "".join(c for c in unicodedata.normalize("NFKD", name)
+                     if not unicodedata.combining(c))
+    return re.sub(r"[^a-z0-9-]+", "-", folded.strip().lower()).strip("-") or None
 
 
 def slugify(name: str) -> str:
     """Lowercase ``name`` into a ``[a-z0-9-]`` slug; empty result -> ``'skill'``."""
     return _slug_or_none(name) or "skill"
+
+
+#: The longest single path component APFS and ext4 will take, in bytes.
+#: (NTFS counts 255 UTF-16 units instead, so it takes some names this refuses;
+#: refusing them everywhere keeps the answer the same on every OS.)
+#: Past it the OS refuses even to *stat* the path, and `Path.exists()` is not
+#: total: pathlib swallows ENOENT, ENOTDIR, EBADF and ELOOP, but ENAMETOOLONG
+#: raises straight out as a bare OSError that the CLI frames as a crash.
+MAX_COMPONENT_BYTES = 255
+
+
+def _check_component(part: str, what: str) -> None:
+    size = len(part.encode("utf-8", "surrogateescape"))
+    if size > MAX_COMPONENT_BYTES:
+        # Over 255 bytes is at least 64 characters (UTF-8 is at most four
+        # bytes a character), so the echo is always a truncation.
+        raise BoostError(
+            "%s is too long (%d bytes, limit %d): %r"
+            % (what, size, MAX_COMPONENT_BYTES, part[:40] + "…"),
+            hint="APFS and ext4 refuse a file or directory name over %d "
+                 "bytes" % MAX_COMPONENT_BYTES)
+
+
+#: What boost names its own temp files and staging dirs with. Short and
+#: fixed, so a temp beside a long final name is no longer than the name, and
+#: dot-led, so a leftover reads as nobody's skill (``store._may_hold_skill``).
+TEMP_PREFIX = ".boost-"
+
+#: The longest suffix an install appends to an item's name for a final path:
+#: a skill is a bare dir (and a bare link), a rule a Cursor ``<name>.mdc``, a
+#: workflow a Gemini ``<name>.toml``.
+_ITEM_SUFFIX = {"skill": "", "rule": ".mdc", "workflow": ".toml"}
+
+
+def check_item_name(name: str, kind: str = "skill") -> str:
+    """Return ``name``, or raise a BoostError if an install of it cannot fit.
+
+    The catalog indexes any name a frontmatter gives, and search and doctor
+    show it as installable; the OS refusing it came from deep inside the
+    install — a staging ``mkdtemp`` (hinted as "free space") or a workflow's
+    temp file (a crash). Asked up front, against the longest file name the
+    install would write for that kind.
+
+    It is also the one answer to "is this a name boost installs under?":
+    a name that is not a safe path component is refused here with a hint,
+    rather than later as a bare "invalid skill name" from the store, and
+    `boost lint` asks the same question through :func:`item_name_error`.
+    """
+    # A namespaced slash command (`frontend/test`, `workflows.NAMESPACE_SEP`)
+    # is a dir per namespace plus a file, each one a component of its own.
+    *namespace, leaf = name.split("/") if kind == "workflow" else [name]
+    if not all(is_safe_component(part) for part in (*namespace, leaf)):
+        raise BoostError("invalid %s name %r" % (kind, name), hint=NAME_RULE_HINT)
+    for part in namespace:
+        _check_component(part, "%s name" % kind)
+    _check_component(leaf + _ITEM_SUFFIX.get(kind, ".toml"), "%s name" % kind)
+    return name
+
+
+#: What a valid item name may contain, said once for every refusal of one.
+NAME_RULE_HINT = ("a name may use only letters, digits, '.', '_' and '-' "
+                  "(e.g. my-skill)")
+
+
+def item_name_error(name: str, kind: str = "skill") -> str | None:
+    """Why ``name`` cannot be installed as a ``kind``, or None when it can.
+
+    :func:`check_item_name` as a predicate, for a caller that reports rather
+    than raises — `boost lint`, whose pass has to mean `boost import` takes
+    the skill as written.
+    """
+    try:
+        check_item_name(name, kind)
+    except BoostError as exc:
+        return str(exc)
+    return None
+
+
+def frontmatter_text(meta: dict, key: str) -> str:
+    """A scalar frontmatter field as stripped text; a nested map reads as "".
+
+    `frontmatter.parse_block` keeps `author:`/`metadata:`-style maps as dicts,
+    and `str()` of one would put a Python repr into a name or description.
+    This is the reading the catalog indexes (`catalog._text`), so lint scores
+    the same text search will show.
+    """
+    val = meta.get(key)
+    if isinstance(val, dict):
+        return ""
+    return str(val or "").strip()
+
+
+def _yaml_kind(val: object) -> str:
+    if isinstance(val, dict):
+        return "a map"
+    if isinstance(val, list):
+        return "a list"
+    if isinstance(val, bool):
+        return "a boolean"
+    return "a number" if isinstance(val, int | float) else type(val).__name__
+
+
+def string_field_error(meta: dict, key: str) -> str | None:
+    """Why frontmatter ``key`` is not a usable string, or None when it is.
+
+    Missing (absent, empty, blank) and present-but-not-a-string are different
+    faults: `description:` written as a map, or `name: true`, is truthy, so a
+    presence check passed it, while the catalog reads a map as "" (and falls
+    back to the body's first line) and a bool as ``"True"``.
+    """
+    val = meta.get(key)
+    if val is None or (isinstance(val, str) and not val.strip()):
+        return "missing required field: %s" % key
+    if not isinstance(val, str):
+        return "`%s` must be a string, not %s" % (key, _yaml_kind(val))
+    return None
+
+
+def frontmatter_name(meta: dict, default: str) -> str:
+    """The name a local install reads from ``meta``, else ``default``.
+
+    Raises BoostError for a name that is present but not a string: `name:
+    [a, b]` used to install as ``"['a', 'b']"`` (refused as a path) and
+    `name: true` as ``True``, a name the SKILL.md never says.
+    """
+    val = meta.get("name")
+    if val is None or val == "":
+        return default
+    if not isinstance(val, str):
+        raise BoostError("frontmatter `name` must be a string, not %s"
+                         % _yaml_kind(val),
+                         hint="write it as plain text, e.g. `name: my-skill`")
+    return val.strip() or default
+
+
+def check_path_length(path: Path, *, what: str = "path") -> Path:
+    """Return ``path``, or raise a BoostError if any component is too long.
+
+    Call it on a user-supplied path *before* the first ``exists()`` — a pure
+    string check, so it answers the same on every OS rather than depending on
+    which errno a given filesystem raises.
+    """
+    for part in Path(path).parts:
+        _check_component(part, what)
+    return path
+
+
+def write_unclaimed(directory: Path, stem: str, suffix: str, text: str) -> Path:
+    """Write ``text`` to ``directory/<stem><suffix>`` without replacing anything.
+
+    When that name is taken, ``<stem>.1<suffix>``, ``<stem>.2<suffix>``, ... are
+    tried in turn. Each attempt opens with ``"x"``, so a file that appears
+    between the check and the write is skipped rather than clobbered. For a
+    file written on the user's behalf that they never named: the name is
+    boost's guess, so a file already sitting there is theirs, not ours.
+    """
+    n = 0
+    while True:
+        dest = directory / ("%s%s%s" % (stem, ".%d" % n if n else "", suffix))
+        try:
+            with dest.open("x", encoding="utf-8", newline="\n") as fh:
+                fh.write(text)
+            return dest
+        except FileExistsError:
+            n += 1
+        except OSError as exc:
+            raise BoostError("cannot write %s: %s" % (dest, exc)) from exc
 
 
 def resolve_slug(raw: str, *, what: str = "name") -> str:
@@ -428,12 +949,24 @@ def resolve_slug(raw: str, *, what: str = "name") -> str:
     seeing it — the same silent swap that let ``boost distill -o`` write a
     path its own install hint then refused, and let two differently-typed
     profile names collide on one file.
+
+    The note goes to stderr: it is a notice about the input, not output, and
+    every caller may be speaking ``--json`` on stdout — ``boost profile save
+    "My Team" --json`` printed it ahead of the JSON object, which then failed
+    to parse.
     """
     slug = _slug_or_none(raw)
     if slug is None:
+        # `名前` has letters — just none a slug can hold, and saying it had
+        # none told the user their input was empty.
+        if any(c.isalnum() for c in raw):
+            raise BoostError("%s needs ASCII letters or digits: %r" % (what, raw),
+                             hint="a name becomes a file name made of a-z, "
+                                  "0-9 and '-'")
         raise BoostError("%s has no letters or digits: %r" % (what, raw))
+    _check_component(slug, what)
     if slug != raw:
-        out.info("using %s %r (from %r)" % (what, slug, raw))
+        out.info("using %s %r (from %r)" % (what, slug, raw), stream=sys.stderr)
     return slug
 
 
@@ -464,20 +997,89 @@ def safe_component(name: str) -> str:
     return name if is_safe_component(name) else slugify(name)
 
 
-def sha256_dir(path: Path) -> str:
-    """Deterministic content hash of a directory tree (paths + bytes)."""
-    h = hashlib.sha256()
-    root = Path(path)
-    files = sorted(
+def _hashed_files(root: Path) -> list[Path]:
+    """The files :func:`sha256_dir` and :func:`exec_bits` read, sorted."""
+    return sorted(
         p for p in root.rglob("*")
         if p.is_file() and not any(part in IGNORED for part in p.parts)
     )
-    for f in files:
+
+
+def exec_bits(path: Path) -> list[str] | None:
+    """The files under ``path`` whose owner exec bit is set, as sorted
+    relative POSIX paths — the same files :func:`sha256_dir` hashes.
+
+    A mode is not content, so :func:`sha256_dir` does not see one: a script
+    made executable upstream read as up to date, and a ``chmod -x`` on the
+    store copy passed `verify`. Kept apart from the hash rather than folded
+    into it, so every lock row written before this still verifies; a row
+    records this list as ``exec`` (see :func:`integrity.exec_drifted`).
+
+    None on Windows, which has no exec bit: ``os.stat`` reports one by
+    extension, so a project lock written on a Mac would read every script
+    as modified there, and the reverse. None is recorded and compared as
+    "unknown", never as an empty list.
+    """
+    if os.name == "nt":
+        return None
+    root = Path(path)
+    return [f.relative_to(root).as_posix() for f in _hashed_files(root)
+            if f.stat().st_mode & stat.S_IXUSR]
+
+
+#: How far into a file a NUL byte makes it binary. ``updatediff.read_file``
+#: sniffs the same window, so the two agree about which files are text.
+BINARY_SNIFF = 8000
+
+
+def hashed_bytes(data: bytes) -> bytes:
+    """``data`` as :func:`sha256_dir` hashes it: CRLF folded to LF in text.
+
+    A file with a NUL in its first :data:`BINARY_SNIFF` bytes is binary and
+    hashed as it is. Text is folded because git's ``core.autocrlf`` (Git for
+    Windows' default) checks committed copies out CRLF, and a hash over raw
+    bytes read that conversion as a hand edit: every Windows clone of a
+    project failed `verify`. Rules and workflows were already immune, being
+    read as text. Bytes, not a decode: a file that is not UTF-8 hashes the
+    same before and after.
+    """
+    if b"\0" in data[:BINARY_SNIFF]:
+        return data
+    return data.replace(b"\r\n", b"\n")
+
+
+def sha256_dir(path: Path, *, raw: bool = False) -> str:
+    """Deterministic content hash of a directory tree (paths + contents).
+
+    Contents as :func:`hashed_bytes` sees them, so a tree that differs only
+    in CRLF vs LF hashes alike. A tree with no CRLF in a text file hashes
+    exactly as it did over raw bytes, which is most lock rows; ``raw=True``
+    is that old hash, for the rows whose copy held CRLF when it was recorded
+    (:func:`sha256_matches`).
+    """
+    h = hashlib.sha256()
+    root = Path(path)
+    for f in _hashed_files(root):
+        data = f.read_bytes()
         h.update(f.relative_to(root).as_posix().encode())
         h.update(b"\0")
-        h.update(f.read_bytes())
+        h.update(data if raw else hashed_bytes(data))
         h.update(b"\0")
     return h.hexdigest()
+
+
+def sha256_matches(path: Path, recorded: str | None) -> bool:
+    """Whether the tree at ``path`` holds what a lock row's ``recorded`` names.
+
+    The question every "is this copy intact?" check asks. A row written now
+    records :func:`sha256_dir`; one written before it was line-ending blind
+    records the raw-byte hash, so either one matching is a match: no lock
+    migration, and no copy that verified before fails now. The raw walk only
+    runs on a mismatch. An empty ``recorded`` matches nothing.
+    """
+    if not recorded:
+        return False
+    return any(sha256_dir(path, raw=raw) == recorded for raw in (False, True))
 
 
 def dir_size(path: Path) -> int:
@@ -497,14 +1099,14 @@ def dir_size(path: Path) -> int:
 def copied_files(path: Path) -> list[Path]:
     """The files ``install`` will copy out of ``path``, in walk order.
 
-    ``store`` installs with ``shutil.copytree(symlinks=False, ignore=
-    ignore_patterns(*IGNORED))``: every link is copied as what it points at,
-    a linked *directory* included, and an ``IGNORED`` name is skipped at any
-    depth. ``Path.rglob`` does not descend through a directory link, so sizing
-    a skill from the tap that way said 61 B and 1 file for a skill that
-    installs as 861 B and 2. A dangling link copies nothing (copytree fails on
-    it, and the failure belongs to install, not to a size estimate). Two
-    paths to one directory are two copies, as they are to copytree; only a
+    Every link counts as what it points at, a linked *directory* included,
+    and an ``IGNORED`` name is skipped at any depth. ``store._copy_tree``
+    keeps a link inside the skill as a link and skips one out of the tap, so
+    this is what the skill *reaches*, an upper bound on the copy's bytes.
+    ``Path.rglob`` does not descend through a directory link, so sizing a
+    skill from the tap that way said 61 B and 1 file for a skill that
+    installs as 861 B and 2. A dangling link copies nothing (install skips
+    it and says so). Two paths to one directory are two copies; only a
     directory that resolves to one of its own ancestors — a link cycle — is
     not descended, so the walk cannot hang.
     """
@@ -616,11 +1218,11 @@ def score_skill(skill_dir: Path) -> tuple[int, list[str]]:
     meta, body = frontmatter.parse(text)
     score = 20  # exists and parses
 
-    if meta.get("name"):
+    if frontmatter_text(meta, "name"):
         score += 10
     else:
         notes.append("frontmatter missing `name`")
-    desc = str(meta.get("description") or "")
+    desc = frontmatter_text(meta, "description")
     if desc:
         score += 10
         if len(desc) >= 40:
@@ -690,12 +1292,49 @@ def lint_errors(skill_dir: Path) -> list[str]:
     if frontmatter.unclosed(text):
         return [frontmatter.UNCLOSED_NOTE]
     meta, _body = frontmatter.parse(text)
-    errors = []
-    if not meta.get("name"):
-        errors.append("missing required field: name")
-    if not meta.get("description"):
-        errors.append("missing required field: description")
+    errors = [e for e in (string_field_error(meta, "name"),
+                          string_field_error(meta, "description")) if e]
+    name = meta.get("name")
+    if isinstance(name, str) and name.strip():
+        # The name `boost import` would install under — the same check, so a
+        # pass here means import takes the skill as written (and a tap
+        # install does not silently slug it into a name the file never says).
+        bad = item_name_error(name.strip())
+        if bad:
+            errors.append(bad)
     return errors
+
+
+def lint_label(skill_dir: Path) -> str:
+    """The name to show for a skill dir in `boost lint`: the one boost installs
+    it under (its frontmatter `name`), falling back to the directory."""
+    from . import frontmatter
+
+    try:
+        text = (Path(skill_dir) / "SKILL.md").read_text(encoding="utf-8",
+                                                        errors="replace")
+    except OSError:
+        return Path(skill_dir).name
+    if frontmatter.unclosed(text):
+        return Path(skill_dir).name
+    name = frontmatter.parse(text)[0].get("name")
+    if isinstance(name, str) and name.strip():
+        return name.strip()
+    return Path(skill_dir).name
+
+
+def name_dir_note(skill_dir: Path) -> str | None:
+    """A note when a skill's frontmatter `name` differs from its directory.
+
+    Not an error — boost installs under the frontmatter name either way — but
+    the Agent Skills format expects the two to match, and an author linting
+    `skills/mismatch` should learn it installs as something else.
+    """
+    label = lint_label(skill_dir)
+    if label == Path(skill_dir).name:
+        return None
+    return "name %r differs from its directory %r — it installs as %r" % (
+        label, Path(skill_dir).name, label)
 
 
 def lint_failed(skill_dir: Path, score: int, min_score: int = 40) -> bool:
@@ -707,3 +1346,21 @@ def lint_failed(skill_dir: Path, score: int, min_score: int = 40) -> bool:
     unclosed frontmatter fence, no SKILL.md) from passing on score alone.
     """
     return score < min_score or bool(lint_errors(skill_dir))
+
+
+def shell_arg(arg: str) -> str:
+    """`arg` as one argument a user can paste into their shell."""
+    if sys.platform == "win32":
+        # cmd.exe and PowerShell both take double quotes; neither takes the
+        # single quotes `shlex.quote` emits.
+        return '"%s"' % arg if any(c.isspace() for c in arg) else arg
+    return shlex.quote(arg)
+
+
+def shell_join(argv: list[str]) -> str:
+    """``argv`` as one command line a user can paste into their shell.
+
+    Each word goes through :func:`shell_arg`, so on POSIX this is
+    ``shlex.join`` and on Windows it keeps that function's double quotes.
+    """
+    return " ".join(shell_arg(a) for a in argv)

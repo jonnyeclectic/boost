@@ -3,10 +3,12 @@
 """Configuration: ~/.boost/config.json with deep-merged defaults."""
 from __future__ import annotations
 
+import difflib
 import json
 import sys
+from collections.abc import Callable
 from copy import deepcopy
-from typing import Any
+from typing import Any, cast
 
 from ..errors import BoostError
 from . import jsonstate, output, paths, typedvalue, util
@@ -14,7 +16,17 @@ from . import jsonstate, output, paths, typedvalue, util
 DEFAULTS = {
     "agents": {
         "claude-code": {"dir": "~/.claude/skills", "enabled": True},
-        "windsurf": {"dir": "~/.windsurf/skills", "enabled": True},
+        # `workflows: False` — Windsurf reads no `commands/` or `agents/` dir.
+        # Its docs (docs.windsurf.com/windsurf/cascade/workflows, redirecting
+        # to docs.devin.ai/desktop/cascade/workflows, read 2026-10-22) name
+        # `.windsurf/workflows/` (or `.devin/workflows/`) in a workspace and
+        # `~/.codeium/windsurf/global_workflows/` for the user, and no
+        # subagent directory at all. Those paths are documented, not verified
+        # against a real install, so boost writes nowhere rather than into
+        # `~/.windsurf/{commands,agents}`, which install reported as written
+        # and Windsurf never loaded. Rules and skills are unaffected.
+        "windsurf": {"dir": "~/.windsurf/skills", "enabled": True,
+                     "workflows": False},
         "cursor": {"dir": "~/.cursor/skills", "enabled": True},
         # Gemini CLI discovers boost's canonical store directly: its user tier
         # reads `~/.gemini/skills` **or the `~/.agents/skills` alias**, and that
@@ -114,7 +126,19 @@ DEFAULTS = {
     },
     "serve": {"port": 8787},
     "policy_enforce": True,
-    "telemetry": False,
+    # A workflow (a subagent, or a slash command with a description) also gets
+    # a copy in the canonical store, ``~/.agents/skills/<name>/SKILL.md``, so
+    # agents that read skills and no workflow format can reach it: Codex reads
+    # the store directly, and the copy is linked into each linking agent that
+    # got no workflow file of its own (windsurf, antigravity, a `skills_only`
+    # profile) -- never into one that holds the workflow's file, which would
+    # show it the procedure twice. `boost install --as-skill/--no-as-skill`
+    # overrides it per install, and that choice sticks; with neither flag an
+    # install follows this. See store._skill_copy and store.copy_link_targets.
+    "workflows_as_skills": True,
+    # No `telemetry` key: it sat here for releases with no reader, so `config
+    # set telemetry true` reported success for a feature that does not
+    # exist. See RETIRED_KEYS.
     "logging": {
         # Console verbosity for the diagnostic log on stderr. "OFF" keeps
         # stderr clean (the default); set DEBUG/INFO/WARNING/ERROR to always
@@ -244,7 +268,7 @@ def registry_categories() -> dict:
             if e.get("category")}
 
 
-def self_installing_command(tap: str) -> str | None:
+def self_installing_command(tap: str, url: str = "") -> str | None:
     """The repo's own install command, when boost must not copy its items.
 
     Some registries are real catalogues of Markdown and some are programs that
@@ -254,8 +278,11 @@ def self_installing_command(tap: str) -> str | None:
     it work is the repo's own build, not a fetch. Returns the upstream command
     so the caller can name it instead of pretending; None for every other tap.
 
-    The tap may be addressed by full ``owner/repo`` or by the bare repo name a
-    clone directory carries, so both resolve.
+    The repo is matched by identity, never by its bare name: ``tap`` equal to
+    the row's full ``owner/repo`` (a name only a remote URL derives), or the
+    tap's configured ``url`` naming that GitHub repository. Matching the bare
+    tail refused every tap whose directory happened to be called ``gstack`` —
+    the user's own local repo included — and told them to clone garrytan's.
     """
     if not tap:
         return None
@@ -264,8 +291,12 @@ def self_installing_command(tap: str) -> str | None:
         if not cmd:
             continue
         name = row.get("name") or ""
-        if tap in (name, name.split("/")[-1]):
+        if tap == name:
             return cmd
+        if url:
+            from . import registry  # registry imports config
+            if registry.same_source(url, "https://github.com/%s" % name):
+                return cmd
     return None
 
 
@@ -306,6 +337,15 @@ def _stat_stamp(p: Any) -> tuple:
 
 
 def _warn_corrupt(err: str) -> None:
+    if isinstance(err, jsonstate.Unreadable):
+        # Not corrupt, so no promise to move it aside: a file boost could not
+        # read may hold every tap and setting, and `save` refuses over it.
+        output.warn(
+            "%s — reading as empty for this command; boost will not write "
+            "config.json until it can read it: %s"
+            % (err, jsonstate.read_remedy(err, paths.tilde)),
+            stream=sys.stderr)
+        return
     output.warn(
         "%s — reading as empty for this command; the file on disk is left "
         "untouched, but the next `config set`/`config unset` will move it "
@@ -336,12 +376,112 @@ def _read_file() -> tuple[dict | None, str | None]:
     return data, err
 
 
+def _shown(value: Any) -> str:
+    """``value`` as config.json spells it, and its JSON type."""
+    kind = {bool: "a boolean", int: "a number", float: "a number",
+            str: "a string", list: "a list", dict: "an object",
+            type(None): "null"}.get(type(value), type(value).__name__)
+    return "%s (%s)" % (json.dumps(value), kind) if value is not None else "null"
+
+
+def tap_row_issue(row: Any) -> str | None:
+    """Why config.json ``taps`` row ``row`` is skipped, or None when it is used.
+
+    The one test of a usable tap row, shared by the reader (:func:`_sanitize`)
+    and the writer (``registry._append_rows``): a writer that counted a row
+    the reader skips reported "tapped" over a config still holding only the
+    row nothing reads.
+    """
+    if not isinstance(row, dict):
+        return "is %s, not an object" % _shown(row)
+    if not isinstance(row.get("name"), str) or not row["name"]:
+        return ('has no "name"' if "name" not in row
+                else '"name" is %s, not a non-empty string'
+                % _shown(row["name"]))
+    if "url" in row and not isinstance(row["url"], str):
+        return '"url" is %s, not a string' % _shown(row["url"])
+    return None
+
+
+def _sanitize(user: dict) -> tuple[dict, list[str]]:
+    """``user`` without the values no reader can use, and why each went.
+
+    The two shapes every surface indexes without asking: a ``taps`` row is an
+    object whose ``name`` is a non-empty string and whose ``url``, when
+    present, is a string; ``agents`` is an object of objects. A hand-edited
+    ``"name": 7`` reached ``registry.safe_name`` and ``"url": null`` the
+    ``update`` pool worker, ``"agents": "x"`` reached ``known_agents`` —
+    each an AttributeError at exit 70 from taps, search, info, update, doctor
+    and install. Here the bad value is left out of the *merged* view only:
+    writers go through :func:`mutate`, which reads :func:`_read_raw`, so a
+    row skipped here is written back exactly as the user left it rather
+    than silently lost on the next ``boost tap``. A `taps` that is not a list
+    is :func:`_read_file`'s refusal, not this.
+    """
+    issues: list[str] = []
+    out = user.copy()
+    taps = user.get("taps")
+    if isinstance(taps, list):
+        keep = []
+        for i, row in enumerate(taps):
+            why = tap_row_issue(row)
+            if why is None:
+                keep.append(row)
+                continue
+            issues.append("taps[%d] %s, so boost skips that tap — repair or "
+                          "remove the row in %s" % (i, why, paths.tilde(
+                              paths.config_path())))
+        out["taps"] = keep
+    if "agents" in user:
+        section = user["agents"]
+        if not isinstance(section, dict):
+            del out["agents"]
+            issues.append("agents is %s, not an object, so boost reads the "
+                          "default agents — `boost config unset agents` "
+                          "restores them" % _shown(section))
+        else:
+            specs = {}
+            for name, spec in section.items():
+                if isinstance(spec, dict):
+                    specs[name] = spec
+                    continue
+                issues.append("agents.%s is %s, not an object, so boost %s — "
+                              "`boost config unset agents.%s` removes it"
+                              % (name, _shown(spec),
+                                 "reads its default" if name in
+                                 cast(dict, DEFAULTS["agents"])
+                                 else "skips that agent", name))
+            out["agents"] = specs
+    return out, issues
+
+
+def shape_issues() -> list[str]:
+    """Each config.json value :func:`_sanitize` leaves out, for doctor.
+
+    Never prints, like :func:`check`; the ordinary read warns once instead.
+    """
+    data = _read_file()[0]
+    return _sanitize(data)[1] if data else []
+
+
+#: Issues :func:`_read` has already warned about in this process. A write
+#: changes the stat stamp, so the read after `config set` would otherwise
+#: repeat every line it printed before it.
+_WARNED_SHAPE: set[str] = set()
+
+
 def _read() -> dict:
     user, err = _read_file()
     if err:
         _warn_corrupt(err)
     if user is None:
         return deepcopy(DEFAULTS)
+    user, issues = _sanitize(user)
+    for issue in issues:
+        if issue in _WARNED_SHAPE:
+            continue
+        _WARNED_SHAPE.add(issue)
+        output.warn("config.json: %s" % issue, stream=sys.stderr, wrap=True)
     return _merge(DEFAULTS, user)
 
 
@@ -383,22 +523,30 @@ def check() -> str | None:
     return _read_file()[1]
 
 
-def unlisted_clones() -> list[str]:
-    """Tap clone directories under `repos/`, by name.
-
-    With config.json unreadable no tap is listed, so these are what `doctor`
-    can still see of the user's registries.
-    """
-    root = paths.repos_dir()
-    return sorted(d.name for d in root.iterdir() if d.is_dir()) \
-        if root.is_dir() else []
-
-
 def load() -> dict:
     """Return a deep copy of the merged config, safe for callers to mutate."""
     # A defensive copy so callers can mutate the result (set_value/unset do)
     # without corrupting the shared cache.
     return deepcopy(_cached())
+
+
+def refuse_unreadable() -> None:
+    """Raise while config.json exists but cannot be read at all.
+
+    An unreadable file (mode 000, a directory on the name) reads as DEFAULTS,
+    whose tap list is empty — so a write built on that view, `config set` or
+    `boost tap` (doctor's own remedy), set the user's whole config aside and
+    left one value or one tap in its place. Its bytes may be intact, so the
+    fix is the permission, never a fresh file. Callers that clone first
+    (`registry.add`) ask before the clone, so a refusal leaves nothing behind.
+    """
+    err = _read_file()[1]
+    if isinstance(err, jsonstate.Unreadable):
+        raise BoostError(
+            "could not read %s (%s) — boost will not write over a config it "
+            "cannot read" % (paths.tilde(err.path), err.reason),
+            hint="%s, then re-run" % jsonstate.read_remedy(err, paths.tilde),
+            wrap=True)
 
 
 def save(cfg: dict) -> None:
@@ -408,12 +556,15 @@ def save(cfg: dict) -> None:
     quarantined to `config.json.corrupt` first, so this never overwrites bytes
     the read path already warned about with a fresh file built from an
     in-memory view that silently dropped them — see `jsonstate.quarantine`.
+    One that exists but cannot be *read* is not corrupt and is not moved:
+    the write is refused (:func:`refuse_unreadable`).
 
     A directory that refuses the write is a :class:`BoostError` naming it.
     This used ``ensure_dirs``, so a cache dir a read-only ``~/.boost`` would
     not create failed `boost untap` at exit 70 before its config was even
     tried, and the config write itself would have failed the same way.
     """
+    refuse_unreadable()
     paths.create_dirs(paths.boost_dirs())
     p = paths.config_path()
     try:
@@ -424,13 +575,41 @@ def save(cfg: dict) -> None:
         util.atomic_write_text(
             p, json.dumps(cfg, indent=2, sort_keys=False) + "\n")
     except OSError as e:
-        block = paths.refuses_writes(p.parent)
-        raise BoostError(
-            "could not save %s (%s)%s"
-            % (paths.tilde(p), e.strerror or e,
-               ": " + paths.not_writable(p.parent, block) if block else ""),
-            hint="%s, then re-run" % paths.write_remedy(block)
-            if block else None) from e
+        raise paths.save_refused(p, e) from e
+
+
+def guard_path():
+    """The sidecar :func:`mutate` locks: beside config.json, never it."""
+    p = paths.config_path()
+    return p.with_name(p.name + ".lock")
+
+
+def mutate(fn: Callable[[dict], bool | None]) -> bool:
+    """Apply ``fn`` to a fresh read of config.json and save it, atomically.
+
+    Every `load()` -> change -> `save()` used to run with nothing between
+    processes: `boost config set` in two shells reverted each other's values
+    behind a check mark, and a `boost tap` overlapping one lost its row while
+    the clone stayed on disk — so `untap` then said "no such tap". The read
+    happens *inside* an exclusive cross-process lock and bypasses the
+    stat-stamp cache, which can miss a rewrite that kept the size and the
+    mtime tick.
+
+    ``fn`` sees the on-disk overrides only (:func:`_read_raw`), never the
+    DEFAULTS-merged view. Every writer used to get the merged view, so one
+    `config set policy_enforce true` — or any `boost tap` — wrote the whole of
+    DEFAULTS to disk, and a default a later release changed (a new
+    ``ai.model``, an agent's ``links_skills``) never reached that user. A
+    file already written that way still reads; it just stops growing.
+    ``fn`` returning False skips the write; returns whether it wrote. Not
+    re-entrant: ``fn`` must not call another config writer.
+    """
+    with util.file_lock(guard_path(), what="the config file", strict=False):
+        cfg = _read_raw()
+        if fn(cfg) is False:
+            return False
+        save(cfg)
+        return True
 
 
 def get(dotted: str, default=None):
@@ -462,6 +641,78 @@ def spec_for(dotted: str) -> str:
     return typedvalue.spec_for(node)
 
 
+#: Every per-agent setting `agents.known_agents` reads. DEFAULTS spells out
+#: only the ones an agent departs from, so a key absent from one agent's
+#: defaults (``links_skills`` on claude-code) is still a real setting there.
+AGENT_KEYS = ("dir", "enabled", "links_skills", "project_scope", "skills_only",
+              "workflows", "dedupes_by_path", "project_dir")
+
+
+def _did_you_mean(dotted: str, prefix: list[str], part: str, rest: list[str],
+                  known) -> str:
+    close = difflib.get_close_matches(part, list(known), n=1)
+    msg = "%r is not a key boost reads" % dotted
+    if close:
+        msg += " — did you mean %r?" % ".".join(prefix + close + rest)
+    return msg + " (saved anyway)"
+
+
+#: Top-level keys boost once listed in DEFAULTS and no longer reads, with why.
+#: An old config.json holding one still loads (an unknown key is kept, as for
+#: any integration's section); `config set` saves it and says it does nothing.
+RETIRED_KEYS: dict[str, str] = {
+    "telemetry": "boost collects no telemetry, so nothing reads this key",
+}
+
+
+def unknown_key_warning(dotted: str) -> str | None:
+    """Why `config set <dotted>` probably did not do what was meant, or None.
+
+    `set_value` stores keys DEFAULTS does not describe, on purpose:
+    integrations write their own top-level sections. But a typo under a
+    section boost owns — ``agents.claude-code.enable`` — was stored the same
+    way, reported with a check mark, and changed nothing. So this stays
+    silent for an invented top-level key and speaks up only below a section
+    boost reads, or for a :data:`RETIRED_KEYS` entry. ``agents`` is the one
+    open section — a user may add an agent
+    — so a name there is a typo only when it is close to a known agent, and a
+    new agent is named when it still has no ``dir``, without which boost has
+    nowhere to put its skills. Reads the saved config, so call it after the
+    write.
+    """
+    parts = dotted.split(".")
+    if parts[0] in RETIRED_KEYS:
+        return "%r has no effect — %s (saved anyway)" % (
+            dotted, RETIRED_KEYS[parts[0]])
+    if parts[0] == "agents" and len(parts) >= 2:
+        name, rest = parts[1], parts[2:]
+        defaults: dict = cast(dict, DEFAULTS["agents"])
+        if name not in defaults:
+            spec = (get("agents") or {}).get(name)
+            has_dir = isinstance(spec, dict) and bool(spec.get("dir"))
+            if not has_dir and difflib.get_close_matches(name, list(defaults),
+                                                         n=1):
+                return _did_you_mean(dotted, ["agents"], name, rest, defaults)
+            if not has_dir:
+                return ("agent %r has no dir, so boost will not use it — "
+                        "`boost config set agents.%s.dir <path>`"
+                        % (name, name))
+        if rest and rest[0] not in AGENT_KEYS:
+            return _did_you_mean(dotted, parts[:2], rest[0], rest[1:],
+                                 AGENT_KEYS)
+        return None
+    node: Any = DEFAULTS
+    for i, part in enumerate(parts):
+        if not isinstance(node, dict):
+            return None
+        if part not in node:
+            # i == 0 is an invented top-level section — the lenient path.
+            return (None if i == 0 else
+                    _did_you_mean(dotted, parts[:i], part, parts[i + 1:], node))
+        node = node[part]
+    return None
+
+
 def get_int(dotted: str, default: int) -> int:
     """Read a config key as an int, or raise :class:`typedvalue.ValueTypeError`.
 
@@ -476,23 +727,150 @@ def get_int(dotted: str, default: int) -> int:
     return typedvalue.adapt(dotted, value, typedvalue.INT)
 
 
+MANAGED_KEYS = ("taps",)
+"""Top-level keys only their own commands may write.
+
+`taps` is the tap registry: `registry.add`/`remove` keep it a list of
+``{name, url, curated, ...}`` records. `config set taps foo` replaced every
+record with a value `_read_file` then refused as a corrupt file, so `boost
+taps` said none were configured and `boost clean` offered to delete their
+catalog caches — all behind a check mark. `config unset taps` drops them all
+just as silently.
+"""
+
+
+def _refuse_managed(dotted: str, verb: str) -> None:
+    head = dotted.split(".", 1)[0]
+    if head in MANAGED_KEYS:
+        raise BoostError(
+            "config key %r is managed by `boost tap` — `config %s` would "
+            "rewrite the tap registry" % (dotted, verb),
+            hint="add or remove registries with `boost tap <spec>` / "
+                 "`boost untap <name>`")
+
+
+def _choices(dotted: str) -> tuple[str, ...] | None:
+    """The fixed set a key's value must come from, or None for any value.
+
+    Compared case-insensitively and stored in the spelling listed. A string
+    key otherwise takes any text, so `logging.level verbose` was saved behind
+    a check mark and then silently read as OFF. Imported lazily from
+    :mod:`logs`, which owns the vocabulary its readers accept.
+    """
+    from . import logs
+    return {"logging.level": logs.LEVEL_CHOICES,
+            "logging.format": logs.FORMAT_CHOICES}.get(dotted)
+
+
+#: Inclusive bounds for numeric keys. `serve.port 99999` used to be saved and
+#: then refused by `boost serve`, which blamed a `--port` never passed.
+RANGES: dict[str, tuple[int, int]] = {"serve.port": (0, 65535)}
+
+
+def placeholder(dotted: str) -> str:
+    """The ``<...>`` a hint shows for a key's value: its choices, range or type."""
+    choices = _choices(dotted)
+    if choices:
+        return "|".join(choices)
+    if dotted in RANGES:
+        return "%d-%d" % RANGES[dotted]
+    return spec_for(dotted)
+
+
+def check_value(dotted: str, value: Any, raw: Any = None) -> Any:
+    """``value`` if the key's :func:`_choices` / :data:`RANGES` allow it.
+
+    Returns the canonical spelling of a choice. Raises
+    :class:`typedvalue.ValueTypeError` naming what is allowed; ``raw`` is
+    what the user typed (or what was stored), for the error, defaulting to
+    ``value``. Used by `set_value` and by readers of a stored value. An
+    ``agents.<name>.dir`` must not be relative (:func:`agents.check_dir`).
+    """
+    shown = value if raw is None else raw
+    parts = dotted.split(".")
+    if len(parts) == 3 and parts[0] == "agents" and parts[2] == "dir":
+        # Lazy: agents imports this module.
+        from . import agents
+        why = agents.check_dir(value)
+        if why:
+            raise typedvalue.ValueTypeError(dotted, shown, spec_for(dotted),
+                                            expected=why)
+    choices = _choices(dotted)
+    if choices is not None:
+        for choice in choices:
+            if isinstance(value, str) and value.strip().lower() == choice.lower():
+                return choice
+        raise typedvalue.ValueTypeError(
+            dotted, shown, spec_for(dotted),
+            expected="one of %s" % ", ".join(choices))
+    bounds = RANGES.get(dotted)
+    if bounds is not None and not bounds[0] <= value <= bounds[1]:
+        raise typedvalue.ValueTypeError(
+            dotted, shown, spec_for(dotted),
+            expected="a whole number from %d to %d" % bounds)
+    return value
+
+
+def _check_section(dotted: str, value: dict) -> dict:
+    """``value`` with every leaf read and checked as if set by its dotted key.
+
+    `config set ai '{"enabled": "off"}'` used to store the string ``"off"``,
+    which :func:`ai.enabled` reads as truthy, so AI stayed on behind a check
+    mark; `logging {"level": "verbose"}` and `serve {"port": 99999}` were
+    stored too, while their dotted forms are refused. Each leaf goes through
+    :func:`typedvalue.adapt` at its own spec and then :func:`check_value`, so
+    a section and its dotted keys accept exactly the same values, stored in
+    the same canonical form. Nested dicts are walked whatever their spec:
+    ``agents.<new>.dir`` is described by no default but still checked.
+    Raises :class:`typedvalue.ValueTypeError` keyed by the offending leaf.
+    """
+    checked: dict = {}
+    for key, leaf in value.items():
+        sub = "%s.%s" % (dotted, key)
+        # adapt first: a section given as a JSON *string* is parsed here,
+        # and its leaves must be walked like any other dict's.
+        adapted = typedvalue.adapt(sub, leaf, spec_for(sub))
+        checked[key] = (_check_section(sub, adapted)
+                        if isinstance(adapted, dict)
+                        else check_value(sub, adapted, leaf))
+    return checked
+
+
 def set_value(dotted: str, raw: str) -> None:
     """Set a dotted key, reading the value at the type :data:`DEFAULTS` declares.
 
     Raises :class:`typedvalue.ValueTypeError` when the text cannot be read at
     that type. Keys with no default keep the old lenient behaviour: JSON when
-    it parses, the string otherwise.
+    it parses, the string otherwise. A :data:`MANAGED_KEYS` path is a
+    :class:`BoostError`, before anything is written. A key with
+    :func:`_choices` or :data:`RANGES` is checked against them too, and so
+    is every leaf of a JSON object (:func:`_check_section`).
+
+    Writes the one key into the on-disk overrides (see :func:`mutate`). A
+    parent that holds a plain value is a :class:`TypeError` whether that
+    value is on disk or only a default: ``serve.port.x`` must not turn the
+    defaulted port into a section.
     """
-    value = typedvalue.coerce(dotted, raw, spec_for(dotted))
-    cfg = load()
-    node: Any = cfg
+    _refuse_managed(dotted, "set")
+    value = check_value(dotted,
+                        typedvalue.coerce(dotted, raw, spec_for(dotted)), raw)
+    if isinstance(value, dict):
+        value = _check_section(dotted, value)
     parts = dotted.split(".")
-    for part in parts[:-1]:
-        node = node.setdefault(part, {})
-        if not isinstance(node, dict):
-            raise TypeError("config key %r is not a section" % part)
-    node[parts[-1]] = value
-    save(cfg)
+    missing = object()
+    for i in range(1, len(parts)):
+        parent = get(".".join(parts[:i]), missing)
+        if parent is not missing and not isinstance(parent, dict):
+            raise TypeError("config key %r is not a section" % parts[i - 1])
+
+    def put(cfg: dict) -> None:
+        node: Any = cfg
+        for part in parts[:-1]:
+            node = node.setdefault(part, {})
+            if not isinstance(node, dict):
+                raise TypeError("config key %r is not a section" % part)
+        node[parts[-1]] = value
+    mutate(put)
 
 
 def unset(dotted: str) -> bool:
@@ -504,16 +882,19 @@ def unset(dotted: str) -> bool:
     `in node` forever, so a repeat `unset` (or a first one on a pristine
     machine with no config.json at all) reported success and wrote the whole
     of DEFAULTS to disk, freezing them against future default changes.
+    A :data:`MANAGED_KEYS` path is a :class:`BoostError`, before any read.
     """
-    cfg = _read_raw()
-    node: Any = cfg
+    _refuse_managed(dotted, "unset")
     parts = dotted.split(".")
-    for part in parts[:-1]:
-        node = node.get(part)
-        if not isinstance(node, dict):
+
+    def drop(cfg: dict) -> bool:
+        node: Any = cfg
+        for part in parts[:-1]:
+            node = node.get(part)
+            if not isinstance(node, dict):
+                return False
+        if parts[-1] not in node:
             return False
-    if parts[-1] in node:
         del node[parts[-1]]
-        save(cfg)
         return True
-    return False
+    return mutate(drop)

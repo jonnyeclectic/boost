@@ -69,15 +69,18 @@ class TestRead:
         assert not p.with_name(p.name + ".corrupt").exists()
 
     def test_corrupt_read_does_not_lose_prior_records(self, sandbox):
-        # A corrupt lock followed by a new install must not silently erase the
-        # only surviving copy of the earlier records — they live on in .corrupt.
+        # A corrupt lock followed by a new install must not erase the only
+        # record of the earlier ones: the write refuses, and the bytes stay
+        # both in place and in .corrupt.
         paths.ensure_dirs()
         p = paths.lockfile_path()
         p.write_text('{"skills": {"old": {"version": "1.0"}}, TRAILING GARBAGE', encoding="utf-8")
-        lockfile.set_skill("new", {"version": "2.0"})
-        assert set(lockfile.installed()) == {"new"}      # skeleton took over
+        raw = p.read_bytes()
+        with pytest.raises(BoostError):
+            lockfile.set_skill("new", {"version": "2.0"})
+        assert p.read_bytes() == raw
         backup = p.with_name(p.name + ".corrupt")
-        assert '"old"' in backup.read_text(encoding="utf-8")             # but old bytes survive
+        assert '"old"' in backup.read_text(encoding="utf-8")
 
     def test_missing_keys_defaulted(self, sandbox):
         paths.ensure_dirs()
@@ -125,14 +128,125 @@ class TestCheck:
         paths.lockfile_path().write_bytes(raw)
         assert lockfile.check() == (False, "corrupt", None)
 
-    def test_wrong_schema_version(self, sandbox):
+    @pytest.mark.parametrize("version", [4, "3", "2", True, 0, -1, 2.0])
+    def test_a_schema_boost_never_wrote_is_refused(self, sandbox, version):
         paths.ensure_dirs()
         paths.lockfile_path().write_text(
-            json.dumps({"version": 2, "skills": {}}), encoding="utf-8")
-        integ = lockfile.check()
-        assert not integ.ok
-        assert integ.problem == "schema"
-        assert integ.version == 2
+            json.dumps({"version": version, "skills": {}}), encoding="utf-8")
+        assert lockfile.check() == (False, "schema", version)
+
+    @pytest.mark.parametrize("version", [1, 2])
+    def test_an_earlier_schema_is_older_and_ok(self, sandbox, version):
+        paths.ensure_dirs()
+        paths.lockfile_path().write_text(
+            json.dumps({"version": version, "skills": {}}), encoding="utf-8")
+        assert lockfile.check() == (True, "older", version)
+
+    def test_no_schema_version_is_older_and_ok(self, sandbox):
+        paths.ensure_dirs()
+        paths.lockfile_path().write_text('{"skills": {"a": {}}}',
+                                         encoding="utf-8")
+        assert lockfile.check() == (True, "older", None)
+
+    @pytest.mark.parametrize("section", ["skills", "rules", "workflows"])
+    def test_an_older_lock_whose_section_is_not_a_mapping_is_corrupt(
+            self, sandbox, section):
+        paths.ensure_dirs()
+        paths.lockfile_path().write_text(json.dumps({section: []}),
+                                         encoding="utf-8")
+        assert lockfile.check() == (False, "corrupt", None)
+
+    @pytest.mark.parametrize("raw", [
+        {"version": 3, "rules": []},
+        {"version": 3, "skills": {"a": "oops"}},
+        {"version": 2, "workflows": {"w": [1]}},
+        {"version": 3, "skills": {"a": {}}, "rules": {"r": None}}])
+    def test_a_known_schema_whose_shape_is_wrong_is_corrupt(self, sandbox, raw):
+        paths.ensure_dirs()
+        paths.lockfile_path().write_text(json.dumps(raw), encoding="utf-8")
+        assert lockfile.check() == (False, "corrupt", raw["version"])
+
+    def test_a_newer_schema_is_not_shape_checked(self, sandbox):
+        # Its shape is the newer boost's business: still "schema", never
+        # "corrupt", so nothing offers to set it aside or roll it back.
+        paths.ensure_dirs()
+        paths.lockfile_path().write_text('{"version": 4, "skills": []}',
+                                         encoding="utf-8")
+        assert lockfile.check() == (False, "schema", 4)
+
+    def test_the_fault_of_a_corrupt_lock(self):
+        assert lockfile.fault(lockfile.Integrity(False, "corrupt")) == "is corrupt"
+
+    @pytest.mark.parametrize("version", [2, "3", "4", True, 0])
+    def test_the_fault_of_a_lock_in_another_schema(self, version):
+        assert lockfile.fault(lockfile.Integrity(False, "schema", version)) == (
+            "is schema v%s, not v%d" % (version, lockfile.SCHEMA_VERSION))
+        assert lockfile.SCHEMA_VERSION == 3
+
+    @pytest.mark.parametrize("version", [4, 17])
+    def test_the_fault_of_a_newer_lock_says_newer(self, version):
+        integ = lockfile.Integrity(False, "schema", version)
+        assert lockfile.newer(integ) is True
+        assert lockfile.fault(integ) == (
+            "is schema v%d, newer than this boost's v3" % version)
+
+    @pytest.mark.parametrize("integ", [
+        lockfile.Integrity(False, "schema", 3),
+        lockfile.Integrity(False, "schema", "4"),
+        lockfile.Integrity(False, "schema", True),
+        lockfile.Integrity(False, "corrupt", 4),
+        lockfile.Integrity(True, "older", 2)])
+    def test_only_a_newer_integer_schema_is_newer(self, integ):
+        assert lockfile.newer(integ) is False
+
+    def test_the_fault_of_a_lock_with_no_version_never_says_vNone(self):
+        assert lockfile.fault(lockfile.Integrity(True, "older", None)) == (
+            "has no schema version")
+        assert lockfile.fault(lockfile.Integrity(False, "schema", None)) == (
+            "is in no schema boost knows")
+
+
+class TestMigrate:
+    """An older lock is upgraded by being rewritten, keeping every key."""
+
+    def test_a_versionless_lock_is_recorded_as_v3_keeping_unknown_keys(
+            self, sandbox):
+        paths.ensure_dirs()
+        p = paths.lockfile_path()
+        p.write_text(json.dumps({"skills": {"a": {"tap": "t", "extra": 1}},
+                                 "someday": {"x": [1]}}), encoding="utf-8")
+        assert lockfile.migrate() == ("recorded the lock file, which had no "
+                                      "schema version, as schema v3")
+        data = json.loads(p.read_text(encoding="utf-8"))
+        assert data["version"] == 3
+        assert data["skills"] == {"a": {"tap": "t", "extra": 1}}
+        assert data["someday"] == {"x": [1]}
+        assert lockfile.check() == (True, None, 3)
+        assert lockfile.migrate() is None
+        # The old bytes are history, like any other write.
+        assert len(lockfile.history_list()) == 1
+
+    def test_an_earlier_version_is_named_by_number(self, sandbox):
+        paths.ensure_dirs()
+        paths.lockfile_path().write_text('{"version": 2, "skills": {}}',
+                                         encoding="utf-8")
+        assert lockfile.older_line(lockfile.check(), dry=True) == (
+            "would record the lock file, which was schema v2, as schema v3")
+        assert lockfile.migrate() == ("recorded the lock file, which was "
+                                      "schema v2, as schema v3")
+
+    @pytest.mark.parametrize("raw", ['{"version": 4, "skills": {}}',
+                                     "{not json"])
+    def test_nothing_else_is_migrated(self, sandbox, raw):
+        paths.ensure_dirs()
+        p = paths.lockfile_path()
+        p.write_text(raw, encoding="utf-8")
+        assert lockfile.migrate() is None
+        assert p.read_text(encoding="utf-8") == raw
+
+    def test_a_missing_lock_is_not_written(self, sandbox):
+        assert lockfile.migrate() is None
+        assert not paths.lockfile_path().exists()
 
     def test_check_does_not_mutate_or_preserve_corrupt(self, sandbox):
         # check() only reports; it must not trigger the .corrupt sidecar that
@@ -386,17 +500,41 @@ class TestHistory:
         assert ei.value.hint == "list other entries with `boost replay`"
 
     @pytest.mark.parametrize("raw", [b"\xff\xfe", b"[]"])
-    def test_writing_over_an_unusable_lock_archives_it(self, sandbox, raw):
-        # write() stamps the outgoing lock's history name from its `updated`
-        # field, which meant parsing it: either shape crashed the very write
-        # that would have replaced it.
+    def test_writing_over_an_unusable_lock_refuses_cleanly(self, sandbox, raw):
+        # Either shape once crashed write() while it parsed the outgoing lock
+        # for its history stamp. It is now refused as a BoostError before any
+        # snapshot, and the stamp still copes with the shape on its own.
         paths.ensure_dirs()
-        paths.lockfile_path().write_bytes(raw)
-        lockfile.write({"skills": {}})
-        assert json.loads(paths.lockfile_path().read_text(
-            encoding="utf-8"))["skills"] == {}
-        [snap] = paths.lock_history_dir().glob("lock-*.json")
-        assert snap.read_bytes() == raw
+        p = paths.lockfile_path()
+        p.write_bytes(raw)
+        with pytest.raises(BoostError):
+            lockfile.write({"skills": {}})
+        assert p.read_bytes() == raw
+        assert not paths.lock_history_dir().exists() or not list(
+            paths.lock_history_dir().glob("lock-*.json"))
+        assert re.fullmatch(r"\d{8}T\d{6}Z", lockfile._archive_stamp(p))
+
+    @pytest.mark.parametrize("snap, why", [
+        ({"skills": "x"}, "'skills' is a str, not an object"),
+        ({"skills": {"a": "b"}}, "'skills' entry 'a' is a str, not an object"),
+        ({"skills": {}, "rules": []}, "'rules' is a list, not an object"),
+        ({"workflows": {"w": 1}},
+         "'workflows' entry 'w' is a int, not an object"),
+    ])
+    def test_history_read_refuses_a_section_it_cannot_walk(
+            self, sandbox, snap, why):
+        # `replay rollback` called `.get` on each record and crashed at exit
+        # 70; dropping the section instead would read as "no skills" and have
+        # rollback uninstall everything installed now.
+        paths.ensure_dirs()
+        p = paths.lock_history_dir() / "lock-20200101T000000Z.json"
+        p.write_text(json.dumps(snap), encoding="utf-8")
+        with pytest.raises(BoostError) as ei:
+            lockfile.history_read("20200101T000000Z")
+        assert ei.value.message == (
+            "lock history entry 20200101T000000Z is unreadable: %s: %s"
+            % (p, why))
+        assert ei.value.hint == "list other entries with `boost replay`"
 
     def test_history_list_skips_corrupt_without_stopping(self, sandbox):
         # a corrupt snapshot that sorts BEFORE a valid one must be skipped, not
@@ -672,3 +810,80 @@ class TestHistoryIsARecordNotTheWork:
         # still lands in the store.
         lockfile.set_skill("a", {"version": "1"})
         assert paths.lockfile_path().is_file()
+
+
+class TestRecordHistory:
+    def test_keeps_the_live_lock_under_its_own_updated(self, sandbox):
+        lockfile.set_skill("rh-a", {"version": "1.0.0"})
+        stamp = lockfile.read()["updated"]
+        assert lockfile.history_list() == []
+        assert lockfile.record_history() is True
+        [h] = lockfile.history_list()
+        assert h["updated"] == stamp and h["count"] == 1
+        assert list(lockfile.history_read(h["id"])["skills"]) == ["rh-a"]
+
+    def test_an_explicit_path(self, sandbox, tmp_path):
+        p = tmp_path / "rh-lock.json"
+        p.write_text('{"version": 3, "skills": {"rh-b": {}}, '
+                     '"updated": "2026-01-02T03:04:05Z"}', encoding="utf-8")
+        assert lockfile.record_history(p) is True
+        assert [h["id"] for h in lockfile.history_list()] == [
+            "20260102T030405Z"]
+
+    def test_an_older_schema_lock_is_recorded(self, sandbox, tmp_path):
+        # The lock a restore replaces may predate schema v3; it is still a
+        # state `replay` can read, so it is kept.
+        p = tmp_path / "rh-v2.json"
+        p.write_text('{"version": 2, "skills": {"rh-c": {}}, '
+                     '"updated": "2026-01-02T03:04:06Z"}', encoding="utf-8")
+        assert lockfile.record_history(p) is True
+        assert [h["id"] for h in lockfile.history_list()] == [
+            "20260102T030406Z"]
+
+    def test_a_missing_or_corrupt_lock_is_not_recorded(self, sandbox,
+                                                       tmp_path):
+        assert lockfile.record_history() is False
+        p = tmp_path / "rh-bad.json"
+        p.write_text("not json", encoding="utf-8")
+        assert lockfile.record_history(p) is False
+        assert not list(paths.lock_history_dir().glob("lock-*.json"))
+
+
+_ROW = {"version": "1.0.0", "commit": "c1", "sha256": "s1"}
+
+
+class TestRowDifferences:
+    BASE = _ROW
+
+    def test_identical_rows_and_absent_flags_match(self):
+        assert lockfile.row_differences(self.BASE, dict(self.BASE)) == {}
+        assert lockfile.row_differences(
+            {**self.BASE, "pinned": False, "only_agents": [],
+             "commit_pin": None}, self.BASE) == {}
+        assert lockfile.row_differences(
+            {**self.BASE, "only_agents": ["b", "a"]},
+            {**self.BASE, "only_agents": ["a", "b"]}) == {}
+
+    def test_every_field_is_compared(self):
+        cur = {"version": "2.0.0", "commit": "c2", "sha256": "s2",
+               "pinned": True, "commit_pin": "c2",
+               "only_agents": ["cursor"]}
+        assert lockfile.row_differences(self.BASE, cur) == {
+            "version": ("1.0.0", "2.0.0"), "commit": ("c1", "c2"),
+            "sha256": ("s1", "s2"), "pinned": (False, True),
+            "commit_pin": (None, "c2"), "only_agents": (None, ["cursor"])}
+
+    def test_a_digest_one_side_lacks_is_no_evidence(self):
+        assert lockfile.row_differences(
+            {"version": "1.0.0"}, self.BASE) == {}
+        assert lockfile.row_differences(
+            self.BASE, {"version": "1.0.0", "commit": "c1"}) == {}
+
+    def test_version_compares_as_text(self):
+        assert lockfile.row_differences({"version": 1}, {"version": "1"}) == {}
+        assert lockfile.row_differences({}, {"version": "1"}) == {
+            "version": ("None", "1")}
+
+    def test_an_empty_commit_pin_is_no_pin(self):
+        assert lockfile.row_differences(
+            {**_ROW, "commit_pin": ""}, _ROW) == {}

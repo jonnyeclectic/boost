@@ -15,7 +15,7 @@ here instead of silently degrading to the generic fallback in front of a user.
 """
 import pytest
 
-from boost_cli.core import dense
+from boost_cli.core import dense, selfupdate
 
 
 def _table(reason: str) -> str:
@@ -33,7 +33,10 @@ def _table(reason: str) -> str:
 ALL_REASONS = [
     "disabled",
     "no-backend",
+    "no-extension-load",
     "no-key",
+    "no-local-wheel",
+    "corrupt",
     "no-store",
     "version-changed",
     "provider-changed",
@@ -73,9 +76,12 @@ class TestWording:
         assert "`" in hint, "%r gives no command to run: %r" % (reason, hint)
         # Three families, because the third one is the point: the kill switch
         # is fixed by neither pip nor boost, and a rule that admitted only
-        # those two is what left BOOST_NO_EMBED advertising an API key.
+        # those two is what left BOOST_NO_EMBED advertising an API key. A
+        # fourth for `no-local-wheel`: no command run on *this* interpreter
+        # fixes it, so its answer moves boost with `--python`.
         assert any(cmd in hint for cmd in
-                   ("boost reindex", "pip install", "unset BOOST_NO_EMBED")), hint
+                   ("boost reindex", "pip install", "unset BOOST_NO_EMBED",
+                    "--python 3.")), hint
 
     def test_missing_backend_says_install_not_set_a_key(self):
         # The [rag] extra carries a local embedding model, so the extra alone is
@@ -220,9 +226,12 @@ class TestNoKeyReadsTheStore:
         assert dense.fix_hint("no-key") == _table("no-key")
 
     @pytest.mark.parametrize("reason", [r for r in ALL_REASONS
-                                        if r not in ("no-key", "provider-changed")])
+                                        if r not in ("no-key", "no-local-wheel",
+                                                     "provider-changed")])
     def test_other_reasons_ignore_the_status_dict(self, reason):
-        # Only the two reasons a lost key can land on read the built store.
+        # Only the reasons a lost key can land on read the built store
+        # (`no-local-wheel` is `no-key` on an interpreter with no onnxruntime
+        # wheel, and reads it for the same reason).
         # ("no-store" reads the live provider, which this dict leaves out —
         # see TestKeyedMachineWithNoStore.) If a status dict started steering
         # the rest, the "these never chain" property would be back in play.
@@ -716,6 +725,36 @@ class TestFitsANarrowTerminal:
     # The narrowest pane the search output is tested against.
     NARROW = 60
 
+    # The install methods whose command is fixed text. A pip or source-checkout
+    # install is told *this* interpreter's absolute path, which is data: it is
+    # as long as the machine makes it, and it overflows whole rather than
+    # folding (see test_an_interpreter_path_is_one_atomic_token).
+    FIXED = (selfupdate.PIPX, selfupdate.UV_TOOL, selfupdate.UNKNOWN)
+
+    @pytest.fixture(params=FIXED)
+    def fixed_install(self, request, monkeypatch):
+        monkeypatch.setattr(selfupdate, "detect",
+                            lambda *a, **k: request.param)
+
+    @pytest.mark.parametrize("method", [selfupdate.PIP, selfupdate.GIT,
+                                        selfupdate.UV_PIP])
+    def test_an_interpreter_path_is_one_atomic_token(self, method,
+                                                     monkeypatch):
+        exe = "/" + "very-long-dir/" * 8 + "python3"
+        monkeypatch.setattr(dense.sys, "executable", exe)
+        monkeypatch.setattr(selfupdate, "detect", lambda *a, **k: method)
+        from boost_cli.core import output
+        hint = dense.fix_hint("no-backend")
+        cmd = dense.install_extra()
+        if method == selfupdate.UV_PIP:
+            assert cmd.startswith("uv pip install --python %s " % exe)
+        else:
+            assert cmd.startswith("%s -m pip install " % exe)
+        # Folded to the narrow pane, the whole command is still one line.
+        lines = output.wrap(hint, self.NARROW)
+        assert "`%s`" % cmd in lines, lines
+
+    @pytest.mark.usefixtures("fixed_install")
     @pytest.mark.parametrize("reason", ALL_REASONS)
     def test_no_token_is_wider_than_a_narrow_pane(self, reason):
         prefix = "semantic search is off — "
@@ -727,6 +766,7 @@ class TestFitsANarrowTerminal:
         # The prefix shares the first line, so it must not crowd out the text.
         assert len(prefix) < self.NARROW
 
+    @pytest.mark.usefixtures("fixed_install")
     @pytest.mark.parametrize("reason", ALL_REASONS)
     def test_every_hint_wraps_within_a_narrow_pane(self, reason):
         import textwrap

@@ -55,6 +55,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -82,9 +83,16 @@ def settings_path(scope: str, project_dir: Path | None = None,
     `CODEX_HOME` says, so moving it here would put the file where the CLI never
     looks and still report success.
 
-    This is a pure path computation, deliberately: `bmad._hook_hosts` probes
-    `settings_path(...).parent.is_dir()` to decide whether a host is in use and
-    `hooks add` prints the path, so a refusal belongs at the write (see
+    Project scope resolves through :func:`project_base`, exactly as
+    ``install --local`` does, and raises when there is no project — standing
+    in ``$HOME``, where the "project" file would *be* the global one. That
+    refusal is for writes and for the paths they print; :func:`load` answers
+    ``{}`` for a project that is not there before it gets here, because
+    ``bmad doctor`` and ``bmad status`` read project scope unasked and a read
+    of nothing is empty, not an error. The global branch
+    stays a pure path computation, deliberately: `bmad._hook_hosts` probes
+    `settings_path(...).parent.is_dir()` to decide whether a host is in use,
+    so the ``$CODEX_HOME`` refusal belongs at the write (see
     :func:`escaping_path`), not here.
     """
     dotdir = hookhost.settings_dir(host)
@@ -95,10 +103,43 @@ def settings_path(scope: str, project_dir: Path | None = None,
                 host, os.environ, str(paths.home()))) / fname
         return paths.home() / dotdir / fname
     if scope == "project":
-        base = Path(project_dir) if project_dir else Path.cwd()
+        base = project_base(project_dir)
+        if base is None:
+            raise BoostError(
+                "there is no project here for a project-scope hook",
+                hint="cd into a repo, or pass --scope global for your user")
         return base / dotdir / fname
     raise BoostError("unknown scope %r" % scope,
                      hint="use 'global' or 'project'")
+
+
+def project_base(project_dir: Path | None = None) -> Path | None:
+    """The directory project-scope hooks live under, or ``None`` for none.
+
+    The same answer ``install --local`` gets, from :func:`scopes.resolve_base`:
+    the enclosing repo root when there is one (run from ``src/deep`` a hook
+    belongs to the repo, not to a stray ``.claude/`` three levels down), else
+    the unmarked cwd — and never ``$HOME``. A project hook written from
+    ``$HOME`` landed in ``~/.claude/settings.json``, the *global* file, while
+    reporting "(project)"; ``hooks list`` then showed the one hook twice.
+    """
+    return scopes.resolve_base(scopes.SCOPE_PROJECT, project_dir)
+
+
+def _readable_scopes(scope: str | None,
+                     project_dir: Path | None) -> tuple[str, ...]:
+    """The scopes a reader walks: the one asked for, or every one that exists.
+
+    With no scope named, a missing project is simply not there to read and
+    gets no row at all; an explicit ``project`` reads as empty through
+    :func:`load`. Either way the global file is never read a second time
+    under the project label, the double-listing this guards against.
+    """
+    if scope:
+        return (scope,)
+    if project_base(project_dir) is None:
+        return tuple(s for s in SCOPES if s != "project")
+    return SCOPES
 
 
 def escaping_path(scope: str, host: str,
@@ -158,9 +199,17 @@ def load(scope: str, project_dir: Path | None = None,
     scope's *whole* settings from here on, so silently swallowing the error
     is how a hooks-only settings.json used to eat the user's `permissions`
     and `model` keys on the next `hooks add`.
+
+    Project scope with no project (standing in ``$HOME``) reads as ``{}``
+    rather than raising from :func:`settings_path`: the only file there is the
+    global one, and reading it under the project label is how one hook was
+    listed twice. A write still refuses — ``add_hook`` asks
+    :func:`settings_path` itself.
     """
+    if scope == "project" and project_base(project_dir) is None:
+        return {}
     p = settings_path(scope, project_dir, host)
-    data, err = jsonstate.read_object(p)
+    data, err = jsonstate.read_object(p, jsonc=hookhost.jsonc(host))
     if err:
         output.warn(
             "%s — reading as empty; the file is left on disk but the next "
@@ -185,32 +234,162 @@ def save(scope: str, data: dict, project_dir: Path | None = None,
     rewrite an unchanged file on every host it wrote to, burning
     :data:`HISTORY_KEEP` slots (2 hosts x 2 hooks = 4 per run) on nothing a
     restore would ever need.
+
+    The file keeps what it had that ``json.dumps`` does not choose: a leading
+    UTF-8 byte-order mark is written back, and a CRLF file stays CRLF, so an
+    ``add`` then ``remove`` returns the user's bytes. The write is atomic and
+    lands on a symlink's *target* with its permission bits kept
+    (:func:`util.write_user_file`), and a write that cannot happen is a
+    :class:`BoostError` naming the file and the fix — raised before the
+    snapshot, or with the snapshot removed, so the history never holds a
+    "previous version" of a change that was not made.
     """
     p = settings_path(scope, project_dir, host)
-    payload = json.dumps(data, indent=2) + "\n"
-    if p.exists() and p.read_text(encoding="utf-8") == payload:
+    target = util.user_file_target(p)
+    _refuse_dangling(p, target)
+    try:
+        prior = target.read_bytes() if target.exists() else None
+    except OSError as e:
+        raise paths.save_refused(target, e) from e
+    bom = prior is not None and prior.startswith(_BOM)
+    text = prior.decode("utf-8-sig", "replace") if prior is not None else ""
+    payload = _render(data, _indent_of(text))
+    if prior is not None and text.replace("\r\n", "\n") == payload:
         return None
-    p.parent.mkdir(parents=True, exist_ok=True)
+    _refuse_lossy(p, text, host)
+    _refuse_read_only(target)
+    if "\r\n" in text:
+        payload = payload.replace("\n", "\r\n")
+    if bom:
+        payload = "\ufeff" + payload
     dest = None
-    if p.exists():
-        hist = _history_dir()
-        hist.mkdir(parents=True, exist_ok=True)
-        stamp = util.now_iso().replace(":", "").replace("-", "")
-        pre = hookhost.history_prefix(host)
-        dest = hist / ("%s%s-%s.json" % (pre, scope, stamp))
-        n = 2
-        while dest.exists():
-            dest = hist / ("%s%s-%s-%d.json" % (pre, scope, stamp, n))
-            n += 1
-        dest.write_text(p.read_text(encoding="utf-8"), encoding="utf-8")
+    if prior is not None:
+        try:
+            dest = _snapshot(target, prior, scope, host)
+        except OSError as e:
+            raise paths.save_refused(_history_dir(), e) from e
+    try:
+        util.write_user_file(target, payload)
+    except OSError as e:
+        if dest is not None:
+            with contextlib.suppress(OSError):
+                dest.unlink()
+        raise paths.save_refused(target, e) from e
+    if dest is not None:
         _prune_history()
-    p.write_text(payload, encoding="utf-8")
+    return dest
+
+
+_BOM = b"\xef\xbb\xbf"
+
+
+def _refuse_dangling(p: Path, target: Path) -> None:
+    """Raise when ``p`` is a symlink into a directory that does not exist.
+
+    Writing through it would create that directory — somewhere in a dotfiles
+    checkout, say — and report success; reading through it already answered
+    "no file". The link is the user's, so it is named rather than replaced.
+    """
+    if p.is_symlink() and not target.parent.is_dir():
+        raise BoostError(
+            "%s is a symlink to %s, whose directory does not exist"
+            % (paths.tilde(p), paths.tilde(target)),
+            hint="create %s, or remove the link, then re-run"
+                 % paths.tilde(target.parent))
+
+
+def _refuse_read_only(target: Path) -> None:
+    """Raise when ``target`` exists and refuses writes.
+
+    The atomic write replaces the file through its *directory*, so it would
+    succeed over a ``chmod 444`` settings.json — the one signal the user left
+    that the file is not to be changed. :func:`paths.save_refused` names a
+    refusing directory; a refusing file is this one's to name.
+    """
+    if target.exists() and not os.access(target, os.W_OK):
+        raise BoostError(
+            "could not save %s (it is read-only)" % paths.tilde(target),
+            hint="chmod u+w %s, then re-run" % paths.tilde(target))
+
+
+def _render(data: dict, indent: int | str) -> str:
+    """``data`` as the settings text :func:`save` writes, non-ASCII verbatim.
+
+    Falls back to ``\\u`` escapes when the text cannot be encoded as UTF-8 —
+    a lone surrogate, which JSON's ``"\\ud83d"`` parses to. Writing it raw
+    raises *after* ``write_text`` has truncated the file, which empties the
+    user's settings; the escaped form is what the file already held.
+    """
+    payload = json.dumps(data, indent=indent, ensure_ascii=False) + "\n"
+    try:
+        payload.encode("utf-8")
+    except UnicodeEncodeError:
+        payload = json.dumps(data, indent=indent) + "\n"
+    return payload
+
+
+def _indent_of(text: str) -> int | str:
+    """The indent ``text``'s first nested line uses, else 2.
+
+    A tab-indented or 4-space settings file stays that way through a ``hooks
+    add``: re-indenting every line boost does not own is a noisy diff in a
+    committed project file, for a change of one key.
+    """
+    m = re.search(r"^\{[ \t]*\r?\n([ \t]+)\S", text)
+    if not m:
+        return 2
+    ws = m.group(1)
+    return ws if "\t" in ws else len(ws)
+
+
+def _refuse_lossy(p: Path, text: str, host: str) -> None:
+    """Raise rather than rewrite a commented settings file.
+
+    A JSONC host (Gemini CLI) reads comments, so boost reads them too — but
+    :func:`json.dumps` cannot put them back, and writing the parsed data would
+    delete every one. Leaving the file untouched and saying so is the only
+    lossless answer; the user can drop the comments or edit the file by hand.
+    """
+    if not hookhost.jsonc(host) or jsonstate.strip_comments(text) == text:
+        return
+    raise BoostError(
+        "%s has comments, which %s reads but boost cannot write back — "
+        "rewriting it would drop them, so it was left unchanged"
+        % (p, hookhost.label(host)),
+        hint="remove the comments from %s and run this again, or make the "
+             "change by hand" % p)
+
+
+def _snapshot(p: Path, prior: bytes, scope: str, host: str) -> Path:
+    """Copy ``p``'s current bytes into the history dir; return the copy.
+
+    A settings file routinely holds secrets under ``env``, so the copy keeps
+    the source's permission bits — created ``0600`` and then set to the
+    source's mode, never widened by the umask — in a ``0700`` directory. A
+    snapshot of a private file used to be world-readable, fifty times over.
+    """
+    hist = _history_dir()
+    hist.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with contextlib.suppress(OSError):
+        os.chmod(hist, 0o700)
+    stamp = util.now_iso().replace(":", "").replace("-", "")
+    pre = hookhost.history_prefix(host)
+    dest = hist / ("%s%s-%s.json" % (pre, scope, stamp))
+    n = 2
+    while dest.exists():
+        dest = hist / ("%s%s-%s-%d.json" % (pre, scope, stamp, n))
+        n += 1
+    # O_BINARY: a Windows fd opens in text mode and would turn \n into \r\n.
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
+    fd = os.open(dest, flags, 0o600)
+    with os.fdopen(fd, "wb") as fh:
+        fh.write(prior)
+    os.chmod(dest, p.stat().st_mode & 0o777)
     return dest
 
 
 def _prune_history() -> None:
-    snaps = sorted(_history_dir().glob("*.json"),
-                   key=lambda f: (f.stat().st_mtime, f.name))
+    snaps = util.sorted_history(_history_dir().glob("*.json"))
     for old in snaps[:-HISTORY_KEEP]:
         with contextlib.suppress(OSError):
             old.unlink()
@@ -220,6 +399,90 @@ def _prune_history() -> None:
 
 def _tag(command: str, name: str) -> str:
     return "%s %s%s" % (command, MARKER, name)
+
+
+def clean_name(name: str | None) -> str:
+    """``name`` as it is stored and compared: trimmed, and checked.
+
+    :func:`_hook_name` reads a stored name back trimmed, so a name that was
+    not trimmed on the way in never matched itself — ``hooks add -n 'x '``
+    twice appended a duplicate (the hook then ran twice per event) and
+    ``hooks remove -n 'x '`` could not find what ``list`` showed. Trimming
+    once, here, makes the written and the compared value the same string.
+
+    A line break is refused rather than trimmed: the name is a shell comment
+    appended to the command, and a newline would end the comment and run the
+    rest as a second command. The marker itself is refused because the name
+    is read back from the *last* marker in the command.
+
+    Only a write validates. The removers and :func:`has_hook` just trim: a
+    name nothing could have stored matches nothing, and "not found" is the
+    honest answer to it rather than an error.
+    """
+    cleaned = (name or "").strip()
+    if not cleaned:
+        raise BoostError("a hook needs a non-empty name",
+                         hint="pass --name <name>; it is how the hook is "
+                              "found and removed later")
+    if "\n" in cleaned or "\r" in cleaned or MARKER in cleaned:
+        raise BoostError("hook name %r cannot contain a line break or %r"
+                         % (cleaned, MARKER),
+                         hint="the name is written into the hook's command as "
+                              "a trailing shell comment")
+    return cleaned
+
+
+def _event_map(data: dict) -> dict:
+    """``data["hooks"]`` when it is the event -> blocks object, else ``{}``.
+
+    Another writer's malformed shape is not boost's to fix or to crash on.
+    """
+    hooks = data.get("hooks")
+    return hooks if isinstance(hooks, dict) else {}
+
+
+def _blocks(data: dict):
+    """``(event, block)`` for every dict block under a list-valued event."""
+    for event, blocks in _event_map(data).items():
+        if not isinstance(blocks, list):
+            continue
+        for block in blocks:
+            if isinstance(block, dict):
+                yield event, block
+
+
+def _entries(block: dict) -> list[dict]:
+    """A block's inner hook entries that are objects; anything else skipped."""
+    inner = block.get("hooks")
+    if not isinstance(inner, list):
+        return []
+    return [h for h in inner if isinstance(h, dict)]
+
+
+def _owned(h, name: str) -> bool:
+    """Whether inner entry ``h`` is boost's hook named ``name``."""
+    return (isinstance(h, dict)
+            and _hook_name(str(h.get("command", ""))) == name)
+
+
+def _event_list(data: dict, event: str, p: Path) -> list:
+    """The list ``add_hook`` writes into, created if absent, refused if odd.
+
+    An existing ``hooks`` that is not an object, or an event whose value is
+    not a list, is refused by name rather than overwritten: it is someone's
+    data, and ``setdefault`` on it used to crash with a bare AttributeError.
+    """
+    hooks = data.setdefault("hooks", {})
+    if not isinstance(hooks, dict):
+        raise BoostError("%s: 'hooks' must be an object of event -> list, "
+                         "not %s" % (p, type(hooks).__name__),
+                         hint="fix or remove that key; boost leaves it as is")
+    blocks = hooks.setdefault(event, [])
+    if not isinstance(blocks, list):
+        raise BoostError("%s: hooks.%s must be a list of hook blocks, not %s"
+                         % (p, event, type(blocks).__name__),
+                         hint="fix or remove that key; boost leaves it as is")
+    return blocks
 
 
 def _hook_name(command: str) -> str | None:
@@ -262,9 +525,11 @@ def add_hook(scope: str, event: str, name: str, command: str,
     Returns `save`'s snapshot path (or None) so the caller can tell the user
     where the pre-edit settings went.
     """
+    name = clean_name(name)
     refuse_escape(scope, host, project_dir, force)
     data = load(scope, project_dir, host)
-    event_list = data.setdefault("hooks", {}).setdefault(event, [])
+    event_list = _event_list(data, event,
+                             settings_path(scope, project_dir, host))
     block: dict = {}
     if matcher:
         block["matcher"] = matcher
@@ -283,10 +548,11 @@ def remove_hook(scope: str, event: str, name: str,
     ``bmad on`` was stopped from reaching, and a no-op read-modify-write still
     rewrites it.
     """
+    name = name.strip()
     refuse_escape(scope, host, project_dir, force)
     data = load(scope, project_dir, host)
     hooks = data.get("hooks")
-    if not isinstance(hooks, dict) or event not in hooks:
+    if not isinstance(hooks, dict) or not isinstance(hooks.get(event), list):
         return 0
     removed = _strip(hooks[event], name)
     if not removed:
@@ -318,6 +584,7 @@ def remove_hook_by_name(scope: str, name: str, event: str | None = None,
     an escaping path be read and reported as "no such hook" rather than
     refused.
     """
+    name = name.strip()
     refuse_escape(scope, host, project_dir, force)
     if event is not None:
         events: tuple[str, ...] = (event,)
@@ -352,8 +619,8 @@ def _strip(event_list: list, name: str, insert: dict | None = None) -> int:
         if not isinstance(inner, list):
             survivors.append(block)
             continue
-        kept = [h for h in inner
-                if _hook_name(str(h.get("command", ""))) != name]
+        # A non-object entry is someone else's and is kept as it is.
+        kept = [h for h in inner if not _owned(h, name)]
         if len(kept) != len(inner):
             removed += len(inner) - len(kept)
             if at is None:
@@ -371,12 +638,11 @@ def _strip(event_list: list, name: str, insert: dict | None = None) -> int:
 def has_hook(scope: str, event: str, name: str,
              project_dir: Path | None = None,
              host: str = hookhost.CLAUDE) -> bool:
+    name = name.strip()
     data = load(scope, project_dir, host)
-    for block in data.get("hooks", {}).get(event, []) or []:
-        for h in (block.get("hooks") or []) if isinstance(block, dict) else []:
-            if _hook_name(str(h.get("command", ""))) == name:
-                return True
-    return False
+    return any(_owned(h, name)
+               for ev, block in _blocks(data) if ev == event
+               for h in _entries(block))
 
 
 def foreign_hooks(scope: str | None = None,
@@ -398,20 +664,15 @@ def foreign_hooks(scope: str | None = None,
     check — which is why doctor counts it with `out.info` rather than raising
     the issue count.
     """
-    scopes = (scope,) if scope else SCOPES
     rows: list[dict] = []
-    for sc in scopes:
-        data = load(sc, project_dir, host)
-        for event, blocks in (data.get("hooks") or {}).items():
-            for block in blocks or []:
-                if not isinstance(block, dict):
-                    continue
-                for h in block.get("hooks") or []:
-                    raw = str(h.get("command", ""))
-                    if _hook_name(raw) is not None:
-                        continue        # ours
-                    rows.append({"scope": sc, "event": event, "command": raw,
-                                 "matcher": block.get("matcher", "")})
+    for sc in _readable_scopes(scope, project_dir):
+        for event, block in _blocks(load(sc, project_dir, host)):
+            for h in _entries(block):
+                raw = str(h.get("command", ""))
+                if _hook_name(raw) is not None:
+                    continue        # ours
+                rows.append({"scope": sc, "event": event, "command": raw,
+                             "matcher": block.get("matcher", "")})
     return rows
 
 
@@ -423,33 +684,28 @@ def list_hooks(scope: str | None = None,
     Rows are ``{scope, event, name, command, matcher, timeout}``, with
     ``timeout`` normalized to seconds whatever the host stores.
     """
-    scopes = (scope,) if scope else SCOPES
     rows: list[dict] = []
-    for sc in scopes:
-        data = load(sc, project_dir, host)
-        for event, blocks in (data.get("hooks") or {}).items():
-            for block in blocks or []:
-                if not isinstance(block, dict):
+    for sc in _readable_scopes(scope, project_dir):
+        for event, block in _blocks(load(sc, project_dir, host)):
+            for h in _entries(block):
+                raw = str(h.get("command", ""))
+                nm = _hook_name(raw)
+                if nm is None:
                     continue
-                for h in block.get("hooks") or []:
-                    raw = str(h.get("command", ""))
-                    nm = _hook_name(raw)
-                    if nm is None:
-                        continue
-                    rows.append({
-                        "scope": sc,
-                        "event": event,
-                        "name": nm,
-                        "command": raw.rsplit(MARKER, 1)[0].strip(),
-                        "matcher": block.get("matcher", ""),
-                        # Normalized to seconds. The stored number is in the
-                        # host's own units — Claude seconds, Gemini
-                        # milliseconds — so reporting it raw would show the
-                        # same `--timeout 10` as 10 on one host and 10000 on
-                        # the other.
-                        "timeout": hookhost.timeout_seconds(
-                            host, h.get("timeout")),
-                    })
+                rows.append({
+                    "scope": sc,
+                    "event": event,
+                    "name": nm,
+                    "command": raw.rsplit(MARKER, 1)[0].strip(),
+                    "matcher": block.get("matcher", ""),
+                    # Normalized to seconds. The stored number is in the
+                    # host's own units — Claude seconds, Gemini
+                    # milliseconds — so reporting it raw would show the
+                    # same `--timeout 10` as 10 on one host and 10000 on
+                    # the other.
+                    "timeout": hookhost.timeout_seconds(
+                        host, h.get("timeout")),
+                })
     return rows
 
 

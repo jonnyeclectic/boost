@@ -235,3 +235,24 @@ class TestTheDerivedPathIsNowAlwaysUsable:
             # Unreachable once parse_spec rejects; kept so this test fails
             # loudly rather than silently if the rejection is ever removed.
             os.path.realpath(str(registry.Tap(name=name, url=url).path))
+
+
+class TestEmptySpecIsRejected:
+    """``Path("")`` is the current directory, so an empty spec tapped the cwd."""
+
+    @pytest.mark.parametrize("spec", ["", "   ", "/", "//", " / "])
+    def test_spec_that_strips_to_nothing_raises(self, spec):
+        with pytest.raises(BoostError) as exc:
+            registry.parse_spec(spec)
+        assert exc.value.args[0] == "tap spec is empty"
+        assert exc.value.hint == ("use owner/repo, a git URL, or a local "
+                                  "directory")
+
+    def test_add_refuses_before_touching_config(self, sandbox):
+        from boost_cli.core import paths
+        cfg = paths.config_path()
+        before = cfg.read_bytes() if cfg.is_file() else None
+        with pytest.raises(BoostError, match=r"^tap spec is empty$"):
+            registry.add("")
+        assert (cfg.read_bytes() if cfg.is_file() else None) == before
+        assert registry.list_taps() == []

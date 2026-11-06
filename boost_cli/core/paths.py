@@ -96,10 +96,97 @@ def tilde(p) -> str:
     return s.replace(os.sep, "/")
 
 
+def env_dir(name: str) -> Path | None:
+    """The directory an environment override names, or None when it is unset.
+
+    ``BOOST_HOME`` and ``BOOST_AGENTS_STORE`` were taken as ``Path(value)``,
+    so a quoted ``'~/store'`` (the shell expands no tilde inside quotes) or a
+    relative ``store`` resolved against the working directory: measured, an
+    install from ``w1/`` created ``w1/~/store/brainstorming``, linked
+    ``~/.claude/skills`` at it with a relative symlink that dangled, and from
+    ``w2/`` `boost list` said nothing was installed. State that moves with
+    ``cd`` is no state at all, so the value goes through :func:`expand` (a
+    leading ``~`` or ``${VAR}``) and a value still relative after that is a
+    :class:`BoostError` naming the variable — the same answer
+    ``agents.check_dir`` gives a relative ``agents.<name>.dir``. An empty
+    value is unset, as before.
+    """
+    raw = os.environ.get(name)
+    if not raw:
+        return None
+    p = expand(raw)
+    if not p.is_absolute():
+        raise BoostError(
+            "%s=%r is a relative path, so it would resolve against the "
+            "working directory" % (name, raw),
+            hint="export %s=/an/absolute/path (or ~/path)" % name,
+            wrap=True)
+    return p
+
+
+def env_source(p: str) -> str | None:
+    """The variable a leading ``${VAR}`` in `p` takes its value from.
+
+    None when `p` has no leading reference, or when the variable is unset and
+    the fallback supplies the value — so a caller can name the variable when
+    the user's environment, not the config, is what made a path unusable.
+    """
+    m = _LEADING_ENV.match(p)
+    if m and os.environ.get(m.group(1)):
+        return m.group(1)
+    return None
+
+
+def override_env() -> dict[str, str]:
+    """``BOOST_HOME`` / ``BOOST_AGENTS_STORE`` as absolute paths, each only
+    when it is set.
+
+    Everything boost hands to another process to run later — an MCP host's
+    server entry, the ``boost://`` handler script, the scheduled update —
+    starts with that process's environment, not this one. Without these the
+    child read ``~/.boost`` and ``~/.agents/skills`` while the user's state
+    lived where they had relocated it. Resolved through :func:`env_dir`, so a
+    ``~`` or ``${VAR}`` the child might expand differently is already gone.
+    """
+    out = {}
+    for name in ("BOOST_HOME", "BOOST_AGENTS_STORE"):
+        p = env_dir(name)
+        if p is not None:
+            out[name] = str(p)
+    return out
+
+
+def check_env() -> None:
+    """Raise :class:`BoostError` if a path override in the environment is unusable.
+
+    `cli.main` calls this before anything opens the log or the config, both of
+    which sit under :func:`boost_home` and run outside the command's own
+    error handler.
+
+    A relative ``HOME`` is refused like a relative ``BOOST_HOME``: every
+    default path hangs off it, so ``HOME=rh`` wrote ``./rh/.boost`` under the
+    working directory and then failed install blaming ``~/.claude/skills``.
+    A ``BOOST_HOME`` that is a file is refused here too, naming the variable,
+    rather than surfacing as a ``FileExistsError`` from the first mkdir.
+    """
+    raw = os.environ.get("HOME")
+    if raw and not Path(raw).is_absolute():
+        raise BoostError(
+            "HOME=%r is a relative path, so it would resolve against the "
+            "working directory" % raw,
+            hint="export HOME=/an/absolute/path", wrap=True)
+    root = boost_home()
+    if os.environ.get("BOOST_HOME") and in_the_way(root):
+        raise BoostError(
+            "BOOST_HOME=%r is not a directory" % os.environ["BOOST_HOME"],
+            hint="move %s aside, or export BOOST_HOME=/a/directory"
+                 % tilde(root), wrap=True)
+    store_dir()
+
+
 def boost_home() -> Path:
     """Resolve boost's state root: ``$BOOST_HOME`` if set, else ``~/.boost``."""
-    override = os.environ.get("BOOST_HOME")
-    return Path(override) if override else home() / ".boost"
+    return env_dir("BOOST_HOME") or home() / ".boost"
 
 
 def repos_dir() -> Path:
@@ -141,6 +228,27 @@ def logs_dir() -> Path:
 def state_dir() -> Path:
     """Return the state directory (pins, tags, policy, profiles, pulse)."""
     return boost_home() / "state"
+
+
+def held_skills_dir() -> Path:
+    """Where a quarantined or sidelined skill's store copy is held aside.
+
+    Outside :func:`store_dir` on purpose: Gemini CLI and Codex read the
+    canonical store directly, so a copy left there stays loaded whatever
+    links boost removes.
+    """
+    return state_dir() / "held"
+
+
+def quarantine_dir() -> Path:
+    """Where `boost sync --prune` moves the store dirs it takes out.
+
+    Beside the store, not in it: Codex and Gemini CLI read the store
+    directly, and sync would see a dir left inside as unrecorded. Not under
+    :func:`held_skills_dir` either, whose children are keyed by skill name —
+    a skill called ``pruned`` would collide with a fixed subdir there.
+    """
+    return store_dir().parent / ".quarantine"
 
 
 def tap_refresh_marker() -> Path:
@@ -187,8 +295,7 @@ def config_path() -> Path:
 
 def store_dir() -> Path:
     """Canonical store for installed skills."""
-    override = os.environ.get("BOOST_AGENTS_STORE")
-    return Path(override) if override else home() / ".agents" / "skills"
+    return env_dir("BOOST_AGENTS_STORE") or home() / ".agents" / "skills"
 
 
 def lockfile_path() -> Path:
@@ -243,9 +350,43 @@ def boost_dirs() -> tuple[Path, ...]:
 
 
 def ensure_dirs() -> None:
-    """Create every directory boost writes into (idempotent)."""
+    """Create every directory boost writes into (idempotent).
+
+    Raises the ``OSError`` of the first refusal: callers that degrade (a tap
+    cache, the rerank cache, the refresh marker) catch exactly that. A caller
+    about to fail anyway wants :func:`require_dirs`.
+    """
     for d in boost_dirs():
         d.mkdir(parents=True, exist_ok=True)
+
+
+def require_dirs() -> None:
+    """:func:`ensure_dirs` for a caller that cannot go on without them.
+
+    Raises :class:`BoostError` naming the directory that refused and the one
+    step that clears it: under a ``BOOST_HOME`` that was read-only, `boost
+    tap` — the next step doctor recommends — exited 70 with a raw
+    ``PermissionError``.
+    """
+    for d in boost_dirs():
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            raise dirs_refused(d, e) from e
+
+
+def dirs_refused(d: Path, e: OSError) -> BoostError:
+    """The error for a mkdir of `d` that raised `e` (see :func:`require_dirs`)."""
+    block = refuses_writes(d)
+    steps = [write_remedy(block)] if block else []
+    if os.environ.get("BOOST_HOME"):
+        steps.append("export BOOST_HOME=<a writable directory>")
+    return BoostError(
+        "could not create %s (%s)%s"
+        % (tilde(d), e.strerror or e,
+           ": " + not_writable(d, block) if block else ""),
+        hint="%s, then re-run" % ", or ".join(steps) if steps else None,
+        wrap=True)
 
 
 def create_dirs(dirs) -> list[Path]:
@@ -344,11 +485,47 @@ def write_remedy(block: Path) -> str:
     return "run `%s`" % chmod_command(block)
 
 
+def save_refused(p: Path, e: OSError) -> BoostError:
+    """The error for a write of `p` that raised `e`: names `p` and, when a
+    directory is what refused, that directory and the one step that clears it.
+
+    ``config.save`` and every state-file writer raise this, so a read-only
+    ``~/.boost/state`` reads as one sentence with a remedy instead of an
+    exit-70 crash report naming a ``PermissionError``.
+    """
+    block = refuses_writes(p.parent)
+    return BoostError(
+        "could not save %s (%s)%s"
+        % (tilde(p), e.strerror or e,
+           ": " + not_writable(p.parent, block) if block else ""),
+        hint="%s, then re-run" % write_remedy(block) if block else None)
+
+
 def chmod_command(block: Path) -> str:
     """The ``chmod`` that makes `block` writable *and* enterable.
 
     ``u+w`` alone was the advice for every refusing dir, and on a dir at
     ``0o600`` it changes nothing: the missing bit is search, not write.
+
+    The path is shell-quoted, because the hint is a command to paste: an
+    unquoted ``my proj/.boost`` handed chmod two arguments and failed. A
+    leading ``~/`` stays outside the quotes, where the shell still expands it.
     """
     return "chmod u+%s %s" % ("wx" if not_searchable(block) else "w",
-                              tilde(block))
+                              shell_path(block))
+
+
+def shell_path(p) -> str:
+    """`p` for display as one pasteable shell word, ``~`` still expandable.
+
+    :func:`tilde` contracts $HOME, then the remainder is quoted by
+    :func:`util.shell_arg` — ``'~/x'`` would not expand, so the ``~/`` is
+    left bare in front of the quoted rest.
+    """
+    from . import util  # util imports paths at module level
+    s = tilde(p)
+    if s == "~":
+        return s
+    if s.startswith("~/"):
+        return "~/" + util.shell_arg(s[2:])
+    return util.shell_arg(s)

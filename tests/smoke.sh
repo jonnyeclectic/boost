@@ -148,7 +148,7 @@ run "impact"                 0 ./boost impact
 echo "== configuration"
 run "config list"            0 ./boost config list
 run "config set/get"         0 bash -c './boost config set ai.enabled false && ./boost config get ai.enabled && ./boost config unset ai.enabled'
-run "config set --json"      0 bash -c './boost config set telemetry false --json | python3 -c "import json,sys; json.load(sys.stdin)"'
+run "config set --json"      0 bash -c './boost config set policy_enforce true --json | python3 -c "import json,sys; json.load(sys.stdin)"'
 run "policy list"            0 ./boost policy list
 run "policy check"           0 ./boost policy check
 run "policy set --json"      0 bash -c './boost policy set pin_only false --json | python3 -c "import json,sys; json.load(sys.stdin)"'

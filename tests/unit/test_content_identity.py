@@ -437,3 +437,53 @@ def test_resolve_one_still_raises_when_a_digest_is_missing(monkeypatch):
     monkeypatch.setattr(catalog, "find", lambda name: [a, b])
     with pytest.raises(BoostError):
         catalog.resolve_one("mirror")
+
+
+def test_bom_skill_keeps_its_frontmatter_and_digest_parity(tmp_path, monkeypatch):
+    """A SKILL.md saved with a BOM reads its declared fields, and the digest
+    still equals what rag hashes for it (both go through frontmatter.split)."""
+    d = tmp_path / "skills" / "bom-skill"
+    d.mkdir(parents=True)
+    (d / "SKILL.md").write_bytes(
+        b"\xef\xbb\xbf---\nname: bom-skill\ndescription: Saved by Notepad\n"
+        b"version: 1.2.0\n---\n\n# BOM\nbody\n")
+    [e] = catalog.scan_dir(tmp_path, "t/bom")
+    assert e["name"] == "bom-skill"
+    assert e["description"] == "Saved by Notepad"
+    assert e["version"] == "1.2.0"
+    assert e["meta"]["version"] == "1.2.0"
+    monkeypatch.setattr(rag, "_tap_paths", lambda: {"t/bom": tmp_path})
+    body = rag.read_body(e)
+    assert "﻿" not in body
+    assert e["content"] == _digest(body)
+    assert e["content"] == _digest("bom-skill\nSaved by Notepad\n# BOM\nbody\n")
+
+
+def test_nested_author_map_does_not_rename_a_scanned_skill(tmp_path):
+    d = tmp_path / "skills" / "author-skill"
+    d.mkdir(parents=True)
+    (d / "SKILL.md").write_text(
+        "---\nname: author-skill\ndescription: nested author\nauthor:\n"
+        "  name: Jane Doe\n  email: jane@example.com\nmetadata:\n"
+        "  version: \"2.0\"\n---\nbody\n", encoding="utf-8")
+    [e] = catalog.scan_dir(tmp_path, "t/nested-author")
+    assert e["name"] == "author-skill"
+    assert e["version"] == "0.0.0"
+    assert e["meta"]["name"] == "author-skill"
+    assert e["meta"]["author"] == {"name": "Jane Doe", "email": "jane@example.com"}
+    assert "email" not in e["meta"]
+
+
+def test_nested_map_is_not_a_name_description_or_version(tmp_path):
+    # A dict where a scalar belongs reads as absent, never as its Python repr.
+    d = tmp_path / "skills" / "dict-fields"
+    d.mkdir(parents=True)
+    (d / "SKILL.md").write_text(
+        "---\nname:\n  first: x\ndescription:\n  en: y\nversion:\n"
+        "  major: 1\ncategory:\n  k: v\ntags: [testing]\n---\nFirst line.\n",
+        encoding="utf-8")
+    [e] = catalog.scan_dir(tmp_path, "t/dict-fields")
+    assert e["name"] == "dict-fields"
+    assert e["description"] == "First line."
+    assert e["version"] == "0.0.0"
+    assert e["category"] == "testing"

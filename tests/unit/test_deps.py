@@ -17,6 +17,11 @@ class TestAsList:
         assert deps.as_list("") == []
         assert deps.as_list(False) == []
 
+    def test_nested_map_names_nothing(self):
+        # `requires: {mcp: [rube]}` parses to a dict; its repr is not a name.
+        assert deps.as_list({"mcp": ["rube"]}) == []
+        assert deps.requirement_names({"requires": {"mcp": ["rube"]}}) == []
+
     def test_yaml_list_strips_blanks(self):
         assert deps.as_list(["a", " b ", "", "  "]) == ["a", "b"]
 
@@ -130,3 +135,15 @@ class TestUnmetNames:
         # A conflict row (no "requires" key at all) must not raise if it
         # were ever passed here by mistake — best-effort, not schema-strict.
         assert deps.unmet_names([{"name": "a", "installed": False}]) == ["a"]
+
+
+class TestRequirementRowAsksTheContainer:
+    def test_a_tap_aware_container_judges_a_qualified_token(self):
+        from boost_cli.core import prereq
+        have = prereq.InstalledSet({"base": {"alpha"}})
+        assert deps.requirement_row("alpha:base", have, ["beta:base"]) == {
+            "name": "alpha:base", "installed": True,
+            "requires": [{"name": "beta:base", "installed": False,
+                          "requires": []}]}
+        assert deps.conflict_row("alpha:base", have) == {
+            "name": "alpha:base", "installed": True}

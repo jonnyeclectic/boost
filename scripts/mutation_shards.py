@@ -89,8 +89,10 @@ Ratios, and the one question they cannot answer
 Everything above is scale-free: the packer needs only that one unit is twice
 another, so the weights can be in any unit that is consistent with itself, and
 they are in summed per-mutant milliseconds. That was fine until it was asked a
-question in a different unit. ``ci.yml`` caps each shard at ``timeout-minutes``;
-a cancelled shard fails the aggregate ``mutation`` job; a ``ci`` run that is
+question in a different unit. ``ci.yml`` caps each shard at ``timeout-minutes``,
+twice: on the job, and lower on the step that runs ``mutmut run``, which is
+nearly the whole job, so the step's cap is the one a slow shard reaches. A
+cancelled shard fails the aggregate ``mutation`` job; a ``ci`` run that is
 *cancelled* rather than *failed* does not satisfy ``publish.yml``'s
 ``conclusion == 'success'``; so a merge to main stops shipping, quietly. That
 happened on the merge of #1015, with ``plan --explain`` reporting ``7391040``
@@ -116,14 +118,12 @@ Usage
   mutation_shards.py merge --shards N --into mutants results/*  # rebuild results
   mutation_shards.py weights --source mutants    # refresh the balance hints
   mutation_shards.py drift --candidate new.json # is a refresh worth a PR?
-  mutation_shards.py cache-key                   # hash half of a shard's actions/cache key
 """
 from __future__ import annotations
 
 import argparse
 import ast
 import contextlib
-import hashlib
 import json
 import math
 import sys
@@ -138,7 +138,7 @@ WEIGHTS = Path("scripts/mutation_weights.json")
 #: spelled in two workflows, pinned against them by
 #: ``tests/unit/test_mutation_shard_count.py`` — ``timeout-minutes`` cannot be
 #: read through ``${{ }}``, so the agreement is asserted rather than derived.
-SHARDS = 12
+SHARDS = 24
 
 #: ``mutmut``'s worker count on the runner. It defaults to ``os.cpu_count()``
 #: and ``setup.cfg`` sets no ``max_children``, so on ``ubuntu-latest`` — 4 vCPU
@@ -211,7 +211,41 @@ RUNNER_EFFICIENCY = 0.98
 #: divides, so the predicted tail approaches ``FIXED_MINUTES x
 #: TAIL_MULTIPLIER`` instead of zero however many shards are added.
 #: ``tests/unit/test_mutation_shard_count.py`` carries the figures.
-FIXED_MINUTES = 5.5
+#:
+#: **Re-measured cold, 2026-10-20: 7.1.** CI run 39357937728 (head
+#: ``525611de``, sixteen shards, a cold cache -- the key hashes ``tests/``, so
+#: every release-train push is cold) logged the preamble, job start to
+#: ``Running mutation testing``, at a median **7.09 min** over its fifteen
+#: successful shards, range 4.36-8.65. That is above 5.5, so it is raised as
+#: the paragraph above asks. The same run confirms the divided term: each
+#: shard's own summed mutmut durations / 4 match its mutation phase at a
+#: median 0.970 of the four workers (0.939-0.989), against the 0.98 committed.
+#:
+#: **Re-measured again, 2026-10-22: 10.0.** The 25 successful shard jobs of
+#: main run 39729763526 (head ``c45107e8``) and PR #1225's run 39750022044
+#: (head ``553b69ae``), both sixteen shards and cold, logged the preamble at a
+#: median **9.98 min**, range 6.60-15.57, so it is raised again. The divided
+#: term held once more: mutant time / 4 against the mutation phase, median
+#: 0.973 (0.922-0.990). Most of the preamble is mutmut's ``Running stats``
+#: pass, a median 6.2 min in those logs. The rest is generation, about 2.1,
+#: and the clean and forced-fail runs, about 1.7. Why stats grew back toward
+#: the 6.9 it reached with the planner tests in it has not been measured. The
+#: ci.yml block above ``timeout-minutes`` has the rest of that re-pack.
+#:
+#: **Kept at 10.0 on 2026-11-04, though the median fell, because the floor
+#: shard pays more.** Over 168 successful full-shard jobs of seven runs
+#: (2026-11-02..04, listed in ci.yml) the preamble's median was 4.80 min. It
+#: depends on what the shard holds. The 154 jobs whose shard held a
+#: whole-file unit paid a median 4.54 (2.30-12.16). The 14 whose shard held
+#: only per-function units paid 11.30 (7.68-12.00). Nearly all of the
+#: difference is in mutmut's ``Running clean tests``, a median 7.88 min
+#: against 1.72. Why that run is longer for such a shard has not been
+#: measured. On the 2026-11-03 weights the floor shard is ``store.install``
+#: alone, one of those, so 10.0 is 1.3 min under what that shard pays. At
+#: 11.3 its tail would be 136.9 min, 72% of the mutate step's 190 against
+#: 71% at 10.0, so the verdict does not move. Lowering this to the overall
+#: median would score the floor shard 6.5 min short of its own preamble.
+FIXED_MINUTES = 10.0
 
 #: How much worse the *worst* run of a shard is than that shard's median.
 #:
@@ -267,15 +301,25 @@ FIXED_MINUTES = 5.5
 #: measured at the *previous* width, which is a lag, and the median under the
 #: multiplier did not divide the way a model through the origin said, which
 #: was a shape problem — :data:`FIXED_MINUTES` is the fix for the second.
-#: Neither is this constant. Being over-estimated is what kept the gate as honest as it
+#: Neither is this constant.
+#:
+#: **Not re-fitted on the 2026-10-20 cancellations, deliberately.** Run
+#: 39357937728 spread 21.8 to 73.4 min (shard 14 cancelled at 75) on a pack
+#: whose weights all agreed to 0.01%. That 3.4x was imbalance, not runner
+#: noise: shard 12's mutation phase was 66.7 min against 65.7 of its own
+#: measured mutant time / 4, while ``plan`` had given it ~24. The weights
+#: had lost ``store.py``'s timing (see :data:`NO_TESTS_EXIT`). Re-fitting
+#: the multiplier on that run would launder a weights bug into this constant.
+#: Being over-estimated is what kept the gate as honest as it
 #: stayed while the median came apart, so do not re-fit it downward on the
 #: 1.60-1.63 evidence: two runs is not the 28 samples a shard it was fitted
 #: over, and the margin is currently doing real work.
 TAIL_MULTIPLIER = 1.91
 
-#: Fraction of ``timeout-minutes`` the predicted tail may reach before
-#: ``plan --timeout-minutes`` calls the pack unsafe. 0.80 leaves the slowest
-#: shard a fifth of the cap in hand; the pack that was cancelled scored 0.97.
+#: Fraction of the mutate step's ``timeout-minutes`` the predicted tail may
+#: reach before ``plan --timeout-minutes`` calls the pack unsafe. 0.80 leaves
+#: the slowest shard a fifth of the cap in hand; the pack that was cancelled
+#: scored 0.97.
 HEADROOM = 0.80
 
 #: "No override is in force", which is a different state from "the override is
@@ -714,7 +758,26 @@ def measured_partition(root: Path, path: Path) -> list[str]:
         return []
     if not set(recorded) <= set(names):
         return []
+    # Methods are the mutants the per-function patterns cannot reach: mutmut
+    # names them `<module>.xǁ<Class>ǁ<method>__mutmut_<n>`, so a module split
+    # into `x_<fn>` units with a class that has methods left those unrun — and
+    # the merge, correctly, refused to gate (catalog.py: "6/1403 mutants
+    # unrun", the first method there to carry any). One more unit addresses
+    # every method at once; `ǁ` can never follow `x_`, so it stays disjoint.
+    if _has_methods(tree):
+        names.append(METHODS)
     return names
+
+
+#: The ``Unit.symbol`` that stands for every method of every class in a file.
+METHODS = "ǁ"
+
+
+def _has_methods(tree: ast.Module) -> bool:
+    """Whether any top-level class in ``tree`` defines a method."""
+    return any(isinstance(node, ast.ClassDef) and any(
+        isinstance(m, (ast.FunctionDef, ast.AsyncFunctionDef))
+        for m in node.body) for node in tree.body)
 
 
 def unit_weight(root: Path, unit: Unit) -> int:
@@ -747,7 +810,35 @@ def unit_weight(root: Path, unit: Unit) -> int:
     total = sum(shares.values())
     if not total:
         return max(file_weight, 1)
-    return max(file_weight * shares.get(unit.symbol, 1) // total, 1)
+    # Ceiling, not floor: flooring every share drops up to 1 ms per function,
+    # so once every function of a file is timed the units sum to less than the
+    # file they were cut from (store.py: 178 ms short of its 53,114,371) and
+    # the planner under-counts the very file that sets the slowest shard.
+    share = shares.get(unit.symbol) or unmeasured_share(unit, recorded, total)
+    return max(-(-file_weight * share // total), 1)
+
+
+def unmeasured_share(unit: Unit, recorded: dict[str, int], total: int) -> int:
+    """A share for a function the measured run never saw: its lines, priced
+    at the rate per line of the functions it did see.
+
+    A function added since the weights were written has no record, and it
+    used to get a share of 1 -- one millisecond out of ``store.py``'s 53
+    million. So a PR that adds functions to a split file put every one of them
+    in whichever shard was lightest by a hair: 23 of them all landed in shard
+    9 of run 41251356192, which then ran 4,289 mutants against main's 3,828:
+    its first attempt lost its runner at 143.2 minutes, and its second hit the
+    145-minute step timeout (job 124732016551). Priced by size
+    at the file's own measured rate, they spread like any other unit until the
+    next measured run records them.
+    """
+    if not recorded or unit.symbol is None:
+        return 1
+    lines = symbol_weight(unit.path, [*recorded, unit.symbol])
+    measured = sum(lines.get(s, 0) for s in recorded)
+    if not measured or unit.symbol not in lines:
+        return 1
+    return max(-(-total * lines[unit.symbol] // measured), 1)
 
 
 def pack(root: Path, shards: int) -> list[list[Unit]]:
@@ -809,6 +900,8 @@ def pattern_for(root: Path, path: Path):
     dotted = "%s.%s" % (SOURCE.as_posix().replace("/", "."), rel.replace("/", "."))
     if unit.symbol is None:
         return "%s.*" % dotted
+    if unit.symbol == METHODS:
+        return "%s.x%s*" % (dotted, METHODS)
     # mutmut mangles `install` to `x_install` and `_install_rule` to
     # `x__install_rule`, then appends `__mutmut_<n>`. Anchoring on that suffix
     # rather than trailing straight off the name is what keeps `install` from
@@ -880,7 +973,8 @@ def headroom_report(loads: list[int], cap: int) -> tuple[bool, list[str]]:
     budget = cap * HEADROOM
     safe = tail <= budget
     lines = [
-        "timeout     : %d min (ci.yml), budget %.1f min at %.0f%% headroom"
+        "timeout     : %d min (ci.yml's mutate step), budget %.1f min at"
+        " %.0f%% headroom"
         % (cap, budget, HEADROOM * 100),
         "slowest tail: %.1f min  (%.1f min median = %.1f fixed + %.1f"
         " mutating, x %.2f slow-runner)"
@@ -975,9 +1069,18 @@ def cmd_plan(args: argparse.Namespace) -> int:
     if not 0 <= args.index < args.shards:
         raise SystemExit("mutation_shards plan: --index %d out of range for %d shards"
                          % (args.index, args.shards))
-    patterns = [pattern_for(root, u) for u in bins[args.index]]
-    print(" ".join(p for p in patterns if p))
+    print(" ".join(patterns_for_bin(root, bins[args.index])))
     return 0
+
+
+def patterns_for_bin(root: Path, units: list[Unit]) -> list[str]:
+    """One packed bin's mutmut patterns, with ``__init__.py``'s ``None`` dropped.
+
+    The single spelling of "what does this shard run", shared by ``plan
+    --index`` and ``mutation_plan.py full`` so the two cannot drift apart --
+    ``merge --shards N`` re-derives the same pack and trusts that they agree.
+    """
+    return [p for p in (pattern_for(root, u) for u in units) if p]
 
 
 def shard_meta(parent: Path, prefix: str, shard: int, name: str):
@@ -1030,6 +1133,8 @@ def cmd_merge(args: argparse.Namespace) -> int:
         # reported below, exactly as a dropped whole file already was.
         codes: dict[str, object] = {}
         extras: dict[str, dict[str, object]] = {}
+        hashes: dict[str, object] = {}
+        disagree = False
         missing = []
         for shard in sorted(shards):
             src = shard_meta(Path(args.source), args.prefix, shard, name)
@@ -1040,6 +1145,14 @@ def cmd_merge(args: argparse.Namespace) -> int:
             for key, value in (data.get("exit_code_by_key") or {}).items():
                 if codes.get(key) is None:
                     codes[key] = value
+            # hash_by_function_name is what a later diff-scoped run compares
+            # against the merge base to find changed functions. Every shard
+            # mutates the whole tree, so the same function legitimately shows up
+            # in several shards with the SAME hash; a different hash means the
+            # shards ran different sources, and merging them would hide that.
+            for key, value in (data.get("hash_by_function_name") or {}).items():
+                if hashes.setdefault(key, value) != value:
+                    disagree = True
             # Carry the parallel per-key maps mutmut writes, so a merged .meta
             # is shaped exactly like an unsharded one.
             for field in ("type_check_error_by_key", "durations_by_key",
@@ -1048,6 +1161,9 @@ def cmd_merge(args: argparse.Namespace) -> int:
                 for key, value in (data.get(field) or {}).items():
                     if bucket.get(key) is None:
                         bucket[key] = value
+        if disagree:
+            problems.append("%s: shards disagree on function hashes" % name)
+            continue
         if missing:
             problems.append("%s: no results from shard%s %s under %s/%s*"
                             % (name, "" if len(missing) == 1 else "s",
@@ -1063,7 +1179,8 @@ def cmd_merge(args: argparse.Namespace) -> int:
             continue
         dest = dest_dir / (name + ".meta")
         dest.parent.mkdir(parents=True, exist_ok=True)
-        payload = {"exit_code_by_key": codes}
+        payload = {"exit_code_by_key": codes,
+                   "hash_by_function_name": hashes}
         for field in ("type_check_error_by_key", "durations_by_key",
                       "estimated_durations_by_key"):
             payload[field] = extras.get(field, {})
@@ -1118,8 +1235,18 @@ def cmd_merge(args: argparse.Namespace) -> int:
 #                  mutants/, and the tests import it — a change in commands/
 #                  or cli.py can flip a core mutant from survived to killed.
 #   tests/**       a new assertion kills a survivor without touching source.
+#                  Except tests/visual/, the puppeteer harnesses: Node scripts
+#                  and their npm lock, which mutmut never runs (it selects
+#                  tests/unit/). Unit tests read those files as text
+#                  (test_visual_harness_*, test_sdist_contents) and import no
+#                  boost_cli code to do it, so they cannot change whether a core
+#                  mutant is killed. A .py file there still counts: the
+#                  exclusion is by what the files are, not where.
 #   setup.cfg      mutmut's own config: source_paths, test selection, also_copy.
 #   pyproject.toml pytest configuration and the packaging metadata under it.
+#   pytest.ini, .pytest.ini, pytest.toml, .pytest.toml
+#                  anywhere: pytest's rootdir search reads each before
+#                  pyproject.toml.
 #   requirements/mutation-tools.txt  pins pytest+mutmut; the kill count is
 #                  defined relative to those versions.
 #   scripts/mutation_*.py, .github/workflows/ci.yml  the gate itself.
@@ -1130,11 +1257,23 @@ RELEVANT_PREFIXES = (
     "boost_cli/",
     "tests/",
     "requirements/mutation-tools.txt",
-    "scripts/mutation_gate.py",
-    "scripts/mutation_shards.py",
     ".github/workflows/ci.yml",
 )
 RELEVANT_EXACT = ("setup.cfg", "pyproject.toml")
+#: pytest config files, by base name, wherever they sit (mutation_diff's
+#: PYTEST_FILES less conftest.py, which `is_relevant` matches by suffix).
+PYTEST_CONFIG_NAMES = ("pytest.ini", ".pytest.ini", "pytest.toml", ".pytest.toml")
+
+#: Every gate script, by shape rather than by name, so the next one
+#: (`mutation_plan.py` was the third) is covered the day it lands. Only
+#: `.py`: `scripts/mutation_weights.json` sits under the same prefix and is a
+#: packing hint, never a correctness input -- a refresh moves which shard runs
+#: a mutant, not whether it is killed, so it must not buy a 24-shard run.
+GATE_SCRIPT_PREFIX = "scripts/mutation_"
+GATE_SCRIPT_SUFFIX = ".py"
+
+#: The browser harnesses' tree; see the RELEVANT_PREFIXES comment.
+VISUAL_HARNESS_PREFIX = "tests/visual/"
 
 
 def is_relevant(changed: list[str]) -> bool:
@@ -1147,6 +1286,14 @@ def is_relevant(changed: list[str]) -> bool:
             return True
         if name.endswith("conftest.py"):
             return True
+        # Read before pyproject.toml's ini options, wherever they sit; a
+        # full-run trigger in mutation_diff, reachable only from here.
+        if name.rpartition("/")[2] in PYTEST_CONFIG_NAMES:
+            return True
+        if name.startswith(GATE_SCRIPT_PREFIX) and name.endswith(GATE_SCRIPT_SUFFIX):
+            return True
+        if name.startswith(VISUAL_HARNESS_PREFIX) and not name.endswith(".py"):
+            continue
         for prefix in RELEVANT_PREFIXES:
             if name.startswith(prefix):
                 return True
@@ -1174,76 +1321,6 @@ def cmd_scope(args: argparse.Namespace) -> int:
         print("true")
         return 0
     print("true" if is_relevant(changed) else "false")
-    return 0
-
-
-# --------------------------------------------------------------------------
-# cache key: reuse a shard's mutants/ results across pushes of the same PR
-# --------------------------------------------------------------------------
-
-# Same list as RELEVANT_PREFIXES, minus boost_cli/ itself. mutmut already
-# reuses a source file's own results by content hash (per the module
-# docstring's "Balance without a chicken-and-egg" -- mutmut's per-source
-# hashing, not re-verified locally against the 3.7.0 pin here), so keying the
-# actions/cache entry on boost_cli/ too would just repeat that reuse one
-# level up, at the cost of evicting every mutant in the cache -- not just the
-# ones in the file that changed -- on every core edit, which is most pushes.
-# What mutmut does NOT re-derive on its own is which tests ran, which
-# mutmut/pytest built the recorded exit codes, and the gate's own scripts;
-# any of those changing must miss the cache and pay the full run, exactly as
-# `is_relevant` already says for the scope job.
-CACHE_KEY_PREFIXES = tuple(p for p in RELEVANT_PREFIXES if p != "boost_cli/")
-CACHE_KEY_EXACT = RELEVANT_EXACT
-
-
-def cache_key_paths(root: Path) -> list[Path]:
-    """Every file whose content can change a shard's cache key.
-
-    Mirrors ``is_relevant``'s own file list, minus ``boost_cli/`` (see
-    ``CACHE_KEY_PREFIXES``). A named file or directory that does not exist is
-    skipped rather than raising, so a fixture repo that only sets up part of
-    the tree still produces a stable key.
-    """
-    found: set[Path] = set()
-    for name in CACHE_KEY_EXACT:
-        path = root / name
-        if path.is_file():
-            found.add(path)
-    for prefix in CACHE_KEY_PREFIXES:
-        base = root / prefix
-        if base.is_dir():
-            found.update(f for f in base.rglob("*") if f.is_file())
-        elif base.is_file():
-            found.add(base)
-    return sorted(found)
-
-
-def cache_key_hash(root: Path) -> str:
-    """A deterministic digest of every file ``cache_key_paths`` names.
-
-    Hashes content, not mtime or git status: a checkout's timestamps are not
-    reproducible across machines, but bytes are. Each file's path is folded
-    in alongside its content (relative to `root`, POSIX-normalized) so a
-    rename or an added/removed file changes the digest even when every
-    remaining file's bytes are untouched.
-    """
-    digest = hashlib.sha256()
-    for path in cache_key_paths(root):
-        digest.update(path.relative_to(root).as_posix().encode("utf-8"))
-        digest.update(b"\0")
-        digest.update(path.read_bytes())
-        digest.update(b"\0")
-    return digest.hexdigest()
-
-
-def cmd_cache_key(args: argparse.Namespace) -> int:
-    """Print the hash half of a mutation shard's ``actions/cache`` key.
-
-    The workflow builds the full key itself (shard index + Python version +
-    this hash) -- this script has no reason to know either of the first two,
-    and folding them in here would just make the CI YAML a pass-through.
-    """
-    print(cache_key_hash(Path(args.root)))
     return 0
 
 
@@ -1494,6 +1571,12 @@ def cmd_drift(args: argparse.Namespace) -> int:
     return _emit_drift(args, "\n".join(lines) + "\n", moved=moved, cost=cost)
 
 
+#: mutmut's exit code for a mutant no test covers. It is assigned without
+#: running anything (``if not tests: exit_code_by_key[...] = 33`` in mutmut's
+#: ``__main__``), so such a mutant never has a duration and costs no time.
+NO_TESTS_EXIT = 33
+
+
 def cmd_weights(args: argparse.Namespace) -> int:
     """Record real mutant counts so the next split balances better.
 
@@ -1520,10 +1603,25 @@ def cmd_weights(args: argparse.Namespace) -> int:
             # ones. A file is only time-weighted when every one of its mutants
             # has a duration, so a partial record cannot understate a file and
             # win itself extra work.
+            #
+            # "Every" means every mutant mutmut RAN. Exit code 33 is "no
+            # tests": mutmut never runs that mutant, so it never gets a
+            # duration, and it costs nothing. Counting it as missing data
+            # threw away the measured time for any file with one untested
+            # mutant. That happened to store.py on the 2026-10-19 refresh
+            # (a3092119): 6,592 mutants fell back to the 2.6 s/mutant repo
+            # mean, and a new `_copy_tree` that really costs 63 s/mutant
+            # (7,563 s over 120 mutants, CI run 39357937728, shard 12) went
+            # unweighted. Shard 12 ran 73.4 min and shard 14 was cancelled
+            # at 75 on a pack that `plan` put at a 56-minute tail. A `None`
+            # code (a mutant that never ran because its shard died) still
+            # blocks.
             durations = data.get("durations_by_key") or {}
-            values = [v for v in durations.values()
-                      if isinstance(v, (int, float)) and v >= 0]
-            if len(values) == len(codes) and values:
+            due = {k for k, c in codes.items() if c != NO_TESTS_EXIT}
+            values = [durations[k] for k in due
+                      if isinstance(durations.get(k), (int, float))
+                      and durations[k] >= 0]
+            if len(values) == len(due) and values:
                 millis[name] = max(round(sum(values) * 1000), 1)
             # Attribute each mutant to the function it belongs to, so a split
             # file balances on measured counts rather than on body size. Keys
@@ -1594,7 +1692,9 @@ def main() -> int:
     p.add_argument("--index", type=int)
     p.add_argument("--explain", action="store_true", help="print the whole split instead")
     p.add_argument("--timeout-minutes", type=int,
-                   help="ci.yml's per-shard ceiling; with --explain, exit 1 "
+                   help="ci.yml's per-shard ceiling: the mutate step's "
+                        "timeout-minutes, which fires before the job's; "
+                        "with --explain, exit 1 "
                         "when the slowest shard's predicted tail reaches it "
                         "(requires --explain — the --index path's stdout is "
                         "captured into mutmut's argv and must stay patterns)")
@@ -1631,9 +1731,6 @@ def main() -> int:
     d.add_argument("--github-output",
                    help="append `moved=` and `makespan=` to this file ($GITHUB_OUTPUT)")
     d.set_defaults(func=cmd_drift)
-
-    k = sub.add_parser("cache-key", help="hash half of a shard's actions/cache key")
-    k.set_defaults(func=cmd_cache_key)
 
     args = ap.parse_args()
     return args.func(args)

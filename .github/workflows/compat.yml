@@ -1,0 +1,163 @@
+name: compat
+
+# The compatibility signals that used to ride every pull request push: the
+# macOS and Windows cells of Python 3.15, and the free-threaded 3.14t canary.
+# All three were advisory there (`continue-on-error`, not required), so they
+# could never block a merge or a release, yet each PR push paid ~47-50
+# slot-minutes and three of the account's 20 concurrent job slots for them,
+# one of those slots out of the five macOS ones. Here they run after a merge
+# that can change what they test, and once a day, and nothing about them is
+# advisory: a red run fails this workflow, and ci-failure-issue.yml (which
+# watches `compat`) opens a tracker for it. That is a louder signal than a
+# yellow cell on a PR nobody re-reads after merging.
+#
+# ubuntu-3.15 stays in ci.yml's `tests` matrix, so a pull request still hears
+# about 3.15 before it merges; this adds the two platforms that only differ
+# from it in rare, platform-shaped ways.
+
+on:
+  push:
+    branches: [main]
+    # What these jobs exercise: the package, the suite, and how both are
+    # installed. A docs-only merge cannot change their colour, and the daily
+    # run below still catches a new interpreter or runner image.
+    paths:
+      - "boost_cli/**"
+      - "tests/**"
+      - "pyproject.toml"
+      - "setup.cfg"
+      - "requirements/**"
+      - ".github/workflows/compat.yml"
+  schedule:
+    # Daily, off the hour, clear of ci's 09:30 nightly and the 04:00-08:00
+    # weekly crons.
+    - cron: "17 12 * * *"
+  # By hand on a BRANCH, with `python` set to 3.13 or 3.14, it is how a fix
+  # for a failure only ci.yml's `tests-extended` legs see (macOS/Windows on
+  # 3.13/3.14, which no pull request runs) is tested before it merges. Here
+  # and not by dispatching ci.yml: a ci dispatch SKIPS lint and the other
+  # pull-request jobs, posts those skipped check runs onto the branch's head
+  # commit -- an open PR's head, as a rule -- and a skipped required check
+  # reads as passing. This workflow's checks (`compat (...)`, `canary (...)`)
+  # are required nowhere, so a dispatch here can only add information.
+  # tests/unit/test_ci_tests_extended.py pins that the choices cover every
+  # `tests-extended` interpreter and that the os lists match.
+  workflow_dispatch:
+    inputs:
+      python:
+        description: "Interpreter for the macOS/Windows legs (3.13/3.14 = ci.yml's tests-extended)"
+        type: choice
+        options: ["3.15", "3.14", "3.13"]
+        default: "3.15"
+
+permissions:
+  contents: read
+
+# Never cancelled: a cancelled run concludes `cancelled`, which
+# ci-failure-issue reads as not green. One group per run, because
+# `cancel-in-progress: false` still cancels an older PENDING run when a third
+# arrives in the same group (ci.yml's concurrency comment).
+concurrency:
+  group: compat-${{ github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  compat:
+    runs-on: ${{ matrix.os }}
+    # ci.yml's `tests` cap for macOS and Windows, and for the same measured
+    # reasons (its timeout comment).
+    timeout-minutes: 80
+    permissions:
+      contents: read
+    defaults:
+      run:
+        # Windows' default runner shell is pwsh; Git for Windows ships a bash
+        # on PATH, so pin bash everywhere and keep one script per step.
+        shell: bash
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+        # 3.15: Homebrew's python3 since 2026-10-28, so what a new user's pipx
+        # picks. ci.yml's tests matrix comment says why it needs no onnxruntime.
+        # A dispatch may pick another (the note on `workflow_dispatch:`); a
+        # push or the cron has no `inputs`, so they always run 3.15.
+        python: ["${{ inputs.python || '3.15' }}"]
+    steps:
+      # No harden-runner: it is Linux-only, and both legs here are not.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0    # tags for setuptools-scm version resolution
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ matrix.python }}
+      - name: git identity (fixture repos)
+        run: |
+          git config --global user.email ci@boost.test
+          git config --global user.name "Boost CI"
+      - name: venv bin dir (Windows uses Scripts/, not bin/)
+        run: echo "VENV_BIN=.venv/$( [ "$RUNNER_OS" = Windows ] && echo Scripts || echo bin )" >> "$GITHUB_ENV"
+      - name: install test deps
+        # The same hash-pinned file ci.yml's `tests` cells install.
+        run: |
+          python -m venv .venv
+          "$VENV_BIN/pip" -q install -r requirements/test-tools.txt
+          "$VENV_BIN/pip" -q install sqlite-vec || true
+      - name: unit + functional
+        run: |
+          set -o pipefail
+          rc=0
+          "$VENV_BIN/pytest" tests/unit tests/functional -n auto -q \
+            | tee /tmp/pytest.out || rc=$?
+          grep -E '^(FAILED|ERROR) ' /tmp/pytest.out | sed 's/^/::error::/' || true
+          exit "$rc"
+      - name: shell smoke suite (sandboxed)
+        run: bash tests/smoke.sh
+
+  canary:
+    # Early warning on the free-threaded (no-GIL) CPython build: a GIL-removal
+    # regression surfaces here before a user on 3.14t hits it on release day.
+    # boost's runtime is stdlib-only, so this should stay green.
+    name: canary (3.14t free-threaded)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: harden runner (egress audit)
+        uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2.22.1
+        with:
+          # audit: record egress, never block — the runtime signal that
+          # catches a compromised action exfiltrating a token, paired with
+          # zizmor's static analysis. Flip to block + an allowlist to enforce.
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0    # tags for setuptools-scm version resolution
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.14t"
+      - name: git identity (fixture repos)
+        run: |
+          git config --global user.email ci@boost.test
+          git config --global user.name "Boost CI"
+      - name: unit + functional on free-threaded 3.14
+        # Plain pytest (no coverage gate) — this leg is a compatibility signal,
+        # not the coverage/mutation gate. [rag] deps with no free-threaded wheel
+        # importorskip themselves, exactly as on the main matrix.
+        run: |
+          python -m venv .venv
+          # setuptools is a TEST dependency here, not a build one: `pip install
+          # -e .` resolves the backend in an isolated build env, so nothing it
+          # does puts setuptools in .venv, and a modern `venv` seeds pip alone.
+          # tests/unit/test_sdist_contents.py runs setuptools' own MANIFEST
+          # matcher (`setuptools._distutils.filelist`) rather than building an
+          # sdist over the network, so without this the leg is red on 17
+          # ModuleNotFoundErrors and a real no-GIL regression would not change
+          # its colour. tests/unit/test_canary_deps.py keeps this list in step
+          # with what the suite imports unguarded.
+          .venv/bin/pip -q install pytest pytest-cov coverage hypothesis setuptools pyyaml
+          .venv/bin/pip -q install -e .
+          .venv/bin/pytest tests/unit tests/functional -q

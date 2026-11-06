@@ -140,10 +140,10 @@
   <section class="block reveal">
     <div class="stats">
       <!-- ROADMAP:stats -->
-      <div class="stat"><b>27</b><span>Shipped</span></div>
+      <div class="stat"><b>28</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
-      <div class="stat"><b>75</b><span>Planned</span></div>
-      <div class="stat"><b>529</b><span>Loop finds</span></div>
+      <div class="stat"><b>80</b><span>Planned</span></div>
+      <div class="stat"><b>562</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -477,6 +477,18 @@
           <span class="m hi">Impact <b>High</b></span>
           <span class="m">Wow <b class="wow">★★★★</b></span>
           <span class="m">Exporting an API key takes a locally built store off the air, and doctor answers with a paid re-embed where `unset` is free. Every user who came in through `boost quickstart` is one `export` away from this.</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="windows-autocrlf-reads-project-copies-as-drifted">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Robustness · Bug</span></div>
+        <h3>On Windows, a clone of a project's committed skill copies reads as drifted</h3>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/windows-autocrlf-reads-project-copies-as-drifted.md">Write-up &middot; windows-autocrlf-reads-project-copies-as-drifted.md</a></p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m">Impact <b>Medium</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">On Windows with core.autocrlf, a teammate's clone of a project's committed skill copies hashes differently from the lock…</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->
@@ -1562,6 +1574,103 @@ NOT ALREADY CARDED, but read the existing card first.
           <span class="m">Impact <b>Low</b></span>
           <span class="m">Wow <b class="wow">★</b></span>
           <span class="m">three call sites size a stderr line by stdout — and pane_width, the card's own model, has it too</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="tap-spec-names-the-wrong-repo">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Robustness · Bug</span></div>
+        <h3>boost tap answers for a different repo than the one it was given</h3>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/tap-spec-names-the-wrong-repo.md">Write-up &middot; tap-spec-names-the-wrong-repo.md</a></p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Medium</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">Three ways `boost tap` answered for a different repo than the one asked for — a same-basename repo "already tapped", file:// cloned from GitHub, an empty repo tapped as 0 items…</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="mcp-offer-once-per-install-run">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">MCP · UX</span></div>
+        <h3><code>install &lt;tap&gt;</code> asks about MCP servers once per skill, not once per run</h3>
+        <p><code>_offer_mcp</code> runs from <code>_report_result</code>, once for each installed item. So a tap
+whose skills declare MCP servers asks <em>register N servers…?</em> once per declaring skill, partway
+through the install output, after <code>-y</code> has already settled the skill list.
+
+<b>Fix.</b> Collect the declared servers across the run and ask once at the end. The question lists
+every server's command line, and a decline prints every <code>&lt;host&gt; mcp add</code> line. A
+single-skill install reads the same as it does today.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">a tap with k skills that declare servers asks the registration question k times</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="mcp-offer-exempt-from-assume-yes">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Safety · MCP</span></div>
+        <h3>Consider exempting the MCP registration offer from <code>BOOST_ASSUME_YES</code></h3>
+        <p><code>install -y</code> no longer answers the offer to register skill-declared MCP servers. A
+typed <code>y</code> does, or running the printed <code>mcp add</code> lines. But
+<code>BOOST_ASSUME_YES=1</code> still answers every confirm, this one included. A dotfiles script
+or agent environment that <em>exports</em> it, rather than prefixing one command, registers
+third-party commands for every project on the machine without anyone reading them.
+
+<b>Option.</b> Give <code>output.confirm</code> an <code>env_bypass=False</code> mode for this prompt,
+as <code>protocol open --gui</code> already does for its dialog. Then only a typed answer or the
+printed command registers. This changes shipped env-var behaviour, so it needs a deprecation
+line first. The 2026-11-06 design review ranked the pinned-consent variant
+(<code>--register-mcp SERVER@DIGEST</code>) second, because of its cost.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">an exported BOOST_ASSUME_YES still registers every server a tap declares, machine-wide</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="mcp-install-tool-names-declared-servers">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">MCP · UX</span></div>
+        <h3>MCP <code>boost_install</code> replies should name the servers a skill declares</h3>
+        <p>The MCP <code>boost_install</code> tool never registers servers, which is correct: an agent must
+not grant itself machine-wide commands. But its reply does not say the skill declares any. So the
+agent reports success, and the skill fails later for a reason nobody surfaced.
+
+<b>Fix.</b> Add one line per declared server to the reply: its name, its command line, and the
+<code>mcp add</code> line a human would run. This matches what the CLI's decline prints.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">an agent installing through MCP never learns a human has to register the skill's server</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="install-local-tap-writes-every-server-to-mcp-json">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Safety · MCP</span></div>
+        <h3><code>install &lt;tap&gt; --local</code> records every declared MCP server in <code>.mcp.json</code> unasked — and <code>--no-mcp</code> hides it</h3>
+        <p>A project-scoped install records declared servers in the repo's <code>.mcp.json</code> with no
+prompt (<code>store.record_project_mcp</code>), because the file is committed and reviewed. The
+report already names them: <em>recorded N MCP servers</em>, followed by the list. Two gaps remain.
+
+- <b>No consent step for a whole tap.</b> With a tap as NAME, one <code>-y</code> writes every
+  server the tap's skills declare. That may be dozens of third-party commands, which every
+  teammate's agent launches once the file is committed. There is also one report per skill
+  rather than one list per run.
+- <b><code>--no-mcp</code> hides the write instead of skipping it.</b> <code>install &lt;tap&gt;
+  --local --no-mcp -y</code>, or the same with <code>BOOST_NO_MCP_OFFER=1</code>, still writes
+  every server: the write has no <code>no_mcp</code> gate. But <code>_offer_mcp</code> returns
+  before its project-scope branch, so nothing is printed. The dry run hides it too, because its
+  <em>record</em> lines sit behind <code>offer_mcp</code>. This predates the tap install.
+
+<b>Fix.</b> Either make <code>--no-mcp</code> skip the <code>.mcp.json</code> write, or always
+report it. Then decide whether a whole-tap <code>--local</code> install asks once, listing every
+server, before recording them.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">--local writes a whole tap's declared servers into .mcp.json unasked, and with --no-mcp says nothing at all</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->
@@ -2694,6 +2803,222 @@ NOT ALREADY CARDED, but read the existing card first.
           <span class="m">Two windows-3.14 jobs were killed at 30.4 and 30.3 min in one morning — both while pytest was still printing results, and the second one blocked a release.</span>
         </div>
       </article>
+
+      <article class="cap rcard" id="cli-surface-edges">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Bug</span></div>
+        <h3>Long names, <code>--help &lt;command&gt;</code> and TAB after a global flag</h3>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/cli-surface-edges.md">Write-up &middot; cli-surface-edges.md</a></p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Medium</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">the tap fix for an over-long name covered one command, and four others still crashed on the same input</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="agent-dir-guards">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Bug</span></div>
+        <h3>An agent row with no <code>dir</code>, and links left in a disabled agent's dir</h3>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/agent-dir-guards.md">Write-up &middot; agent-dir-guards.md</a></p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">an agent row with no dir linked skills into the working directory, and a disabled agent kept dangling links nobody looked for</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="context-file-writes">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Bug</span></div>
+        <h3>A rule writes through a symlinked context file and keeps its mode</h3>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/context-file-writes.md">Write-up &middot; context-file-writes.md</a></p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">installing a rule replaced a symlinked CLAUDE.md or GEMINI.md with a private copy, and uninstall left the copy behind</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="fix-hooks-robustness">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Bug</span></div>
+        <h3>Padded hook names, foreign hook shapes and the project root for <code>boost hooks</code></h3>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/fix-hooks-robustness.md">Write-up &middot; fix-hooks-robustness.md</a></p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Medium</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">three ways a hooks command did the wrong thing to settings.json, one of them in the user-global file</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="fix-lock-corrupt">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Bug</span></div>
+        <h3>A corrupt lock file is reported, and never written over</h3>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/fix-lock-corrupt.md">Write-up &middot; fix-lock-corrupt.md</a></p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Medium</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">a corrupt lock was reported only in boost.log, the next fresh install replaced every record with one, and doctor sent a rolled-back lock's newest skill to sync</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="fix-project-scope-visibility">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Bug</span></div>
+        <h3><code>outdated</code>, <code>update</code> and <code>deps</code> see <code>--local</code> skills</h3>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/fix-project-scope-visibility.md">Write-up &middot; fix-project-scope-visibility.md</a></p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">info and list read the repo's own lock; outdated, update, deps and install's dependency plan did not</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="fix-tap-name-identity">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Bug</span></div>
+        <h3>Tap names are case-blind, untap keeps what it does not own, and <code>--at</code> hints honestly</h3>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/fix-tap-name-identity.md">Write-up &middot; fix-tap-name-identity.md</a></p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">on a case-insensitive filesystem, untapping a case variant deleted the clone of the tap that stayed configured</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="fix-update-default-branch">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Bug</span></div>
+        <h3><code>boost update</code> follows an upstream change of default branch</h3>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/fix-update-default-branch.md">Write-up &middot; fix-update-default-branch.md</a></p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Medium</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">a tap cloned --depth 1 stayed on the branch that was default at clone time, so an upstream rename read as up to date and then broke every update</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="lock-field-preservation">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Bug</span></div>
+        <h3>Pins hold through <code>reinstall</code>, profiles snapshot the active set, <code>update</code> names what a pin held</h3>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/lock-field-preservation.md">Write-up &middot; lock-field-preservation.md</a></p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Medium</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">a commit pin did not survive a reinstall, a profile brought back skills that were off, and update gave an all-clear over pinned items it skipped</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="name-resolution">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Bug</span></div>
+        <h3><code>tap:name</code> after install, and a dry run that refuses when the run would</h3>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/name-resolution.md">Write-up &middot; name-resolution.md</a></p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Medium</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">install took tap:name, and twelve commands that act on installed items answered "not installed" for the same string</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="fix-authoring-outputs">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Bug</span></div>
+        <h3>Generated skills report a refused install and never clobber a file</h3>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/fix-authoring-outputs.md">Write-up &middot; fix-authoring-outputs.md</a></p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Medium</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">distill, infer and absorb --install exited 0 on a refused install, clobbered a file of the fallback's name, kept the tap prefix in the output name, and split a scalar tags string into letters</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="fix-frontmatter-parsing">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Bug</span></div>
+        <h3>Nested frontmatter maps and byte-order marks no longer corrupt a skill's metadata</h3>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/fix-frontmatter-parsing.md">Write-up &middot; fix-frontmatter-parsing.md</a></p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Medium</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">a nested author map renamed a skill, and a byte-order mark hid a file's whole frontmatter</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="fix-mcp-tool-parity">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Bug</span></div>
+        <h3>The MCP tools agree with the CLI on install state and skill drift</h3>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/fix-mcp-tool-parity.md">Write-up &middot; fix-mcp-tool-parity.md</a></p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Medium</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">boost_doctor, boost_info, boost_list and boost_search disagreed with the CLI about what is installed and whether it is intact</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="fix-project-integrity">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Bug</span></div>
+        <h3>Project-scope integrity checks every agent copy, and heal repairs a missing one</h3>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/fix-project-integrity.md">Write-up &middot; fix-project-integrity.md</a></p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">project-scope integrity hashed only the first agent copy, so doctor and verify passed a tampered or deleted copy and heal left it missing</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="fix-store-copy-and-adopt">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Bug</span></div>
+        <h3>Symlinked skills install, and a lost lock no longer adopts a workflow's skill copy</h3>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/fix-store-copy-and-adopt.md">Write-up &middot; fix-store-copy-and-adopt.md</a></p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">a skill with a symlink crashed install, and a lost lock made heal adopt a workflow's skill copy as a local skill</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="fix-update-duplicate-names">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Bug</span></div>
+        <h3>boost update refreshes the copy that was installed</h3>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/fix-update-duplicate-names.md">Write-up &middot; fix-update-duplicate-names.md</a></p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">with two same-named copies in one tap, boost update replaced the copy picked with install --path by the one that scanned first</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="snapshot-export">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Bug</span></div>
+        <h3>Snapshot restore is all-or-nothing, rollback keeps holds, export sees project skills</h3>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/snapshot-export.md">Write-up &middot; snapshot-export.md</a></p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">snapshot restore emptied the store before a symlink broke the extract; rollback dropped scope and pins; export and dump ignored project-scope skills</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="workflow-files">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Bug</span></div>
+        <h3>A workflow's agent files are boost's only while boost wrote them</h3>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/workflow-files.md">Write-up &middot; workflow-files.md</a></p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">a workflow install overwrote the user's own slash command and uninstall deleted it (now left alone, recorded as foreign, and written by sync once moved aside); a slot move orphaned old files; edited files were deleted; Gemini kept $ARGUMENTS literal</span>
+        </div>
+      </article>
       <!-- /ROADMAP:cards -->
 
     </div>
@@ -3233,6 +3558,30 @@ NOT ALREADY CARDED, but read the existing card first.
           <span class="m">Impact <b>Low</b></span>
           <span class="m">Wow <b class="wow">★★</b></span>
           <span class="m">a rule whose every materialization row names an agent boost no longer writes reads "ok" in verify and is counted as installed by health — only doctor says otherwise</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="doctor-integrity-agrees-with-verify-and-heal">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Diagnostics · Bug</span></div>
+        <h3><code>boost doctor</code> agrees with <code>verify</code> on rule/workflow edits, and stops prescribing a <code>heal</code> that declines</h3>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/doctor-integrity-agrees-with-verify-and-heal.md">Write-up &middot; doctor-integrity-agrees-with-verify-and-heal.md</a></p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">doctor said healthy over hand-edited rules/workflows, and prescribed a heal that declines for a pinned skill</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="tap-health">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Bug</span></div>
+        <h3>Drift re-taps the recorded source, and a clone without .git reads as broken</h3>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/tap-health.md">Write-up &middot; tap-health.md</a></p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Medium</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">drift told users to run a re-tap command that could not parse, and a clone without .git read as healthy while every update failed</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->
@@ -5593,18 +5942,6 @@ exactly why plausible similarity was not accepted as evidence.</p>
         </div>
       </article>
 
-      <article class="cap rcard" id="recategorised-taps-never-reach-a-tapped-machine">
-        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Catalog · Data</span></div>
-        <h3>A registry moved out of <code>general</code> never reached a machine that had already tapped it</h3>
-        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/recategorised-taps-never-reach-a-tapped-machine.md">Write-up &middot; recategorised-taps-never-reach-a-tapped-machine.md</a></p>
-        <div class="meta">
-          <span class="m">Complexity <b>M</b></span>
-          <span class="m">Impact <b>Med</b></span>
-          <span class="m">Wow <b class="wow">★★</b></span>
-          <span class="m">46 registries out of general, 4 unregistered taps added, caches rescan on a moved category</span>
-        </div>
-      </article>
-
       <article class="cap rcard" id="typos-reported-as-boost-bugs">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Bug</span></div>
         <h3>The last command that blamed boost for the user's typo</h3>
@@ -5746,6 +6083,66 @@ exactly why plausible similarity was not accepted as evidence.</p>
           <span class="m">Impact <b>Low</b></span>
           <span class="m">Wow <b class="wow">★★</b></span>
           <span class="m">a rule written for 1 of 5 recorded agents still advertises all five in list, info and stats</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="browse-reskin-ranked-tmux-statusbar">
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">CLI · UX</span></div>
+        <h3><code>boost browse</code> reskin — ranked matches, <code>#category</code> scope, slate selection and a tmux-style status bar</h3>
+        <p><b>Why.</b> Matching is fuzzy, so over a 2,402-entry corpus <code>code review</code> matched 1,722 rows — in alphabetical order, with <code>0-preflight</code> first and the <code>code-review</code> the user typed somewhere below it. Every row also carried a ★ (a curated catalogue stars everything), a full <code>[owner/repo]</code> badge, and the key hints took a chrome row of their own.
+
+<b>What changed.</b>
+
+- <b>Ranked matches</b> (<code>browse.match_tier</code> / <code>rank</code>): exact name, then prefix, substring, fuzzy-on-name, then description/tap only; catalogue order breaks ties. <code>code review</code> and <code>code-review</code> are the same name.
+- <b>Category scope</b>: <code>category</code> joins the scope toggles, and rows show a <code>#category</code> chip from <code>browse.entry_category</code> — the same lookup the scope searches, so a chip is always findable.
+- <b>Selection</b>: a cyan <code>▌</code> bar on a soft slate row instead of a solid reversed accent block; 8-colour and monochrome terminals keep reverse video.
+- <b>Less noise</b>: the ★ column is gone (it is a detail chip now), kind badges take a hue each (skill cyan · rule violet · workflow pink; workflow is yellow on 8 colours, where violet and pink are one magenta), taps show the repo name only.
+- <b>Status bar</b> under the frame: a mode pill (<code>SEARCH</code> / <code>SCOPE</code> / <code>LIST</code> / <code>DETAIL</code>), hints for that mode that drop from the middle and never lose <code>esc quit</code>, and the session install chip at the right. The list gains the row the hints used to take.
+- <b>Detail pane</b>: a chips line (kind · version · #category · ★ curated), dim labels and bright values, wrapped values aligned under the value column, and FRONTMATTER no longer repeats the name and description.
+- <b>Colour levels</b>: true Aurora hues where slots can be redefined, the nearest xterm-256 index where they cannot (tmux without <code>Tc</code> used to fall to 8 colours), base colours below that. <code>NO_COLOR</code> is honoured.
+
+All of the above is pure logic in <code>core/browse.py</code> under unit tests and the mutation gate; the curses layer only paints it.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★★</b></span>
+          <span class="m">boost browse listed fuzzy matches alphabetically, so a typed name landed past the first screen; reskinned with ranked matches, a category scope and a tmux-style status bar</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="misleading-empty-states-and-counts">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · Bug</span></div>
+        <h3>Four messages that sent the user the wrong way</h3>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/misleading-empty-states-and-counts.md">Write-up &middot; misleading-empty-states-and-counts.md</a></p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">four commands that answered confidently and wrongly — each now names what actually happened</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="browse-facet-pickers">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · UX</span></div>
+        <h3><code>boost browse</code> facet pickers — sorted, searchable category, tap and kind filters</h3>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/browse-facet-pickers.md">Write-up &middot; browse-facet-pickers.md</a></p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m">Impact <b>Medium</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">the ^G category picker listed largest-first with a letter-jump; it now sorts A–Z, filters as you type, and the same picker filters by tap (^R) and kind (^K)</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="recategorised-taps-never-reach-a-tapped-machine">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Catalog · Data</span></div>
+        <h3>A registry moved out of <code>general</code> never reached a machine that had already tapped it</h3>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/recategorised-taps-never-reach-a-tapped-machine.md">Write-up &middot; recategorised-taps-never-reach-a-tapped-machine.md</a></p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">42 registries out of general, 4 unregistered taps added, caches rescan on a moved category</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->
@@ -6370,6 +6767,18 @@ exactly why plausible similarity was not accepted as evidence.</p>
           <span class="m">934 text writes take the platform line ending; five are bugs, and the walker was blind to the worst one</span>
         </div>
       </article>
+
+      <article class="cap rcard" id="rag-on-python-315-and-homebrew-proof-installs">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Compat · Install</span></div>
+        <h3>Python 3.15 broke the <code>[rag]</code> extra, and a Homebrew upgrade broke the install</h3>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/rag-on-python-315-and-homebrew-proof-installs.md">Write-up &middot; rag-on-python-315-and-homebrew-proof-installs.md</a></p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">Homebrew removed python@3.14 and stranded the pipx venv; on 3.15 the [rag] extra would not install at all. The extra now installs there, doctor names the gap, and self-update and quickstart offer to move a pipx or uv install to 3.13</span>
+        </div>
+      </article>
       <!-- /ROADMAP:cards -->
 
     </div>
@@ -6477,6 +6886,18 @@ exactly why plausible similarity was not accepted as evidence.</p>
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★★</b></span>
           <span class="m">no silent overwrites</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="update-overwrote-local-edits-and-downgraded">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Security · Supply chain</span></div>
+        <h3>Update no longer overwrites local edits or walks a version back</h3>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/update-overwrote-local-edits-and-downgraded.md">Write-up &middot; update-overwrote-local-edits-and-downgraded.md</a></p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">edits and versions held unless --discard-edits / --allow-downgrade</span>
         </div>
       </article>
 
@@ -6872,6 +7293,29 @@ exactly why plausible similarity was not accepted as evidence.</p>
           <span class="m">Impact <b>Low</b></span>
           <span class="m">Wow <b class="wow">★</b></span>
           <span class="m">fixed — quarantine unlinks every agent it can, names each one it could not with its chmod, and a re-run finishes</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="rule-block-orphan-start-marker">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · Bug</span></div>
+        <h3>A rule block missing its end marker made the next reinstall delete the user's own <code>CLAUDE.md</code> text</h3>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/rule-block-orphan-start-marker.md">Write-up &middot; rule-block-orphan-start-marker.md</a></p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★★</b></span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="one-untested-mutant-untimed-store-py">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CI · Mutation gate</span></div>
+        <h3>One untested mutant erased store.py's measured time, and a balanced pack ran 21.8 to 75+ minutes</h3>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/one-untested-mutant-untimed-store-py.md">Write-up &middot; one-untested-mutant-untimed-store-py.md</a></p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">one exit-33 mutant dropped store.py's time; the pack ran 3.4x out of balance</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->

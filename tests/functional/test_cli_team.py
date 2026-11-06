@@ -10,10 +10,12 @@ from __future__ import annotations
 
 import getpass
 import hashlib
+import io
 import json
 import os
 import shutil
 import stat
+import subprocess
 import sys
 from datetime import UTC, datetime, timedelta
 
@@ -22,6 +24,21 @@ import pytest
 from boost_cli.core import journal, lockfile, paths
 
 USER = getpass.getuser()
+
+
+class _FakeTtyStdin(io.StringIO):
+    """Scripted stdin that claims to be a terminal, so prompts actually fire."""
+
+    def isatty(self):
+        return True
+
+
+def _hand_made_skill(name):
+    """A skill put in the store by hand, for `boost sync` to record."""
+    d = paths.store_dir() / name
+    d.mkdir(parents=True)
+    (d / "SKILL.md").write_text("# %s\n" % name, encoding="utf-8")
+    return d
 
 
 def _member(cohort: str, percent: int) -> bool:
@@ -83,9 +100,46 @@ class TestCohort:
     def test_create_full_rollout_warns_on_unknown_skill(self, boost, tapped):
         r = boost("cohort", "create", "pilot",
                  "--skills", "brainstorming,ghost-skill", "--percent", "100")
-        assert "skill 'ghost-skill' not found in any tap (kept anyway)" in r.out
+        assert r.err == ("  ! skill 'ghost-skill' not found in any tap "
+                         "(kept anyway)\n")
+        assert "not found" not in r.out
         assert ("created cohort pilot (100% rollout, 2 skills) — "
                 "you are IN") in r.out
+
+    def test_create_json_with_unknown_skill_keeps_stdout_parseable(
+            self, boost, tapped):
+        # The warning used to land on stdout ahead of the object, so
+        # `json.load` failed on line 1 of a successful create.
+        r = boost("cohort", "create", "beta", "--skills", "nosuch-skill",
+                 "--json")
+        assert json.loads(r.out) == {"name": "beta", "percent": 100,
+                                     "skills": ["nosuch-skill"],
+                                     "updated": False,
+                                     "member": _member("beta", 100)}
+        assert "skill 'nosuch-skill' not found in any tap" in r.err
+
+    @pytest.mark.parametrize("action", ["list", "status"])
+    def test_name_narrows_list_and_status(self, boost, tapped, action):
+        boost("cohort", "create", "pilot", "--skills", "brainstorming")
+        boost("cohort", "create", "zero", "--skills", "commit-messages",
+             "--percent", "0")
+        data = json.loads(boost("cohort", action, "zero", "--json").out)
+        assert data == [{"name": "zero", "skills": ["commit-messages"],
+                         "percent": 0, "member": False,
+                         "created": data[0]["created"]}]
+        r = boost("cohort", action, "zero")
+        assert [l.split()[0] for l in r.out.splitlines()
+                if l.startswith(("pilot", "zero"))] == ["zero"]
+
+    @pytest.mark.parametrize("extra", [[], ["--json"]])
+    @pytest.mark.parametrize("action", ["list", "status"])
+    def test_missing_name_is_rc1_not_every_cohort(self, boost, tapped,
+                                                   action, extra):
+        boost("cohort", "create", "pilot", "--skills", "brainstorming")
+        r = boost("cohort", action, "nosuch", *extra, expect=1)
+        assert r.out == ""
+        assert "Error: no cohort named nosuch" in r.err
+        assert "list cohorts with `boost cohort list`" in r.err
 
     def test_create_singular_skill_agrees(self, boost, tapped):
         r = boost("cohort", "create", "solo",
@@ -156,6 +210,34 @@ class TestCohort:
         assert "brainstorming already installed" in r.out
         assert "applied: 0 installed, 1 already present" in r.out
 
+    def test_reapply_sees_a_tap_qualified_member_as_installed(self, boost,
+                                                               tapped):
+        # The lock keys by the bare name, so `fixture-tap:brainstorming` was
+        # never found: the second apply re-installed it, hit "already
+        # installed" and exited 1 with the rest of the cohort unprocessed.
+        boost("cohort", "create", "pilot", "--percent", "100",
+             "--skills", "fixture-tap:brainstorming,tdd-workflow")
+        r = boost("cohort", "apply")
+        assert "applied: 2 installed, 0 already present" in r.out
+        r = boost("cohort", "apply")
+        assert "fixture-tap:brainstorming already installed" in r.out
+        assert "tdd-workflow already installed" in r.out
+        assert "applied: 0 installed, 2 already present" in r.out
+
+    def test_a_mismatched_qualifier_skips_that_member_only(self, boost,
+                                                           tapped):
+        # `othertap:brainstorming` while brainstorming is installed from
+        # fixture-tap: installed_name raises, which must not abort the apply.
+        boost("install", "brainstorming")
+        boost("cohort", "create", "pilot", "--percent", "100",
+             "--skills", "othertap:brainstorming,tdd-workflow")
+        r = boost("cohort", "apply")
+        # The tap is what is missing, not the skill — fixture-tap ships it.
+        assert ("! no tap named 'othertap' ('brainstorming' is shipped by: "
+                "fixture-tap) —") in r.out
+        assert "installed tdd-workflow" in r.out
+        assert "applied: 1 installed, 0 already present, 1 not found" in r.out
+
     def test_apply_reports_missing_members_and_exits_nonzero_when_nothing_landed(
             self, boost, tapped):
         # The bug: a cohort whose only member is nowhere to be found reported
@@ -190,6 +272,36 @@ class TestCohort:
         assert not [e for e in journal.events(action="cohort", subject="zero")
                    if e.get("op") == "apply"]
 
+    def test_apply_survives_a_policy_refused_member(self, boost, tapped):
+        # One refused member used to abort the whole apply: c2 never ran,
+        # nothing was printed to stdout and nothing was journaled.
+        boost("policy", "set", "blocked_skills", "cowboy-coding")
+        boost("cohort", "create", "c1", "--skills",
+             "jira-integration,cowboy-coding", "--percent", "100")
+        boost("cohort", "create", "c2", "--skills", "commit-messages",
+             "--percent", "100")
+        r = json.loads(boost("cohort", "apply", "--json", expect=1).out)
+        by_name = {c["cohort"]: c for c in r["cohorts"]}
+        assert by_name["c1"]["installed"] == ["jira-integration"]
+        assert by_name["c1"]["failed"] == ["cowboy-coding"]
+        assert by_name["c2"]["installed"] == ["commit-messages"]
+        assert by_name["c2"]["failed"] == []
+        assert (r["installed"], r["failed"]) == (2, 1)
+        event = [e for e in journal.events(action="cohort", subject="c1")
+                 if e.get("op") == "apply"]
+        assert event[0]["failed"] == 1
+        assert event[0]["installed"] == 1
+
+    def test_apply_text_counts_the_refused_member(self, boost, tapped):
+        boost("policy", "set", "blocked_skills", "cowboy-coding")
+        boost("cohort", "create", "c1", "--skills",
+             "jira-integration,cowboy-coding", "--percent", "100")
+        r = boost("cohort", "apply", expect=1)
+        flat = " ".join(r.out.split())
+        assert ("cowboy-coding: policy blocks installing cowboy-coding: skill "
+                "'cowboy-coding' is on the blocklist") in flat
+        assert "applied: 1 installed, 0 already present, 1 failed" in flat
+
     def test_apply_skills_flag_can_be_repeated(self, boost, tapped):
         # --skills a --skills b used to replace rather than append, so only
         # the last occurrence's skills survived.
@@ -221,12 +333,29 @@ class TestCohort:
         assert "deleted cohort pilot" in r.out
         assert "no cohorts defined" in boost("cohort", "list").out
 
+    @pytest.mark.parametrize("argv, msg", [
+        (("list", "--percent", "5"), "--percent only applies to `cohort create`"),
+        (("status", "--percent", "100"),
+         "--percent only applies to `cohort create`"),
+        (("apply", "--skills", "a"), "--skills only applies to `cohort create`"),
+        (("delete", "x", "--skills", "a", "--percent", "5"),
+         "--skills/--percent only apply to `cohort create`"),
+    ])
+    def test_create_only_flags_on_another_action_rc2(self, boost, sandbox,
+                                                      argv, msg):
+        r = boost("cohort", *argv, expect=2)
+        assert msg in r.err
+        assert not paths.state_dir().joinpath("cohorts.json").exists()
+
     def test_errors_and_edge_cases(self, boost, tapped):
         r = boost("cohort", "create", "bad", "--skills", "x",
                  "--percent", "101", expect=2)
         assert "--percent must be 0-100" in r.err
         r = boost("cohort", "create", "bad", expect=2)
         assert "create needs --skills" in r.err
+        r = boost("cohort", "create", "full", "--skills", "x")
+        assert "(100% rollout, 1 skill)" in r.out
+        boost("cohort", "delete", "full", "-y")
         r = boost("cohort", "delete", "ghost", expect=1)
         assert "no cohort named ghost" in r.err
         r = boost("cohort", "apply", "ghost", expect=1)
@@ -290,10 +419,11 @@ class TestCohort:
         assert by_name["pilot"] == {
             "cohort": "pilot", "member": True,
             "installed": ["brainstorming"], "already_present": [],
-            "not_found": ["ghost-skill"]}
+            "not_found": ["ghost-skill"], "failed": []}
         assert by_name["closed"] == {
             "cohort": "closed", "member": False, "installed": [],
-            "already_present": [], "not_found": []}
+            "already_present": [], "not_found": [], "failed": []}
+        assert first["failed"] == 0
 
         second = json.loads(boost("cohort", "apply", "pilot", "--json").out)
         assert second["cohorts"][0]["already_present"] == ["brainstorming"]
@@ -321,6 +451,86 @@ class TestCohort:
 
 
 # ---------------------------------------------------------------- profile
+
+class TestRecordedNamesAcrossTaps:
+    """`cohort apply` and `profile use` installed `find()[0]` — the first
+    tap's copy — for a name two taps ship, or whose recorded tap was gone."""
+
+    def test_cohort_apply_skips_an_ambiguous_member(self, boost, rival_tap,
+                                                    monkeypatch):
+        monkeypatch.setenv("COLUMNS", "200")
+        boost("cohort", "create", "pilot", "--percent", "100",
+              "--skills", "brainstorming")
+        r = boost("cohort", "apply", expect=1)
+        assert ("! 'brainstorming' exists in multiple taps: fixture-tap, "
+                "rival-tap (qualify it, e.g. `fixture-tap:brainstorming`) — "
+                "skipped") in r.out
+        assert "applied: 0 installed, 0 already present, 1 not found" in r.out
+        assert lockfile.get_skill("brainstorming") is None
+
+    def test_profile_use_never_swaps_in_another_tap(self, boost, rival_tap,
+                                                    monkeypatch):
+        monkeypatch.setenv("COLUMNS", "200")
+        boost("install", "rival-tap:brainstorming")
+        boost("profile", "save", "p1")
+        boost("uninstall", "brainstorming")
+        boost("untap", "rival-tap")
+        # A skipped member means this is not the profile: no "switched", rc 1.
+        r = boost("profile", "use", "p1", expect=1)
+        assert ("! brainstorming was recorded from tap rival-tap, which is no "
+                "longer tapped (`boost tap` it again, or install it from: "
+                "fixture-tap) — skipped") in r.out
+        assert ("applied profile p1, but 1 skill not found — compare with "
+                "`boost profile diff p1`") in r.out
+        assert "switched to profile" not in r.out
+        assert "tap has moved" not in r.out
+        assert lockfile.get_skill("brainstorming") is None
+
+    def test_rollback_never_restores_another_tap_s_copy(
+            self, boost, rival_tap, tick_clock, monkeypatch):
+        monkeypatch.setenv("COLUMNS", "200")
+        boost("install", "rival-tap:brainstorming")
+        boost("install", "tdd-workflow")
+        snap_id = lockfile.history_list()[-1]["id"]   # holds brainstorming
+        assert "brainstorming" in lockfile.history_read(snap_id)["skills"]
+        boost("uninstall", "brainstorming")
+        boost("untap", "rival-tap")
+        r = boost("replay", "rollback", snap_id, expect=1)
+        assert ("! brainstorming was recorded from tap rival-tap, which is no "
+                "longer tapped (`boost tap` it again, or install it from: "
+                "fixture-tap) — cannot restore") in r.out
+        assert "finished with 1 skill not restored: brainstorming" in r.out
+        assert lockfile.get_skill("brainstorming") is None
+
+    def test_profile_use_restores_the_skill_beside_a_namesake_workflow(
+            self, boost, sandbox, tmp_path, monkeypatch):
+        """A profile keeps skills only, yet `find()[0]` brought back the
+        tap's same-named workflow — and resolve_one alone refuses the pair."""
+        monkeypatch.setenv("COLUMNS", "200")
+        root = tmp_path / "pair-tap"
+        (root / "skills" / "tdd").mkdir(parents=True)
+        (root / "skills" / "tdd" / "SKILL.md").write_text(
+            "---\nname: tdd\ndescription: The tdd skill\nversion: 1.0.0\n"
+            "---\n\n# TDD\n\nRed, green, refactor.\n", encoding="utf-8")
+        (root / "commands").mkdir()
+        (root / "commands" / "tdd.md").write_text(
+            "---\ndescription: A slash command running tdd\n---\n\nRun tdd.\n",
+            encoding="utf-8")
+        for argv in (("init", "-q"), ("config", "user.email", "p@boost.test"),
+                     ("config", "user.name", "Pair"), ("add", "-A"),
+                     ("commit", "-qm", "pair")):
+            subprocess.run(("git", *argv), cwd=root, check=True,
+                           capture_output=True)
+        boost("tap", root)
+        boost("install", "pair-tap:tdd", "--path", "skills/tdd")
+        boost("profile", "save", "p1")
+        boost("uninstall", "tdd")
+        r = boost("profile", "use", "p1")
+        assert "installed tdd" in r.out
+        assert "skipped" not in r.out
+        assert lockfile.get_skill("tdd")["version"] == "1.0.0"
+        assert lockfile.find_any("tdd")[0] == "skill"
+
 
 class TestProfile:
     def test_save_show_diff_use_lifecycle(self, boost, tapped):
@@ -400,11 +610,13 @@ class TestProfile:
                 "installed): cowboy-coding") in r.out
         link = paths.home() / ".claude" / "skills" / "cowboy-coding"
         assert not link.exists()
-        assert (paths.store_dir() / "cowboy-coding").is_dir()
+        assert not os.path.lexists(paths.store_dir() / "cowboy-coding")
+        assert (paths.held_skills_dir() / "cowboy-coding").is_dir()
 
         r = boost("profile", "use", "solo", "--prune")
         assert "uninstalled cowboy-coding" in r.out
         assert not (paths.store_dir() / "cowboy-coding").exists()
+        assert not os.path.lexists(paths.held_skills_dir() / "cowboy-coding")
         assert "cowboy-coding" not in json.loads(
             paths.lockfile_path().read_text(encoding="utf-8"))["skills"]
 
@@ -428,7 +640,8 @@ class TestProfile:
         assert "uninstalled cowboy-coding" not in r.out
         assert "switched to profile solo" in r.out
         assert not link.exists()
-        assert (paths.store_dir() / "cowboy-coding").is_dir()
+        assert not os.path.lexists(paths.store_dir() / "cowboy-coding")
+        assert (paths.held_skills_dir() / "cowboy-coding").is_dir()
 
     def test_use_records_the_sideline_and_clears_it_on_return(self, boost, tapped):
         # `sidelined_by` is what stops `doctor`/`sync` from reading a
@@ -472,7 +685,10 @@ class TestProfile:
         p.write_text(json.dumps(lock), encoding="utf-8")
         r = boost("profile", "use", "pin")
         assert "brainstorming (version differs)" in r.out
-        assert "switched to profile pin" in r.out
+        # not "switched": the machine is not the profile
+        assert "switched to profile" not in r.out
+        assert ("applied profile pin, but 1 skill differs from it — compare "
+                "with `boost profile diff pin`") in " ".join(r.out.split())
 
     def test_save_notes_uncaptured_rules_and_workflows(self, boost, installed):
         # Profiles carry skills only — with a rule and workflow installed the
@@ -507,6 +723,30 @@ class TestProfile:
         assert lockfile.get_skill("brainstorming") is None
         assert lockfile.get_rule("brainstorming")["version"] == "1.0.0"
 
+    def test_delete_with_closed_stdin_declines_cleanly(self, boost, installed,
+                                                       monkeypatch):
+        # out.confirm() under `<&-` (sys.stdin None) crashed with
+        # AttributeError; it now answers its default, like a pipe.
+        boost("profile", "save", "gone")
+        monkeypatch.delenv("BOOST_ASSUME_YES")
+        monkeypatch.setattr("sys.stdin", None)
+        r = boost("profile", "delete", "gone", expect=1)
+        assert "unexpected error" not in r.err
+        assert "pass -y or set BOOST_ASSUME_YES=1" in r.out
+        assert "deleted profile gone" not in r.out
+
+    def test_assume_yes_zero_does_not_confirm_a_delete(self, boost, installed,
+                                                       monkeypatch):
+        # Any non-empty BOOST_ASSUME_YES used to count as yes, so `=0` —
+        # the spelling of "off" — deleted the profile without asking.
+        boost("profile", "save", "gone")
+        monkeypatch.setenv("BOOST_ASSUME_YES", "0")
+        monkeypatch.setattr("sys.stdin", None)
+        r = boost("profile", "delete", "gone", expect=1)
+        assert "pass -y or set BOOST_ASSUME_YES=1" in r.out
+        assert "deleted profile gone" not in r.out
+        assert "gone" in boost("profile", "list").out
+
     def test_delete_and_unknown(self, boost, installed):
         boost("profile", "save", "gone")
         r = boost("profile", "delete", "gone")
@@ -518,6 +758,15 @@ class TestProfile:
         r = boost("profile", "show", expect=2)
         assert "show needs a profile NAME" in r.err
 
+    @pytest.mark.parametrize("action", ["save", "list", "show", "diff",
+                                        "delete"])
+    def test_prune_outside_use_rc2(self, boost, installed, action):
+        # `profile save p3 --prune -y` reported "saved" and pruned nothing.
+        r = boost("profile", action, "p3", "--prune", "-y", expect=2)
+        assert "--prune only applies to `profile use`" in r.err
+        assert r.out == ""
+        assert not list(paths.profiles_dir().glob("*.json"))
+
     def test_list_and_show_json(self, boost, installed):
         boost("profile", "save", "daily")
         r = boost("profile", "list", "--json")
@@ -526,14 +775,16 @@ class TestProfile:
         assert data[0]["name"] == "daily" and data[0]["skills"] == 1
         r = boost("profile", "show", "daily", "--json")
         prof = json.loads(r.out)
-        assert prof["skills"]["brainstorming"] == {"tap": "fixture-tap",
-                                                   "version": "1.4.0"}
+        assert prof["skills"]["brainstorming"] == {
+            "tap": "fixture-tap", "version": "1.4.0",
+            "commit": lockfile.get_skill("brainstorming")["commit"]}
         assert prof["user"] == USER
 
     def test_save_json(self, boost, installed):
         first = json.loads(boost("profile", "save", "daily", "--json").out)
         assert first == {"name": "daily", "updated": False, "was_skills": None,
-                          "skills": 1, "rules_not_captured": 0,
+                          "skills": 1, "sidelined_not_captured": [],
+                          "rules_not_captured": 0,
                           "workflows_not_captured": 0}
         boost("install", "tdd-workflow")
         second = json.loads(boost("profile", "save", "daily", "--json").out)
@@ -541,14 +792,28 @@ class TestProfile:
         assert second["was_skills"] == 1
         assert second["skills"] == 2
 
+    def test_a_name_that_is_not_a_slug_keeps_stdout_pure_json(self, boost,
+                                                              installed):
+        # The slug note used to land on stdout ahead of the object, so
+        # json.loads failed at char 2 for every action but `list`.
+        note = "  using profile name 'my-team' (from 'My Team')\n"
+        r = boost("profile", "save", "My Team", "--json")
+        assert json.loads(r.out)["name"] == "My Team"
+        assert r.err == note
+        for action in ("show", "diff", "use", "delete"):
+            r = boost("profile", action, "My Team", "--json")
+            assert json.loads(r.out), action
+            assert r.err == note, action
+
     def test_use_json_reports_installs_and_sidelines(self, boost, tapped):
         boost("install", "brainstorming")
         boost("profile", "save", "solo")
         boost("install", "cowboy-coding")
         r = json.loads(boost("profile", "use", "solo", "--json").out)
         assert r == {"name": "solo", "installed": [], "not_found": [],
+                     "failed": [],
                      "uninstalled": [], "sidelined": ["cowboy-coding"],
-                     "kept_extras": False, "other_kind": {}}
+                     "kept_extras": False, "other_kind": {}, "differs": []}
 
         # cowboy-coding stays in the lock (sidelined, not uninstalled), so a
         # second `use --prune` still sees it as an extra to remove.
@@ -556,6 +821,40 @@ class TestProfile:
                              "--json").out)
         assert r["uninstalled"] == ["cowboy-coding"]
         assert r["sidelined"] == []
+
+    def test_use_prune_keeps_a_skill_whose_only_copy_is_the_store(
+            self, boost, tapped, monkeypatch):
+        # Recorded by `boost sync` where it was found, it has nowhere to come
+        # back from, so switching profiles must not delete it on the way.
+        boost("install", "brainstorming")
+        boost("profile", "save", "solo")
+        boost("install", "cowboy-coding")
+        mine = _hand_made_skill("pr-me")
+        boost("sync")
+        monkeypatch.delenv("BOOST_ASSUME_YES")
+        monkeypatch.setattr("sys.stdin", _FakeTtyStdin("n\n"))
+        r = boost("profile", "use", "solo", "--prune")
+        assert ("uninstall 1 skill not in the profile (cowboy-coding)? [y/N]"
+                in r.out)
+        monkeypatch.setenv("BOOST_ASSUME_YES", "1")
+        r = boost("profile", "use", "solo", "--prune")
+        flat = " ".join(r.out.split())
+        assert "uninstalled cowboy-coding" in flat
+        assert ("kept pr-me: the store holds its only copy — `boost uninstall "
+                "pr-me` deletes it") in flat
+        # The declined run above already set it aside, so this one does not
+        # report sidelining it again.
+        assert "sidelined" not in flat
+        assert lockfile.get_skill("pr-me")["sidelined_by"] == "profile"
+        # Its only copy is held aside, not deleted.
+        assert not os.path.lexists(mine)
+        assert (paths.held_skills_dir() / "pr-me" / "SKILL.md").is_file()
+        assert not os.path.lexists(paths.home() / ".claude" / "skills" / "pr-me")
+        # Already set aside by the run above, so a repeat sidelines nothing
+        # new — it still names the only copy it keeps.
+        r = json.loads(boost("profile", "use", "solo", "--prune", "--json").out)
+        assert (r["uninstalled"], r["sidelined"]) == ([], [])
+        assert r["only_copies"] == ["pr-me"] and r["kept_extras"] is False
 
     def test_use_json_declines_prune(self, boost, tapped, monkeypatch):
         boost("install", "brainstorming")
@@ -594,7 +893,8 @@ class TestProfile:
     def test_save_prints_a_note_when_the_name_is_slugified(self, boost, installed):
         r = boost("profile", "save", "My Daily")
         assert "My Daily" in r.out
-        assert "my-daily" in r.out
+        # On stderr, so the same note cannot corrupt `--json` on stdout.
+        assert r.err == "  using profile name 'my-daily' (from 'My Daily')\n"
         assert (paths.profiles_dir() / "my-daily.json").is_file()
 
     def test_list_sorts_by_the_displayed_name_not_the_slugged_filename(
@@ -626,7 +926,226 @@ class TestProfile:
         assert not p.exists()
 
 
+def _ghost_profile(name, skills):
+    """A profile file naming ``skills``, written by hand like a teammate's,
+    at the version the fixture tap ships (``1.0.0`` for a name it lacks)."""
+    from boost_cli.core import catalog
+
+    def version(n):
+        found = catalog.find(n)
+        return str(found[0]["version"]) if found else "1.0.0"
+
+    path = paths.profiles_dir() / ("%s.json" % name)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({
+        "name": name, "saved": "2026-10-01T00:00:00Z", "user": "x",
+        "skills": {n: {"tap": "fixture-tap", "version": version(n)}
+                   for n in skills}}), encoding="utf-8")
+
+
+class TestProfileUseSkippedMembers:
+    """A switch that skipped members is not a switch: no checkmark, rc 1."""
+
+    def test_nothing_resolvable_keeps_the_setup_linked(self, boost, tapped):
+        boost("install", "brainstorming", "tdd-workflow")
+        before = sorted(lockfile.installed())
+        _ghost_profile("onlyghost", ["ghost-skill"])
+        r = json.loads(boost("profile", "use", "onlyghost", "--json",
+                             expect=1).out)
+        assert r["not_found"] == ["ghost-skill"]
+        assert r["failed"] == []
+        assert r["sidelined"] == []
+        assert r["left_linked"] == before
+        assert not [n for n, e in lockfile.installed().items()
+                    if e.get("sidelined_by")]
+        assert (paths.home() / ".claude" / "skills" / "brainstorming").exists()
+
+        r = boost("profile", "use", "onlyghost", expect=1)
+        flat = " ".join(r.out.split())
+        assert ("nothing in profile onlyghost could be installed — left %d "
+                "skills linked: %s" % (len(before), ", ".join(before))) in flat
+        assert ("applied profile onlyghost, but 1 skill not found — compare "
+                "with `boost profile diff onlyghost`") in flat
+        assert "switched to profile" not in flat
+        assert "sidelined" not in flat
+
+    def test_an_empty_profile_still_switches(self, boost, tapped):
+        boost("install", "brainstorming")
+        _ghost_profile("empty", [])
+        r = json.loads(boost("profile", "use", "empty", "--json").out)
+        assert r["sidelined"] == ["brainstorming"]
+        assert "left_linked" not in r
+
+    def test_mixed_profile_warns_instead_of_switching(self, boost, tapped):
+        boost("install", "brainstorming")
+        boost("profile", "save", "p1")
+        path = paths.profiles_dir() / "p1.json"
+        data = json.loads(path.read_text(encoding="utf-8"))
+        data["skills"]["ghost-skill"] = {"tap": "fixture-tap",
+                                         "version": "1.0.0"}
+        path.write_text(json.dumps(data), encoding="utf-8")
+        boost("install", "cowboy-coding")
+        r = boost("profile", "use", "p1", expect=1)
+        flat = " ".join(r.out.split())
+        assert "ghost-skill is in the profile but not in any tap — skipped" in flat
+        assert ("applied profile p1, but 1 skill not found — compare with "
+                "`boost profile diff p1`") in flat
+        assert "switched to profile" not in flat
+        # Something the profile names did resolve, so the extra is set aside.
+        assert lockfile.get_skill("cowboy-coding")["sidelined_by"] == "profile"
+
+    def test_a_refused_member_does_not_abort_the_switch(self, boost, tapped):
+        # cowboy-coding sorts between the other two, so the member after the
+        # refusal is the one the old abort never reached.
+        _ghost_profile("pb", ["brainstorming", "cowboy-coding",
+                              "tdd-workflow"])
+        boost("install", "jira-integration")   # pulls in commit-messages
+        boost("policy", "set", "blocked_skills", "cowboy-coding")
+        r = json.loads(boost("profile", "use", "pb", "--json", expect=1).out)
+        assert r["installed"] == ["brainstorming", "tdd-workflow"]
+        assert r["failed"] == ["cowboy-coding"]
+        assert r["not_found"] == []
+        assert r["differs"] == []
+        assert r["sidelined"] == ["commit-messages", "jira-integration"]
+        assert lockfile.get_skill("cowboy-coding") is None
+        assert [e for e in journal.events(action="profile", subject="pb")
+                if e.get("op") == "use"]
+
+    def test_a_refused_member_is_named_in_text(self, boost, tapped):
+        _ghost_profile("pb", ["brainstorming", "cowboy-coding"])
+        boost("policy", "set", "blocked_skills", "cowboy-coding")
+        r = boost("profile", "use", "pb", expect=1)
+        flat = " ".join(r.out.split())
+        assert ("cowboy-coding: policy blocks installing cowboy-coding: skill "
+                "'cowboy-coding' is on the blocklist") in flat
+        assert ("applied profile pb, but 1 skill failed to install — compare "
+                "with `boost profile diff pb`") in flat
+        assert "switched to profile" not in flat
+        assert lockfile.get_skill("brainstorming") is not None
+
+
+class TestProfileDiffIgnoresSidelined:
+    """`save` leaves sidelined skills out, so `diff` must not count them."""
+
+    def test_save_diff_use_use_is_idempotent(self, boost, tapped):
+        boost("install", "brainstorming", "tdd-workflow")
+        boost("profile", "save", "p1")
+        boost("install", "jira-integration")   # pulls in commit-messages
+        r = boost("profile", "use", "p1")
+        assert ("sidelined 2 skills not in the profile (unlinked, still "
+                "installed): commit-messages, jira-integration") in r.out
+        assert json.loads(boost("profile", "diff", "p1", "--json").out) == {
+            "missing": [], "extras": [], "changed": [], "other_kind": {}}
+
+        boost("profile", "save", "p2")
+        assert json.loads(boost("profile", "diff", "p2", "--json").out) == {
+            "missing": [], "extras": [], "changed": [], "other_kind": {}}
+        r = boost("profile", "diff", "p2")
+        assert "current setup matches profile p2" in r.out
+        for _ in range(2):
+            r = boost("profile", "use", "p2")
+            assert "sidelined" not in r.out
+            assert "switched to profile p2" in r.out
+            js = json.loads(boost("profile", "use", "p2", "--json").out)
+            assert js["sidelined"] == []
+        assert lockfile.get_skill("jira-integration")["sidelined_by"] == "profile"
+
+    def test_prune_still_removes_an_already_sidelined_extra(self, boost,
+                                                            tapped):
+        boost("install", "brainstorming")
+        boost("profile", "save", "solo")
+        boost("install", "cowboy-coding")
+        boost("profile", "use", "solo")
+        r = json.loads(boost("profile", "use", "solo", "--prune", "-y",
+                             "--json").out)
+        assert r["uninstalled"] == ["cowboy-coding"]
+        assert r["sidelined"] == []
+        assert lockfile.get_skill("cowboy-coding") is None
+
+
 # ---------------------------------------------------------------- protocol
+
+class TestProfileRestoresWhatItSaved:
+    """`profile use` puts a missing skill back the way the profile recorded
+    it — its agent scope and pin — and says so when the tap has moved."""
+
+    def test_use_reinstalls_into_the_recorded_agents_with_the_pin(
+            self, boost, tapped):
+        boost("install", "tdd-workflow", "--agent", "cursor")
+        boost("pin", "tdd-workflow")
+        boost("profile", "save", "p1")
+        saved = json.loads(boost("profile", "show", "p1", "--json").out)
+        assert saved["skills"]["tdd-workflow"]["only_agents"] == ["cursor"]
+        assert saved["skills"]["tdd-workflow"]["pinned"] is True
+        boost("uninstall", "tdd-workflow")
+
+        r = boost("profile", "use", "p1")
+        assert "installed tdd-workflow → cursor" in r.out
+        assert "switched to profile p1" in r.out
+        row = lockfile.get_skill("tdd-workflow")
+        assert row["only_agents"] == ["cursor"]
+        assert row["pinned"] is True
+        assert (paths.home() / ".cursor" / "skills" / "tdd-workflow").is_symlink()
+        assert not (paths.home() / ".claude" / "skills" / "tdd-workflow").exists()
+        assert boost("profile", "diff", "p1").out.strip().endswith(
+            "current setup matches profile p1")
+
+    def test_a_skill_the_tap_moved_is_not_reported_switched(
+            self, boost, fixture_tap_src, tmp_path):
+        src = tmp_path / "moving-tap"
+        shutil.copytree(fixture_tap_src, src)
+        boost("tap", src)
+        boost("install", "brainstorming")
+        old_commit = lockfile.get_skill("brainstorming")["commit"]
+        boost("profile", "save", "p1")
+        boost("uninstall", "brainstorming")
+        md = src / "skills" / "brainstorming" / "SKILL.md"
+        md.write_text(md.read_text(encoding="utf-8").replace(
+            "version: 1.4.0", "version: 1.5.0"), encoding="utf-8")
+        subprocess.run(["git", "-C", str(src), "commit", "-aqm", "bump"],
+                       check=True, capture_output=True)
+        boost("update")
+
+        r = boost("profile", "use", "p1")
+        new_commit = lockfile.get_skill("brainstorming")["commit"]
+        flat = " ".join(r.out.split())
+        assert ("brainstorming (version differs): profile has v1.4.0 @%s, "
+                "installed v1.5.0 @%s — its tap has moved since the profile "
+                "was saved" % (old_commit[:7], new_commit[:7])) in flat
+        assert "switched to profile" not in r.out
+        assert ("applied profile p1, but 1 skill differs from it — compare "
+                "with `boost profile diff p1`") in flat
+        # and `diff` agrees with what `use` just said
+        assert "~ brainstorming  (version differs)" in boost(
+            "profile", "diff", "p1").out
+        js = json.loads(boost("profile", "use", "p1", "--json").out)
+        assert js["differs"] == ["brainstorming"]
+
+    def test_a_commit_that_moved_under_one_version_is_a_difference(
+            self, boost, installed):
+        boost("profile", "save", "p1")
+
+        def move(row):
+            row["commit"] = "f" * 40
+        lockfile.update_skill("brainstorming", move)
+        r = boost("profile", "diff", "p1")
+        assert "~ brainstorming  (commit differs)" in r.out
+        assert json.loads(boost("profile", "diff", "p1", "--json").out)[
+            "changed"] == ["brainstorming"]
+
+    def test_an_older_profile_without_the_new_fields_still_switches(
+            self, boost, installed):
+        boost("profile", "save", "p1")
+        path = paths.profiles_dir() / "p1.json"
+        data = json.loads(path.read_text(encoding="utf-8"))
+        data["skills"] = {"brainstorming": {"tap": "fixture-tap",
+                                            "version": "1.4.0"}}
+        path.write_text(json.dumps(data), encoding="utf-8")
+        boost("uninstall", "brainstorming")
+        r = boost("profile", "use", "p1")
+        assert "switched to profile p1" in r.out
+        assert lockfile.get_skill("brainstorming").get("only_agents") is None
+
 
 class TestProtocol:
     def test_status_lists_url_forms(self, boost, sandbox, monkeypatch):
@@ -676,6 +1195,17 @@ class TestProtocol:
         r = boost("protocol", "open", expect=2)
         assert "open needs a boost:// URL" in r.err
 
+    @pytest.mark.parametrize("argv, msg", [
+        (("status", "--gui"), "--gui only applies to `protocol open`"),
+        (("register", "--gui"), "--gui only applies to `protocol open`"),
+        (("status", "boost://install/x"),
+         "a URL only applies to `protocol open`"),
+    ])
+    def test_open_only_arguments_elsewhere_rc2(self, boost, sandbox, argv, msg):
+        r = boost("protocol", *argv, expect=2)
+        assert msg in r.err
+        assert r.out == ""
+
     def test_declined_install_and_tap(self, boost, tapped, monkeypatch):
         monkeypatch.delenv("BOOST_ASSUME_YES")
         r = boost("protocol", "open", "boost://install/brainstorming", expect=1)
@@ -683,6 +1213,135 @@ class TestProtocol:
         assert not (paths.store_dir() / "brainstorming").exists()
         r = boost("protocol", "open", "boost://tap/owner/repo", expect=1)
         assert "cancelled" in r.out
+
+    def test_declined_hint_names_a_flag_that_parses(self, boost, tapped,
+                                                    monkeypatch):
+        # The decline prints "pass -y …"; `protocol open -y` used to be an
+        # argparse error (rc 2), so the hint named a flag that did not run.
+        monkeypatch.delenv("BOOST_ASSUME_YES")
+        r = boost("protocol", "open", "boost://install/brainstorming", expect=1)
+        assert "pass -y or set BOOST_ASSUME_YES=1" in r.out
+        r = boost("protocol", "open", "-y", "boost://install/brainstorming")
+        assert (paths.store_dir() / "brainstorming" / "SKILL.md").is_file()
+        assert "cancelled" not in r.out
+
+    def test_yes_does_not_register_a_declared_mcp_server(
+            self, boost, sandbox, fixture_tap_src, tmp_path, monkeypatch):
+        # `-y` answers "install mcp-needer?". Registering its server with
+        # every agent CLI, for every project on the machine, is a separate
+        # default-No question, and confirm() used to approve it too by
+        # reading -y off sys.argv — which is why argv carries it here.
+        tap = tmp_path / "mcp-tap"
+        shutil.copytree(fixture_tap_src, tap)
+        skill = tap / "skills" / "mcp-needer"
+        skill.mkdir(parents=True)
+        (skill / "SKILL.md").write_text(
+            "---\nname: mcp-needer\ndescription: needs an MCP server\n"
+            "version: 1.0.0\n---\n\n# mcp-needer\n\nBody.\n",
+            encoding="utf-8")
+        (skill / ".mcp.json").write_text(json.dumps(
+            {"mcpServers": {"ghx": {"command": "npx",
+                                    "args": ["-y", "ghx-server"]}}}),
+            encoding="utf-8")
+        subprocess.run(["git", "-C", str(tap), "add", "-A"],
+                       check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(tap), "commit", "-qm", "add"],
+                       check=True, capture_output=True)
+        boost("tap", tap)
+        monkeypatch.delenv("BOOST_ASSUME_YES")
+        registered = []
+        monkeypatch.setattr(
+            "boost_cli.commands.pkg._register_mcp_server",
+            lambda name, spec, **kw: registered.append(name))
+        url = "boost://install/mcp-needer"
+        monkeypatch.setattr("sys.argv", ["boost", "protocol", "open", url, "-y"])
+        r = boost("protocol", "open", url, "-y")
+        assert (paths.store_dir() / "mcp-needer" / "SKILL.md").is_file()
+        assert registered == []
+        assert "skipped — run these yourself when you're ready:" in r.out
+        assert "BOOST_ASSUME_YES" not in r.out
+        assert "pass -y" not in r.out
+
+    def test_yes_and_gui_are_exclusive(self, boost, tapped):
+        r = boost("protocol", "open", "-y", "--gui",
+                  "boost://install/brainstorming", expect=2)
+        assert "not allowed with argument" in r.err
+
+    def _dialog(self, monkeypatch, rc, stdout=""):
+        calls = []
+
+        def run(argv, **kw):
+            calls.append(argv)
+            return subprocess.CompletedProcess(argv, rc, stdout, "")
+        self._fake_desktop(monkeypatch, run=run,
+                           which=lambda c: "/usr/bin/zenity" if c == "zenity" else None)
+        return calls
+
+    @staticmethod
+    def _fake_desktop(monkeypatch, which, run=None):
+        # Through ask()'s own seams, not by patching shutil.which itself:
+        # that is one module object, and install needs the real one for git.
+        from boost_cli.core import dialog
+        real = dialog.ask
+        monkeypatch.setattr("boost_cli.commands.team.platform.system",
+                            lambda: "Linux")
+        monkeypatch.setattr(
+            "boost_cli.core.dialog.ask",
+            lambda prompt, ok, system: real(prompt, ok, system, which=which,
+                                            run=run, env={"DISPLAY": ":0"}))
+
+    def test_gui_installs_after_the_dialog_says_yes(self, boost, tapped,
+                                                    monkeypatch):
+        calls = self._dialog(monkeypatch, 0)
+        boost("protocol", "open", "--gui", "boost://install/brainstorming")
+        assert (paths.store_dir() / "brainstorming" / "SKILL.md").is_file()
+        assert calls == [[
+            "zenity", "--question", "--no-markup", "--title=boost",
+            "--ok-label=Install", "--cancel-label=Cancel", "--timeout=120",
+            "--text=A boost:// link asks to install brainstorming from "
+            "fixture-tap?"]]
+
+    def test_gui_ignores_assume_yes_and_honours_a_decline(self, boost, tapped,
+                                                          monkeypatch):
+        # BOOST_ASSUME_YES is set by the sandbox: the handler mode must still
+        # ask, because the person who clicked is the only one who can say yes.
+        calls = self._dialog(monkeypatch, 1)
+        r = boost("protocol", "open", "--gui", "boost://install/brainstorming",
+                  expect=1)
+        assert len(calls) == 1
+        assert "cancelled" in r.out
+        assert not (paths.store_dir() / "brainstorming").exists()
+        r = boost("protocol", "open", "--gui", "boost://tap/owner/repo",
+                  expect=1)
+        assert calls[1][4] == "--ok-label=Tap"
+        assert calls[1][-1] == "--text=A boost:// link asks to tap owner/repo?"
+        assert "cancelled" in r.out
+
+    def test_gui_with_no_dialog_changes_nothing_and_names_the_command(
+            self, boost, tapped, monkeypatch):
+        self._fake_desktop(monkeypatch, which=lambda c: None)
+        r = boost("protocol", "open", "--gui",
+                  "boost://install/brainstorming", expect=1)
+        assert "no terminal and no dialog tool to ask with — nothing was changed" in r.out
+        assert ("to go ahead, run in a terminal:" in r.out)
+        assert ("`boost protocol open "
+                "boost://install/brainstorming`") in r.out
+        assert "cancelled" in r.out
+        assert not (paths.store_dir() / "brainstorming").exists()
+
+    def test_status_flags_a_handler_written_before_the_dialog(
+            self, boost, sandbox, monkeypatch):
+        monkeypatch.setattr("boost_cli.commands.team.platform.system",
+                            lambda: "Linux")
+        paths.ensure_dirs()
+        script = paths.state_dir() / "boost-protocol-handler.sh"
+        script.write_text('#!/usr/bin/env bash\nexec boost protocol open "$1"\n',
+                          encoding="utf-8")
+        r = boost("protocol", "status")
+        assert "re-run `boost protocol register`" in r.out
+        monkeypatch.setattr("boost_cli.commands.team.shutil.which", lambda c: None)
+        boost("protocol", "register")
+        assert "re-run" not in boost("protocol", "status").out
 
     def test_open_tap_refreshes_the_completion_cache(self, boost, sandbox,
                                                       fixture_tap_src,
@@ -713,7 +1372,12 @@ class TestProtocol:
             # Windows filesystems have no POSIX exec bit for chmod to set.
             assert script.stat().st_mode & stat.S_IEXEC
         body = script.read_text(encoding="utf-8")
-        assert 'protocol open "$1"' in body
+        assert 'protocol open --gui "$1"' in body
+        # Any page can open a boost:// link: the handler must never carry a
+        # bypass, and must drop one inherited from the launching session.
+        assert "unset BOOST_ASSUME_YES\n" in body
+        assert " -y" not in body and "--yes" not in body
+        assert "asks in a desktop dialog before it installs" in r.out
         assert str(paths.repo_root() / "boost") in body
         assert "Automator" in r.out  # macOS guidance
         r = boost("protocol", "status")
@@ -728,6 +1392,51 @@ class TestProtocol:
         assert "not written" in status
         assert "no — build Boost.app" in status
 
+    def test_register_script_carries_the_state_it_was_registered_under(
+            self, boost, sandbox, monkeypatch):
+        monkeypatch.setattr("boost_cli.commands.team.platform.system",
+                            lambda: "Darwin")
+        monkeypatch.setenv("BOOST_HOME", str(sandbox / "alt boost"))
+        monkeypatch.setenv("BOOST_AGENTS_STORE", "~/st$re")
+        shim = sandbox / "bin $x" / 'b"st'
+        monkeypatch.setattr("boost_cli.core.paths.launcher", lambda: shim)
+        boost("protocol", "register")
+        script = sandbox / "alt boost" / "state" / "boost-protocol-handler.sh"
+        assert script.read_text(encoding="utf-8") == (
+            "#!/usr/bin/env bash\n"
+            "# boost:// URL handler — invoked with the URL as $1\n"
+            "unset BOOST_ASSUME_YES\n"
+            "export BOOST_HOME='%s'\n"
+            "export BOOST_AGENTS_STORE='%s'\n"
+            "exec '%s' protocol open --gui \"$1\"\n"
+            # str() of each Path, so the separator is the platform's own.
+            % (sandbox / "alt boost", sandbox / "st$re", shim))
+
+    @pytest.mark.skipif(sys.platform == "win32" or not shutil.which("bash"),
+                        reason="runs the bash handler")
+    def test_register_script_runs_with_hostile_paths(self, boost, sandbox,
+                                                     monkeypatch):
+        monkeypatch.setattr("boost_cli.commands.team.platform.system",
+                            lambda: "Darwin")
+        monkeypatch.setenv("BOOST_AGENTS_STORE", str(sandbox / "s $(x) `y`"))
+        bindir = sandbox / "bin $HOME `z`"
+        bindir.mkdir()
+        shim = bindir / "boost"
+        shim.write_text('#!/bin/sh\nprintf "%s|%s|%s|%s" '
+                        '"$BOOST_AGENTS_STORE" "${BOOST_HOME-unset}" "$3" "$4"\n',
+                        encoding="utf-8")
+        shim.chmod(0o755)
+        monkeypatch.setattr("boost_cli.core.paths.launcher", lambda: shim)
+        boost("protocol", "register")
+        script = paths.state_dir() / "boost-protocol-handler.sh"
+        env = {k: v for k, v in os.environ.items()
+               if k not in ("BOOST_HOME", "BOOST_AGENTS_STORE")}
+        got = subprocess.run(["bash", str(script), "boost://install/x"],
+                             capture_output=True, text=True, encoding="utf-8",
+                             env=env, check=True).stdout
+        assert got == "%s|unset|--gui|boost://install/x" % (
+            sandbox / "s $(x) `y`")
+
     def test_register_linux_and_other(self, boost, sandbox, monkeypatch):
         monkeypatch.setattr("boost_cli.commands.team.platform.system",
                             lambda: "Linux")
@@ -739,6 +1448,7 @@ class TestProtocol:
         assert desktop.exists()
         assert "x-scheme-handler/boost" in desktop.read_text(encoding="utf-8")
         assert "xdg-mime not found — handler written but not registered" in r.out
+        assert "neither zenity nor kdialog found" in r.out
         r = boost("protocol", "status")
         assert "boost-protocol.desktop" in r.out
         boost("protocol", "unregister")
@@ -877,6 +1587,69 @@ class TestReplay:
         r = boost("replay", "rollback", snap_id)
         assert "already at this snapshot — nothing to do" in r.out
 
+    def test_rollback_restores_recorded_scope_and_pins(self, boost, tapped,
+                                                       tick_clock):
+        # Regression: a removed skill came back from its tap with defaults —
+        # linked into every agent, unpinned, and with no commit pin — while
+        # rollback reported "complete" and `boost verify` passed.
+        boost("install", "brainstorming", "--agent", "cursor")
+        boost("pin", "brainstorming", "--commit")
+        recorded = lockfile.get_skill("brainstorming")
+        assert recorded["commit_pin"] == recorded["commit"]
+        boost("install", "tdd-workflow")
+        snap_id = lockfile.history_list()[-1]["id"]   # {brainstorming, tdd}
+        assert "brainstorming" in lockfile.history_read(snap_id)["skills"]
+        boost("uninstall", "brainstorming")
+
+        r = boost("replay", "rollback", snap_id)
+        assert "restored brainstorming → cursor" in r.out
+        assert "verify` will flag" not in r.out
+        assert "rollback to %s complete" % snap_id in r.out
+        row = lockfile.get_skill("brainstorming")
+        assert row["only_agents"] == ["cursor"]
+        assert row["agents"] == ["cursor"]
+        assert row["pinned"] is True
+        assert row["commit_pin"] == recorded["commit_pin"]
+        assert not os.path.lexists(
+            paths.home() / ".claude" / "skills" / "brainstorming")
+        assert (paths.home() / ".cursor" / "skills" / "brainstorming").is_symlink()
+        boost("verify")
+
+    def test_rollback_without_holds_restores_none(self, boost, tapped,
+                                                  tick_clock):
+        boost("install", "brainstorming")
+        boost("install", "tdd-workflow")
+        snap_id = lockfile.history_list()[-1]["id"]
+        boost("uninstall", "brainstorming")
+        boost("replay", "rollback", snap_id)
+        row = lockfile.get_skill("brainstorming")
+        assert not row.get("pinned")
+        assert "commit_pin" not in row
+        assert not row.get("only_agents")
+        assert os.path.lexists(
+            paths.home() / ".claude" / "skills" / "brainstorming")
+
+    def test_rollback_keeps_a_skill_whose_only_copy_is_the_store(
+            self, boost, tapped, tick_clock):
+        # Recorded by `boost sync` where it was found, it has nowhere to come
+        # back from: rolling back past it must not delete it.
+        boost("install", "brainstorming")
+        mine = _hand_made_skill("pr-me")
+        boost("sync")                        # snapshot: {brainstorming}
+        boost("install", "cowboy-coding")    # snapshot: {brainstorming, pr-me}
+        snap_id = lockfile.history_list()[0]["id"]
+        r = boost("replay", "rollback", snap_id)
+        flat = " ".join(r.out.split())
+        assert ("kept pr-me: the store holds its only copy — `boost uninstall "
+                "pr-me` deletes it") in flat
+        assert "uninstalled cowboy-coding" in flat
+        assert (mine / "SKILL.md").is_file() and "pr-me" in lockfile.installed()
+        assert "nothing else to roll back" in boost(
+            "replay", "rollback", snap_id).out
+        assert json.loads(boost("replay", "rollback", snap_id, "--json").out) == {
+            "id": snap_id, "no_changes": True, "not_rolled_back": [],
+            "only_copies": ["pr-me"]}
+
     def test_rollback_declined(self, boost, tapped, tick_clock, monkeypatch):
         _history_ops(boost)
         snap_id = lockfile.history_list()[1]["id"]
@@ -1009,6 +1782,179 @@ class TestReplay:
                       if l.startswith(history[1]["id"]))
         assert "+1" in newest                 # the rule the old delta missed
 
+    def test_rollback_brings_a_quarantined_skill_back_quarantined(
+            self, boost, tapped, tick_clock):
+        # Regression: the reinstall reset the flag, so a skill the snapshot
+        # recorded quarantined came back linked into every agent, "complete".
+        boost("install", "brainstorming")
+        boost("install", "tdd-workflow")
+        boost("quarantine", "tdd-workflow")
+        boost("uninstall", "tdd-workflow")
+        snap_id = lockfile.history_list()[-1]["id"]
+        assert lockfile.history_read(snap_id)["skills"]["tdd-workflow"][
+            "quarantined"] is True
+        r = boost("replay", "rollback", snap_id)
+        assert ("restored tdd-workflow (quarantined, as the snapshot "
+                "recorded)") in r.out
+        assert "rollback to %s complete" % snap_id in r.out
+        row = lockfile.get_skill("tdd-workflow")
+        assert row["quarantined"] is True and row["agents"] == []
+        assert (paths.held_skills_dir() / "tdd-workflow" / "SKILL.md").is_file()
+        assert not (paths.store_dir() / "tdd-workflow").exists()
+        for agent in (".claude", ".cursor", ".windsurf"):
+            assert not os.path.lexists(
+                paths.home() / agent / "skills" / "tdd-workflow")
+
+    def test_rollback_restores_a_sideline(self, boost, tapped, tick_clock):
+        boost("install", "brainstorming")
+        boost("install", "tdd-workflow")
+        from boost_cli.core import store
+        store.sideline("tdd-workflow", "profile")
+        boost("uninstall", "tdd-workflow")
+        snap_id = lockfile.history_list()[-1]["id"]
+        r = boost("replay", "rollback", snap_id)
+        assert ("restored tdd-workflow (sidelined by `boost profile`, as the "
+                "snapshot recorded)") in r.out
+        row = lockfile.get_skill("tdd-workflow")
+        assert row["sidelined_by"] == "profile" and row["agents"] == []
+        assert not os.path.lexists(
+            paths.home() / ".claude" / "skills" / "tdd-workflow")
+
+    def test_a_pin_flip_is_a_difference_and_rollback_undoes_it(
+            self, boost, tapped, tick_clock):
+        # Regression: compared by version alone, `show` said "matches" and
+        # rollback "nothing to do" while the pin the snapshot lacked stayed.
+        boost("install", "brainstorming")
+        boost("install", "tdd-workflow")
+        boost("pin", "brainstorming")
+        snap_id = lockfile.history_list()[-1]["id"]   # before the pin
+        r = boost("replay", "show", snap_id)
+        assert "~ brainstorming  pinned no → yes" in r.out
+        assert "matches" not in r.out
+        data = json.loads(boost("replay", "show", snap_id, "--json").out)
+        assert data["since_snapshot"]["changed"] == ["brainstorming"]
+        assert data["since_snapshot"]["differences"] == {
+            "brainstorming": {"pinned": [False, True]}}
+        r = boost("replay", "rollback", snap_id)
+        assert "revisit 1 changed skill(s)" in r.out
+        assert ("restored brainstorming's pinned as the snapshot recorded"
+                in r.out)
+        assert "rollback to %s complete" % snap_id in r.out
+        assert "pinned" not in lockfile.get_skill("brainstorming")
+        assert "current state matches this snapshot" in boost(
+            "replay", "show", snap_id).out
+        assert "already at this snapshot — nothing to do" in boost(
+            "replay", "rollback", snap_id).out
+
+    def test_rollback_reapplies_a_released_pin_json(self, boost, tapped,
+                                                    tick_clock):
+        boost("install", "brainstorming")
+        boost("pin", "brainstorming")
+        boost("install", "tdd-workflow")
+        snap_id = lockfile.history_list()[-1]["id"]   # pinned, no tdd
+        boost("unpin", "brainstorming")
+        r = json.loads(boost("replay", "rollback", snap_id, "--json").out)
+        assert r == {"id": snap_id, "uninstalled": ["tdd-workflow"],
+                     "restored": [], "unrestorable": [], "version_diffs": [],
+                     "not_rolled_back": [],
+                     "holds_restored": ["brainstorming"]}
+        assert lockfile.get_skill("brainstorming")["pinned"] is True
+
+    def test_a_same_version_content_change_is_not_reported_as_matching(
+            self, boost, fixture_tap_src, tmp_path, tick_clock):
+        src = tmp_path / "rp-content"
+        shutil.copytree(fixture_tap_src, src)
+        boost("tap", src)
+        boost("install", "brainstorming")
+        boost("install", "tdd-workflow")
+        md = src / "skills" / "tdd-workflow" / "SKILL.md"
+        md.write_text(md.read_text(encoding="utf-8")
+                      + "\n- Run the whole suite twice.\n", encoding="utf-8")
+        subprocess.run(["git", "-c", "user.email=t@t.test", "-c",
+                        "user.name=t", "commit", "-qam", "body"],
+                       cwd=str(src), check=True, capture_output=True)
+        before = lockfile.get_skill("tdd-workflow")
+        boost("update")
+        after = lockfile.get_skill("tdd-workflow")
+        assert after["version"] == before["version"]
+        assert after["commit"] != before["commit"]
+        snap_id = lockfile.history_list()[-1]["id"]   # before the update
+        line = ("~ tdd-workflow  commit %s → %s · sha256 %s → %s"
+                % (before["commit"][:12], after["commit"][:12],
+                   before["sha256"][:12], after["sha256"][:12]))
+        r = boost("replay", "show", snap_id)
+        assert line in r.out and "matches" not in r.out
+        for _ in range(2):   # nothing a rerun does can change it
+            r = boost("replay", "rollback", snap_id, expect=1)
+            flat = " ".join(r.out.split()) + " " + " ".join(r.err.split())
+            assert "tdd-workflow differs from the snapshot: commit" in flat
+            assert ("finished with 1 skill still differing from the "
+                    "snapshot: tdd-workflow") in flat
+            assert "complete" not in flat and "nothing to do" not in flat
+        r = json.loads(boost("replay", "rollback", snap_id, "--json",
+                             expect=1).out)
+        assert r["version_diffs"] == [{
+            "skill": "tdd-workflow", "snapshot": before["version"],
+            "current": after["version"], "fields": ["commit", "sha256"]}]
+        assert r["restored"] == [] and r["uninstalled"] == []
+
+    def test_rollback_refuses_to_delete_local_edits(self, boost, tapped,
+                                                    tick_clock):
+        # Regression: an edited skill installed since the snapshot was
+        # uninstalled for good, and rolling forward brought the tap's copy.
+        boost("install", "brainstorming")
+        boost("install", "commit-messages")
+        snap_id = lockfile.history_list()[-1]["id"]   # {brainstorming}
+        md = paths.store_dir() / "commit-messages" / "SKILL.md"
+        md.write_text(md.read_text(encoding="utf-8") + "MY LOCAL EDIT\n",
+                      encoding="utf-8")
+        r = boost("replay", "rollback", snap_id, expect=1)
+        flat = " ".join((r.out + r.err).split())
+        assert ("not rolled back: it would uninstall commit-messages, which "
+                "has local edits nothing else holds — copy it aside, or "
+                "`boost replay rollback %s --discard-edits` deletes them"
+                % snap_id) in flat
+        assert "MY LOCAL EDIT" in md.read_text(encoding="utf-8")
+        assert "commit-messages" in lockfile.installed()
+        assert json.loads(boost("replay", "rollback", snap_id, "--json",
+                                expect=1).out) == {
+            "id": snap_id, "refused": "local-edits",
+            "edited": ["commit-messages"]}
+        assert "MY LOCAL EDIT" in md.read_text(encoding="utf-8")
+        r = boost("replay", "rollback", snap_id, "--discard-edits")
+        assert "uninstalled commit-messages" in r.out
+        assert "rollback to %s complete" % snap_id in r.out
+        assert not md.exists()
+
+    def test_snapshot_restore_can_itself_be_rolled_back(self, boost, tapped,
+                                                        tick_clock):
+        # Regression: the restore swapped the lock in with no history entry
+        # for the state it replaced, and stamped with the archive's old
+        # `updated` — so replay could not undo it, and ids collided.
+        import re
+        boost("install", "brainstorming")
+        boost("install", "commit-messages")
+        r = boost("snapshot", "save", "before-x")
+        snap = re.search(r"saved (snap-[\w-]+)", r.out).group(1)
+        boost("uninstall", "commit-messages")
+        boost("install", "cowboy-coding")
+        before = {h["id"] for h in lockfile.history_list()}
+        boost("snapshot", "restore", snap, "-y")
+        assert sorted(lockfile.installed()) == ["brainstorming",
+                                                 "commit-messages"]
+        history = lockfile.history_list()
+        kept = [h for h in history if h["id"] not in before
+                and "cowboy-coding" in lockfile.history_read(h["id"])["skills"]]
+        assert len(kept) == 1
+        # Chronological: nothing written before the restore sorts after it.
+        assert [h["updated"] for h in history] == sorted(
+            h["updated"] for h in history)
+        assert lockfile.read()["updated"] > kept[0]["updated"]
+        r = boost("replay", "rollback", kept[0]["id"])
+        assert "rollback to %s complete" % kept[0]["id"] in r.out
+        assert sorted(lockfile.installed()) == ["brainstorming",
+                                                 "cowboy-coding"]
+
 
 # ---------------------------------------------------------------- who
 
@@ -1023,6 +1969,34 @@ class TestWho:
         assert cols[3] == "1"   # installs
         assert "USER" in r.out and "LAST ACTIVE" in r.out
         assert "based on the local journal" in r.out
+
+    def test_an_update_is_not_counted_as_an_install(self, boost, installed):
+        # `boost update`/`reinstall` journal "install" with via=update/
+        # reinstall; INSTALLS must count what `boost trending` counts.
+        journal.log("install", "brainstorming", via="update")
+        journal.log("install", "brainstorming", via="reinstall")
+        r = boost("who")
+        cols = next(l for l in r.out.splitlines()
+                    if l.startswith(USER)).split()
+        assert cols[1] == "4"   # every event is still an event
+        assert cols[3] == "1"   # but only one put the skill here
+        assert json.loads(boost("who", "--json").out)[USER]["installs"] == 1
+
+    def test_a_real_update_counts_one_install(
+            self, boost, fixture_tap_src, tmp_path):
+        import subprocess
+        tap_dir = tmp_path / "who-tap"
+        shutil.copytree(fixture_tap_src, tap_dir)
+        boost("tap", tap_dir)
+        boost("install", "brainstorming")
+        md = tap_dir / "skills" / "brainstorming" / "SKILL.md"
+        md.write_text(md.read_text(encoding="utf-8").replace("1.4.0", "1.5.0"),
+                      encoding="utf-8")
+        subprocess.run(["git", "-c", "user.email=t@t.test", "-c", "user.name=t",
+                        "commit", "-qam", "bump"], cwd=str(tap_dir),
+                       check=True, capture_output=True)
+        assert "upgraded brainstorming" in boost("update").out
+        assert json.loads(boost("who", "--json").out)[USER]["installs"] == 1
 
     def test_aggregate_json(self, boost, installed):
         r = boost("who", "--json")
@@ -1133,3 +2107,161 @@ class TestWho:
         r = boost("who")
         for ln in r.out.split("\n"):
             assert len(ln) <= 60, ln
+
+
+# ------------------------------------------------- unusable team state files
+
+_UNUSABLE = [
+    pytest.param(b"[]", "expected a JSON object, found list", id="list"),
+    pytest.param(b'{"a": "\xff\xfe"}', "not valid UTF-8", id="non-utf8"),
+    pytest.param(b'{"a": 1,}', "invalid JSON", id="garbage"),
+]
+
+
+class TestUnusableTeamState:
+    """Each reader refuses with rc 1 naming the file; each writer quarantines.
+
+    These used to be rc 70 (AttributeError / UnicodeDecodeError / TypeError),
+    and `cohort create` silently wrote one cohort over all of them.
+    """
+
+    @pytest.mark.parametrize("raw, why", [*_UNUSABLE,
+        pytest.param(b'{"skills": {"a": "b"}}',
+                     "'skills' entry 'a' is a str, not an object",
+                     id="non-object-record")])
+    @pytest.mark.parametrize("action", ["show", "diff", "use"])
+    def test_profile_readers_refuse_cleanly(self, boost, sandbox, action,
+                                            raw, why):
+        paths.ensure_dirs()
+        p = paths.profiles_dir() / "p1.json"
+        p.write_bytes(raw)
+        r = boost("profile", action, "p1", expect=1)
+        assert r.err.startswith("Error: profile p1 is unreadable: %s: " % p)
+        assert why in r.err
+        assert "boost profile save p1" in r.err
+        assert p.read_bytes() == raw
+
+    @pytest.mark.parametrize("raw, why", [*_UNUSABLE,
+        pytest.param(b'{"skills": 3}', "'skills' is a int, not an object",
+                     id="non-object-skills")])
+    def test_profile_save_replaces_and_keeps_the_bad_bytes(
+            self, boost, installed, raw, why):
+        paths.ensure_dirs()
+        p = paths.profiles_dir() / "p1.json"
+        p.write_bytes(raw)
+        assert "unreadable" in boost("profile", "list").out
+        r = boost("profile", "save", "p1")
+        assert "saved profile p1 (1 skill)" in r.out
+        assert "was corrupt and has been moved to" in r.err
+        assert p.with_name("p1.json.corrupt").read_bytes() == raw
+        assert list(json.loads(p.read_text(encoding="utf-8"))["skills"]) == [
+            "brainstorming"]
+
+    def test_profile_save_json_over_a_corrupt_profile_is_not_an_update(
+            self, boost, installed):
+        paths.ensure_dirs()
+        (paths.profiles_dir() / "p1.json").write_bytes(b"[]")
+        r = boost("profile", "save", "p1", "--json")
+        data = json.loads(r.out)
+        assert data["updated"] is False
+        assert data["was_skills"] is None
+
+    @pytest.mark.parametrize("raw, why", [*_UNUSABLE,
+        pytest.param(b'{"c1": "x"}', "cohort 'c1' is a str, not an object",
+                     id="non-object-cohort"),
+        pytest.param(b'{"c1": {"skills": ["a"]}}',
+                     "cohort 'c1' has no integer percent", id="no-percent")])
+    @pytest.mark.parametrize("argv", [["list"], ["status"], ["apply"],
+                                      ["delete", "c1"]])
+    def test_cohort_readers_refuse_cleanly(self, boost, sandbox, argv, raw,
+                                           why):
+        paths.ensure_dirs()
+        p = paths.state_dir() / "cohorts.json"
+        p.write_bytes(raw)
+        r = boost("cohort", *argv, expect=1)
+        assert r.err.startswith("Error: cohorts are unreadable: %s: " % p)
+        assert why in r.err
+        assert p.read_bytes() == raw
+
+    @pytest.mark.parametrize("raw, why", _UNUSABLE)
+    def test_cohort_create_quarantines_instead_of_overwriting(
+            self, boost, tapped, raw, why):
+        paths.ensure_dirs()
+        p = paths.state_dir() / "cohorts.json"
+        p.write_bytes(raw)
+        r = boost("cohort", "create", "c3", "--skills", "brainstorming")
+        assert "created cohort c3" in r.out
+        assert ("~/.boost/state/cohorts.json was corrupt and has been moved "
+                "to ~/.boost/state/cohorts.json.corrupt before writing the "
+                "new file") in r.err
+        assert p.with_name("cohorts.json.corrupt").read_bytes() == raw
+        assert list(json.loads(p.read_text(encoding="utf-8"))) == ["c3"]
+
+    def test_cohort_create_over_a_good_file_keeps_the_rest(self, boost, tapped):
+        boost("cohort", "create", "c1", "--skills", "brainstorming")
+        r = boost("cohort", "create", "c2", "--skills", "brainstorming")
+        assert "corrupt" not in r.err
+        assert not (paths.state_dir() / "cohorts.json.corrupt").exists()
+        assert sorted(json.loads((paths.state_dir() / "cohorts.json")
+                                 .read_text(encoding="utf-8"))) == ["c1", "c2"]
+
+    @pytest.mark.parametrize("snap", [{"version": 3, "skills": {"a": "b"}},
+                                      {"version": 3, "skills": "x"}])
+    @pytest.mark.parametrize("action", ["show", "rollback"])
+    def test_replay_refuses_a_malformed_entry_before_acting(
+            self, boost, installed, action, snap):
+        paths.ensure_dirs()
+        h = paths.lock_history_dir() / "lock-20200101T000000Z.json"
+        h.write_text(json.dumps(snap), encoding="utf-8")
+        before = paths.lockfile_path().read_bytes()
+        r = boost("replay", action, "20200101T000000Z", expect=1)
+        assert r.err.startswith(
+            "Error: lock history entry 20200101T000000Z is unreadable: %s: "
+            % h)
+        assert paths.lockfile_path().read_bytes() == before
+
+
+# ------------------------------------------- -y on every confirming action
+
+class TestYesFlag:
+    """The decline hint says "pass -y"; each of these used to reject it rc 2."""
+
+    @pytest.fixture()
+    def no_answer(self, monkeypatch):
+        # No env bypass, and a non-tty stdin: confirm() alone would decline.
+        monkeypatch.delenv("BOOST_ASSUME_YES")
+        monkeypatch.setattr("sys.stdin", io.StringIO(""))
+
+    @pytest.mark.parametrize("flag", ["-y", "--yes"])
+    def test_cohort_delete(self, boost, tapped, no_answer, flag):
+        boost("cohort", "create", "c1", "--skills", "brainstorming")
+        r = boost("cohort", "delete", "c1", expect=1)
+        assert "pass -y" in r.out + r.err
+        r = boost("cohort", "delete", "c1", flag)
+        assert "deleted cohort c1" in r.out
+        assert "pass -y" not in r.out + r.err
+
+    @pytest.mark.parametrize("flag", ["-y", "--yes"])
+    def test_profile_delete(self, boost, installed, no_answer, flag):
+        boost("profile", "save", "p1")
+        boost("profile", "delete", "p1", expect=1)
+        r = boost("profile", "delete", "p1", flag)
+        assert "deleted profile p1" in r.out
+        assert not (paths.profiles_dir() / "p1.json").exists()
+
+    def test_profile_use_prune(self, boost, tapped, no_answer):
+        boost("install", "brainstorming")
+        boost("profile", "save", "solo")
+        boost("install", "cowboy-coding")
+        r = boost("profile", "use", "solo", "--prune", "-y")
+        assert "uninstalled cowboy-coding" in r.out
+        assert not (paths.store_dir() / "cowboy-coding").exists()
+
+    def test_replay_rollback(self, boost, tapped, tick_clock, no_answer):
+        _history_ops(boost)
+        snap_id = lockfile.history_list()[1]["id"]
+        boost("replay", "rollback", snap_id, expect=1)
+        r = boost("replay", "rollback", snap_id, "-y")
+        assert "rollback to %s complete" % snap_id in r.out
+        assert "cowboy-coding" not in json.loads(
+            paths.lockfile_path().read_text(encoding="utf-8"))["skills"]

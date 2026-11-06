@@ -554,6 +554,38 @@ class TestWeightsRecording:
         assert data["millis_by_file"] == {}, \
             "a partial duration record must not weight the file"
 
+    def test_an_untested_mutant_does_not_untime_the_file(self, tmp_path):
+        # Exit 33 is mutmut's "no tests": it is never run, so it never has a
+        # duration. Treating it as missing data dropped store.py's measured
+        # time on the 2026-10-19 refresh and under-packed two shards into a
+        # 75-minute cancellation.
+        repo = _repo(tmp_path / "r", {"store.py": _fn("install")})
+        keys = ["boost_cli.core.store.x_install__mutmut_%d" % n for n in (1, 2, 3)]
+        codes = {keys[0]: 1, keys[1]: 0, keys[2]: ms.NO_TESTS_EXIT}
+        rc, data = self._run(tmp_path, repo, codes,
+                             durations={keys[0]: 40, keys[1]: 60})
+        assert rc == 0
+        assert data["millis_by_file"]["store.py"] == 100_000
+        assert data["millis_by_symbol"]["store.py"] == {"install": 100_000}
+
+    def test_an_unrun_mutant_still_untimes_the_file(self, tmp_path):
+        # A `None` code is a mutant whose shard never reached it. Only 33 is
+        # exempt; anything else without a duration is a partial record.
+        repo = _repo(tmp_path / "r", {"store.py": _fn("install")})
+        keys = ["boost_cli.core.store.x_install__mutmut_%d" % n for n in (1, 2, 3)]
+        codes = {keys[0]: 1, keys[1]: None, keys[2]: ms.NO_TESTS_EXIT}
+        rc, data = self._run(tmp_path, repo, codes, durations={keys[0]: 40})
+        assert rc == 0
+        assert data["millis_by_file"] == {}
+
+    def test_a_file_whose_every_mutant_is_untested_is_not_timed(self, tmp_path):
+        # Nothing ran, so there is no measurement; it stays imputed.
+        repo = _repo(tmp_path / "r", {"store.py": _fn("install")})
+        codes = {"boost_cli.core.store.x_install__mutmut_1": ms.NO_TESTS_EXIT}
+        rc, data = self._run(tmp_path, repo, codes)
+        assert rc == 0
+        assert data["millis_by_file"] == {}
+
     def test_durations_are_summed_and_converted_to_milliseconds(self, tmp_path):
         # mutmut records SECONDS as floats (measured: 0.24-7.93 per mutant).
         # Storing the raw sum under a millis name was a 1000x mislabel — it

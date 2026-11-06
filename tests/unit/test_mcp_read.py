@@ -40,6 +40,16 @@ class TestTheReplyCarriesTheBody:
         assert "installed: yes" in text
         assert mcp.read_reply("b", "body", installed=False).count("installed: no") == 1
 
+    def test_a_local_install_names_its_checkout(self):
+        text = mcp.read_reply("r", "body", kind="rule", installed=True,
+                              where="~/proj")
+        assert text.splitlines()[:3] == ["name: r", "kind: rule",
+                                         "installed: yes (project ~/proj)"]
+        assert mcp.read_reply("r", "body", installed=False,
+                              where="~/proj").splitlines()[1] == "installed: no"
+        assert mcp.read_reply("r", "body", installed=True,
+                              where="").splitlines()[1] == "installed: yes"
+
     def test_kind_is_marked_only_when_it_is_not_a_skill(self):
         # Same convention as hit_line: a marker on every line would spend a
         # token per reply to say "nothing unusual here".
@@ -102,6 +112,27 @@ class TestTruncationIsAnnounced:
         text = mcp.read_reply("x", body)
         assert "truncated" in text
         assert len(text) < len(body)
+
+    def test_a_long_later_line_is_cut_inside_not_dropped(self):
+        # A 1 MB description on line 3: the last newline in the budget sits
+        # after line 2, and cutting there served 18 characters of 12,000.
+        body = "---\nname: hugedesc\ndescription: " + "testing " * 131072
+        text = mcp.read_reply("hugedesc", body)
+        kept = text.split("\n\n", 1)[1].split("\n\n[truncated")[0]
+        assert kept == body[:mcp.READ_LIMIT]
+        assert ("[truncated at %d of %d characters" % (mcp.READ_LIMIT, len(body))
+                in text)
+
+    def test_the_line_cut_needs_half_the_budget(self):
+        # A boundary keeping exactly half the budget is used; one short of
+        # half is not, and the reply hard-cuts at the budget instead.
+        limit = 100
+        half = "a" * (limit // 2) + "\n" + "b" * 200
+        assert mcp.read_reply("x", half, limit=limit).split("\n\n")[1] == (
+            "a" * (limit // 2))
+        under = "a" * (limit // 2 - 1) + "\n" + "b" * 200
+        assert mcp.read_reply("x", under, limit=limit).split(
+            "\n\n[truncated")[0].split("\n\n", 1)[1] == under[:limit]
 
     def test_the_limit_is_honoured_not_merely_approached(self):
         body = "\n".join("line %d" % i for i in range(4000))
@@ -327,7 +358,8 @@ class TestTheKindLabelIsTrueBeforeInstall:
         monkeypatch.setattr(info.lockfile, "get_skill", lambda n: None)
         monkeypatch.setattr(info.catalog, "resolve_one", lambda n: entry)
         monkeypatch.setattr(info.registry, "get",
-                            lambda tap: types.SimpleNamespace(path=tmp_path))
+                            lambda tap: types.SimpleNamespace(
+                                path=tmp_path, name="t", is_cloned=True))
 
         path, lock, cat = info._resolve_skill_md("x")
         assert lock is None
@@ -349,3 +381,40 @@ class TestTheKindLabelIsTrueBeforeInstall:
             lambda n: (path, {"tap": "t"}, {"kind": "rule", "tap": "t"}))
         # Installed as a skill, catalog says rule: the lock wins.
         assert info._resolve_text("thing")[1] == "skill"
+
+
+class TestHeldItemsAreMarked:
+    """A quarantined item read as installed and usable on the MCP surface."""
+
+    def test_state_marks(self):
+        assert mcp.state_marks(None) == ""
+        assert mcp.state_marks({}) == ""
+        assert mcp.state_marks({"pinned": True}) == " [pinned]"
+        assert mcp.state_marks({"quarantined": True}) == " [quarantined]"
+        assert mcp.state_marks({"sidelined_by": "focus"}) == " [sidelined]"
+        assert mcp.state_marks({"pinned": True, "quarantined": True,
+                                "sidelined_by": "focus"}) == (
+            " [pinned] [quarantined]")
+        assert mcp.state_marks({}, modified=False) == ""
+        assert mcp.state_marks(None, modified=True) == " [modified]"
+        assert mcp.state_marks({"pinned": True}, True) == (
+            " [modified] [pinned]")
+
+    def test_held_line(self):
+        assert mcp.held_line("x", None) is None
+        assert mcp.held_line("x", {"quarantined": False}) is None
+        assert mcp.held_line("x", {"quarantined": True}) == (
+            "quarantined: yes — no agent loads it; `boost quarantine "
+            "--release x` puts it back")
+        assert mcp.held_line("x", {"sidelined_by": "focus"}) == (
+            "sidelined: yes (by `boost focus`) — no agent loads it")
+
+    def test_read_reply_header_carries_it(self):
+        held = mcp.held_line("x", {"quarantined": True})
+        text = mcp.read_reply("x", "body", installed=True, held=held)
+        assert text.split("\n\n")[0] == (
+            "name: x\ninstalled: yes\n%s" % held)
+        # Only an installed item can be held.
+        assert "quarantined" not in mcp.read_reply("x", "body", held=held)
+        assert mcp.read_reply("x", "body", installed=True).split(
+            "\n\n")[0] == "name: x\ninstalled: yes"

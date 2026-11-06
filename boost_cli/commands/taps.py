@@ -4,8 +4,8 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
+import sys
 from contextlib import suppress
 from pathlib import Path
 from typing import cast
@@ -16,10 +16,13 @@ from ..core import (
     complete,
     config,
     gitutil,
+    installedview,
+    integrity,
     journal,
     lockfile,
     paths,
     registry,
+    scopes,
     staleness,
     store,
     util,
@@ -38,31 +41,87 @@ def _tap_catalog(args, tapped: list[tuple[str, int]] | None = None) -> int:
         out.warn("no catalog registries match that filter")
         return 1
     if args.dry_run:
-        rows = [(e["name"], e["type"], e.get("category", ""),
-                 "~%d" % (e.get("est_items") or 0),
-                 out.role(e.get("focus", ""), "muted")) for e in selection]
-        # NAME is the owner/repo `boost tap` takes.
-        out.table(rows, headers=("NAME", "TYPE", "CATEGORY", "EST", "FOCUS"),
-                  whole=("NAME",))
-        print()
-        out.dim("%d registries · ~%d items (dry run — nothing tapped)"
-                % (len(selection), sum(e.get("est_items") or 0 for e in selection)))
-        return 0
+        plan = registry.plan_specs([str(e["url"]) for e in selection])
+        todo = [e for e, row in zip(selection, plan, strict=True)
+                if row.get("todo")]
+        if todo:
+            rows = [(e["name"], e["type"], e.get("category", ""),
+                     "~%d" % (e.get("est_items") or 0),
+                     out.role(e.get("focus", ""), "muted")) for e in todo]
+            # NAME is the owner/repo `boost tap` takes.
+            out.table(rows, headers=("NAME", "TYPE", "CATEGORY", "EST",
+                                     "FOCUS"), whole=("NAME",))
+            print()
+        rc = _print_held(plan)
+        out.dim("%s · ~%d items (dry run — nothing tapped)"
+                % (_dry_run_counts(plan),
+                   sum(e.get("est_items") or 0 for e in todo)))
+        return rc
     focus = {str(e["name"]): e.get("focus", "") for e in selection}
+    # The ★ follows the catalogue's own `curated` column, not the whole batch:
+    # stamping every row is what made it mark 463 registries. `--curated` still
+    # stars the lot, because that is the user saying so.
     return _tap_all([str(e["url"]) for e in selection], jobs=args.jobs,
-                    focus=focus, tapped=tapped)
+                    focus=focus, tapped=tapped, curated=args.curated,
+                    curated_names=frozenset(str(e["name"]) for e in selection
+                                            if e.get("curated")))
 
 
-def _print_dry_run(pairs: list[tuple[str, str]]) -> int:
-    """Print what `--defaults`/SPEC would tap and return 0, tapping nothing.
+def _print_dry_run(specs: list[str], at: str | None = None) -> int:
+    """Print what `--defaults`/SPEC would tap; 1 if the run would refuse one.
 
-    Shares the format of the `--catalog --dry-run` table above so the flag
-    reads the same regardless of which branch of `cmd_tap` it modifies.
+    Built from :func:`registry.plan_specs`, the split the real run makes, so
+    a registry already tapped is named as skipped rather than listed among
+    the ones to clone. Shares the format of the `--catalog --dry-run` table
+    above so the flag reads the same regardless of which branch of `cmd_tap`
+    it modifies.
     """
-    out.table(pairs, headers=("NAME", "URL"), whole=("NAME",))
-    print()
-    out.dim("%d registries (dry run — nothing tapped)" % len(pairs))
-    return 0
+    plan = registry.plan_specs(specs)
+    if at:
+        # `--at` never skips: a tap already configured is an error there
+        # (see cmd_tap), so the preview says so instead of "already tapped".
+        for row in plan:
+            if row.get("skipped"):
+                row.pop("skipped")
+                row["error"] = "already tapped, and --at does not move it"
+    todo = [(row["name"], row["url"]) for row in plan if row.get("todo")]
+    if todo:
+        out.table(todo, headers=("NAME", "URL"), whole=("NAME",))
+        print()
+    rc = _print_held(plan)
+    out.dim("%s (dry run — nothing tapped)" % _dry_run_counts(plan))
+    return rc
+
+
+def _print_held(plan: list[dict]) -> int:
+    """Name each planned spec the run would not clone; 1 if one would fail.
+
+    Worded as `_tap_all` words the same row, so a preview and its run read
+    alike line for line.
+    """
+    rc = 0
+    for row in plan:
+        if row.get("skipped"):
+            out.info(out.role(registry.already_tapped(
+                row["name"], row.get("tapped_as", row["name"])), "muted"))
+        elif not row.get("todo"):
+            out.warn("would not tap %s: %s" % (row["name"], row["error"]),
+                     wrap=True)
+            rc = 1
+    return rc
+
+
+def _dry_run_counts(plan: list[dict]) -> str:
+    """"2 registries to tap, 1 already tapped" — the split the run will make."""
+    todo = sum(1 for row in plan if row.get("todo"))
+    held = sum(1 for row in plan if row.get("skipped"))
+    bad = len(plan) - todo - held
+    parts = ["%d %s to tap" % (todo, "registry" if todo == 1 else "registries")]
+    if held:
+        parts.append("%d already tapped" % held)
+    if bad:
+        parts.append("%d refused" % bad)
+    return ", ".join(parts)
 
 
 def _skip_if_already_tapped(spec: str) -> bool:
@@ -74,14 +133,19 @@ def _skip_if_already_tapped(spec: str) -> bool:
     errored (exit 1), the second printed this muted line and exited 0. A
     spec that fails to parse is not "already tapped" — it falls through so
     the ordinary `registry.add` call raises its usual, more specific error.
+    Nor is a *different* repository under the same name: it falls through
+    too, and `registry.add` refuses it naming the URL that holds the name.
     """
     try:
-        name, _url = registry.parse_spec(spec)
+        name, url = registry.parse_spec(spec)
     except BoostError:
         return False
-    if not registry.is_tapped(name):
+    hit = next((t for t in registry.list_taps()
+                if registry.name_key(t.name) == registry.name_key(name)
+                and registry.same_source(t.url, url)), None)
+    if hit is None:
         return False
-    out.info(out.role("%s already tapped" % name, "muted"))
+    out.info(out.role(registry.already_tapped(name, hit.name), "muted"))
     return True
 
 
@@ -89,7 +153,8 @@ def _tap_all(urls: list[str], jobs: int | None,
              focus: dict[str, str] | None = None,
              pins: dict[str, str] | None = None,
              curated: bool = True,
-             tapped: list[tuple[str, int]] | None = None) -> int:
+             tapped: list[tuple[str, int]] | None = None,
+             curated_names: frozenset[str] = frozenset()) -> int:
     """Clone many registries at once, then scan each one that arrived.
 
     The split is the whole optimisation. Cloning is network latency — 1.6 s per
@@ -98,22 +163,26 @@ def _tap_all(urls: list[str], jobs: int | None,
     its output can be printed in order and its errors belong to one tap.
     """
     focus = focus or {}
-    results = registry.add_many(urls, curated=curated, pins=pins, jobs=jobs)
+    results = registry.add_many(urls, curated=curated, pins=pins, jobs=jobs,
+                                curated_names=curated_names)
     rc = 0
     for res in results:
         name = res["name"]
         if res.get("skipped"):
-            out.info(out.role("%s already tapped" % name, "muted"))
+            out.info(out.role(registry.already_tapped(
+                name, res.get("tapped_as", name)), "muted"))
             continue
         if not res.get("ok"):
-            out.warn("could not tap %s: %s" % (name, res.get("error", "")))
+            out.warn("could not tap %s: %s" % (name, res.get("error", "")),
+                     stream=sys.stderr)
             rc = 1
             continue
         tap = res["tap"]
         try:
             entries = catalog.rebuild_tap(tap)
         except BoostError as err:
-            out.warn("could not index %s: %s" % (name, err.message))
+            out.warn("could not index %s: %s" % (name, err.message),
+                     stream=sys.stderr)
             rc = 1
             continue
         journal.log("tap", tap.name)
@@ -146,7 +215,7 @@ def cmd_tap(argv) -> int:
     p = cliparse.parser(
         prog="boost tap",
         description="Add a git URL, GitHub repo, or local directory as a skill registry")
-    p.add_argument("spec", nargs="*",
+    p.add_argument("spec", type=util.nonempty_str, nargs="*",
                    help="owner/repo, a git URL, or a local directory — several "
                         "at once clone in parallel")
     p.add_argument("--defaults", action="store_true",
@@ -155,7 +224,7 @@ def cmd_tap(argv) -> int:
                    help="tap from the bundled curated registry catalog")
     p.add_argument("--type", choices=("skill", "rule", "workflow"),
                    help="with --catalog: restrict to one item type")
-    p.add_argument("--category", help="with --catalog: restrict to one category")
+    p.add_argument("--category", type=util.nonempty_str, help="with --catalog: restrict to one category")
     p.add_argument("--limit", type=util.positive_int, metavar="N",
                    help="with --catalog: only the top N registries by est. size")
     p.add_argument("--include-lists", action="store_true",
@@ -164,7 +233,7 @@ def cmd_tap(argv) -> int:
                    help="print what would be tapped, tap nothing")
     p.add_argument("--curated", action="store_true",
                    help="mark the tap as curated (★ in listings)")
-    p.add_argument("--at", metavar="SHA",
+    p.add_argument("--at", type=util.nonempty_str, metavar="SHA",
                    help="pin the clone to one 40-character commit, as a "
                         "published vector shard requires")
     p.add_argument("--jobs", type=util.positive_int, metavar="N",
@@ -172,6 +241,18 @@ def cmd_tap(argv) -> int:
                         "%d)" % (registry.DEFAULT_TAP_JOBS,
                                  registry.MAX_TAP_JOBS))
     args = p.parse_args(argv)
+    if not args.catalog:
+        # Each of these only narrows --catalog. Ignoring them elsewhere let
+        # `tap --limit 2 --defaults` clone every default registry.
+        stray = [flag for flag, val in (("--type", args.type),
+                                        ("--category", args.category),
+                                        ("--limit", args.limit),
+                                        ("--include-lists", args.include_lists))
+                 if val]
+        if stray:
+            p.error("%s only filter%s --catalog; pass --catalog or drop %s"
+                    % ("/".join(stray), "" if len(stray) > 1 else "s",
+                       "them" if len(stray) > 1 else "it"))
     if args.at and len(args.spec) != 1:
         p.error("--at pins one registry, so it needs exactly one SPEC")
     if not args.spec and not args.defaults and not args.catalog:
@@ -187,8 +268,7 @@ def cmd_tap(argv) -> int:
         rc |= _tap_catalog(args, tapped)
     if args.defaults:
         if args.dry_run:
-            rc |= _print_dry_run([(str(d["name"]), str(d["url"]))
-                                  for d in config.DEFAULT_TAPS])
+            rc |= _print_dry_run([str(d["url"]) for d in config.DEFAULT_TAPS])
         else:
             # "items", not "skills": the defaults now carry rules and
             # workflows, so a pure rules registry reported "257 skills"
@@ -200,7 +280,7 @@ def cmd_tap(argv) -> int:
                                   for d in config.DEFAULT_TAPS},
                            tapped=tapped)
     if args.spec and args.dry_run:
-        rc |= _print_dry_run(registry.parse_specs(list(args.spec)))
+        rc |= _print_dry_run(list(args.spec), at=args.at)
     elif args.spec and args.at:
         # --at pins one commit, which cannot describe "skip, already tapped"
         # — a tap already sitting on a different commit must fail loudly, not
@@ -268,18 +348,25 @@ def _untap_one(name: str, force: bool) -> int:
     try:
         tap = registry.get(name)
     except BoostError as exc:
-        out.warn("could not untap %s: %s" % (name, exc.message))
+        out.warn("could not untap %s: %s" % (name, exc.message),
+                 stream=sys.stderr)
         return 1
-    dependent = registry.dependents(tap.name)
-    if dependent:
-        labels = [n if kind == "skill" else "%s (%s)" % (n, kind)
-                  for kind, n in dependent]
+    labels = [n if kind == "skill" else "%s (%s)" % (n, kind)
+              for kind, n in registry.dependents(tap.name)]
+    labels += ["%s (project)" % n
+               for n in registry.project_dependents(tap.name)]
+    if labels:
         out.warn("%d installed item(s) from %s: %s"
-                 % (len(dependent), tap.name, ", ".join(labels)))
+                 % (len(labels), tap.name, ", ".join(labels)))
         out.warn("installed items keep working but lose their update source")
         if not force and not out.confirm("untap %s anyway?" % tap.name):
             out.info("cancelled")
             return 1
+    if labels:
+        # The last moment its URL is known: recorded on the rows that came
+        # from it, a later tap of another repo under this name reads as the
+        # source change it is, and `boost drift` can re-tap from it.
+        store.backfill_tap_urls()
     registry.remove(tap.name)
     complete.refresh_names()
     journal.log("untap", tap.name)
@@ -292,7 +379,7 @@ def cmd_untap(argv) -> int:
     p = cliparse.parser(
         prog="boost untap",
         description="Remove a registry tap")
-    p.add_argument("name", nargs="+",
+    p.add_argument("name", type=util.nonempty_str, nargs="+",
                    help="tap name(s) (owner/repo or short alias) — several "
                         "at once remove one invocation per tap")
     p.add_argument("-f", "--force", action="store_true",
@@ -411,20 +498,100 @@ def cmd_taps(argv) -> int:
     return 0
 
 
-def _outdated_display(r: dict) -> str:
+def _outdated_display(r: dict, configured: frozenset[str] = frozenset()) -> str:
     """Table rendering of one `cmd_outdated` row's machine fields.
 
     ``reason``/``latest``/``latest_commit`` are the JSON-facing values;
     everything a human reads (the "(content changed)" wording, the short
     commit) is derived here so the two representations can't drift apart.
+    ``configured`` names the taps still configured: a missing row from one of
+    them was removed upstream, which is what the footer calls it too.
     """
     if r["reason"] == staleness.SOURCE_MISSING:
-        return staleness.OUTDATED_SOURCE_MISSING
+        return (staleness.OUTDATED_REMOVED_UPSTREAM if r["tap"] in configured
+                else staleness.OUTDATED_SOURCE_MISSING)
+    if r["reason"] == staleness.SOURCE_CHANGED:
+        return staleness.OUTDATED_SOURCE_CHANGED
+    if r["reason"] == staleness.NOT_CLONED:
+        return staleness.OUTDATED_NOT_CLONED
     latest = r["latest"] or "?"
+    if r["reason"] == staleness.DOWNGRADE:
+        return "%s (older than installed)" % latest
     if r["reason"] == staleness.CONTENT:
         return ("%s (%s)" % (latest, r["latest_commit"])
                 if r["latest_commit"] else "%s (content changed)" % latest)
     return latest
+
+
+def _outdated_qualifier(r: dict) -> str:
+    """NAME-column suffix for a non-skill kind and for a project install.
+
+    The project mark is what tells two rows of one name apart when a skill is
+    installed in both scopes, and it says which command refreshes it.
+    """
+    tags = [r["kind"]] if r["kind"] != "skill" else []
+    if r.get("scope") == scopes.SCOPE_PROJECT:
+        tags.append(scopes.SCOPE_PROJECT)
+    return " (%s)" % ", ".join(tags) if tags else ""
+
+
+def _outdated_holds(r: dict) -> str:
+    """INSTALLED-column suffix naming what holds the row where it is.
+
+    `boost update` skips a pinned or quarantined item and an item with local
+    edits ("has local edits — update skipped"), so a row showing none of the
+    three read as a plain upgrade that the next run would take.
+    """
+    tags = [tag for tag, on in (("pinned", r["pinned"]),
+                                ("quarantined", r["quarantined"]),
+                                ("local edits", r["local_edits"])) if on]
+    return " (%s)" % ", ".join(tags) if tags else ""
+
+
+def _held_by_edits(reason: str | None, kind: str, name: str, lk: dict,
+                   base=None) -> bool:
+    """Whether `boost update` would hold this row back for its local edits.
+
+    Asked only of a row with an upgrade to take, so `outdated` hashes no copy
+    it has nothing to say about -- and the question is `boost update`'s own
+    (:func:`integrity.locally_edited`), so the two cannot disagree. Update
+    checks quarantine, then the pin, then the edits: a quarantined or pinned
+    row is held by that first (an `evolve --apply` revision is pinned *and*
+    reads as edited), so it is not reported as held by its edits.
+    """
+    if (reason not in (staleness.VERSION, staleness.CONTENT,
+                       staleness.DOWNGRADE)
+            or lk.get("quarantined") or lk.get("pinned")):
+        return False
+    return integrity.locally_edited(kind, name, lk, base=base)
+
+
+def _held_tap_reason(tap_name: str, lk: dict,
+                     memo: dict[str, registry.Tap | None]) -> str | None:
+    """Why a row of a *configured* tap cannot be compared at all, else None.
+
+    The tap now naming another repository than the lock recorded is
+    source-changed — its same-named item is not this one's upstream, and
+    calling it an update is how `boost update` replaced a skill with an
+    unrelated one. A configured tap with no clone is not-cloned: `boost
+    update` clones it, which "removed upstream" told the user it could not.
+    Source-changed is checked first, because cloning would fetch the other
+    repository. An unconfigured tap returns None and is reported by the
+    caller's own source-missing path. ``memo`` caches one lookup per tap.
+    """
+    if tap_name not in memo:
+        try:
+            memo[tap_name] = registry.get(tap_name)
+        except BoostError:
+            memo[tap_name] = None
+    tap = memo[tap_name]
+    if tap is None:
+        return None
+    if registry.source_changed(lk, tap):
+        return staleness.SOURCE_CHANGED
+    if not tap.is_cloned:
+        return staleness.NOT_CLONED
+    return None
 
 
 def cmd_outdated(argv) -> int:
@@ -438,11 +605,32 @@ def cmd_outdated(argv) -> int:
 
     results = []
     heads = {}  # tap name -> HEAD commit ("" when unknown)
-    for name, lk in sorted(lockfile.installed().items()):
+    tap_memo: dict[str, registry.Tap | None] = {}
+    # Read once and passed to every lookup: `find(name)` alone re-validates
+    # every tap's cache per call, which over 308 installed skills and 460
+    # taps was a third of this command.
+    entries = catalog.all_entries()
+    # Both locks: a `--local` skill is recorded only in the repo's own, and
+    # walking the user lock alone answered "everything up to date" in the
+    # directory where `boost info` said the same skill had an update.
+    for name, lk, scope, _base in integrity.installed_skill_rows():
         tap_name = lk.get("tap", "local")
         if tap_name == "local":
             continue
-        matches = [e for e in catalog.find(name) if e["tap"] == tap_name]
+        held = _held_tap_reason(tap_name, lk, tap_memo)
+        if held:
+            results.append({"name": name, "kind": "skill",
+                            "installed": str(lk.get("version") or "0.0.0"),
+                            "latest": None, "reason": held,
+                            "latest_commit": None,
+                            "tap": tap_name, "pinned": bool(lk.get("pinned")),
+                            "quarantined": bool(lk.get("quarantined")),
+                            "local_edits": False, "scope": scope})
+            continue
+        # Skills only: a same-named workflow upstream is not this skill's
+        # update, and listing it as one sent `boost update` to "upgrade" it.
+        matches = [e for e in catalog.find(name, entries=entries)
+                   if e["tap"] == tap_name and e.get("kind", "skill") == "skill"]
         if not matches:
             # The tap is untapped, or dropped this entry entirely — same
             # condition the rule/workflow loop below reports honestly, so a
@@ -452,44 +640,55 @@ def cmd_outdated(argv) -> int:
                             "latest": None,
                             "reason": staleness.SOURCE_MISSING,
                             "latest_commit": None,
-                            "tap": tap_name, "pinned": bool(lk.get("pinned"))})
+                            "tap": tap_name, "pinned": bool(lk.get("pinned")),
+                            "quarantined": bool(lk.get("quarantined")),
+                            "local_edits": False, "scope": scope})
             continue
         entry, _warning = catalog.select_lock_source(matches, lk)
         entry = cast(dict, entry)             # matches is non-empty above
         latest = str(entry.get("version") or "0.0.0")
         installed_v = str(lk.get("version") or "0.0.0")
-        head, src_sha, src_missing = "", None, False
+        head, src_sha, src_missing, exec_changed = "", None, False, False
         if not util.semver_gt(latest, installed_v):
             if tap_name not in heads:
-                try:
-                    tap = registry.get(tap_name)
-                    heads[tap_name] = (gitutil.head_commit(tap.path)
-                                       if tap.is_cloned else "")
-                except BoostError:
-                    heads[tap_name] = ""
+                # Configured and cloned: `_held_tap_reason` returned above
+                # for every other configured tap.
+                tap = tap_memo.get(tap_name)
+                heads[tap_name] = (gitutil.head_commit(tap.path)
+                                   if tap is not None else "")
             head = heads[tap_name]
             if head and head != lk.get("commit"):
                 try:
-                    src_sha = util.sha256_dir(store.source_dir_for(entry))
+                    src_sha = store.skill_source_sha(entry)
                 except BoostError:
                     src_missing = True
+                else:
+                    exec_changed = store.source_exec_changed(
+                        entry, lk, integrity.project_skill_dir(lk, _base)
+                        if scope == scopes.SCOPE_PROJECT
+                        else store.skill_store_dir(name))
         base = {"name": name, "kind": "skill", "installed": installed_v,
-                "tap": tap_name, "pinned": bool(lk.get("pinned"))}
+                "tap": tap_name, "pinned": bool(lk.get("pinned")),
+                "quarantined": bool(lk.get("quarantined")),
+                "local_edits": False, "scope": scope}
         if src_missing:
             results.append(base | {"latest": None,
                                    "reason": staleness.SOURCE_MISSING,
                                    "latest_commit": None})
         else:
-            reason = staleness.upstream_reason(
+            reason = staleness.rewound(staleness.upstream_reason(
                 installed_v, latest, lk.get("commit", ""), head,
-                lk.get("sha256", ""), src_sha)
+                lk.get("sha256", ""), src_sha, exec_changed),
+                installed_v, latest, pinned=bool(lk.get("pinned")))
+            base["local_edits"] = _held_by_edits(
+                reason, "skill", name, lk,
+                _base if scope == scopes.SCOPE_PROJECT else None)
             if reason == staleness.VERSION:
                 results.append(base | {"latest": latest,
                                        "reason": staleness.VERSION,
                                        "latest_commit": None})
-            elif reason == staleness.CONTENT:
-                results.append(base | {"latest": latest,
-                                       "reason": staleness.CONTENT,
+            elif reason in (staleness.CONTENT, staleness.DOWNGRADE):
+                results.append(base | {"latest": latest, "reason": reason,
                                        "latest_commit": head[:7]})
 
     # Rules/workflows have no store dir — their staleness signal is the lock's
@@ -503,26 +702,30 @@ def cmd_outdated(argv) -> int:
                 continue
             installed_v = str(lk.get("version") or "0.0.0")
             base = {"name": name, "kind": kind, "installed": installed_v,
-                    "tap": tap_name, "pinned": bool(lk.get("pinned"))}
-            try:
-                raw = (registry.get(tap_name).path / lk.get("source_file", "")
-                       ).read_text(encoding="utf-8", errors="replace")
-            except (OSError, BoostError):
+                    "tap": tap_name, "pinned": bool(lk.get("pinned")),
+                    "quarantined": bool(lk.get("quarantined")),
+                    "local_edits": False,
+                    "scope": lk.get("scope") or scopes.SCOPE_USER}
+            held = _held_tap_reason(tap_name, lk, tap_memo)
+            if held:
+                results.append(base | {"latest": None, "reason": held,
+                                       "latest_commit": None})
+                continue
+            tap = tap_memo[tap_name]
+            if tap is None:
                 results.append(base | {"latest": None,
                                        "reason": staleness.SOURCE_MISSING,
                                        "latest_commit": None})
                 continue
-            if hashlib.sha256(raw.encode("utf-8")).hexdigest() == lk.get("sha256"):
+            # The one comparison `boost info` makes too, so the two cannot
+            # disagree about whether a rule or workflow has an update.
+            reason, r_latest = installedview.update_of(
+                kind, lk, tap, catalog.find(name, entries=entries))
+            if reason is None:
                 continue
-            matches = [e for e in catalog.find(name)
-                       if e["tap"] == tap_name
-                       and e.get("kind", "skill") == kind]
-            entry, _warning = catalog.select_lock_source(matches, lk)
-            r_latest: str | None = (str(entry.get("version"))
-                                    if entry and entry.get("version") else None)
-            reason = (staleness.VERSION
-                      if r_latest and util.semver_gt(r_latest, installed_v)
-                      else staleness.CONTENT)
+            reason = staleness.rewound(reason, installed_v, r_latest,
+                                       pinned=bool(lk.get("pinned")))
+            base["local_edits"] = _held_by_edits(reason, kind, name, lk)
             # Rules/workflows carry no tap-HEAD commit here (only a source-file
             # sha comparison), so `latest_commit` stays unset — `_outdated_display`
             # falls back to the same "(content changed)" wording skills used to
@@ -536,16 +739,32 @@ def cmd_outdated(argv) -> int:
     if not results:
         out.ok("everything up to date")
         return 0
-    rows = [(r["name"] + ("" if r["kind"] == "skill" else " (%s)" % r["kind"]),
-             r["installed"] + (" (pinned)" if r["pinned"] else ""),
-             _outdated_display(r), r["tap"]) for r in results]
+    # A missing row whose tap is still configured lost the item upstream;
+    # re-tapping it would restore nothing, so it is worded and counted apart.
+    configured = frozenset(t.name for t in registry.list_taps())
+    # Both version columns are a tap's frontmatter: display copies only.
+    results = out.plain_fields(results)
+    rows = [(r["name"] + _outdated_qualifier(r),
+             r["installed"] + _outdated_holds(r),
+             _outdated_display(r, configured), r["tap"]) for r in results]
     # NAME is what `boost update`/`upgrade` take.
     out.table(rows, headers=("NAME", "INSTALLED", "LATEST", "TAP"),
               whole=("NAME",))
     print()
-    source_missing = sum(1 for r in results
-                         if r["reason"] == staleness.SOURCE_MISSING)
-    out.dim(staleness.outdated_footer(len(results), source_missing))
+    missing = [r for r in results if r["reason"] == staleness.SOURCE_MISSING]
+    removed = sum(1 for r in missing if r["tap"] in configured)
+    reasons = [r["reason"] for r in results]
+    # Only a row `boost update` would otherwise take is held by these two: a
+    # rewound or missing row is already counted under its own reason.
+    upgrades = [r for r in results
+                if r["reason"] in (staleness.VERSION, staleness.CONTENT)]
+    out.dim(staleness.outdated_footer(
+        len(results), len(missing), removed,
+        source_changed=reasons.count(staleness.SOURCE_CHANGED),
+        not_cloned=reasons.count(staleness.NOT_CLONED),
+        downgrade=reasons.count(staleness.DOWNGRADE),
+        quarantined=sum(1 for r in upgrades if r["quarantined"]),
+        local_edits=sum(1 for r in upgrades if r["local_edits"])))
     return 0
 
 
@@ -560,11 +779,11 @@ def cmd_catalog(argv) -> int:
         prog="boost catalog",
         description="Share the tapped catalogue so others skip the clone")
     mode = p.add_mutually_exclusive_group(required=True)
-    mode.add_argument("--export", metavar="FILE",
+    mode.add_argument("--export", type=util.nonempty_str, metavar="FILE",
                       help="write every tapped registry's catalogue to FILE")
-    mode.add_argument("--import", metavar="FILE", dest="import_",
+    mode.add_argument("--import", type=util.nonempty_str, metavar="FILE", dest="import_",
                       help="merge a catalogue bundle into this machine")
-    mode.add_argument("--show", metavar="FILE",
+    mode.add_argument("--show", type=util.nonempty_str, metavar="FILE",
                       help="describe a bundle without importing it")
     p.add_argument("--json", action="store_true", dest="as_json",
                    help="machine-readable output")

@@ -103,7 +103,8 @@ class TestList:
         assert "commit-messages" in r.out and "1.0.2" in r.out
         # abbreviated agents column: the linked ones only — gemini reads the
         # canonical store directly and is never symlinked
-        assert "claude·windsurf·cursor" in r.out
+        # Sorted, as a rule's agents are (`integrity.written_agent_names`).
+        assert "antigravity·claude·cursor·windsurf" in r.out
         assert "gemini" not in r.out
         assert "2 skills" in r.out
 
@@ -309,7 +310,8 @@ class TestInfo:
         assert re.search(r"tap\s+fixture-tap", r.out)
         assert "~/.agents/skills/brainstorming" in r.out   # ~-contracted store
         assert re.search(r"quality\s+95/100", r.out)
-        assert "claude-code, windsurf, cursor" in r.out
+        assert re.search(r"agents\s+antigravity, claude-code, cursor, windsurf$",
+                         r.out, re.M)
         assert re.search(r"pinned\s+no", r.out)
         assert re.search(r"quarantined\s+no", r.out)
         # D17: identity-card badges beneath the name
@@ -434,6 +436,11 @@ class TestInfo:
         monkeypatch.setenv("COLUMNS", "60")
         r = boost("info", "brainstorming")
         for ln in r.out.split("\n"):
+            # `tap url` is data, one unbreakable token: it overflows whole
+            # rather than folding, and the fixture tap's is a long tmp path.
+            if ln.strip().startswith("tap url "):
+                assert len(ln.split()) == 3, ln
+                continue
             assert len(ln) <= 60, ln
         assert "Structured ideation" in r.out
         assert "divergent-thinking" in r.out
@@ -580,6 +587,18 @@ class TestMcpReadHonoursTheQualifier:
 # ── edit ─────────────────────────────────────────────────────────────────
 
 class TestEdit:
+    def test_a_quarantined_skill_names_the_release_not_sync(self, boost,
+                                                           installed):
+        # Its copy is held out of the store; "repair the store with `boost
+        # sync`" looped, since sync leaves a held skill alone.
+        boost("quarantine", "brainstorming")
+        r = boost("edit", "brainstorming", expect=1)
+        assert ("Error: brainstorming is quarantined — its store copy is held "
+                "aside") in r.err
+        assert "`boost quarantine --release brainstorming` puts it back first" \
+            in " ".join(r.err.split())
+        assert "boost sync" not in r.err
+
     @pytest.mark.skipif(sys.platform == "win32",
                         reason="POSIX shebang script isn't directly executable on Windows")
     def test_editor_change_updates_lock_and_warns(self, boost, installed,
@@ -636,6 +655,26 @@ class TestEdit:
         assert "editor exited with status 1" in r.out
         assert "no changes" not in r.out
         assert _lock()["brainstorming"]["sha256"] == sha_before
+
+    def test_editor_launches_the_resolved_shim(self, boost, installed,
+                                               monkeypatch):
+        # `code` is code.cmd on Windows: launched by its bare name it raises
+        # FileNotFoundError although `shutil.which` finds it.
+        from boost_cli.core import util
+        launched = []
+
+        def call(argv):
+            launched.append(argv)
+            return 0
+        monkeypatch.setenv("EDITOR", "code -w")
+        monkeypatch.delenv("VISUAL", raising=False)
+        monkeypatch.setattr(util.shutil, "which",
+                            lambda n: "C:\\vs\\bin\\code.cmd" if n == "code"
+                            else None)
+        monkeypatch.setattr(info.subprocess, "call", call)
+        boost("edit", "brainstorming")
+        skill_md = paths.store_dir() / "brainstorming" / "SKILL.md"
+        assert launched == [["C:\\vs\\bin\\code.cmd", "-w", str(skill_md)]]
 
     def test_not_installed_rc1(self, boost, tapped):
         r = boost("edit", "brainstorming", expect=1)
@@ -893,6 +932,26 @@ class TestExplain:
         assert "Key rules:" not in r.out
 
 
+class TestExplainSkipsFencedCode:
+    def test_shell_comments_and_heredoc_lines_are_not_outline_or_rules(
+            self, boost, sandbox, monkeypatch):
+        text = ("---\nname: deploy-helper\ndescription: Deploys.\n---\n\n"
+                "# Deploy\n\n```bash\n# Install dependencies first\n"
+                "# Never commit secrets -- this is just a shell comment\n"
+                "1. not a step, a heredoc line\n```\n\n## After\n\n"
+                "- Always run the smoke test after deploy.\n")
+        monkeypatch.setattr(info, "_resolve_text",
+                            lambda name: (text, "skill", None, None))
+        r = boost("explain", "deploy-helper")
+        lines = [ln.strip() for ln in r.out.split("\n")]
+        start = lines.index("Outline:") + 1
+        assert lines[start:lines.index("", start)] == ["Deploy", "After"]
+        start = lines.index("Key rules:") + 1
+        assert lines[start:] in (
+            ["• Always run the smoke test after deploy."],
+            ["• Always run the smoke test after deploy.", ""])
+
+
 # The outline used to print every heading in the file: 521 lines for one
 # catalog entry, while the "Key rules:" list beside it stopped at 12. The cap
 # is spelled out here rather than read from `info`, so the boundary is a
@@ -979,6 +1038,17 @@ class TestLog:
         boost("import", _skill_dir(tmp_path, "local-one"))
         r = boost("log", "local-one")
         assert "no upstream history (imported locally)" in r.out
+
+    def test_untapped_source_is_not_called_a_local_import(self, boost,
+                                                           installed):
+        boost("untap", "fixture-tap")
+        r = boost("log", "brainstorming", expect=1)
+        assert ("brainstorming comes from tap fixture-tap, which is no "
+                "longer tapped") in r.err
+        assert "imported locally" not in r.out
+        r = boost("log", "brainstorming", "--json", expect=1)
+        assert r.out == ""
+        assert "no longer tapped" in r.err
 
     def test_name_with_diagnostics_or_crashes_is_a_usage_error(self, boost, installed):
         # `log NAME --diagnostics` used to silently drop NAME and show the
@@ -1237,6 +1307,31 @@ class TestTag:
         assert "whitespace" in r.err
         assert _lock()["brainstorming"].get("tags", []) == []
 
+    def test_every_token_after_double_dash_is_an_operand(self, boost, installed):
+        # `--zz` after `--` used to be dropped (with the `--`), rc 0 and no
+        # change. Now it is the mod it spells: remove the tag `-zz`.
+        r = boost("tag", "brainstorming", "--", "+-zz", "+a")
+        assert _lock()["brainstorming"]["tags"] == ["-zz", "a"]
+        r = boost("tag", "brainstorming", "--", "--zz")
+        assert _lock()["brainstorming"]["tags"] == ["a"]
+        assert r.out == "  ✓ brainstorming  #a\n"
+
+    def test_the_name_may_follow_double_dash(self, boost, installed):
+        boost("tag", "--", "brainstorming", "+b")
+        assert _lock()["brainstorming"]["tags"] == ["b"]
+
+    def test_bad_operand_after_double_dash_is_still_rejected(self, boost,
+                                                             installed):
+        r = boost("tag", "brainstorming", "--", "oops", expect=1)
+        assert "cannot parse 'oops'" in r.err
+        assert _lock()["brainstorming"].get("tags", []) == []
+
+    def test_unknown_long_flag_before_double_dash_still_exits_2(self, boost,
+                                                               installed):
+        r = boost("tag", "brainstorming", "--verbose", "--", "+a", expect=2)
+        assert "unrecognized arguments: --verbose" in r.err
+        assert _lock()["brainstorming"].get("tags", []) == []
+
 
 # ── installed rules & workflows ──────────────────────────────────────────
 
@@ -1330,8 +1425,10 @@ class TestMaterializedKinds:
         # Before find_any, this fell through to the catalog and errored
         # "no skill named 'house' in any tap" — a denial, not an answer.
         self._seed_claude_rule()
-        r = boost("log", "house")
-        assert "no upstream history (imported locally)" in r.out
+        # The seeded rule records `some-tap`, which is not tapped here: the
+        # answer names that, rather than calling a tap install a local import.
+        r = boost("log", "house", expect=1)
+        assert "house comes from tap some-tap, which is no longer tapped" in r.err
 
     def test_home_resolves_an_installed_rule(self, boost, sandbox):
         self._seed_claude_rule()

@@ -13,6 +13,7 @@ structural lines survive, while genuine prose duplicates still collapse.
 from __future__ import annotations
 
 from boost_cli.commands import intelligence
+from boost_cli.core import frontmatter
 
 
 def _source(name, body, description="d"):
@@ -111,3 +112,27 @@ class TestIsStructuralLine:
     def test_does_not_flag_ordinary_prose(self):
         assert not intelligence._is_structural_line("always write tests first")
         assert not intelligence._is_structural_line("x = 1")
+
+
+class TestDistillMergeTags:
+    """Bug: a scalar `tags: testing` merged as t, e, s, i, n, g."""
+
+    def _tagged(self, name, tags):
+        src = _source(name, "- rule from %s" % name)
+        src["meta"]["tags"] = tags
+        return src
+
+    def test_scalar_comma_number_and_list_tags_merge_whole(self):
+        merged = intelligence._distill_merge("mix", [
+            self._tagged("a", "testing"),
+            self._tagged("b", "x, y"),
+            self._tagged("c", 5),
+            self._tagged("d", ["git", "testing"]),
+        ])
+        meta, _ = frontmatter.parse(merged)
+        assert meta["tags"] == ["testing", "x", "y", "5", "git"]
+
+    def test_no_tags_anywhere_writes_no_tags_key(self):
+        merged = intelligence._distill_merge("mix", [
+            _source("a", "- one"), self._tagged("b", {"bad": 1})])
+        assert "tags" not in frontmatter.parse(merged)[0]

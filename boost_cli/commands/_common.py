@@ -11,7 +11,7 @@ from __future__ import annotations
 import difflib
 from itertools import chain
 
-from ..core import lockfile, store
+from ..core import integrity, lockfile, store
 from ..errors import BoostError
 
 
@@ -63,11 +63,17 @@ def _require_lock_integrity() -> None:
         raise BoostError(
             "lock file missing — the store has skills but nothing is recorded",
             hint="run `boost sync`")
-    if integ.problem == "corrupt":
-        raise BoostError("lock file is corrupt — restore with `boost replay`")
+    if integ.problem in ("corrupt", "unreadable"):
+        raise BoostError("lock file %s — %s"
+                         % (lockfile.fault(integ), lockfile.remedy(integ)))
+    if lockfile.newer(integ):
+        raise BoostError("lock file %s" % lockfile.fault(integ),
+                         hint=lockfile.remedy(integ))
     raise BoostError(
-        "lock file schema is v%s, expected v%d" % (integ.version, lockfile.SCHEMA_VERSION),
-        hint="restore with `boost replay`")
+        "lock file schema is %s, expected v%d"
+        % ("unreadable" if integ.version is None else "v%s" % integ.version,
+           lockfile.SCHEMA_VERSION),
+        hint=lockfile.remedy(integ))
 
 
 def _iter_installed(names: list[str] | None = None) -> list[tuple[str, dict]]:
@@ -102,6 +108,41 @@ def _iter_installed(names: list[str] | None = None) -> list[tuple[str, dict]]:
                 hint=_not_installed_hint(missing, list(skills)))
         return [(n, skills[n]) for n in names]
     return sorted(skills.items())
+
+
+def _iter_installed_rows(
+        names: list[str] | None = None) -> list[integrity.InstalledSkill]:
+    """:func:`_iter_installed`, across both scopes, each row with its ``dir``.
+
+    For a command that *reads* skills — lint, test, conflict — where a skill
+    installed ``--local`` is read from the repo's copy rather than reported
+    "not installed" beside a ``boost list`` that shows it. ``None`` is every
+    row of both locks (:func:`integrity.installed_skills`); a name resolves
+    user scope first, then the current project (:func:`integrity.resolve_skill`),
+    and a name neither holds as a skill gets exactly :func:`_iter_installed`'s
+    error, since that is the one that tells "a rule" from "not installed".
+    """
+    if names is None:
+        return integrity.installed_skills()
+    rows, rest = [], []
+    for n in dict.fromkeys(names):
+        row = integrity.resolve_skill(n)
+        if row is None:
+            rest.append(n)
+        else:
+            rows.append(row)
+    if rest:
+        _iter_installed(rest)   # raises: not a user skill, not a project one
+    return rows
+
+
+def row_dir(row: integrity.InstalledSkill):
+    """The directory to read ``row`` from: its copy, else the store path.
+
+    A row whose copy is gone still needs a path for a reader to report
+    "missing SKILL.md" from rather than crash on None.
+    """
+    return row.dir if row.dir is not None else store.skill_store_dir(row.name)
 
 
 def _shadowed_kinds(name: str, acted_kind: str) -> list[str]:

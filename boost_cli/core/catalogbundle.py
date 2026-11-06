@@ -171,7 +171,7 @@ def read_manifest(src: Path) -> dict:
             handle = tar.extractfile(member)
             if handle is None:
                 raise BoostError("bundle manifest is unreadable: %s" % src)
-            return json.loads(handle.read().decode("utf-8"))
+            manifest = json.loads(handle.read().decode("utf-8"))
     except KeyError as exc:
         raise BoostError(
             "%s is not a boost catalogue bundle (no %s)" % (src, MANIFEST_NAME),
@@ -180,9 +180,68 @@ def read_manifest(src: Path) -> dict:
         raise BoostError("cannot read bundle %s: %s" % (src, exc)) from exc
     except (json.JSONDecodeError, UnicodeDecodeError) as exc:
         raise BoostError("bundle manifest is malformed: %s" % exc) from exc
+    return _validate_manifest(manifest)
 
 
-def _safe_members(tar: tarfile.TarFile) -> list[tarfile.TarInfo]:
+def _malformed(why: str) -> BoostError:
+    return BoostError("bundle manifest is malformed: %s" % why,
+                      hint="re-export it with `boost catalog --export <file>`")
+
+
+def _validate_manifest(manifest: object) -> dict:
+    """``manifest`` if its shape is one import and --show can trust, or raise.
+
+    The manifest is as untrusted as the archive. Checked once, before anything
+    is written: a ``taps`` row that was a string used to crash the config
+    merge at rc 70 *after* its catalogue file had landed in the cache, leaving
+    a file no tap owned.
+    """
+    if not isinstance(manifest, dict):
+        raise _malformed("expected an object, got %s" % type(manifest).__name__)
+    taps = manifest.get("taps")
+    if taps is not None and not isinstance(taps, list):
+        raise _malformed("`taps` must be a list, got %s" % type(taps).__name__)
+    for i, row in enumerate(taps or []):
+        if not isinstance(row, dict):
+            raise _malformed("taps[%d] must be an object, got %s"
+                             % (i, type(row).__name__))
+        name = row.get("name")
+        if not isinstance(name, str) or not name:
+            raise _malformed("taps[%d] needs a non-empty string `name`" % i)
+        if not isinstance(row.get("url", ""), str):
+            raise _malformed("taps[%d].url must be a string" % i)
+        if not isinstance(row.get("commit") or "", str):
+            raise _malformed("taps[%d].commit must be a string" % i)
+    entries = manifest.get("entries")
+    if entries is not None and (not isinstance(entries, int)
+                                or isinstance(entries, bool)):
+        raise _malformed("`entries` must be an integer")
+    if not isinstance(manifest.get("generated", ""), str):
+        raise _malformed("`generated` must be a string")
+    return manifest
+
+
+def manifest_files(manifest: dict) -> set[str]:
+    """The catalogue leaves ``manifest`` accounts for: ``<safe_name>.json``.
+
+    Derived from each tap's *name* by the rule `registry.Tap.cache_file`
+    uses, never from the row's own ``file`` field — the manifest is as
+    untrusted as the archive, and trusting it would let a row claim
+    ``discovery.json``. :data:`paths.INTERNAL_CACHE_FILES` are left out
+    even when a tap name produces one.
+    """
+    out: set[str] = set()
+    for row in manifest.get("taps") or []:
+        name = row.get("name") if isinstance(row, dict) else None
+        if isinstance(name, str) and name:
+            leaf = registry.Tap(name=name, url="").safe_name + ".json"
+            if leaf not in paths.INTERNAL_CACHE_FILES:
+                out.add(leaf)
+    return out
+
+
+def _safe_members(tar: tarfile.TarFile,
+                  allowed: set[str] | None = None) -> list[tarfile.TarInfo]:
     """The catalogue members of ``tar``, or raise naming what was rejected.
 
     The archive never chooses a destination. A member is accepted only when it
@@ -191,6 +250,12 @@ def _safe_members(tar: tarfile.TarFile) -> list[tarfile.TarInfo]:
     entry — and the caller then writes it to a path built from that basename.
     Validating the name and *also* discarding it is deliberate: a check that
     feeds its input forward is one refactor away from being decorative.
+
+    A safe name is still not enough: the destination is boost's cache dir,
+    which also holds its own indexes. A leaf in
+    :data:`paths.INTERNAL_CACHE_FILES` is refused outright (a bundle carrying
+    ``discovery.json`` replaced the discovery index and crashed `discover`),
+    and with ``allowed`` given, so is any leaf no manifest tap accounts for.
     """
     members = tar.getmembers()
     if len(members) > MAX_MEMBERS:
@@ -218,6 +283,16 @@ def _safe_members(tar: tarfile.TarFile) -> list[tarfile.TarInfo]:
                 or "/" in leaf or "\\" in leaf or not leaf.endswith(".json")):
             raise BoostError(
                 "bundle contains an unsafe member name: %s" % member.name)
+        if leaf in paths.INTERNAL_CACHE_FILES:
+            raise BoostError(
+                "bundle member %s would overwrite boost's own %s"
+                % (member.name, leaf),
+                hint="a catalogue bundle holds only tap catalogues")
+        if allowed is not None and leaf not in allowed:
+            raise BoostError(
+                "bundle member %s belongs to no tap in its manifest"
+                % member.name,
+                hint="re-export the bundle with `boost catalog --export`")
         if member.size > MAX_MEMBER_BYTES:
             raise BoostError(
                 "bundle member %s is %d bytes, over the %d cap"
@@ -249,11 +324,11 @@ def import_bundle(src: Path) -> dict:
             % (fmt, BUNDLE_FORMAT),
             hint="upgrade boost, or re-export the bundle with this version")
 
-    paths.ensure_dirs()
+    paths.require_dirs()
     written = 0
     try:
         with tarfile.open(src, "r:gz") as tar:
-            members = _safe_members(tar)
+            members = _safe_members(tar, manifest_files(manifest))
             for member in members:
                 handle = tar.extractfile(member)
                 if handle is None:
@@ -267,29 +342,35 @@ def import_bundle(src: Path) -> dict:
     except (tarfile.TarError, OSError) as exc:
         raise BoostError("cannot read bundle %s: %s" % (src, exc)) from exc
 
-    cfg = config.load()
-    existing = cfg.get("taps") or []
-    if not isinstance(existing, list):
-        existing = []
-    known = {t.get("name") for t in existing if isinstance(t, dict)}
     added = 0
     local_added: list[str] = []
-    for row in manifest.get("taps") or []:
-        name = row.get("name")
-        if not name or name in known:
-            continue
-        existing.append({"name": name, "url": row.get("url", ""),
-                         "curated": bool(row.get("curated"))})
-        known.add(name)
-        added += 1
-        # Flagged at export time (`_is_local_url`), not re-derived here: a
-        # manifest from an older boost simply carries no "local" key, and a
-        # missing flag must read as "unknown", never as "confirmed remote".
-        if row.get("local"):
-            local_added.append(name)
 
-    cfg["taps"] = existing
-    config.save(cfg)
+    def merge(cfg: dict) -> None:
+        # Under config.mutate, on a fresh read: counted here, so a rerun
+        # after a crash or a race never double-counts what is already there.
+        nonlocal added
+        added = 0
+        local_added.clear()
+        existing = cfg.get("taps") or []
+        if not isinstance(existing, list):
+            existing = []
+        known = {t.get("name") for t in existing if isinstance(t, dict)}
+        for row in manifest.get("taps") or []:
+            name = row.get("name")
+            if not name or name in known:
+                continue
+            existing.append({"name": name, "url": row.get("url", ""),
+                             "curated": bool(row.get("curated"))})
+            known.add(name)
+            added += 1
+            # Flagged at export time (`_is_local_url`), not re-derived here:
+            # a manifest from an older boost simply carries no "local" key,
+            # and a missing flag must read as "unknown", never as
+            # "confirmed remote".
+            if row.get("local"):
+                local_added.append(name)
+        cfg["taps"] = existing
+    config.mutate(merge)
 
     return {"path": str(src), "taps": len(manifest.get("taps") or []),
             "added": added, "files": written,

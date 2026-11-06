@@ -13,11 +13,10 @@ it did), and `boost_cli/core` is what the mutation gate targets.
 """
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass, field
 
 from ..errors import BoostError
-from . import catalog, config, journal, registry
+from . import catalog, config, journal, registry, typedvalue
 
 #: Escape hatch, same shape as ``BOOST_NO_MCP_OFFER``: suppress the implicit
 #: seed for anyone who wants `boost mcp` to stay a local, offline operation —
@@ -77,12 +76,24 @@ def will_seed(*, force: bool = False) -> bool:
     command a first-time user was told to run, silence that long reads as a
     hang. Deliberately mirrors seed_catalog's own gates rather than guessing.
     """
-    if not force and os.environ.get(NO_SEED_ENV):
-        return False
+    return bool(seed_plan(force=force))
+
+
+def seed_plan(*, force: bool = False) -> list[str]:
+    """The names :func:`seed_catalog` would tap, in order; [] when it would not.
+
+    What `boost mcp register --dry-run` prints, so the preview names the
+    network work the real run does before it touches any host. The count is
+    the missing defaults, not all of them: under ``--seed`` a machine holding
+    five of seven is topped up by two.
+    """
+    if not force and typedvalue.env_flag(NO_SEED_ENV, unknown=True):
+        return []
     existing = {t.name for t in registry.list_taps()}
     if not force and existing:
-        return False
-    return any(str(d["name"]) not in existing for d in config.DEFAULT_TAPS)
+        return []
+    return [str(d["name"]) for d in config.DEFAULT_TAPS
+            if str(d["name"]) not in existing]
 
 
 def seed_catalog(*, force: bool = False) -> SeedResult:
@@ -103,7 +114,7 @@ def seed_catalog(*, force: bool = False) -> SeedResult:
     dead network or one bad remote must cost them a reported line, not the
     server they asked for.
     """
-    if not force and os.environ.get(NO_SEED_ENV):
+    if not force and typedvalue.env_flag(NO_SEED_ENV, unknown=True):
         return SeedResult(skipped=True)
     existing = {t.name for t in registry.list_taps()}
     # `force` re-checks the DEFAULTS rather than re-adding them: a machine

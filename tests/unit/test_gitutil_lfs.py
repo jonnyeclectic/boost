@@ -20,7 +20,7 @@ from boost_cli.core import gitutil
 
 
 def _capture(monkeypatch) -> dict:
-    """Run a git command with subprocess.run stubbed; return the kwargs it received."""
+    """Run a git command with gitutil._exec stubbed; return the kwargs it received."""
     seen: dict = {}
 
     def fake_run(argv, **kwargs):
@@ -30,7 +30,7 @@ def _capture(monkeypatch) -> dict:
         return subprocess.CompletedProcess(argv, 0, "", "")
 
     monkeypatch.setattr(gitutil, "has_git", lambda: True)
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(gitutil, "_exec", fake_run)
     return seen
 
 

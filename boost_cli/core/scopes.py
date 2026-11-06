@@ -179,6 +179,103 @@ def project_base(start=None) -> tuple[Path | None, str | None]:
     return here, BASE_UNMARKED
 
 
+def project_dir(start=None) -> Path:
+    """The directory a repo-wide command should treat as "this project".
+
+    :func:`project_base` when it has an answer, else ``start``/cwd. For
+    commands that act on the repo as a whole — ``onboard`` writing
+    ``.github/workflows``, ``decay``/``health`` probing the stack — run from
+    ``src/deep/nested``: GitHub only reads workflows at the root, and the
+    ``pyproject.toml`` the stack probe looks for is there too, so answering
+    with the raw cwd gave a different (and wrong) result one level down.
+    Same walk as ``install --local``, so a git worktree (``.git`` is a file)
+    resolves to its own root.
+    """
+    found, _kind = project_base(start)
+    if found is not None:
+        return found
+    return Path(start) if start is not None else Path.cwd()
+
+
+def _is_bare_git_dir(d: Path) -> bool:
+    """Does ``d`` look like a bare git repository (or a non-bare one's git dir)?
+
+    ``HEAD`` + ``objects/`` + ``refs/`` is what git itself tests for. A bare
+    repo has no work tree, so nothing written into it can be committed.
+    """
+    return ((d / "HEAD").is_file() and (d / "objects").is_dir()
+            and (d / "refs").is_dir())
+
+
+def managed_by_boost(base) -> str | None:
+    """Why ``base`` may not be a project, or ``None`` when it may.
+
+    ``--local`` writes ``.claude/``, ``.cursor/``, ``.boost/``… into the
+    project. Into an installed skill's store dir that modifies the skill (and
+    ``boost verify`` then reports it tampered); into a tap clone under
+    ``~/.boost/repos`` it plants copies the next rescan indexes as that tap's
+    own catalogue items; into a bare git repo it writes files no commit can
+    carry; into an agent's user config root (``~/.gemini``, ``~/.codex``) it
+    writes that agent's *global* context file. Each is a directory with no project marker, so the unmarked
+    fallback in :func:`project_base` would happily claim it.
+    """
+    from . import agents
+    try:
+        here = Path(base).resolve()
+    except OSError:
+        return None
+    managed = [(paths.store_dir(), "boost's skill store"),
+               (paths.boost_home(), "boost's own state directory")]
+    try:
+        home = Path(paths.home()).resolve()
+    except OSError:
+        home = None
+    with suppress(BoostError):
+        dirs = [Path(d) for d in agents.enabled_agents().values()]
+        managed += [(d, "an agent's user skills directory") for d in dirs]
+        # The skills dir's parent is the agent's user config root, and it is
+        # where user scope writes that agent's context file. Gemini and Codex
+        # name the project file the same as the user one (`rules.CONTEXT_FILES`
+        # — GEMINI.md, AGENTS.md), so a "project" at ~/.gemini puts its rule
+        # block into the global file every session loads, recorded as project
+        # scope. Every configured agent, not just the enabled ones: turning an
+        # agent off does not make its config dir a project. Never $HOME or
+        # above it — an agent whose skills sit directly in ~ would otherwise
+        # refuse every project on the machine.
+        roots = [Path(s["dir"]).parent
+                 for s in agents.known_agents().values()]
+        for root in roots:
+            with suppress(OSError):
+                r = root.resolve()
+                if home is not None and (r == home or r in home.parents):
+                    continue
+                managed.append((root, "an agent's user config directory"))
+    for root, what in managed:
+        try:
+            root_r = root.resolve()
+        except OSError:
+            continue
+        if here == root_r or root_r in here.parents:
+            return "%s is inside %s (%s)" % (paths.tilde(here), what,
+                                            paths.tilde(root_r))
+    for d in (here, *here.parents):
+        if d == home:
+            break
+        if _is_bare_git_dir(d):
+            return "%s is inside a bare git repository (%s)" % (
+                paths.tilde(here), paths.tilde(d))
+    return None
+
+
+def refuse_managed(base) -> None:
+    """Raise :class:`BoostError` when :func:`managed_by_boost` refuses ``base``."""
+    why = managed_by_boost(base)
+    if why is not None:
+        raise BoostError("cannot install --local here: " + why,
+                         hint="cd into a project checkout, or drop --local to "
+                              "install for your user")
+
+
 def resolve_base(scope: str, base=None, start=None) -> Path | None:
     """Directory a scope materializes under — ``None`` for user scope.
 
@@ -329,6 +426,20 @@ def stranded(entry: dict) -> bool:
     base = entry.get("base")
     return (entry.get("scope") == SCOPE_PROJECT and names_a_directory(base)
             and not os.path.isdir(cast(str, base)))  # noqa: FURB146
+
+
+def project_label(entry: dict) -> str | None:
+    """Where a ``--local`` rule/workflow row lives, for display, else None.
+
+    The tilde'd base, with ``(gone)`` when the directory no longer exists.
+    These rows sit in the user lock beside user-scope ones, so a surface that
+    does not say this reads a rule in another checkout as active here.
+    """
+    if (entry.get("scope") != SCOPE_PROJECT
+            or not names_a_directory(entry.get("base"))):
+        return None
+    where = paths.tilde(Path(entry["base"]))
+    return where + " (gone)" if stranded(entry) else where
 
 
 def check_scope(scope: str) -> str:
