@@ -1192,6 +1192,43 @@ class TestDiscover:
         assert "a local sample of 3 entries, not GitHub" in r.out
         assert "drop --local to search GitHub itself" in r.out
 
+    def test_already_tapped_repos_are_left_out(self, boost, sandbox):
+        # The help promises repos "you have not tapped yet"; the index is a
+        # snapshot from before the tap, and listed it with no marker.
+        from boost_cli.core import config
+        config.save({"taps": [{"name": "pack",
+                               "url": "https://github.com/Acme/Pack.git"}]})
+        _write_index(_ITEMS)
+        r = boost("discover", "--local")
+        assert "acme/pack" not in r.out
+        assert "octo/skills" in r.out
+        assert ("1 repo(s) across 1 of 3 indexed skill files · GitHub reported "
+                "~42 total when this index was built") in r.out
+        assert ("1 already-tapped repo(s) not shown — `boost search` covers "
+                "them") in r.out
+        rows = json.loads(boost("discover", "--local", "--json").out)
+        assert [row["repo"] for row in rows] == ["octo/skills"]
+        r = boost("discover", "--local", "acme")
+        assert "no locally indexed skills match 'acme'" in r.out
+        assert "1 already-tapped repo(s) not shown" in r.out
+
+    def test_a_tapped_repo_the_query_misses_is_not_counted(self, boost,
+                                                           sandbox):
+        # "not shown" means this query would have shown it: counting the
+        # whole index named repos the query never matched.
+        from boost_cli.core import config
+        config.save({"taps": [{"name": "pack",
+                               "url": "https://github.com/Acme/Pack.git"}]})
+        _write_index(_ITEMS)
+        r = boost("discover", "--local", "octo")
+        assert "octo/skills" in r.out
+        assert "already-tapped" not in r.out
+
+    def test_nothing_tapped_says_nothing_about_tapped_repos(self, boost,
+                                                            sandbox):
+        _write_index(_ITEMS)
+        assert "already-tapped" not in boost("discover", "--local").out
+
     def test_limit(self, boost, sandbox):
         _write_index(_ITEMS)
         r = boost("discover", "--limit", "1")
@@ -1246,6 +1283,34 @@ class TestDiscoverLive:
         assert "boost tap <repo>" in r.out
         # the user's terms reached the code-search query
         assert "mempalace" in seen[0][-1] and "filename:SKILL.md" in seen[0][-1]
+
+    def test_already_tapped_repos_are_left_out(self, boost, sandbox,
+                                               monkeypatch):
+        from boost_cli.core import config
+        config.save({"taps": [{"name": "mempalace",
+                               "url": "https://github.com/mempalace/MemPalace"}]})
+        self._gh(monkeypatch, [
+            _gh_item("MemPalace/mempalace", "skills/mempalace/SKILL.md"),
+            _gh_item("MemPalace/mempalace", "skills/other/SKILL.md"),
+            _gh_item("octo/other", "skills/x/SKILL.md")])
+        r = boost("discover", "mempalace")
+        assert "MemPalace/mempalace" not in r.out
+        assert "octo/other" in r.out
+        assert "1 repo(s) across the top 3 code-search hits" in r.out
+        assert ("1 already-tapped repo(s) not shown — `boost search` covers "
+                "them") in r.out
+        rows = json.loads(boost("discover", "mempalace", "--json").out)
+        assert [row["repo"] for row in rows] == ["octo/other"]
+
+    def test_only_tapped_matches_say_so(self, boost, sandbox, monkeypatch):
+        from boost_cli.core import config
+        config.save({"taps": [{"name": "mempalace",
+                               "url": "https://github.com/MemPalace/mempalace"}]})
+        self._gh(monkeypatch, [
+            _gh_item("MemPalace/mempalace", "skills/mempalace/SKILL.md")])
+        r = boost("discover", "mempalace")
+        assert "no SKILL.md repositories on GitHub match 'mempalace'" in r.out
+        assert "1 already-tapped repo(s) not shown" in r.out
 
     def test_repo_rows_collapse_mirrored_copies(self, boost, sandbox, monkeypatch):
         """One repo mirroring a skill per agent is one row, not four."""

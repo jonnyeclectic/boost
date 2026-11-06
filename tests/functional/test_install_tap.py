@@ -65,20 +65,29 @@ def test_tap_name_lists_then_installs_every_skill(boost, tapped):
     assert "Installed 5 new skills" in r.out
 
 
-def test_without_a_terminal_or_yes_it_asks_and_declines(boost, tapped,
+def test_without_a_terminal_or_all_it_asks_and_declines(boost, tapped,
                                                         monkeypatch):
     monkeypatch.delenv("BOOST_ASSUME_YES", raising=False)
     r = boost("install", _tap_name(), expect=1)
     assert "cancelled" in r.out
+    assert "pass --all or set BOOST_ASSUME_YES=1 to skip this prompt" in r.out
     # The list is on screen before the question, so the decline is informed.
     assert "brainstorming" in r.out
     assert _installed() == []
 
 
-def test_yes_installs_without_asking(boost, tapped, monkeypatch):
+def test_all_installs_without_asking(boost, tapped, monkeypatch):
     monkeypatch.delenv("BOOST_ASSUME_YES", raising=False)
-    boost("install", _tap_name(), "--yes")
+    boost("install", _tap_name(), "--all")
     assert _installed() == FIXTURE_SKILLS
+
+
+def test_y_does_not_answer_the_skill_list(boost, tapped, monkeypatch):
+    # install's -y answers the MCP-server offer, a different question.
+    monkeypatch.delenv("BOOST_ASSUME_YES", raising=False)
+    r = boost("install", _tap_name(), "-y", expect=1)
+    assert "cancelled" in r.out
+    assert _installed() == []
 
 
 def test_answering_yes_at_the_prompt_installs(boost, tapped, monkeypatch):
@@ -283,18 +292,26 @@ def registrations(monkeypatch):
     return calls
 
 
-def test_yes_does_not_also_register_mcp_servers(boost, fixture_tap_src,
+def test_all_does_not_also_register_mcp_servers(boost, fixture_tap_src,
                                                tmp_path, monkeypatch,
                                                registrations):
     boost("tap", _mcp_tap(fixture_tap_src, tmp_path / "mcp"))
     monkeypatch.delenv("BOOST_ASSUME_YES", raising=False)
-    r = boost("install", _tap_name(), "-y")
+    r = boost("install", _tap_name(), "--all")
     assert "needs-mcp" in _installed()
     assert registrations == []
     assert "skipped — run these yourself" in r.out
-    # The hint names the bypass that works for this prompt, not -y.
-    assert "set BOOST_ASSUME_YES=1 to skip this prompt" in r.out
-    assert "pass -y" not in r.out
+    # install's own -y is what answers this prompt, so its hint names it.
+    assert "pass -y or set BOOST_ASSUME_YES=1 to skip this prompt" in r.out
+
+
+def test_all_with_y_installs_and_registers(boost, fixture_tap_src, tmp_path,
+                                          monkeypatch, registrations):
+    boost("tap", _mcp_tap(fixture_tap_src, tmp_path / "mcp"))
+    monkeypatch.delenv("BOOST_ASSUME_YES", raising=False)
+    boost("install", _tap_name(), "--all", "-y")
+    assert "needs-mcp" in _installed()
+    assert registrations == ["srv"]
 
 
 def test_assume_yes_still_registers_them(boost, fixture_tap_src, tmp_path,

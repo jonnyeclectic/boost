@@ -76,6 +76,23 @@ def stdin_is_tty(stream: object = _STDIN) -> bool:
         return False
 
 
+def tolerate_undecodable_stdin(stream: object = _STDIN) -> None:
+    """Make a line read from stdin replace bytes it cannot decode.
+
+    Python 3.12–3.14 open a piped stdin with ``errors="strict"`` outside UTF-8
+    mode, so one Latin-1 byte (``printf 'caf\\xe9' | boost chat``) raised
+    UnicodeDecodeError out of ``input()`` and into the crash handler. A
+    question with a U+FFFD in it is still a question. A stream that cannot be
+    reconfigured (closed, already read, not a TextIOWrapper) is left alone.
+    """
+    if stream is _STDIN:
+        stream = sys.stdin
+    if getattr(stream, "errors", None) != "strict":
+        return
+    with contextlib.suppress(AttributeError, ValueError, OSError):
+        stream.reconfigure(errors="replace")  # type: ignore[attr-defined]
+
+
 def use_color(stream=None) -> bool:
     """True when ANSI color should be emitted on `stream` (default stdout).
 
@@ -1376,34 +1393,38 @@ def table(rows, headers=None, stream=None, keep=(), text=(),
 
 
 _CONFIRM_BYPASS_HINT = "pass -y or set BOOST_ASSUME_YES=1 to skip this prompt"
-_ENV_BYPASS_HINT = "set BOOST_ASSUME_YES=1 to skip this prompt"
+# For a prompt the running command's -y deliberately does not answer — the
+# hint must not name a flag that would change nothing.
+ENV_ONLY_BYPASS_HINT = "set BOOST_ASSUME_YES=1 to skip this prompt"
 
 
 def confirm(prompt: str, default: bool = False, quiet: bool = False,
-            argv_yes: bool = True) -> bool:
+            hint: str | None = None) -> bool:
     """Ask a yes/no question and return the answer as a bool.
 
-    BOOST_ASSUME_YES or --yes/-y force True; non-TTY stdin and an empty
-    answer return `default`; EOF or Ctrl-C returns False.
+    BOOST_ASSUME_YES forces True; non-TTY stdin and an empty answer return
+    `default`; EOF or Ctrl-C returns False.
 
-    ``argv_yes=False`` is for a question a command's own ``-y`` was never
-    meant to answer. `boost install`'s ``-y`` agrees to the skill list a
-    tap install shows; reading it here as well also agreed, unasked, to
-    registering every MCP server those third-party skills declare, machine
-    wide. Only the environment (or a typed answer) says yes to that, and the
-    hint names only the bypass that works.
+    A command's own ``-y``/``--yes`` is NOT read here: each caller passes its
+    parsed flag as ``args.yes or out.confirm(...)``. This used to scan
+    ``sys.argv`` for either spelling, which made one flag answer every prompt
+    a run reached — `protocol open -y` and `import -y`, whose -y means "skip
+    this command's prompt", also said yes to the separate, default-No
+    "register MCP servers for every project on this machine?" question. A
+    prompt that needs its own consent can only get it from a caller that
+    asks for it by name.
 
     Every path that resolves to a decline (as opposed to `default` being
     True) prints the bypass hint here, once, so callers inherit it instead
     of each command growing its own reminder — see the confirm-bypass-hints
     roadmap item. ``quiet`` suppresses that hint — for a caller that is about
     to print its own machine-readable (``--json``) result on a decline, where
-    the hint would land as a stray prose line ahead of it.
+    the hint would land as a stray prose line ahead of it. ``hint`` replaces
+    the default wording, for a prompt the command's own ``-y`` does not reach.
     """
-    if typedvalue.env_flag("BOOST_ASSUME_YES") or (
-            argv_yes and ("--yes" in sys.argv or "-y" in sys.argv)):
+    if typedvalue.env_flag("BOOST_ASSUME_YES"):
         return True
-    hint = _CONFIRM_BYPASS_HINT if argv_yes else _ENV_BYPASS_HINT
+    hint = hint or _CONFIRM_BYPASS_HINT
     if not stdin_is_tty():
         if not default and not quiet:
             dim(hint)

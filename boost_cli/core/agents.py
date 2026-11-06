@@ -135,6 +135,14 @@ class RelativeAgentDir(BoostError):
     """An agent ``dir`` that expands to a relative path."""
 
 
+# Variables an agent itself resolves against the working directory when they
+# are relative, so boost must too or it writes where the agent never looks.
+# Measured for Codex in :func:`mcphost.config_home`; Claude Code refuses a
+# relative CLAUDE_CONFIG_DIR, so a variable is added here only once its own
+# CLI is shown to honour one.
+CWD_RELATIVE_VARS = frozenset({"CODEX_HOME"})
+
+
 def _row_dir(spec: dict) -> Path | None:
     """The agent row's expanded ``dir``, or None when it names no directory.
 
@@ -157,6 +165,19 @@ def _row_dir(spec: dict) -> Path | None:
     if p == Path():
         return None
     if not p.is_absolute():
+        # The environment made it relative, not the config: a relative
+        # CODEX_HOME is one Codex itself honours against the cwd, and any
+        # other is the variable to fix, so name it rather than the dir value
+        # (the shipped default) whose hint the user had already followed.
+        var = paths.env_source(raw)
+        if var in CWD_RELATIVE_VARS:
+            return Path(os.path.abspath(p))
+        if var:
+            raise RelativeAgentDir(
+                "%s=%r is a relative path, so %r would resolve against "
+                "whatever directory boost runs from"
+                % (var, os.environ[var], raw),
+                hint="export %s=/an/absolute/path (or ~/path)" % var)
         raise RelativeAgentDir(
             "%r is a relative path, which would resolve against whatever "
             "directory boost runs from" % raw,
@@ -214,7 +235,19 @@ def known_agents() -> dict[str, dict]:
     for name, spec in (config.get("agents") or {}).items():
         try:
             adir = _row_dir(spec)
-        except RelativeAgentDir as e:
+        except BoostError as e:
+            # A disabled agent is one nothing will write into, so its
+            # unusable dir must not stop every command — disabling it was the
+            # obvious remedy and did nothing. Skip it, once, with a warning.
+            if not _flag(name, spec, "enabled"):
+                if name not in _WARNED_DIRLESS:
+                    _WARNED_DIRLESS.add(name)
+                    output.warn("agents.%s is disabled and boost skips it: %s"
+                                % (name, e.message), stream=sys.stderr,
+                                wrap=True)
+                continue
+            if not isinstance(e, RelativeAgentDir):
+                raise
             # check() keys the error by name for doctor; a command that stops
             # here has only this line, so it names the key to edit.
             raise BoostError("agents.%s.dir: %s" % (name, e.message),
@@ -497,9 +530,14 @@ def remembered_native_dirs() -> list[tuple[str, Path]]:
     readers of this list remove only a link to one named skill's store dir, or
     one that dangles into the store, never a live link named for no skill.
     """
-    remembered = _remembered_link_dirs()
+    # By identity, as :func:`former_link_dirs` compares: a dir remembered as
+    # ``/private/tmp/...`` and read now as ``/tmp/...`` is one dir, and an
+    # exact-string test left that agent's links dangling after uninstall.
+    remembered = {n: {dir_identity(Path(d)) for d in dirs}
+                  for n, dirs in _remembered_link_dirs().items()}
     return [(n, s["dir"]) for n, s in known_agents().items()
-            if not s["links_skills"] and str(s["dir"]) in remembered.get(n, ())
+            if not s["links_skills"]
+            and dir_identity(s["dir"]) in remembered.get(n, set())
             and not aliases_store(s["dir"])]
 
 

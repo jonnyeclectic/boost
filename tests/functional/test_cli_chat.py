@@ -174,6 +174,18 @@ class TestPipedSession:
         assert "> " not in r.out
         assert not r.out.endswith("\n\n"), "a blank line closing a prompt never shown"
 
+    def test_undecodable_piped_stdin_is_answered_not_crashed(
+            self, boost, tapped, monkeypatch):
+        # A strict-errors stdin (Python 3.12-3.14 outside UTF-8 mode) raised
+        # UnicodeDecodeError out of input(): rc 70 and a crash report for one
+        # Latin-1 byte. The bad byte becomes U+FFFD and the line is a question.
+        monkeypatch.setattr("sys.stdin", io.TextIOWrapper(
+            io.BytesIO(b"caf\xe9 brainstorming ideas\n"),
+            encoding="utf-8", errors="strict"))
+        r = boost("chat")
+        assert "unexpected error" not in r.err
+        assert "brainstorming" in r.out, "the question was not answered"
+
     def test_closed_stdin_is_an_empty_session(self, boost, tapped, monkeypatch):
         # `boost chat <&-`: sys.stdin is None, and isatty()/input() on it
         # crashed (rc 70). Nothing to read is an EOF before the first line.
