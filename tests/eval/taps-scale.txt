@@ -12,9 +12,9 @@
 # fail. It is A scale, not THE scale: hit@1 decays continuously with corpus
 # size and never plateaus, so no size here can be canonical.
 #
-# 134 distractor registries, 20,013 est items (the curated list's own estimate).
+# 132 distractor registries, 20,002 est items (the curated list's own estimate).
 # est_items under-reports by about 2.5x against a real install, so that
-# projects to roughly 50,807 actual entries — a projection, not a measurement.
+# projects to roughly 50,779 actual entries — a projection, not a measurement.
 # The real counts are written in by `eval_corpus.py --refresh`, which is
 # also what pins these rows. Regenerating KEEPS any pin already here, so
 # --check verifies the selection, not the pins.
@@ -118,70 +118,68 @@ ddd-crew/ai-ddd-prompts-and-rules                 95201874c6f4db08e84751bdb4a71f
 Comfy-Org/comfy-claude-prompt-library             c1df6735799222b0362cc1753a0de94e5b9696ba    70
 finsilabs/awesome-ecommerce-skills                30a1fb674e41284e738608c059690c251699eb07   178
 composio-community/awesome-claude-plugins
-microsoft/skills                                  e20084b9d230c6f3b46ce36f011e6c3e50f79f8a   220
+K-Dense-AI/scientific-agent-skills
 anthropics/claude-plugins-official
-kostja94/marketing-skills
+microsoft/skills                                  e20084b9d230c6f3b46ce36f011e6c3e50f79f8a   220
 hoangsonww/Claude-Code-Agent-Monitor
-minhnv0807/ai-business-skills
+kostja94/marketing-skills
 dsifry/metaswarm
-aws/agent-toolkit-for-aws
+minhnv0807/ai-business-skills
 jezweb/claude-skills
-nexscope-ai/eCommerce-Skills
+aws/agent-toolkit-for-aws
 wshobson/commands
-claude-office-skills/skills
+nexscope-ai/eCommerce-Skills
 glittercowboy/taches-cc-resources
-mohitmishra786/low-level-dev-skills
+claude-office-skills/skills
 aiwonglab/claude_code_agents
-jabrena/plinth
+mohitmishra786/low-level-dev-skills
 trailofbits/skills
-JetBrains/skills
+jabrena/plinth
 cloudflare/agents
-aaron-he-zhu/aaron-marketing-skills
+JetBrains/skills
 pluginagentmarketplace/custom-plugin-nextjs
-ThibautBaissac/rails_ai_agents
+aaron-he-zhu/aaron-marketing-skills
 syahiidkamil/Software-Engineer-AI-Agent-Atlas
-Owl-Listener/designer-skills
+ThibautBaissac/rails_ai_agents
 alirezarezvani/claude-code-skill-factory
-rampstackco/claude-skills
+Owl-Listener/designer-skills
 datopian/portaljs
-MengTo/Skills
+rampstackco/claude-skills
 dl-ezo/claude-code-sub-agents
-40RTY-ai/shopify-admin-skills
+MengTo/Skills
 humanlayer/humanlayer
-guanyang/open-agent-hub
+40RTY-ai/shopify-admin-skills
 anthropics/claude-code
-phuryn/pm-skills
+guanyang/open-agent-hub
 lst97/claude-code-sub-agents
-glebis/claude-skills
+phuryn/pm-skills
 darrenhinde/OpenAgentsControl
-browser-act/skills
+glebis/claude-skills
 dotnet/skills
-forcedotcom/sf-skills
+browser-act/skills
 danielrosehill/Claude-Slash-Commands
-jpcaparas/superpowers-laravel
+forcedotcom/sf-skills
 kasperjunge/agent-resources-legacy
-Orchestra-Research/AI-Research-SKILLs
+jpcaparas/superpowers-laravel
 centminmod/my-claude-code-setup
-majiayu000/spellbook
+Orchestra-Research/AI-Research-SKILLs
 pluginagentmarketplace/custom-plugin-kotlin
-openakita/openakita
+majiayu000/spellbook
 hnaymyh123-henry/claude-dev-skill
-Leooooooow/Awesome-eCommerce-Skills
+openakita/openakita
 brennercruvinel/CCPlugins
-elementalsouls/Claude-BugHunter
+Leooooooow/Awesome-eCommerce-Skills
 vijaythecoder/awesome-claude-agents
-full-stack-skills/t2ui-skills
+elementalsouls/Claude-BugHunter
 codenamev/ai-software-architect
-google/skills
+full-stack-skills/t2ui-skills
 steipete/agent-rules
-lebsral/DSPy-Programming-not-prompting-LMs-skills
+google/skills
 talknerdytome-labs/claude-agents
-SpaceZephyr/myskill
+lebsral/DSPy-Programming-not-prompting-LMs-skills
 anthropics/claude-cookbooks
-dev-toolings/superpowers-symfony
+SpaceZephyr/myskill
 glapsfun/cnative-skills
-Cold-IQ/ColdIQ-s-GTM-Skills
+dev-toolings/superpowers-symfony
 iannuttall/claude-agents
-nowork-studio/notfair-plugin
-ducpm2303/claude-java-plugins
-ihlamury/design-skills
+Cold-IQ/ColdIQ-s-GTM-Skills
