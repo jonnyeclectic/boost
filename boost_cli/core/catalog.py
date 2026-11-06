@@ -76,6 +76,12 @@ from . import (
 #  10 -- a description longer than `DESCRIPTION_MAX` is clamped, and a file
 #        that is binary (see `is_binary`) is no longer an item
 CACHE_FORMAT = 10
+# A cache is also stale when the tap's curated category has moved since it was
+# written: `category` falls back to that value at scan time, so recategorising
+# a registry in `registries.json` reached no machine that had already tapped it
+# (127 registries sat in `general` with 16,538 entries stamped from it). The
+# cache records the category it was scanned under as `tap_category`, and
+# `_cache_record` compares it with today's — no format bump per recategorisation.
 
 KIND_SKILL = "skill"
 KIND_RULE = "rule"
@@ -283,7 +289,7 @@ def _entry_category(meta: dict, tap_category: str) -> str:
     (see CLAUDE.md's design-domain note on `awesome-design-skills` vs
     `ai-design-skills`). ``tap_category`` — looked up once per scan from the
     bundled registry catalog, never per item — is everything an un-annotated
-    item has, and is itself often empty for a tap outside the bundled 487.
+    item has, and is itself often empty for a tap outside the bundled registry catalog.
     """
     own = _text(meta, "category")
     if own:
@@ -641,6 +647,7 @@ def rebuild_tap(tap: registry.Tap) -> list[dict]:
         "format": CACHE_FORMAT,
         "generated": util.now_iso(),
         "commit": gitutil.head_commit(tap.path),
+        "tap_category": config.registry_categories().get(tap.name, ""),
         "skills": entries,
     }, indent=1)
     # Replaced, not rewritten in place: a cache file this process cannot
@@ -708,7 +715,11 @@ def _cache_record(tap: registry.Tap) -> tuple[list[dict], bool, str] | None:
         _ENTRY_CACHE.pop(key, None)
         return None
     skills = data.get("skills", [])
-    current = data.get("format") == CACHE_FORMAT
+    # A cache predating `tap_category` reads as "", so it is current only for a
+    # tap that has no curated category to have missed.
+    current = (data.get("format") == CACHE_FORMAT
+               and str(data.get("tap_category") or "")
+               == config.registry_categories().get(tap.name, ""))
     commit = data.get("commit")
     commit = commit if isinstance(commit, str) else ""
     _ENTRY_CACHE[key] = (stamp, skills, current, commit)
@@ -719,7 +730,8 @@ def _cached_tap(tap: registry.Tap) -> tuple[list[dict], bool] | None:
     """``(skills, is_current)`` for a tap's cache, or ``None`` to force a
     rebuild (file missing, unreadable, or corrupt JSON).
 
-    ``is_current`` says whether the cache was written by this scanner. It is
+    ``is_current`` says whether the cache was written by this scanner, under
+    the tap category the bundled registry data names today. It is
     reported rather than acted on here because the right response depends on
     something this function cannot see: whether the clone is still on disk to
     rescan. A stale cache is not *wrong* — it is missing fields its consumers
@@ -733,8 +745,9 @@ def _cached_tap(tap: registry.Tap) -> tuple[list[dict], bool] | None:
 
 def cache_is_fresh(tap: registry.Tap, head: str | None = None) -> bool:
     """True when a tap's cache needs no rescan: it exists, parses, was written
-    at this ``CACHE_FORMAT``, stamps the tap's current ★, and was scanned at
-    the clone's current HEAD.
+    at this ``CACHE_FORMAT`` under the tap category the registry data names
+    today, stamps the tap's current ★, and was scanned at the clone's current
+    HEAD.
 
     ``update`` and ``heal`` ask this before :func:`rebuild_tap`. Rescanning an
     unchanged tap is not just slow (a full ``scan_dir``; ~20 s across a 63k-item
