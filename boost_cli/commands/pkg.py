@@ -119,8 +119,7 @@ def _warn_secrets(res: store.InstallResult) -> None:
     _emit_scan(installscan.scan(res, installscan.SECRET))
 
 
-def _offer_mcp(res: store.InstallResult, no_mcp: bool = False,
-               yes: bool | None = None) -> None:
+def _offer_mcp(res: store.InstallResult, no_mcp: bool = False) -> None:
     """Surface the MCP servers a just-installed skill needs, and offer to wire them.
 
     A skill that only works paired with an MCP server used to install "cleanly"
@@ -136,12 +135,16 @@ def _offer_mcp(res: store.InstallResult, no_mcp: bool = False,
     with only Gemini CLI is offered ``gemini mcp add`` rather than a ``claude``
     command it cannot run.
 
-    ``yes`` is ``boost install``'s own ``-y``, the one flag that answers this
-    prompt. Every other caller leaves it ``None``: `protocol open -y` and
-    `import -y` consent to *their* prompt, and registering a server with every
-    agent CLI for every project on the machine is a separate decision that
-    defaults to No — so for them the decline hint names only
-    ``BOOST_ASSUME_YES``, not a ``-y`` that would change nothing.
+    No flag answers this prompt — not ``install -y``, ``import -y`` or
+    ``protocol open -y``, whose -y consents to *their own* prompt. Registering
+    a third-party command with every agent CLI, for every project on the
+    machine, is a separate decision that defaults to No, and a flag that
+    answered it would be one an agent appends by reflex. So the decline prints
+    no bypass hint: it prints the exact ``<host> mcp add`` lines instead, which
+    are the scriptable consent — whoever runs one has the server's real
+    command in front of them. ``BOOST_ASSUME_YES`` still answers it, as it
+    answers every confirm, and ``--help`` says so; the decline does not
+    advertise it.
     """
     rows = res.mcp_servers
     if not rows or no_mcp or typedvalue.env_flag("BOOST_NO_MCP_OFFER", unknown=True):
@@ -201,10 +204,10 @@ def _offer_mcp(res: store.InstallResult, no_mcp: bool = False,
     # Name the scope. The prompt used to say only "register N servers with
     # Claude Code now?", which is the one detail the answer turns on — this
     # writes a registration every project on this machine will then launch.
-    if not (yes or out.confirm(
+    if not out.confirm(
             "  register %s with %s, for every project on this machine?"
             % (_plural(len(wirable), "server"), where), default=False,
-            hint=out.ENV_ONLY_BYPASS_HINT if yes is None else None)):
+            hint=""):
         out.dim("  skipped — run these yourself when you're ready:", wrap=True)
         for row in wirable:
             # One line per host, not `targets[0]` — the prompt named every
@@ -284,12 +287,8 @@ def _register_mcp_server(name: str, spec: dict, host: str = "claude",
     journal.log("mcp-register", name, host=host)
 
 
-def _report_result(res: store.InstallResult, no_mcp: bool = False,
-                   yes: bool | None = None) -> None:
-    """The canonical three-line install report.
-
-    ``yes`` reaches :func:`_offer_mcp` only from ``boost install`` — see there.
-    """
+def _report_result(res: store.InstallResult, no_mcp: bool = False) -> None:
+    """The canonical three-line install report."""
     if res.kind in ("rule", "workflow"):
         where = " (this repo)" if res.scope == "project" else ""
         out.ok("materialized%s → %s"
@@ -325,7 +324,7 @@ def _report_result(res: store.InstallResult, no_mcp: bool = False,
         _warn_submodules(res)
         _warn_injection(res)
         _warn_secrets(res)
-        _offer_mcp(res, no_mcp=no_mcp, yes=yes)
+        _offer_mcp(res, no_mcp=no_mcp)
         return
     out.ok("copied to %s" % _tilde(res.dest))
     if res.linked:
@@ -341,7 +340,7 @@ def _report_result(res: store.InstallResult, no_mcp: bool = False,
     out.ok("lock updated (.skill-lock.json)")
     _warn_injection(res)
     _warn_secrets(res)
-    _offer_mcp(res, no_mcp=no_mcp, yes=yes)
+    _offer_mcp(res, no_mcp=no_mcp)
 
 
 def _report_skill_copy(res) -> None:
@@ -675,14 +674,10 @@ def cmd_install(argv: list[str]) -> int:
     ap.add_argument("names", type=util.nonempty_str, nargs="+", metavar="NAME",
                     help="skill name, optionally qualified as tap:skill; a "
                          "tap's own name (owner/repo) installs every skill "
-                         "it ships, after listing them and asking (--all "
+                         "it ships, after listing them and asking (-y "
                          "skips the question)")
     ap.add_argument("--force", action="store_true",
                     help="reinstall even if already installed or pinned")
-    ap.add_argument("--all", dest="all_skills", action="store_true",
-                    help="with a tap as NAME, install its whole skill list "
-                         "without asking first (-y is separate: it answers "
-                         "the MCP-server registration offer)")
     ap.add_argument("--path", type=util.nonempty_str, metavar="P", default=None,
                     help="pick which copy to install when one registry ships "
                          "the name more than once (see the paths that error "
@@ -702,8 +697,12 @@ def cmd_install(argv: list[str]) -> int:
     ap.add_argument("--no-mcp", action="store_true",
                     help="don't offer to register MCP servers a skill declares")
     ap.add_argument("-y", "--yes", action="store_true",
-                    help="register the MCP servers a skill declares without "
-                         "asking")
+                    help="with a tap as NAME, install its skill list without "
+                         "asking first. Never answers the offer to register "
+                         "the MCP servers a skill declares: a typed y does, "
+                         "or BOOST_ASSUME_YES=1 for the whole command, or "
+                         "running the `mcp add` lines a declined offer "
+                         "prints")
     skill_g = ap.add_mutually_exclusive_group()
     skill_g.add_argument("--as-skill", dest="as_skill", action="store_const",
                          const=True, default=None,
@@ -832,13 +831,14 @@ def cmd_install(argv: list[str]) -> int:
     # pulled in; never on a dry run, which writes nothing to agree to.
     noun = ("skill" if all((e.get("kind") or "skill") == "skill"
                            for e in entries) else "item")
-    # `--all`, not `-y`: install's -y answers the MCP-server registration
-    # offer, a separate machine-wide decision this list does not include.
-    if (expansions and not args.dry_run and not args.all_skills
+    # -y answers this list and nothing else. The hint names only -y: the
+    # MCP-server offer that may follow is a separate, machine-wide decision,
+    # and a hint naming BOOST_ASSUME_YES here would hand an agent the one
+    # switch that answers both.
+    if (expansions and not args.dry_run and not args.yes
             and not out.confirm(
                 "install %s?" % _plural(len(entries), noun),
-                hint="pass --all or set BOOST_ASSUME_YES=1 to skip this "
-                     "prompt")):
+                hint="pass -y to skip this prompt")):
         out.info("cancelled")
         return 1
 
@@ -1011,7 +1011,7 @@ def cmd_install(argv: list[str]) -> int:
             out.warn("%s: %s" % (e["name"], err.message), stream=sys.stderr)
             failed += 1
             continue
-        _report_result(res, no_mcp=args.no_mcp, yes=args.yes)
+        _report_result(res, no_mcp=args.no_mcp)
         results.append(res)
     if results:
         _report_prerequisites([e for e in entries

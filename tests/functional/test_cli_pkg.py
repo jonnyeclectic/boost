@@ -4629,36 +4629,44 @@ class TestMcpAwareSkills:
         assert calls == []
         assert "registered MCP server" not in r.out
         assert "skipped — run these yourself when you're ready:" in r.out
-        # The hint must not tell the user to pass the -y they just passed.
-        assert "set BOOST_ASSUME_YES=1 to skip this prompt" in r.out
+        # No bypass hint: the -y they passed changes nothing here, and the
+        # printed command is the consent, not a blanket env var.
         assert "pass -y" not in r.out
+        assert "BOOST_ASSUME_YES" not in r.out
+        assert "claude mcp add github --scope user -- npx" in r.out
         assert "mcp-skill" in _lock()
 
-    def test_install_yes_answers_the_registration_prompt(
-            self, boost, sandbox, tmp_path, monkeypatch, fixture_tap_src):
-        # The prompt's own hint says "pass -y"; install used to reject -y with
-        # rc 2. Now it parses, and it is the one -y that answers this prompt.
+    @pytest.mark.parametrize("extra", [(), ("-y",)])
+    def test_install_y_does_not_answer_the_registration_prompt(
+            self, boost, sandbox, tmp_path, monkeypatch, fixture_tap_src,
+            extra):
+        # install's -y skips the tap-list question; a server registered for
+        # every project on the machine takes a typed y (or the env var, or
+        # the printed command), never a flag an agent appends by reflex.
         monkeypatch.delenv("BOOST_ASSUME_YES", raising=False)
         boost("tap", _mcp_skill_tap(
             fixture_tap_src, tmp_path,
             sidecar={"mcpServers": {"github": {"command": "npx"}}}))
         calls = self._record_registrations(monkeypatch)
-        boost("install", "needs-mcp", "-y")
+        r = boost("install", "needs-mcp", *extra)
+        assert calls == []
+        assert "skipped — run these yourself when you're ready:" in r.out
+        assert "pass -y" not in r.out
+        assert "BOOST_ASSUME_YES" not in r.out
+        assert "mcp add github" in r.out
+
+    def test_install_assume_yes_answers_the_registration_prompt(
+            self, boost, sandbox, tmp_path, monkeypatch, fixture_tap_src):
+        monkeypatch.setenv("BOOST_ASSUME_YES", "1")
+        boost("tap", _mcp_skill_tap(
+            fixture_tap_src, tmp_path,
+            sidecar={"mcpServers": {"github": {"command": "npx"}}}))
+        calls = self._record_registrations(monkeypatch)
+        boost("install", "needs-mcp")
         # install fetches through git, so the registrar is stubbed rather than
         # subprocess.run; with no agent CLI found every host is targeted.
         assert calls and {c[0] for c in calls} == {"github"}
         assert {c[1] for c in calls} == {"user"}
-
-    def test_install_without_yes_names_the_flag_it_takes(
-            self, boost, sandbox, tmp_path, monkeypatch, fixture_tap_src):
-        monkeypatch.delenv("BOOST_ASSUME_YES", raising=False)
-        boost("tap", _mcp_skill_tap(
-            fixture_tap_src, tmp_path,
-            sidecar={"mcpServers": {"github": {"command": "npx"}}}))
-        calls = self._record_registrations(monkeypatch)
-        r = boost("install", "needs-mcp")
-        assert calls == []
-        assert "pass -y or set BOOST_ASSUME_YES=1 to skip this prompt" in r.out
 
     def test_declining_prints_a_line_for_every_host_the_yes_would_have_hit(
             self, boost, sandbox, tmp_path, monkeypatch):

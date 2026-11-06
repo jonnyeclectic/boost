@@ -142,8 +142,8 @@
       <!-- ROADMAP:stats -->
       <div class="stat"><b>28</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
-      <div class="stat"><b>76</b><span>Planned</span></div>
-      <div class="stat"><b>557</b><span>Loop finds</span></div>
+      <div class="stat"><b>80</b><span>Planned</span></div>
+      <div class="stat"><b>561</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -1586,6 +1586,81 @@ NOT ALREADY CARDED, but read the existing card first.
           <span class="m">Impact <b>Medium</b></span>
           <span class="m">Wow <b class="wow">★★</b></span>
           <span class="m">Three ways `boost tap` answered for a different repo than the one asked for — a same-basename repo "already tapped", file:// cloned from GitHub, an empty repo tapped as 0 items…</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="mcp-offer-once-per-install-run">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">MCP · UX</span></div>
+        <h3><code>install &lt;tap&gt;</code> asks about MCP servers once per skill, not once per run</h3>
+        <p><code>_offer_mcp</code> runs from <code>_report_result</code>, once for each installed item. So a tap
+whose skills declare MCP servers asks <em>register N servers…?</em> once per declaring skill, partway
+through the install output, after <code>-y</code> has already settled the skill list.
+
+<b>Fix.</b> Collect the declared servers across the run and ask once at the end. The question lists
+every server's command line, and a decline prints every <code>&lt;host&gt; mcp add</code> line. A
+single-skill install reads the same as it does today.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">a tap with k skills that declare servers asks the registration question k times</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="mcp-offer-exempt-from-assume-yes">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Safety · MCP</span></div>
+        <h3>Consider exempting the MCP registration offer from <code>BOOST_ASSUME_YES</code></h3>
+        <p><code>install -y</code> no longer answers the offer to register skill-declared MCP servers. A
+typed <code>y</code> does, or running the printed <code>mcp add</code> lines. But
+<code>BOOST_ASSUME_YES=1</code> still answers every confirm, this one included. A dotfiles script
+or agent environment that <em>exports</em> it, rather than prefixing one command, registers
+third-party commands for every project on the machine without anyone reading them.
+
+<b>Option.</b> Give <code>output.confirm</code> an <code>env_bypass=False</code> mode for this prompt,
+as <code>protocol open --gui</code> already does for its dialog. Then only a typed answer or the
+printed command registers. This changes shipped env-var behaviour, so it needs a deprecation
+line first. The 2026-11-06 design review ranked the pinned-consent variant
+(<code>--register-mcp SERVER@DIGEST</code>) second, because of its cost.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">an exported BOOST_ASSUME_YES still registers every server a tap declares, machine-wide</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="mcp-install-tool-names-declared-servers">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">MCP · UX</span></div>
+        <h3>MCP <code>boost_install</code> replies should name the servers a skill declares</h3>
+        <p>The MCP <code>boost_install</code> tool never registers servers, which is correct: an agent must
+not grant itself machine-wide commands. But its reply does not say the skill declares any. So the
+agent reports success, and the skill fails later for a reason nobody surfaced.
+
+<b>Fix.</b> Add one line per declared server to the reply: its name, its command line, and the
+<code>mcp add</code> line a human would run. This matches what the CLI's decline prints.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">an agent installing through MCP never learns a human has to register the skill's server</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="install-local-tap-writes-every-server-to-mcp-json">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Safety · MCP</span></div>
+        <h3><code>install &lt;tap&gt; --local</code> records every declared MCP server in <code>.mcp.json</code> unasked</h3>
+        <p>A project-scoped install records declared servers in the repo's <code>.mcp.json</code> with no
+prompt, because the file is committed and reviewed. With a tap as NAME, one <code>-y</code> now
+writes every server that the tap's skills declare. That may be dozens of third-party commands,
+which every teammate's agent launches once the file is committed.
+
+<b>Fix.</b> Name every server written in the project-scope report, which already prints
+<em>recorded N servers</em>. Add a functional test that pins the whole-tap case.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">--local writes a whole tap's declared servers into the repo's .mcp.json without a prompt</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->

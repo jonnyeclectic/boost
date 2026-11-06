@@ -2074,12 +2074,37 @@ class TestConfirm:
 
     def test_custom_hint_replaces_the_default(self, monkeypatch, capsys):
         monkeypatch.setattr(sys, "stdin", FakeStream(tty=False))
-        assert output.confirm("go?", hint=output.ENV_ONLY_BYPASS_HINT) is False
-        assert capsys.readouterr().out == output.ENV_ONLY_BYPASS_HINT + "\n"
+        assert output.confirm("go?", hint="pass -y to skip this prompt") is False
+        assert capsys.readouterr().out == "pass -y to skip this prompt\n"
 
-    def test_env_only_hint_names_no_flag(self):
-        assert output.ENV_ONLY_BYPASS_HINT == (
-            "set BOOST_ASSUME_YES=1 to skip this prompt")
+    # hint="" is "no flag answers this": the MCP-registration offer prints the
+    # commands it would have run instead. Each decline path is pinned, since
+    # each has its own `and hint` guard.
+    def test_empty_hint_prints_nothing_off_a_tty(self, monkeypatch, capsys):
+        monkeypatch.setattr(sys, "stdin", FakeStream(tty=False))
+        assert output.confirm("go?", hint="") is False
+        assert capsys.readouterr().out == ""
+
+    def test_empty_hint_prints_nothing_on_a_typed_no(self, monkeypatch,
+                                                     capsys):
+        monkeypatch.setattr(output, "stdin_is_tty", lambda *a: True)
+        monkeypatch.setattr("builtins.input", lambda prompt: "n")
+        assert output.confirm("go?", hint="") is False
+        assert capsys.readouterr().out == ""
+
+    def test_empty_hint_prints_nothing_on_eof(self, monkeypatch, capsys):
+        monkeypatch.setattr(output, "stdin_is_tty", lambda *a: True)
+
+        def eof(prompt):
+            raise EOFError
+        monkeypatch.setattr("builtins.input", eof)
+        assert output.confirm("go?", hint="") is False
+        assert capsys.readouterr().out == "\n"
+
+    def test_empty_hint_still_returns_a_typed_yes(self, monkeypatch):
+        monkeypatch.setattr(output, "stdin_is_tty", lambda *a: True)
+        monkeypatch.setattr("builtins.input", lambda prompt: "y")
+        assert output.confirm("go?", hint="") is True
 
     def test_non_tty_returns_default_true(self, monkeypatch):
         monkeypatch.setattr(sys, "stdin", FakeStream(tty=False))

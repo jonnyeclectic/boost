@@ -1393,9 +1393,6 @@ def table(rows, headers=None, stream=None, keep=(), text=(),
 
 
 _CONFIRM_BYPASS_HINT = "pass -y or set BOOST_ASSUME_YES=1 to skip this prompt"
-# For a prompt the running command's -y deliberately does not answer — the
-# hint must not name a flag that would change nothing.
-ENV_ONLY_BYPASS_HINT = "set BOOST_ASSUME_YES=1 to skip this prompt"
 
 
 def confirm(prompt: str, default: bool = False, quiet: bool = False,
@@ -1420,13 +1417,16 @@ def confirm(prompt: str, default: bool = False, quiet: bool = False,
     roadmap item. ``quiet`` suppresses that hint — for a caller that is about
     to print its own machine-readable (``--json``) result on a decline, where
     the hint would land as a stray prose line ahead of it. ``hint`` replaces
-    the default wording, for a prompt the command's own ``-y`` does not reach.
+    the default wording, and ``hint=""`` prints none: for a prompt no flag
+    answers, where any bypass line would name something that changes nothing
+    or advertise a blanket yes the caller means to keep out of sight.
     """
     if typedvalue.env_flag("BOOST_ASSUME_YES"):
         return True
-    hint = hint or _CONFIRM_BYPASS_HINT
+    if hint is None:
+        hint = _CONFIRM_BYPASS_HINT
     if not stdin_is_tty():
-        if not default and not quiet:
+        if not default and not quiet and hint:
             dim(hint)
         return default
     suffix = " [Y/n] " if default else " [y/N] "
@@ -1434,10 +1434,10 @@ def confirm(prompt: str, default: bool = False, quiet: bool = False,
         answer = input(prompt + suffix).strip().lower()
     except (EOFError, KeyboardInterrupt):
         print()
-        if not quiet:
+        if not quiet and hint:
             dim(hint)
         return False
     result = answer in ("y", "yes") if answer else default
-    if not result and not quiet:
+    if not result and not quiet and hint:
         dim(hint)
     return result

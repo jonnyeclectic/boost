@@ -65,28 +65,34 @@ def test_tap_name_lists_then_installs_every_skill(boost, tapped):
     assert "Installed 5 new skills" in r.out
 
 
-def test_without_a_terminal_or_all_it_asks_and_declines(boost, tapped,
-                                                        monkeypatch):
+def test_without_a_terminal_or_y_it_asks_and_declines(boost, tapped,
+                                                      monkeypatch):
     monkeypatch.delenv("BOOST_ASSUME_YES", raising=False)
     r = boost("install", _tap_name(), expect=1)
     assert "cancelled" in r.out
-    assert "pass --all or set BOOST_ASSUME_YES=1 to skip this prompt" in r.out
+    # Exactly -y: the env var answers the MCP offer too, so the list's hint
+    # must not hand an agent the switch that answers both.
+    assert "pass -y to skip this prompt" in r.out
+    assert "BOOST_ASSUME_YES" not in r.out + r.err
     # The list is on screen before the question, so the decline is informed.
     assert "brainstorming" in r.out
     assert _installed() == []
 
 
-def test_all_installs_without_asking(boost, tapped, monkeypatch):
+@pytest.mark.parametrize("flag", ["-y", "--yes"])
+def test_y_installs_without_asking(boost, tapped, monkeypatch, flag):
     monkeypatch.delenv("BOOST_ASSUME_YES", raising=False)
-    boost("install", _tap_name(), "--all")
+    r = boost("install", _tap_name(), flag)
+    assert "cancelled" not in r.out
     assert _installed() == FIXTURE_SKILLS
 
 
-def test_y_does_not_answer_the_skill_list(boost, tapped, monkeypatch):
-    # install's -y answers the MCP-server offer, a different question.
+def test_all_is_not_a_flag(boost, tapped, monkeypatch):
+    # The train once spelled the list's consent --all; install has one
+    # prompt-skipping flag, and the tap name already selects everything.
     monkeypatch.delenv("BOOST_ASSUME_YES", raising=False)
-    r = boost("install", _tap_name(), "-y", expect=1)
-    assert "cancelled" in r.out
+    r = boost("install", _tap_name(), "--all", expect=2)
+    assert "--all" in r.err
     assert _installed() == []
 
 
@@ -265,7 +271,7 @@ def test_the_tap_name_matches_case_blind(boost, tapped, spelling):
     assert "Installed 5 new skills" in r.out
 
 
-# ── what -y answers, and the list staying the list ─────────────────────────
+# ── what -y answers (the list, never the MCP offer) ─────────────────────────
 
 def _mcp_tap(fixture_tap_src, dest):
     sidecar = {"mcpServers": {"srv": {"command": "touch", "args": ["x"]}}}
@@ -292,25 +298,41 @@ def registrations(monkeypatch):
     return calls
 
 
-def test_all_does_not_also_register_mcp_servers(boost, fixture_tap_src,
-                                               tmp_path, monkeypatch,
-                                               registrations):
+def _mcp_decline_lines(out):
+    return [ln.strip() for ln in out.splitlines() if "mcp add" in ln]
+
+
+def test_y_does_not_also_register_mcp_servers(boost, fixture_tap_src,
+                                             tmp_path, monkeypatch,
+                                             registrations):
+    # An agent appending -y by reflex gets the skills and no servers.
     boost("tap", _mcp_tap(fixture_tap_src, tmp_path / "mcp"))
     monkeypatch.delenv("BOOST_ASSUME_YES", raising=False)
-    r = boost("install", _tap_name(), "--all")
+    r = boost("install", _tap_name(), "-y")
     assert "needs-mcp" in _installed()
     assert registrations == []
     assert "skipped — run these yourself" in r.out
-    # install's own -y is what answers this prompt, so its hint names it.
-    assert "pass -y or set BOOST_ASSUME_YES=1 to skip this prompt" in r.out
+    # The decline names no flag and no env var -- only what a yes would run.
+    assert "pass -y" not in r.out
+    assert "BOOST_ASSUME_YES" not in r.out + r.err
+    assert _mcp_decline_lines(r.out) == ["claude mcp add srv --scope user "
+                                         "-- touch x"]
 
 
-def test_all_with_y_installs_and_registers(boost, fixture_tap_src, tmp_path,
-                                          monkeypatch, registrations):
+def test_a_typed_y_registers_after_y_skipped_the_list(boost, fixture_tap_src,
+                                                      tmp_path, monkeypatch,
+                                                      registrations):
     boost("tap", _mcp_tap(fixture_tap_src, tmp_path / "mcp"))
     monkeypatch.delenv("BOOST_ASSUME_YES", raising=False)
-    boost("install", _tap_name(), "--all", "-y")
-    assert "needs-mcp" in _installed()
+    from boost_cli.core import output
+    asked = []
+    monkeypatch.setattr(output, "stdin_is_tty", lambda *a: True)
+    monkeypatch.setattr("builtins.input",
+                        lambda prompt: asked.append(prompt) or "y")
+    boost("install", _tap_name(), "-y")
+    # -y answered the list, so the only question left is the MCP one.
+    assert len(asked) == 1
+    assert "register 1 server with Claude Code, for every project" in asked[0]
     assert registrations == ["srv"]
 
 

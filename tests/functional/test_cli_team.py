@@ -1259,7 +1259,7 @@ class TestProtocol:
         assert (paths.store_dir() / "mcp-needer" / "SKILL.md").is_file()
         assert registered == []
         assert "skipped — run these yourself when you're ready:" in r.out
-        assert "set BOOST_ASSUME_YES=1 to skip this prompt" in r.out
+        assert "BOOST_ASSUME_YES" not in r.out
         assert "pass -y" not in r.out
 
     def test_yes_and_gui_are_exclusive(self, boost, tapped):
