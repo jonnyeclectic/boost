@@ -69,6 +69,13 @@ AI_NOT_UI = "Owl-Listener/ai-design-skills"
 # only that it stays out of the one its name suggests.
 BUILDINGS_NOT_SOFTWARE = "AlpacaLabsLLC/skills-for-architects"
 
+# And the self-description trap: nWave calls itself a framework, but
+# `framework` holds language/framework coding-standard rule packs (.NET,
+# Godot, PHP/Laravel). Its items are an agent methodology — `nw-product-owner`,
+# `nw-software-crafter`, `nw-lane-orchestrator`, each role with a `-reviewer`
+# twin — the same shape as obra/superpowers and SethGammon/Citadel in `meta`.
+METHODOLOGY_NOT_FRAMEWORK = "nWave-ai/nWave"
+
 # Token-efficiency registries: repos whose items exist to make an agent emit
 # *less* — less code, or fewer output tokens. Both were filed by reading item
 # names (`ponytail-audit`, `ponytail-debt`, `ponytail-gain`; `caveman-compress`,
@@ -214,6 +221,15 @@ class TestDesignDomain:
             "%s ships AEC and real-estate skills (zoning, permits, EPDs), not "
             "software architecture; `tap --catalog --category architecture` "
             "would mix them in with the DDD packs" % name)
+
+    def test_nwave_is_filed_with_the_agent_methodologies(self, catalog):
+        name = METHODOLOGY_NOT_FRAMEWORK
+        row = next((e for e in catalog if e["name"] == name), None)
+        assert row is not None, "%s dropped out of the catalog" % name
+        assert row["category"] == "meta", (
+            "%s is an agent-methodology suite like obra/superpowers, but is "
+            "filed %r; `framework` is language coding-standard rule packs"
+            % (name, row["category"]))
 
     def test_playwright_is_carried_as_a_skill_registry(self, catalog):
         """The framework repo ships real SKILL.md items under

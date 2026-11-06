@@ -400,7 +400,7 @@ SKILLS = [
     ("vibeeval/vibecosystem", "general", "AI software team for Claude Code - 138 agents, 295 skills, 73 hooks... (299 skills, 6 rules, 138 workflows)", 443, "high"),
     ("j4flmao/agent-skills", "general", "432 skills, 2 rules, 3 workflows", 437, "med"),
     ("asgard-ai-platform/skills", "general", "301 open-source coding agent skills across 22 domains - methodology... (314 skills)", 314, "high"),
-    ("nWave-ai/nWave", "framework", "AI agents that guide you from idea to working code, with you in... (151 skills, 130 workflows)", 281, "high"),
+    ("nWave-ai/nWave", "meta", "AI agents that guide you from idea to working code, with you in... (151 skills, 130 workflows)", 281, "high"),
     ("anthropics/knowledge-work-plugins", "general", "Plugins for knowledge workers in Claude Cowork: sales, finance, legal... (252 skills, 20 workflows)", 272, "high"),
     ("shinpr/claude-code-workflows", "workflow", "Production-ready development workflows for Claude Code, powered by... (115 skills, 91 workflows)", 206, "high"),
     ("OneWave-AI/claude-skills", "general", "172 production-ready Claude Code skills for sales, marketing, design... (204 skills)", 204, "high"),

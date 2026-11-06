@@ -3276,7 +3276,7 @@
       "name": "nWave-ai/nWave",
       "url": "https://github.com/nWave-ai/nWave",
       "type": "skill",
-      "category": "framework",
+      "category": "meta",
       "focus": "AI agents that guide you from idea to working code, with you in... (151 skills, 130 workflows)",
       "est_items": 281,
       "confidence": "high",
