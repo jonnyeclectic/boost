@@ -851,7 +851,7 @@ def cmd_protocol(argv) -> int:
         return 0
 
     if args.action == "register":
-        paths.ensure_dirs()
+        paths.require_dirs()
         shim = paths.launcher()
         script = _handler_script()
         # newline="\n" because this artifact is a bash script and bash is a
@@ -873,10 +873,20 @@ def cmd_protocol(argv) -> int:
         # so the handler must ask. With no TTY to ask on, --gui asks in a
         # dialog; the unset keeps an exported BOOST_ASSUME_YES from leaking
         # in from the session that launched the browser.
+        #
+        # The OS launches the handler with its own environment, so the state
+        # dir and store it was registered under are exported here, or a link
+        # installed into ~/.boost and ~/.agents/skills. Every interpolated
+        # path is shlex-quoted: a `$`, backtick or `"` in it would otherwise
+        # be expanded by bash or break the line.
+        exports = "".join("export %s=%s\n" % (k, shlex.quote(v))
+                          for k, v in paths.override_env().items())
         script.write_text("#!/usr/bin/env bash\n"
                           "# boost:// URL handler — invoked with the URL as $1\n"
                           "unset BOOST_ASSUME_YES\n"
-                          'exec "%s" protocol open %s "$1"\n' % (shim, _GUI_FLAG),
+                          "%s"
+                          'exec %s protocol open %s "$1"\n'
+                          % (exports, shlex.quote(str(shim)), _GUI_FLAG),
                           encoding="utf-8", newline="\n")
         script.chmod(script.stat().st_mode | stat.S_IEXEC)
         out.ok("wrote handler script %s" % _tilde(script))

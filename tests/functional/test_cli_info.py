@@ -436,6 +436,11 @@ class TestInfo:
         monkeypatch.setenv("COLUMNS", "60")
         r = boost("info", "brainstorming")
         for ln in r.out.split("\n"):
+            # `tap url` is data, one unbreakable token: it overflows whole
+            # rather than folding, and the fixture tap's is a long tmp path.
+            if ln.strip().startswith("tap url "):
+                assert len(ln.split()) == 3, ln
+                continue
             assert len(ln) <= 60, ln
         assert "Structured ideation" in r.out
         assert "divergent-thinking" in r.out

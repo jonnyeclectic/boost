@@ -14,6 +14,7 @@ from __future__ import annotations
 import os
 import shutil
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -284,3 +285,75 @@ class TestDirAliasesTheStore:
         assert not (sandbox / ".agents" / "skills" / "tdd-workflow").exists()
         assert (sandbox / ".claude" / "skills" / "brainstorming").is_symlink()
         assert store.plan_issues(store.sync_plan()) == 0
+
+
+class TestEnvMadeTheDirRelative:
+    """A relative value in the *environment* is not a bad config value: a
+    relative CODEX_HOME is one Codex honours against the cwd, any other names
+    the variable, and neither may block commands for a disabled agent."""
+
+    def test_relative_codex_home_resolves_against_the_cwd(self, sandbox,
+                                                          monkeypatch):
+        monkeypatch.setenv("CODEX_HOME", "relcodex")
+        want = Path(os.path.abspath("relcodex")) / "skills"
+        assert agents._row_dir({"dir": "${CODEX_HOME:-~/.codex}/skills"}) \
+            == want
+        assert agents.known_agents()["codex"]["dir"] == want
+        monkeypatch.setenv("CODEX_HOME", "./a/../relcodex")
+        assert agents._row_dir({"dir": "${CODEX_HOME}/skills"}) == want
+
+    def test_other_relative_var_is_named(self, sandbox, monkeypatch):
+        monkeypatch.setenv("BOOST_TEST_REL_VAR", "relx")
+        with pytest.raises(agents.RelativeAgentDir) as e:
+            agents._row_dir({"dir": "${BOOST_TEST_REL_VAR:-~/x}/skills"})
+        assert e.value.message == (
+            "BOOST_TEST_REL_VAR='relx' is a relative path, so "
+            "'${BOOST_TEST_REL_VAR:-~/x}/skills' would resolve against "
+            "whatever directory boost runs from")
+        assert e.value.hint == ("export BOOST_TEST_REL_VAR=/an/absolute/path "
+                                "(or ~/path)")
+
+    def test_a_relative_fallback_still_blames_the_dir(self, sandbox,
+                                                      monkeypatch):
+        monkeypatch.delenv("BOOST_TEST_REL_VAR", raising=False)
+        with pytest.raises(agents.RelativeAgentDir) as e:
+            agents._row_dir({"dir": "${BOOST_TEST_REL_VAR:-rel}/skills"})
+        assert e.value.message.startswith(
+            "'${BOOST_TEST_REL_VAR:-rel}/skills' is a relative path")
+
+    def test_env_source(self, monkeypatch):
+        monkeypatch.setenv("BOOST_TEST_SRC", "v")
+        monkeypatch.delenv("BOOST_TEST_NOPE", raising=False)
+        assert paths.env_source("${BOOST_TEST_SRC:-x}/y") == "BOOST_TEST_SRC"
+        assert paths.env_source("${BOOST_TEST_NOPE:-x}/y") is None
+        assert paths.env_source("~/x") is None
+        monkeypatch.setenv("BOOST_TEST_SRC", "")
+        assert paths.env_source("${BOOST_TEST_SRC:-x}/y") is None
+
+    def test_disabled_agent_with_unusable_dir_is_skipped(self, sandbox,
+                                                         capsys):
+        _patch_row("cursor", dir="cursor-rel/skills", enabled=False)
+        known = agents.known_agents()
+        assert "cursor" not in known
+        assert "claude-code" in known
+        err = capsys.readouterr().err
+        assert "agents.cursor is disabled and boost skips it: " \
+               "'cursor-rel/skills' is a relative path" in " ".join(err.split())
+        agents.known_agents()  # warned once per process
+        assert capsys.readouterr().err == ""
+
+    def test_disabled_agent_with_unset_var_is_skipped(self, sandbox,
+                                                      monkeypatch):
+        monkeypatch.delenv("BOOST_TEST_REL_NOPE", raising=False)
+        _patch_row("cursor", dir="${BOOST_TEST_REL_NOPE}/skills",
+                   enabled=False)
+        assert "cursor" not in agents.known_agents()
+
+    def test_enabled_agent_with_unset_var_still_raises(self, sandbox,
+                                                       monkeypatch):
+        monkeypatch.delenv("BOOST_TEST_REL_NOPE", raising=False)
+        _patch_row("cursor", dir="${BOOST_TEST_REL_NOPE}/skills")
+        with pytest.raises(BoostError) as e:
+            agents.known_agents()
+        assert not isinstance(e.value, agents.RelativeAgentDir)
+        assert e.value.message.startswith("BOOST_TEST_REL_NOPE is not set")

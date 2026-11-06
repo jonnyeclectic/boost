@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -233,6 +234,27 @@ class TestLinksLeftAfterLinksSkillsOff:
             in agents.remembered_native_dirs()
         # Never folded into the broad sweeps.
         assert _home(".windsurf", "skills") not in agents.sweep_dirs()
+
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="symlinked dirs need privileges on Windows")
+    def test_a_dir_remembered_under_another_spelling_is_one_dir(
+            self, boost, mixed, tmp_path):
+        import json
+        self._flip(boost)
+        real = _home(".windsurf", "skills")
+        alias = tmp_path / "alias-skills"
+        os.symlink(real, alias)
+        f = agents.link_dirs_path()
+        f.write_text(json.dumps({"windsurf": [str(alias)]}), encoding="utf-8")
+        assert agents.remembered_native_dirs() == [("windsurf", real)]
+        # Another agent's record of the same dir is not windsurf's.
+        f.write_text(json.dumps({"cursor": [str(alias)]}), encoding="utf-8")
+        assert agents.remembered_native_dirs() == []
+        # And an unrelated dir is not this one.
+        (tmp_path / "elsewhere").mkdir()
+        f.write_text(json.dumps({"windsurf": [str(tmp_path / "elsewhere")]}),
+                     encoding="utf-8")
+        assert agents.remembered_native_dirs() == []
 
     def test_a_native_dir_boost_never_linked_into_is_not_remembered(
             self, boost, mixed):

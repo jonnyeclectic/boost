@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 from ..errors import BoostError
-from . import frontmatter, util
+from . import frontmatter, output, util
 
 SLOT_COMMANDS = "commands"
 SLOT_AGENTS = "agents"
@@ -245,10 +245,38 @@ def gemini_command_notes(raw: str) -> list[str]:
              for trigger, what in (("@{", "a file to inject"),
                                    ("!{", "a shell command to run"))
              if trigger in body]
+    # Each distinct command once, in order: the same `!`...`` repeated down a
+    # workflow is one thing to say, not one note per occurrence.
+    braced = list(dict.fromkeys(
+        m.group(1) for m in _BANG_CMD_BRACED.finditer(body)))
     notes += ["Gemini cannot run `!`%s`` before the prompt (a brace would end "
-              "its `!{...}` early); left as text" % m.group(1)
-              for m in _BANG_CMD_BRACED.finditer(body)]
+              "its `!{...}` early); left as text" % _note_snippet(cmd)
+              for cmd in braced[:NOTE_EXAMPLES]]
+    if len(braced) > NOTE_EXAMPLES:
+        notes.append("... and %d more braced `!`...`` command%s, left as text"
+                     % (len(braced) - NOTE_EXAMPLES,
+                        "" if len(braced) - NOTE_EXAMPLES == 1 else "s"))
     return notes
+
+
+#: How many braced commands :func:`gemini_command_notes` quotes before it
+#: counts the rest. One note per match made a 20,000-line workflow print
+#: 40,008 lines of install output.
+NOTE_EXAMPLES = 2
+#: The longest command a note quotes, in characters, before ``…``.
+NOTE_SNIPPET_MAX = 80
+
+
+def _note_snippet(cmd: str) -> str:
+    """``cmd`` safe to echo in a note: control bytes gone, length bounded.
+
+    The note is printed to the user's terminal, and the command is tap text:
+    an ESC in it retitled the window and cleared the screen at install.
+    """
+    cmd = output.plain(cmd)
+    if len(cmd) > NOTE_SNIPPET_MAX:
+        cmd = cmd[:NOTE_SNIPPET_MAX - 1] + "…"
+    return cmd
 
 
 def render_gemini_command(name: str, raw: str) -> str:

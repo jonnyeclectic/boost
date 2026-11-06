@@ -134,6 +134,17 @@ def _offer_mcp(res: store.InstallResult, no_mcp: bool = False) -> None:
     The offer targets whichever agent CLIs are actually installed, so a machine
     with only Gemini CLI is offered ``gemini mcp add`` rather than a ``claude``
     command it cannot run.
+
+    No flag answers this prompt — not ``install -y``, ``import -y`` or
+    ``protocol open -y``, whose -y consents to *their own* prompt. Registering
+    a third-party command with every agent CLI, for every project on the
+    machine, is a separate decision that defaults to No, and a flag that
+    answered it would be one an agent appends by reflex. So the decline prints
+    no bypass hint: it prints the exact ``<host> mcp add`` lines instead, which
+    are the scriptable consent — whoever runs one has the server's real
+    command in front of them. ``BOOST_ASSUME_YES`` still answers it, as it
+    answers every confirm, and ``install -y``'s help says so; the decline
+    does not advertise it.
     """
     rows = res.mcp_servers
     if not rows or no_mcp or typedvalue.env_flag("BOOST_NO_MCP_OFFER", unknown=True):
@@ -195,7 +206,8 @@ def _offer_mcp(res: store.InstallResult, no_mcp: bool = False) -> None:
     # writes a registration every project on this machine will then launch.
     if not out.confirm(
             "  register %s with %s, for every project on this machine?"
-            % (_plural(len(wirable), "server"), where), default=False):
+            % (_plural(len(wirable), "server"), where), default=False,
+            hint=""):
         out.dim("  skipped — run these yourself when you're ready:", wrap=True)
         for row in wirable:
             # One line per host, not `targets[0]` — the prompt named every
@@ -618,11 +630,52 @@ def _refuse_preview_by_policy(e: dict, scope: str, pbase, seen) -> None:
         raise BoostError(why, hint="inspect with `boost policy list`")
 
 
+def _expand_tap(tap: registry.Tap, args, pbase) -> installplan.TapExpansion:
+    """List what ``boost install <tap>`` would install, and why not the rest.
+
+    Printed before anything else is decided, so the names a user is asked to
+    confirm are on screen above the question.
+    """
+    if args.path:
+        raise BoostError(
+            "--path picks one copy of one skill, not a tap's worth",
+            hint="name the skill: `boost install %s --path %s`"
+                 % (util.shell_arg("%s:<skill>" % tap.name),
+                    util.shell_arg(args.path)))
+    exp = installplan.expand_tap(tap, force=args.force, scope=args.scope,
+                                 base=pbase)
+    others = ", ".join(_plural(n, k) for k, n in exp.other_kinds.items())
+    if not (exp.entries or exp.installed or exp.skipped):
+        raise BoostError(
+            "%s ships no skills" % tap.name,
+            hint=("it ships %s — install one by name: `boost install %s`"
+                  % (others, util.shell_arg("%s:<name>" % tap.name))
+                  if others else "`boost update %s` refreshes its catalog"
+                  % util.shell_arg(tap.name)), wrap=True)
+    out.heading("%s: %s to install" % (tap.name,
+                                       _plural(len(exp.entries), "skill")))
+    if exp.entries:
+        out.info(", ".join(e["name"] for e in exp.entries), wrap=True)
+    if exp.installed:
+        out.dim("  already installed (%d): %s"
+                % (len(exp.installed), ", ".join(exp.installed)), wrap=True)
+    for name, why in exp.skipped:
+        out.warn("%s: skipped — %s" % (name, why), wrap=True)
+    if others:
+        out.dim("  not included: %s — install those by name, `boost install "
+                "%s`" % (others, util.shell_arg("%s:<name>" % tap.name)),
+                wrap=True)
+    return exp
+
+
 def cmd_install(argv: list[str]) -> int:
     ap = cliparse.parser(prog="boost install",
                                  description="Install a skill from a tap registry")
     ap.add_argument("names", type=util.nonempty_str, nargs="+", metavar="NAME",
-                    help="skill name, optionally qualified as tap:skill")
+                    help="skill name, optionally qualified as tap:skill; a "
+                         "tap's own name (owner/repo) installs every skill "
+                         "it ships, after listing them and asking (-y "
+                         "skips the question)")
     ap.add_argument("--force", action="store_true",
                     help="reinstall even if already installed or pinned")
     ap.add_argument("--path", type=util.nonempty_str, metavar="P", default=None,
@@ -643,6 +696,13 @@ def cmd_install(argv: list[str]) -> int:
                          "(the wider spellings are reported, never installed)")
     ap.add_argument("--no-mcp", action="store_true",
                     help="don't offer to register MCP servers a skill declares")
+    ap.add_argument("-y", "--yes", action="store_true",
+                    help="with a tap as NAME, install its skill list without "
+                         "asking first. Never answers the offer to register "
+                         "the MCP servers a skill declares: a typed y does, "
+                         "or BOOST_ASSUME_YES=1 for the whole command, or "
+                         "running the `mcp add` lines a declined offer "
+                         "prints")
     skill_g = ap.add_mutually_exclusive_group()
     skill_g.add_argument("--as-skill", dest="as_skill", action="store_const",
                          const=True, default=None,
@@ -700,8 +760,15 @@ def cmd_install(argv: list[str]) -> int:
     only = _check_agents(args.agent)
     multi = len(args.names) > 1
     entries, failed = [], 0
+    expansions: list[installplan.TapExpansion] = []
+    named: list[dict] = []          # entries asked for one by one
     for n in args.names:
         try:
+            tap = installplan.tap_target(n)
+            if tap is not None:
+                expansions.append(_expand_tap(tap, args, pbase))
+                entries.extend(expansions[-1].entries)
+                continue
             entry = catalog.resolve_one(n, path=args.path)
             # The slug every other command will know it by, said out loud:
             # `install c++-helper` copied to `c--helper` without a word. Only
@@ -710,23 +777,70 @@ def cmd_install(argv: list[str]) -> int:
             if not util.is_safe_component(bare):
                 catalog.note_catalogued_as(entry["name"], bare)
             entries.append(entry)
+            named.append(entry)
         except BoostError as err:
+            extra = installplan.untapped_hint(n)
+            if extra:
+                err.hint = catalog.join_hints(err.hint, extra)
             if not multi:
                 raise
             out.warn("%s: %s" % (n, err.message), stream=sys.stderr)
+            if extra:
+                out.dim("  " + extra, wrap=True)
             failed += 1
 
     # Grow the request into its `requires:` closure (deps installed first),
     # unless the caller opted out. Only skills carry dependency frontmatter;
     # rules/workflows pass through unchanged. `installplan.plan` is the one
     # plan — `boost browse` and MCP `boost_install` take theirs from it too.
+    if expansions:
+        # A tap and one of its skills named together, or two spellings of
+        # one tap, would list a skill twice — and install it twice, the
+        # second time into "already installed" and exit 1.
+        entries = list({(e.get("tap"), e.get("kind") or "skill", e["name"]): e
+                        for e in entries}.values())
+        entries, clashes = installplan.claim_names(entries, keep=named)
+        for name, why in clashes:
+            out.warn("%s: skipped — %s" % (name, why), wrap=True)
+        if not entries:
+            out.info("nothing to install")
+            return 1 if failed else 0
     the_plan = installplan.plan(entries, pbase=pbase, deps=not args.no_deps)
     _print_plan(the_plan)
     entries = the_plan.entries
+    if expansions:
+        entries, refused = installplan.weigh(
+            entries, keep=named,
+            checked=[e for exp in expansions for e in exp.entries],
+            force=args.force, scope=args.scope, base=pbase)
+        # A dependency the listing already skipped is refused again here for
+        # the same reason; saying it twice reads as two different problems.
+        said = {s for exp in expansions for s in exp.skipped}
+        for name, why in refused:
+            if (name, why) not in said:
+                out.warn("%s: skipped — %s" % (name, why), wrap=True)
+        if not entries:
+            out.info("nothing to install")
+            return 1 if failed else 0
     # Pulling in dependencies can turn a single-name request into a multi-item
     # install (per-item headings); it must never *lower* multi (e.g. when an
     # unknown co-requested name was dropped), so OR rather than reassign.
-    multi = multi or len(entries) > 1
+    # A tap is a many-item request even when it ships a single skill.
+    multi = multi or len(entries) > 1 or bool(expansions)
+    # After the plan, so the count asked about includes the `requires:` it
+    # pulled in; never on a dry run, which writes nothing to agree to.
+    noun = ("skill" if all((e.get("kind") or "skill") == "skill"
+                           for e in entries) else "item")
+    # -y answers this list and nothing else. The hint names only -y: the
+    # MCP-server offer that may follow is a separate, machine-wide decision,
+    # and a hint naming BOOST_ASSUME_YES here would hand an agent the one
+    # switch that answers both.
+    if (expansions and not args.dry_run and not args.yes
+            and not out.confirm(
+                "install %s?" % _plural(len(entries), noun),
+                hint="pass -y to skip this prompt")):
+        out.info("cancelled")
+        return 1
 
     if args.dry_run:
         from ..core import mcpdecl, mcphost
@@ -1209,13 +1323,17 @@ def cmd_sync(argv: list[str]) -> int:
     ap.add_argument("--diff", action="store_true",
                     help="show the plan without applying it")
     ap.add_argument("--prune", action="store_true",
-                    help="also delete store dirs that copy another tool's "
-                         "skills, drop boost's Claude Code link to a skill an "
+                    help="also move store dirs that copy another tool's "
+                         "skills to quarantine (~/.agents/.quarantine), drop "
+                         "boost's Claude Code link to a skill an "
                          "enabled plugin ships identically, and remove links "
                          "outside a declared --agent scope")
     ap.add_argument("--json", action="store_true", help="machine-readable output")
     ap.add_argument("-y", "--yes", action="store_true",
                     help="skip the --prune confirmation prompts")
+    ap.add_argument("--include-changed", action="store_true",
+                    help="with --prune, also quarantine copies that differ "
+                         "from the original (local edits, such as a port)")
     ap.add_argument("--rebuild-lock", action="store_true",
                     help="set an unreadable lock file aside (its bytes are "
                          "kept) and re-record the store into a new one")
@@ -1345,16 +1463,28 @@ def cmd_sync(argv: list[str]) -> int:
     # A store dir holding a git repository is never offered: its history is
     # in no copy, so it is named and kept rather than put to a confirm.
     offer = [r for r in copies if not store.is_repo_copy(r)]
+    # A copy that differs carries someone's edits, and `--yes` or
+    # BOOST_ASSUME_YES answer every confirm at once — so it needs its own
+    # flag, naming the risk, before it leaves the store.
+    changed = [r for r in offer if r[3] == foreign.DIFFERS
+               and not args.include_changed]
+    offer = [r for r in offer if r not in changed]
     pruned: list[str] = []
     kept: list[str] = []
     declined_copies = False
+    stamp = store.quarantine_stamp()
     if args.prune:
         kept += ["kept %s: %s" % (_tilde(store.skill_store_dir(r[0])),
                                   store.REPO_KEPT)
-                 for r in copies if r not in offer]
+                 for r in copies if store.is_repo_copy(r)]
+        kept += ["kept %s: it differs from the original (local changes) — "
+                 "`boost sync --prune --include-changed` moves it to "
+                 "quarantine" % _tilde(store.skill_store_dir(r[0]))
+                 for r in changed]
     if args.prune and offer:
         if _go(args, _foreign_prompt(offer)):
-            for row, why in zip(offer, store.remove_foreign_copies(offer),
+            for row, why in zip(offer,
+                                store.remove_foreign_copies(offer, stamp),
                                 strict=True):
                 if why is None:
                     pruned.append(row[0])
@@ -1445,7 +1575,9 @@ def cmd_sync(argv: list[str]) -> int:
                        ", ".join(unrecorded)) if unrecorded else "",
                     lockfile.remedy(integ)), wrap=True)
     for name in pruned:
-        out.ok("pruned %s" % _tilde(store.skill_store_dir(name)))
+        out.ok("pruned %s — moved to %s"
+               % (_tilde(store.skill_store_dir(name)),
+                  _tilde(paths.quarantine_dir() / stamp / name)))
     for line in store.older_copy_lines(plan["older_copies"]):
         out.info(line, wrap=True)
     # A decline names what it left rather than the flag the user just ran.
@@ -1525,22 +1657,23 @@ def _go(args, prompt: str) -> bool:
 def _foreign_prompt(rows: list) -> str:
     """The `--prune` confirm for copies of other tools' skills, with its cost.
 
-    Deleting one costs more than it looks: the agents that read the store
-    natively lose the skill, and a changed copy — a port, say — loses the
-    change. Both are said before the question rather than discovered after.
+    Moving one out costs more than it looks: the agents that read the store
+    natively lose the skill, and a changed copy — a port, say — takes the
+    change with it into quarantine. Both are said before the question rather
+    than discovered after.
     """
     differ = sum(1 for r in rows if r[3] == foreign.DIFFERS)
     native = [agents.display_name(a) for a in agents.native_store_agents()]
     costs = []
     if differ:
-        costs.append("%s from the original, and those changes go too"
+        costs.append("%s from the original, and those changes go with it"
                      % ("it differs" if len(rows) == 1 else "%d differ" % differ))
     if native:
         costs.append("%s read%s %s directly and will stop seeing %s"
                      % (" and ".join(native), "s" if len(native) == 1 else "",
                         _tilde(paths.store_dir()),
                         "it" if len(rows) == 1 else "them"))
-    return ("Delete %s that %s another tool's skill%s%s: %s?"
+    return ("Move %s that %s another tool's skill%s to quarantine%s: %s?"
             % (_plural(len(rows), "store dir"),
                "copies" if len(rows) == 1 else "copy",
                "" if len(rows) == 1 else "s",
@@ -1550,15 +1683,18 @@ def _foreign_prompt(rows: list) -> str:
 
 # ── update ───────────────────────────────────────────────────────────────
 
-def _show_and_confirm(label: str, diff, name: str) -> bool:
-    """Print why an update is risky, show it, and ask. Shared by all kinds."""
+def _show_and_confirm(label: str, diff, name: str, yes: bool = False) -> bool:
+    """Print why an update is risky, show it, and ask. Shared by all kinds.
+
+    ``yes`` is ``boost update --yes``: the diff is still shown, then applied.
+    """
     out.warn("%s: upstream update %s" % (label, "; ".join(diff.reasons)))
     print(diff.text)
-    return out.confirm("Apply this update to %s?" % name)
+    return yes or out.confirm("Apply this update to %s?" % name)
 
 
 def _confirm_risky_update(name: str, entry: dict, base=None,
-                          lk: dict | None = None) -> bool:
+                          lk: dict | None = None, yes: bool = False) -> bool:
     """Gate an in-place update behind a visible diff when it is risky.
 
     Diffs the installed skill against the incoming source. If the change adds
@@ -1582,7 +1718,7 @@ def _confirm_risky_update(name: str, entry: dict, base=None,
         updatediff.read_tree(current) if current is not None else {}, new_tree)
     if not diff.risky:
         return True
-    return _show_and_confirm(name, diff, name)
+    return _show_and_confirm(name, diff, name, yes=yes)
 
 
 def _materialized_sides(kind: str, name: str, lk: dict,
@@ -1641,7 +1777,7 @@ def _materialized_sides(kind: str, name: str, lk: dict,
 
 
 def _confirm_risky_materialized(kind: str, name: str, lk: dict,
-                                new_raw: str) -> bool:
+                                new_raw: str, yes: bool = False) -> bool:
     """The same gate as `_confirm_risky_update`, for rules and workflows.
 
     This used to be absent, and the asymmetry ran the wrong way: a skill that
@@ -1656,7 +1792,7 @@ def _confirm_risky_materialized(kind: str, name: str, lk: dict,
                                 {label: new for label, _, new in sides})
     if not diff.risky:
         return True
-    return _show_and_confirm("%s %s" % (kind, name), diff, name)
+    return _show_and_confirm("%s %s" % (kind, name), diff, name, yes=yes)
 
 
 def _hold_update(label: str, name: str, lk: dict, kind: str, old_v: str,
@@ -1735,6 +1871,7 @@ def _update_materialized(kind: str, installed: dict[str, dict], results,
                          discard_edits: bool = False,
                          allow_downgrade: bool = False, *,
                          index: dict[str, list[dict]],
+                         yes: bool = False,
                          ) -> tuple[int, int, int, int]:
     """Re-materialize installed rules/workflows whose tap source moved.
 
@@ -1772,12 +1909,11 @@ def _update_materialized(kind: str, installed: dict[str, dict], results,
         # twice, and `matches[0]` refreshed the copy the user did not pick.
         entry, warning = catalog.select_lock_source(matches, lk)
         entry = cast(dict, entry)             # matches is non-empty above
-        if warning:
-            out.warn(warning)
         old_v = str(lk.get("version", "0.0.0"))
         new_v = str(entry.get("version", "0.0.0"))
         bumped = util.semver_gt(new_v, old_v)
         changed = bumped
+        cur = None
         if not changed:
             try:
                 src = registry.get(tapname).path / entry.get("skill_md", "")
@@ -1787,6 +1923,14 @@ def _update_materialized(kind: str, installed: dict[str, dict], results,
             except OSError:
                 cur = None
             changed = bool(cur and cur != lk.get("sha256"))
+        if warning:
+            # Moved upstream with the same bytes: record where, once, rather
+            # than warning on every run (`store.record_moved_source`).
+            if cur and cur == lk.get("sha256"):
+                _note_move("%s %s" % (kind, name), kind, name, lk, entry,
+                           gitutil.head_commit(registry.get(tapname).path))
+            else:
+                out.warn(warning)
         if not changed:
             continue
         if lk.get("quarantined"):
@@ -1819,7 +1963,8 @@ def _update_materialized(kind: str, installed: dict[str, dict], results,
                            encoding="utf-8", errors="replace")
         except (OSError, BoostError):
             new_raw = ""        # unreadable: store.install reports the real error
-        if new_raw and not _confirm_risky_materialized(kind, name, lk, new_raw):
+        if new_raw and not _confirm_risky_materialized(kind, name, lk, new_raw,
+                                                       yes=yes):
             out.warn("%s %s: update skipped — review the diff, then `boost "
                      "update --yes` to apply" % (kind, name))
             held += 1
@@ -1995,6 +2140,20 @@ def _ingest_shards(args) -> int:
     return rc
 
 
+def _note_move(label: str, kind: str, name: str, lk: dict, entry: dict,
+               commit: str, *, base=None) -> None:
+    """Record an unchanged item's new upstream location and say so once."""
+    field, key = (("source_dir", "rel_dir") if kind == "skill"
+                  else ("source_file", "skill_md"))
+    was = lk.get(field)
+    if store.record_moved_source(kind, name, entry, commit, base=base):
+        lk[field] = entry.get(key)
+        if commit:
+            lk["commit"] = commit
+        out.info("%s: moved upstream from %s to %s — lock updated"
+                 % (label, out.plain(str(was)), out.plain(str(entry.get(key)))))
+
+
 def _update_skill(name: str, lk: dict, scope: str, pbase, results,
                   args, *, heads: dict[str, str],
                   index: dict[str, list[dict]]) -> tuple[int, int, int, int]:
@@ -2034,8 +2193,6 @@ def _update_skill(name: str, lk: dict, scope: str, pbase, results,
     # user's choice for whichever copy scanned first.
     entry, warning = catalog.select_lock_source(matches, lk)
     entry = cast(dict, entry)             # matches is non-empty above
-    if warning:
-        out.warn("%s: %s" % (label, warning))
     old_v = str(lk.get("version", "0.0.0"))
     new_v = str(entry.get("version", "0.0.0"))
     head, src_sha, exec_changed = "", None, False
@@ -2047,6 +2204,8 @@ def _update_skill(name: str, lk: dict, scope: str, pbase, results,
             try:
                 src_sha = store.skill_source_sha(entry)
             except BoostError:
+                if warning:
+                    out.warn("%s: %s" % (label, warning))
                 return 0, 0, 0, 0
             exec_changed = store.source_exec_changed(
                 entry, lk, integrity.project_skill_dir(lk, pbase)
@@ -2055,6 +2214,15 @@ def _update_skill(name: str, lk: dict, scope: str, pbase, results,
     reason = staleness.upstream_reason(old_v, new_v, lk.get("commit", ""),
                                        head, lk.get("sha256", ""), src_sha,
                                        exec_changed)
+    if warning:
+        # Moved upstream with the same bytes and modes: nothing to reinstall,
+        # so record the new location here, or the warning repeats every run.
+        if (reason is None and src_sha is not None
+                and src_sha == lk.get("sha256")):
+            _note_move(label, "skill", name, lk, entry, head,
+                       base=pbase if scope == scopes.SCOPE_PROJECT else None)
+        else:
+            out.warn("%s: %s" % (label, warning))
     if reason is None:
         return 0, 0, 0, 0
     if lk.get("quarantined"):
@@ -2074,7 +2242,8 @@ def _update_skill(name: str, lk: dict, scope: str, pbase, results,
         return 0, 1, 0, 0
     # A declined diff or a refused install (a policy block) is held back too:
     # both used to end the run on "everything up to date".
-    if not _confirm_risky_update(name, entry, base=pbase, lk=lk):
+    if not _confirm_risky_update(name, entry, base=pbase, lk=lk,
+                                 yes=args.yes):
         out.warn("%s: update skipped — review the diff, then `boost update "
                  "--yes` to apply" % label)
         return 0, 1, 0, 0
@@ -2101,9 +2270,9 @@ def cmd_update(argv: list[str]) -> int:
     # Declared because this command *advertises* it: a skipped risky update
     # prints "review the diff, then `boost update --yes` to apply", and without
     # this line that instruction died on `unrecognized arguments: --yes` — the
-    # only escape from the confirmation was a flag the parser rejected. The
-    # behaviour needs nothing else: out.confirm() already honours --yes/-y off
-    # sys.argv, so this makes the printed advice true rather than adding a path.
+    # only escape from the confirmation was a flag the parser rejected. It is
+    # threaded to the risky-update gates explicitly: out.confirm() no longer
+    # reads -y off sys.argv, because that let one flag answer every prompt.
     ap.add_argument("-y", "--yes", action="store_true",
                     help="skip the confirmation prompt")
     ap.add_argument("--force", action="store_true",
@@ -2170,7 +2339,7 @@ def cmd_update(argv: list[str]) -> int:
     locked = {t: lock for t, e in failures.items()
               if t not in unpinnable and (lock := gitutil.git_lock_path(e))}
     for tname, lock in locked.items():
-        out.info(out.role("%s: %s" % (tname, gitutil.lock_hint(lock)),
+        out.info(out.role("%s: %s" % (tname, gitutil.lock_hint(lock, gitutil.TAP_CLONE)),
                           "muted"))
     if refused:
         out.info(out.role(
@@ -2227,7 +2396,7 @@ def cmd_update(argv: list[str]) -> int:
                           ("workflow", lockfile.installed_workflows())):
         n, h, p, q = _update_materialized(
             kind, section, results, discard_edits=args.discard_edits,
-            allow_downgrade=args.allow_downgrade, index=index)
+            allow_downgrade=args.allow_downgrade, index=index, yes=args.yes)
         upgraded += n
         held += h
         pinned_held += p
@@ -3421,10 +3590,9 @@ def _snapshot_save(label: str | None) -> int:
 def _snapshot_list(as_json: bool) -> int:
     paths.ensure_dirs()
     snaps = []
-    # newest first; file mtime keeps same-second saves (snap-...-2) in order
-    for tar_path in sorted(paths.snapshots_dir().glob("snap-*.tar.gz"),
-                           key=lambda p: (p.stat().st_mtime, p.name),
-                           reverse=True):
+    # newest first, by the id's stamp and same-second serial (snap-...-2)
+    for tar_path in util.sorted_history(
+            paths.snapshots_dir().glob("snap-*.tar.gz"), newest_first=True):
         snap_id = tar_path.name[:-len(".tar.gz")]
         side = tar_path.parent / (snap_id + ".json")
         meta = {}

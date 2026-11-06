@@ -27,6 +27,7 @@ import os
 import re
 import sqlite3
 import tempfile
+import time
 import unicodedata
 from collections import defaultdict
 from collections.abc import Callable, Sequence
@@ -333,6 +334,83 @@ def _tap_commits() -> dict[str, str]:
     return commits
 
 
+# Recorded for a tap whose documents predate format tracking; no cache's
+# ``format`` is negative, so `_reusable` never matches it.
+_UNKNOWN_FORMAT = -1
+
+
+def _tap_formats() -> dict[str, int]:
+    """Map safe tap name -> the ``CACHE_FORMAT`` its catalog cache was scanned at.
+
+    Reuse in :func:`build` was keyed on the commit alone, but a scanner fix
+    rescans a cache at the *same* commit (``load_tap`` backfills a stale
+    ``format``), so the fixed entries reached ``boost info`` while the index
+    kept the old documents: 11c4e7b1 (format 7) and 3b249ecc (format 8) both
+    shipped at one INDEX_VERSION, and the text they restored stayed
+    unsearchable until upstream moved or the user ran ``reindex --force``.
+    A tap whose cache is missing or carries no integer format is left out.
+    Kept apart from :func:`_tap_commits` so a caller faking one still gets
+    the other, as with :func:`_tap_stamps`.
+    """
+    formats: dict[str, int] = {}
+    for t in registry.list_taps():
+        with contextlib.suppress(OSError, ValueError):
+            data = json.loads(t.cache_file.read_text(encoding="utf-8"))
+            fmt = data.get("format") if isinstance(data, dict) else None
+            if isinstance(fmt, int) and not isinstance(fmt, bool):
+                formats[t.safe_name] = fmt
+    return formats
+
+
+def _reusable(safe: str, commit: str, old: dict,
+              formats: dict[str, int]) -> bool:
+    """Whether ``safe``'s documents in index ``old`` still describe its cache.
+
+    Same commit, and the same cache format. An index with no ``formats``
+    key at all was written before formats were recorded, so nothing says
+    which scanner its documents came from: it is rebuilt once, or the first
+    CACHE_FORMAT bump after upgrading would hit this bug one last time. A
+    tap missing from a recorded map (a shard import whose tap had no
+    readable cache) is judged by commit alone.
+    """
+    if not commit or (old.get("commits") or {}).get(safe) != commit:
+        return False
+    old_formats = old.get("formats")
+    if not isinstance(old_formats, dict):
+        return False
+    if safe not in old_formats:
+        return True
+    return old_formats[safe] == formats.get(safe)
+
+
+def _stamp_of(path: Path) -> list[int] | None:
+    """A cache file's ``[st_mtime_ns, st_size]``, or None when it cannot be stat'd.
+
+    A list, not a tuple, because it round-trips through the index JSON and
+    ``[1, 2] != (1, 2)`` — comparing a stored stamp with a fresh tuple would
+    call every index stale and rebuild it on every search.
+    """
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    return [st.st_mtime_ns, st.st_size]
+
+
+def _tap_stamps() -> dict[str, list[int]]:
+    """Map safe tap name -> the stamp of the catalog cache this build consumed.
+
+    Kept apart from :func:`_tap_commits` so a caller faking one (tests do)
+    still gets the other.
+    """
+    stamps: dict[str, list[int]] = {}
+    for t in registry.list_taps():
+        stamp = _stamp_of(t.cache_file)
+        if stamp is not None:
+            stamps[t.safe_name] = stamp
+    return stamps
+
+
 def entry_path(entry: dict, tap_paths: dict[str, Path] | None = None
                ) -> Path | None:
     """Where a catalog entry's defining file actually lives on this machine.
@@ -556,6 +634,11 @@ def build(entries: list[dict] | None = None, force: bool = False) -> dict:
     entries = catalog.all_entries() if entries is None else entries
     tap_paths = _tap_paths()
     commits = _tap_commits()
+    # After the caches were loaded, not before: `load_tap` may rewrite a stale
+    # cache while loading it, and a stamp taken earlier would then call this
+    # index stale on the very next search.
+    stamps = _tap_stamps()
+    formats = _tap_formats()
 
     old = _load_raw()
     reused_safe: set = set()
@@ -567,10 +650,8 @@ def build(entries: list[dict] | None = None, force: bool = False) -> dict:
     if old is not None and "postings" not in old and not postings_readable():
         old = None
     if old is not None and not force:
-        old_commits = old.get("commits", {})
-        for safe, commit in commits.items():
-            if commit and old_commits.get(safe) == commit:
-                reused_safe.add(safe)
+        reused_safe = {safe for safe, commit in commits.items()
+                       if _reusable(safe, commit, old, formats)}
 
     kept = _kept_docs(old, reused_safe) if old is not None and reused_safe else []
     if kept is None:
@@ -580,7 +661,7 @@ def build(entries: list[dict] | None = None, force: bool = False) -> dict:
              if e["tap"].replace("/", "__") not in reused_safe]
     docs = kept + _make_docs(fresh, tap_paths)
 
-    saved = _save(docs, commits)
+    saved = _save(docs, commits, stamps, formats)
     reindexed = sorted({e["tap"] for e in fresh})
     # `reindexed` names taps by their real name ("owner/repo"); `reused_safe`
     # is keyed by the safe name ("owner__repo") that `_tap_commits` uses to
@@ -922,7 +1003,9 @@ def postings_fault() -> str | None:
     return "the BM25 postings store is unreadable"
 
 
-def _save(docs: list[dict], commits: dict[str, str]) -> dict:
+def _save(docs: list[dict], commits: dict[str, str],
+          stamps: dict[str, list[int]] | None = None,
+          formats: dict[str, int] | None = None) -> dict:
     """Persist the index and return the ``stats`` block it wrote.
 
     Returning the stats rather than recomputing them in :func:`build` keeps one
@@ -964,6 +1047,18 @@ def _save(docs: list[dict], commits: dict[str, str]) -> dict:
         "stats": stats,
         "docs": meta_docs,
     }
+    if stamps is not None:
+        # Each consumed tap cache's [mtime_ns, size], which `stale()` compares
+        # for equality. Written even when empty: key presence is what tells
+        # `stale()` this index can be judged by stamps at all. A writer that
+        # cannot vouch for the caches passes None and leaves the key out, so
+        # the index falls back to the mtime rule instead of being called
+        # stale on every search.
+        payload["stamps"] = stamps
+    if formats is not None:
+        # Each tap's cache format at build time, which `build` compares
+        # before reusing that tap's documents (see `_tap_formats`).
+        payload["formats"] = formats
     p = index_path()
     # Atomic swap: a bare write_text here can leave a truncated/corrupt index
     # on disk if the process dies mid-write or a query reads concurrently.
@@ -1163,9 +1258,27 @@ def import_shards(batch: Sequence[tuple[dict, str]]
     new_safe = {tap.replace("/", "__") for tap in accepted}
     commits: dict[str, str] = {}
     docs: list[dict] = []
+    # Stamps carry over for the taps kept as they were; an imported tap gets
+    # its cache's stamp now. An old index with no stamps stays without them,
+    # so `stale()` keeps judging it by mtime rather than by an empty map that
+    # would call every cached tap changed on every search.
+    stamps: dict[str, list[int]] | None = None
+    formats: dict[str, int] = {}
     if old is not None:
         commits = {k: v for k, v in (old.get("commits") or {}).items()
                    if k not in new_safe}
+        old_formats = old.get("formats")
+        if isinstance(old_formats, dict):
+            formats = dict(old_formats)
+        else:
+            # An index from before formats were recorded: its kept taps are
+            # unvouched, and leaving them out of the map written below would
+            # let `_reusable` judge them by commit alone. A format no cache
+            # carries makes the next build re-index them once instead.
+            formats = dict.fromkeys(old.get("commits") or {}, _UNKNOWN_FORMAT)
+        old_stamps = old.get("stamps")
+        if isinstance(old_stamps, dict):
+            stamps = dict(old_stamps)
         keep = {d["t"].replace("/", "__") for d in old.get("docs", [])}
         kept = _kept_docs(old, keep - new_safe)
         if kept is None:
@@ -1175,10 +1288,20 @@ def import_shards(batch: Sequence[tuple[dict, str]]
             # next search re-indexes them.
             commits, kept = {}, []
         docs = kept
+    if stamps is not None:
+        current = _tap_stamps()
+        stamps = {k: v for k, v in stamps.items() if k in commits}
+        stamps |= {k: current[k] for k in new_safe if k in current}
+    # Kept taps keep the format their docs were built against; an imported
+    # tap is recorded at its cache's format now, so the next build does not
+    # throw the import away. A tap with no readable cache stays unrecorded.
+    current_formats = _tap_formats()
+    formats = {k: v for k, v in formats.items() if k in commits}
+    formats |= {k: current_formats[k] for k in new_safe if k in current_formats}
     for tap, shard in accepted.items():
         commits[tap.replace("/", "__")] = str(shard["commit"])
         docs.extend({**d, "c": 0} for d in shard["docs"])
-    _save(docs, commits)
+    _save(docs, commits, stamps, formats)
     return results
 
 
@@ -1322,13 +1445,21 @@ def stale() -> bool:
 
     * the tap set must still match the set the index recorded (catches a tap
       added or removed, neither of which need touch an existing cache file);
-    * no tap's catalog cache may be newer than the index (catches a tap whose
-      contents moved, since ``build()`` writes the index only after every
-      catalog cache it consumed).
+    * every tap's catalog cache must still carry the ``(mtime_ns, size)``
+      stamp it had when ``build()`` consumed it (catches a tap whose contents
+      moved and were re-cached).
 
-    The residual gap is a cache rewritten inside the same filesystem mtime tick
-    as the index; the next tap operation catches it, and paying a full parse on
-    every search to close it is the worse trade.
+    The stamp is compared for **equality**, never ordered against the index's
+    own mtime. "Cache newer than index" only works while the clock never runs
+    backwards: an index built while the clock ran ahead stayed "fresh" until
+    the wall clock caught up with it, and every tap update in between went
+    unsearchable while doctor said healthy. Equality also closes the gap where
+    a cache was rewritten inside the index's own mtime tick.
+
+    An index written before stamps were recorded has no ``stamps`` key and is
+    judged the old way, so upgrading does not force a full rebuild; its next
+    build records stamps. The one exception is such an index whose mtime is in
+    the future, which the old rule can never call stale: it rebuilds once.
     """
     raw = _load_raw()
     if raw is None:
@@ -1336,9 +1467,22 @@ def stale() -> bool:
     taps = registry.list_taps()
     if {t.safe_name for t in taps} != set(raw.get("commits") or {}):
         return True
+    stamps = raw.get("stamps")
+    if isinstance(stamps, dict):
+        # A tap recorded with no stamp had no cache at build time; one that
+        # has a cache now is new content. A recorded stamp whose file is gone
+        # is a change too. `.get` on both sides makes those two cases fall out
+        # of the same inequality.
+        return any(_stamp_of(t.cache_file) != stamps.get(t.safe_name)
+                   for t in taps)
     try:
         built_at = index_path().stat().st_mtime
     except OSError:
+        return True
+    if built_at > time.time():
+        # An index stamped in the future was built while the clock ran ahead,
+        # and nothing can be "newer" than it until the clock catches up — the
+        # bug stamps fix. Rebuild once; that build records stamps.
         return True
     for t in taps:
         try:

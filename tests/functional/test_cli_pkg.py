@@ -612,9 +612,35 @@ class TestSync:
         assert "everything in sync" not in r.out
         assert copy.is_dir() and "automate" not in _lock()
         r = boost("sync", "--prune")       # BOOST_ASSUME_YES confirms
-        assert "pruned ~/.agents/skills/automate" in r.out
+        m = re.search(r"pruned ~/\.agents/skills/automate — moved to "
+                      r"(~/\.agents/\.quarantine/[0-9T]+/automate)", _flat(r.out))
+        assert m, r.out
         assert not copy.exists()
+        held = paths.home() / m.group(1)[2:]
+        assert (held / "SKILL.md").read_text(encoding="utf-8") == "# automate\n"
         assert (theirs / "SKILL.md").is_file(), "the original is not boost's"
+
+    def test_prune_keeps_a_changed_copy_unless_asked_by_name(
+            self, boost, installed):
+        # A port is a copy someone edited: --yes or BOOST_ASSUME_YES alone
+        # must not be enough to take it out of the store.
+        _vendor_skill("automate", "# automate\n")
+        copy = paths.store_dir() / "automate"
+        copy.mkdir()
+        (copy / "SKILL.md").write_text("# my port\n", encoding="utf-8")
+        r = boost("sync", "--prune", "--yes")
+        assert ("kept ~/.agents/skills/automate: it differs from the original "
+                "(local changes) — `boost sync --prune --include-changed` moves "
+                "it to quarantine") in _flat(r.out)
+        assert (copy / "SKILL.md").is_file()
+        data = json.loads(boost("sync", "--json", "--prune").out)
+        assert data["pruned"] == [] and copy.is_dir()
+        r = boost("sync", "--prune", "--include-changed")
+        assert "pruned ~/.agents/skills/automate — moved to" in _flat(r.out)
+        assert not copy.exists()
+        held = list((paths.home() / ".agents" / ".quarantine").glob("*/automate"))
+        assert [(h / "SKILL.md").read_text(encoding="utf-8") for h in held] == [
+            "# my port\n"]
 
     def test_prune_names_a_git_repository_and_never_offers_it(
             self, boost, installed, monkeypatch):
@@ -902,8 +928,8 @@ class TestSync:
             shutil.rmtree(theirs)
             return True
         monkeypatch.setattr(output, "confirm", confirm)
-        r = boost("sync", "--prune")
-        assert "it differs from the original, and those changes go too" in _flat(
+        r = boost("sync", "--prune", "--include-changed")
+        assert "it differs from the original, and those changes go with it" in _flat(
             asked[0])
         assert "kept ~/.agents/skills/automate: " in _flat(r.out)
         assert "pruned" not in r.out
@@ -1461,9 +1487,10 @@ class TestUpdateDiffGate:
 
         # Drive the real out.confirm() rather than patching it: drop conftest's
         # BOOST_ASSUME_YES (it would auto-approve and hide whether --yes did
-        # anything) and set sys.argv explicitly, which is where confirm() looks
-        # for the flag. With neither set and stdin not a tty, confirm returns
-        # its default — False — so the gate declines on its own.
+        # anything). sys.argv is pinned to a bare `update` both times so the
+        # pass cannot come from a process-argv scan: the parsed --yes is
+        # what reaches the gate. With neither and stdin not a tty, confirm
+        # returns its default — False — so the gate declines on its own.
         # NB: never monkeypatch.undo() here; the sandbox fixture's HOME is on
         # the same monkeypatch, so undoing drops the test out of its sandbox and
         # onto the developer's real ~/.boost.
@@ -1474,7 +1501,6 @@ class TestUpdateDiffGate:
         assert _lock()["brainstorming"]["version"] == "1.4.0"
 
         # Now take that advice verbatim.
-        monkeypatch.setattr("sys.argv", ["boost", "update", "--yes"])
         r2 = boost("update", "--yes")
         assert "unrecognized arguments" not in r2.err
         assert "upgraded brainstorming v1.4.0 → v1.5.0" in r2.out
@@ -3370,6 +3396,81 @@ class TestUpdateKeepsTheChosenCopy:
         assert "Use four spaces." in claude and "Use tabs." not in claude
 
 
+class TestUpdateRecordsAMoveWithUnchangedContent:
+    """An upstream `git mv` with no edit gave `update` nothing to reinstall,
+    and the reinstall was the only writer of the lock's source path: every
+    run repeated "no longer at its installed source", `info` kept the dead
+    path and `drift` called the skill source-missing."""
+
+    @staticmethod
+    def _mv(tap_dir, old, new):
+        subprocess.run(["git", "-C", str(tap_dir), "mv", old, new],
+                       check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(tap_dir), "commit", "-qm", "move"],
+                       check=True, capture_output=True)
+        return subprocess.run(["git", "-C", str(tap_dir), "rev-parse", "HEAD"],
+                              check=True, capture_output=True,
+                              text=True).stdout.strip()
+
+    def test_a_moved_skill_is_recorded_once_and_then_quiet(
+            self, boost, fixture_tap_src, tmp_path):
+        tap_dir = _copy_tap(fixture_tap_src, tmp_path / "mv-skill-tap")
+        boost("tap", tap_dir)
+        boost("install", "brainstorming")
+        before = _lock()["brainstorming"]
+        assert before["source_dir"] == "skills/brainstorming"
+        head = self._mv(tap_dir, "skills/brainstorming", "skills/brainstorm")
+        r = boost("update")
+        assert ("brainstorming: moved upstream from skills/brainstorming to "
+                "skills/brainstorm — lock updated") in r.out
+        assert "no longer at its installed source" not in r.out + r.err
+        row = _lock()["brainstorming"]
+        assert row["source_dir"] == "skills/brainstorm"
+        assert row["commit"] == head
+        assert row["sha256"] == before["sha256"]
+        assert row["version"] == before["version"]
+        again = boost("update")
+        assert "moved upstream" not in again.out
+        assert "no longer at its installed source" not in again.out + again.err
+        assert "everything up to date" in again.out
+        assert "source-missing" not in boost("drift").out
+
+    def test_a_moved_and_edited_skill_still_warns_and_reinstalls(
+            self, boost, fixture_tap_src, tmp_path):
+        tap_dir = _copy_tap(fixture_tap_src, tmp_path / "mv-edit-tap")
+        boost("tap", tap_dir)
+        boost("install", "brainstorming")
+        subprocess.run(["git", "-C", str(tap_dir), "mv", "skills/brainstorming",
+                        "skills/brainstorm"], check=True, capture_output=True)
+        _add_and_commit(tap_dir, "skills/brainstorm/extra.md", "new\n", "edit")
+        r = boost("update", "--yes")
+        assert ("brainstorming: brainstorming no longer at its installed "
+                "source (skills/brainstorming) — using skills/brainstorm"
+                ) in r.out
+        assert "moved upstream" not in r.out
+        assert _lock()["brainstorming"]["source_dir"] == "skills/brainstorm"
+
+    def test_a_moved_rule_is_recorded_once(
+            self, boost, fixture_tap_src, tmp_path):
+        tap_dir = _copy_tap(fixture_tap_src, tmp_path / "mv-rule-tap")
+        _add_and_commit(tap_dir, "rules/a/house.mdc",
+                        "---\nname: mv-house\nversion: 1.0.0\n---\n\n"
+                        "Use tabs.\n", "a rule")
+        boost("tap", tap_dir)
+        boost("install", "mv-house")
+        head = self._mv(tap_dir, "rules/a", "rules/b")
+        r = boost("update")
+        assert ("rule mv-house: moved upstream from rules/a/house.mdc to "
+                "rules/b/house.mdc — lock updated") in r.out
+        row = json.loads(paths.lockfile_path().read_text(
+            encoding="utf-8"))["rules"]["mv-house"]
+        assert row["source_file"] == "rules/b/house.mdc"
+        assert row["commit"] == head
+        again = boost("update")
+        assert "moved upstream" not in again.out
+        assert "no longer at its installed source" not in again.out
+
+
 class TestReinstallEdges:
     def test_multi_skips_missing(self, boost, installed):
         r = boost("reinstall", "brainstorming", "ghost", expect=1)
@@ -4410,6 +4511,15 @@ class TestMcpAwareSkills:
             "shutil.which",
             lambda n: "/usr/bin/" + n if n in present else None)
 
+    def _record_registrations(self, monkeypatch):
+        """Stub the registrar; return the (name, scope) of each call."""
+        calls = []
+        monkeypatch.setattr(
+            "boost_cli.commands.pkg._register_mcp_server",
+            lambda name, spec, host="claude", scope="user":
+                calls.append((name, scope)))
+        return calls
+
     def _capture_run(self, monkeypatch, rc=0, err=""):
         """Capture every subprocess argv; return the list."""
         calls = []
@@ -4500,6 +4610,63 @@ class TestMcpAwareSkills:
         assert "agy mcp add" not in r.out
         assert "codex mcp add" not in r.out
         assert "mcp-skill" in _lock()
+
+    def test_import_yes_does_not_answer_the_registration_prompt(
+            self, boost, sandbox, tmp_path, monkeypatch):
+        # import's -y skips *its* prompt (replace the only copy). Registering
+        # a server for every project on the machine is a separate, default-No
+        # decision: confirm() used to read -y off sys.argv and approve both.
+        # sys.argv carries the flag here because that is where the old scan
+        # looked; an in-process run would otherwise never show the bug.
+        monkeypatch.delenv("BOOST_ASSUME_YES", raising=False)
+        self._fake_which(monkeypatch, "claude")
+        calls = self._capture_run(monkeypatch)
+        d = _mcp_skill_dir(
+            tmp_path, decl="github",
+            sidecar={"mcpServers": {"github": {"command": "npx"}}})
+        monkeypatch.setattr("sys.argv", ["boost", "import", str(d), "-y"])
+        r = boost("import", d, "-y")
+        assert calls == []
+        assert "registered MCP server" not in r.out
+        assert "skipped — run these yourself when you're ready:" in r.out
+        # No bypass hint: the -y they passed changes nothing here, and the
+        # printed command is the consent, not a blanket env var.
+        assert "pass -y" not in r.out
+        assert "BOOST_ASSUME_YES" not in r.out
+        assert "claude mcp add github --scope user -- npx" in r.out
+        assert "mcp-skill" in _lock()
+
+    @pytest.mark.parametrize("extra", [(), ("-y",)])
+    def test_install_y_does_not_answer_the_registration_prompt(
+            self, boost, sandbox, tmp_path, monkeypatch, fixture_tap_src,
+            extra):
+        # install's -y skips the tap-list question; a server registered for
+        # every project on the machine takes a typed y (or the env var, or
+        # the printed command), never a flag an agent appends by reflex.
+        monkeypatch.delenv("BOOST_ASSUME_YES", raising=False)
+        boost("tap", _mcp_skill_tap(
+            fixture_tap_src, tmp_path,
+            sidecar={"mcpServers": {"github": {"command": "npx"}}}))
+        calls = self._record_registrations(monkeypatch)
+        r = boost("install", "needs-mcp", *extra)
+        assert calls == []
+        assert "skipped — run these yourself when you're ready:" in r.out
+        assert "pass -y" not in r.out
+        assert "BOOST_ASSUME_YES" not in r.out
+        assert "mcp add github" in r.out
+
+    def test_install_assume_yes_answers_the_registration_prompt(
+            self, boost, sandbox, tmp_path, monkeypatch, fixture_tap_src):
+        monkeypatch.setenv("BOOST_ASSUME_YES", "1")
+        boost("tap", _mcp_skill_tap(
+            fixture_tap_src, tmp_path,
+            sidecar={"mcpServers": {"github": {"command": "npx"}}}))
+        calls = self._record_registrations(monkeypatch)
+        boost("install", "needs-mcp")
+        # install fetches through git, so the registrar is stubbed rather than
+        # subprocess.run; with no agent CLI found every host is targeted.
+        assert calls and {c[0] for c in calls} == {"github"}
+        assert {c[1] for c in calls} == {"user"}
 
     def test_declining_prints_a_line_for_every_host_the_yes_would_have_hit(
             self, boost, sandbox, tmp_path, monkeypatch):

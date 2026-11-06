@@ -152,11 +152,8 @@ def _install_generated(name: str, text: str, yes: bool = False) -> bool:
     ``distill``/``infer``/``absorb --install`` don't quietly destroy an
     existing install and relabel its lock provenance ``local``.
 
-    ``yes`` mirrors each caller's own ``-y``/``--yes`` flag: out.confirm()
-    already honours ``--yes``/``-y`` off ``sys.argv`` for a real invocation,
-    but that check can't see an ``argv`` list handed straight to
-    :func:`boost_cli.cli.main` rather than the process's own argv, so the
-    parsed flag is passed through explicitly rather than relied on twice.
+    ``yes`` mirrors each caller's own ``-y``/``--yes`` flag. out.confirm()
+    does not read ``sys.argv``, so the parsed flag is the only way it lands.
     """
     owner = store.existing_skill_owner(name)
     if owner and not (yes or out.confirm(
@@ -1571,6 +1568,7 @@ def _chat_session(args) -> int:
         # fd 0 closed at launch (`<&-`): input() would raise RuntimeError
         # ("lost sys.stdin"), but this is just an EOF before the first line.
         return 0
+    out.tolerate_undecodable_stdin()
     history: list[chat_engine.Turn] = []
     while True:
         try:

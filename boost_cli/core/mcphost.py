@@ -111,6 +111,8 @@ import re
 import shlex
 from collections.abc import Mapping
 
+from . import paths
+
 # The MCP server name boost registers itself under. Deliberately free of
 # underscores: Gemini CLI assigns every MCP tool the fully-qualified name
 # ``mcp_{server}_{tool}`` and its policy parser splits on the first underscore
@@ -451,11 +453,22 @@ def register_argv(host: str, launcher: str, *, scope: str = "user",
     """The argv that registers boost as an MCP server with ``host``.
 
     ``launcher`` is the absolute path other processes should use to invoke
-    boost (:func:`paths.launcher`). ``env`` defaults to :data:`LAUNCH_ENV`;
+    boost (:func:`paths.launcher`). ``env`` defaults to :func:`launch_env`;
     pass ``{}`` for none. Raises KeyError for an unknown host.
     """
     return add_argv(host, name, launcher, ["mcp", "--stdio"], scope=scope,
-                    env=LAUNCH_ENV if env is None else env)
+                    env=launch_env() if env is None else env)
+
+
+def launch_env() -> dict[str, str]:
+    """:data:`LAUNCH_ENV` plus the ``BOOST_HOME`` / ``BOOST_AGENTS_STORE``
+    this process runs under, each only when set (:func:`paths.override_env`).
+
+    The host starts the server with its own environment, so a registration
+    made under a relocated state dir served ``~/.boost`` and
+    ``~/.agents/skills`` to the agent instead.
+    """
+    return LAUNCH_ENV | paths.override_env()
 
 
 def unregister_argv(host: str, *, scope: str = "user",
