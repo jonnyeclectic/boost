@@ -148,7 +148,7 @@ Two things closed this gap:
    `setuptools-scm`, resolved fresh into an isolated build environment on every
    `python -m build` regardless of what the outer environment has installed —
    so `pyproject.toml`'s `[build-system].requires` is now exact-pinned
-   (`setuptools==83.0.0`, `setuptools-scm==10.2.1`) rather than left as a
+   (`setuptools==84.2.1`, `setuptools-scm==10.2.1`) rather than left as a
    floor. PEP 508's requirement-string syntax has no hash field, so an exact
    version is the strongest pin available at that layer.
 2. **The sdist is normalised.** `scripts/normalize_sdist.py` rewrites the
