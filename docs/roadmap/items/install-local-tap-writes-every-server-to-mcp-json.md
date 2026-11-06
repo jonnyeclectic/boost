@@ -7,14 +7,24 @@ category: Safety · MCP
 complexity: S
 impact: Med
 wow: 2
-note: --local writes a whole tap's declared servers into the repo's .mcp.json without a prompt
+note: --local writes a whole tap's declared servers into .mcp.json unasked, and with --no-mcp says nothing at all
 order: 383
-title: "<code>install &lt;tap&gt; --local</code> records every declared MCP server in <code>.mcp.json</code> unasked"
+title: "<code>install &lt;tap&gt; --local</code> records every declared MCP server in <code>.mcp.json</code> unasked — and <code>--no-mcp</code> hides it"
 ---
 A project-scoped install records declared servers in the repo's <code>.mcp.json</code> with no
-prompt, because the file is committed and reviewed. With a tap as NAME, one <code>-y</code> now
-writes every server that the tap's skills declare. That may be dozens of third-party commands,
-which every teammate's agent launches once the file is committed.
+prompt (<code>store.record_project_mcp</code>), because the file is committed and reviewed. The
+report already names them: <em>recorded N MCP servers</em>, followed by the list. Two gaps remain.
 
-<b>Fix.</b> Name every server written in the project-scope report, which already prints
-<em>recorded N servers</em>. Add a functional test that pins the whole-tap case.
+- <b>No consent step for a whole tap.</b> With a tap as NAME, one <code>-y</code> writes every
+  server the tap's skills declare. That may be dozens of third-party commands, which every
+  teammate's agent launches once the file is committed. There is also one report per skill
+  rather than one list per run.
+- <b><code>--no-mcp</code> hides the write instead of skipping it.</b> <code>install &lt;tap&gt;
+  --local --no-mcp -y</code>, or the same with <code>BOOST_NO_MCP_OFFER=1</code>, still writes
+  every server: the write has no <code>no_mcp</code> gate. But <code>_offer_mcp</code> returns
+  before its project-scope branch, so nothing is printed. The dry run hides it too, because its
+  <em>record</em> lines sit behind <code>offer_mcp</code>. This predates the tap install.
+
+<b>Fix.</b> Either make <code>--no-mcp</code> skip the <code>.mcp.json</code> write, or always
+report it. Then decide whether a whole-tap <code>--local</code> install asks once, listing every
+server, before recording them.

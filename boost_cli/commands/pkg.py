@@ -143,8 +143,8 @@ def _offer_mcp(res: store.InstallResult, no_mcp: bool = False) -> None:
     no bypass hint: it prints the exact ``<host> mcp add`` lines instead, which
     are the scriptable consent — whoever runs one has the server's real
     command in front of them. ``BOOST_ASSUME_YES`` still answers it, as it
-    answers every confirm, and ``--help`` says so; the decline does not
-    advertise it.
+    answers every confirm, and ``install -y``'s help says so; the decline
+    does not advertise it.
     """
     rows = res.mcp_servers
     if not rows or no_mcp or typedvalue.env_flag("BOOST_NO_MCP_OFFER", unknown=True):
