@@ -356,6 +356,61 @@ def get(name: str) -> Tap:
                     else "list taps with `boost taps`")
 
 
+def named(name: str) -> Tap | None:
+    """The configured tap whose *whole* name is ``name``, else None.
+
+    Narrower than :func:`get` on purpose: only the full name and, failing
+    that, its case-folded spelling count — never the bare repo tail or
+    ``safe_name``. The caller is `boost install`, where a NAME that is not a
+    tap must stay a skill name; `install superpowers` meaning "every skill
+    obra ships" because a repo happens to be called that would be a surprise
+    no prompt should have to catch. It resolves on its own rather than
+    handing off to :func:`get`, whose tail tier comes before the case-folded
+    one: with a local tap ``Skills`` and ``acme/skills`` both configured,
+    ``get("skills")`` answers ``acme/skills``. Two taps that differ only by
+    case and match neither exactly are an error, as they are for ``get``.
+    """
+    taps = list_taps()
+    hits = ([t for t in taps if t.name == name]
+            or [t for t in taps if name_key(t.name) == name_key(name)])
+    if len(hits) > 1:
+        raise BoostError(
+            "%r is ambiguous — it matches %d taps: %s"
+            % (name, len(hits), ", ".join(sorted(t.name for t in hits))),
+            hint="use the full owner/repo name")
+    return hits[0] if hits else None
+
+
+def url_for(entry: dict) -> str | None:
+    """The repository an installed or catalogued item comes from, or None.
+
+    In order: the ``tap_url`` a lock row recorded at install (what was
+    actually installed, even after an untap — :func:`source_changed` trusts
+    it the same way), then the configured tap's URL (a catalog row, or a lock
+    row written before the field, unless the name was tapped again since),
+    then a URL import's ``source_url``. A path import has none: its
+    ``source_dir`` is a directory, not a source.
+    Only an exact tap name is looked up — the entry's ``tap`` is already the
+    configured spelling, and :func:`get`'s looser tiers could answer with
+    another tap's URL.
+    """
+    recorded = str(entry.get("tap_url") or "")
+    if recorded:
+        return recorded
+    tap = str(entry.get("tap") or "")
+    if tap == "local" and "source_url" in entry:
+        # An import, whatever is configured: `local` is also a legal tap name
+        # (`boost tap ~/c/local`), and that tap's path is not this row's source.
+        return str(entry.get("source_url") or "") or None
+    for t in list_taps():
+        # A row written before `tap_url` existed, under a name tapped again
+        # since, came from the earlier repository — `boost outdated` calls
+        # that "source changed", so its URL must not be the new one's.
+        if tap and t.name == tap and t.url and not retapped_since(entry, t):
+            return t.url
+    return str(entry.get("source_url") or "") or None
+
+
 def same_source(a: str, b: str) -> bool:
     """True when two tap URLs name the same repository.
 

@@ -2055,6 +2055,39 @@ class TestConfirm:
         monkeypatch.setattr(sys, "stdin", FakeStream(tty=False))
         assert output.confirm("delete everything?") is False
 
+    def test_argv_yes_off_ignores_a_y_flag(self, monkeypatch, capsys):
+        # `boost install -y` agrees to a tap's skill list; it must not also
+        # answer "register these MCP servers machine-wide?".
+        monkeypatch.setattr(sys, "argv", ["boost", "install", "t", "-y",
+                                          "--yes"])
+        monkeypatch.setattr(sys, "stdin", FakeStream(tty=False))
+        assert output.confirm("go?", default=False, argv_yes=False) is False
+        assert capsys.readouterr().out == output._ENV_BYPASS_HINT + "\n"
+
+    def test_argv_yes_off_still_honours_the_env(self, monkeypatch):
+        monkeypatch.setenv("BOOST_ASSUME_YES", "1")
+        monkeypatch.setattr(sys, "stdin", FakeStream(tty=False))
+        assert output.confirm("go?", default=False, argv_yes=False) is True
+
+    def test_argv_yes_off_hint_on_a_typed_no(self, monkeypatch, capsys):
+        monkeypatch.setattr(sys, "stdin", FakeStream(tty=True))
+        monkeypatch.setattr("builtins.input", lambda p: "n")
+        assert output.confirm("go?", argv_yes=False) is False
+        assert capsys.readouterr().out == output._ENV_BYPASS_HINT + "\n"
+
+    def test_argv_yes_off_hint_on_eof(self, monkeypatch, capsys):
+        monkeypatch.setattr(sys, "stdin", FakeStream(tty=True))
+
+        def eof(p):
+            raise EOFError
+        monkeypatch.setattr("builtins.input", eof)
+        assert output.confirm("go?", argv_yes=False) is False
+        assert capsys.readouterr().out == "\n" + output._ENV_BYPASS_HINT + "\n"
+
+    def test_env_bypass_hint_names_only_the_env(self):
+        assert "BOOST_ASSUME_YES=1" in output._ENV_BYPASS_HINT
+        assert "-y" not in output._ENV_BYPASS_HINT
+
     def test_bypass_hint_names_both_flag_and_env(self):
         assert "-y" in output._CONFIRM_BYPASS_HINT
         assert "BOOST_ASSUME_YES" in output._CONFIRM_BYPASS_HINT

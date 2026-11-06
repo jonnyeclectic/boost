@@ -14,11 +14,24 @@ callers is what stops that drifting again.
 """
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable
 from typing import NamedTuple
 
 from ..errors import BoostError
-from . import catalog, deps, prereq, resolve, typosquat
+from . import (
+    catalog,
+    deps,
+    lockfile,
+    prereq,
+    projectlock,
+    registry,
+    resolve,
+    scopes,
+    store,
+    typosquat,
+    util,
+)
 
 
 def _plural(n: int, word: str) -> str:
@@ -333,3 +346,231 @@ def prerequisite_lines(entries: list[dict], *, pbase=None,
     hint = (("would meet them with: %s" if would else "meet them with: %s")
             % prereq.install_hint(rows))
     return warnings, hint
+
+
+class TapExpansion(NamedTuple):
+    """What ``boost install <tap>`` means: every skill the tap ships, split
+    into the ones an install will write and the ones it will not.
+
+    ``entries`` are catalog rows ready for :func:`plan`, sorted by name;
+    ``installed`` are names already installed from this tap (not a failure —
+    re-running the command after the tap grows installs only what is new);
+    ``skipped`` are ``(name, reason)`` for a skill the run would refuse;
+    ``other_kinds`` counts the rules and workflows the tap also ships, which
+    a tap install leaves out — a rule edits a context file the user reads
+    every session, so it is installed by name or not at all.
+    """
+    tap: str
+    entries: list[dict]
+    installed: list[str]
+    skipped: list[tuple[str, str]]
+    other_kinds: dict[str, int]
+
+
+def tap_target(name: str) -> registry.Tap | None:
+    """The tap an install NAME names, or None when it names an item.
+
+    An item always wins: a namespaced workflow is spelled ``frontend/test``,
+    which is also the shape of a tap name, and what installed before must
+    install the same way after. A ``tap:skill`` qualifier is never a tap.
+    Only a configured tap's whole name counts (:func:`registry.named`).
+    """
+    if ":" in name or catalog.find(name):
+        return None
+    return registry.named(name)
+
+
+_REPO_SHAPE = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
+
+
+def untapped_hint(name: str) -> str | None:
+    """What to do about a NAME shaped like ``owner/repo`` that nothing knows.
+
+    None unless ``name`` is neither an item nor a configured tap: the person
+    typing `boost install obra/superpowers` before tapping it most likely
+    means the repository, and "no skill named" alone does not say that the
+    tap is the missing step. Worded as a condition, because a mistyped
+    namespaced workflow (`frontend/tset`) has the same shape.
+    """
+    if (not _REPO_SHAPE.fullmatch(name) or name.split("/")[0] in (".", "..")
+            or catalog.find(name) or registry.named(name) is not None):
+        return None
+    return ("if %s is a repository, `boost tap %s` first — then `boost "
+            "install %s` lists its skills and asks before installing them"
+            % (name, util.shell_arg(name), util.shell_arg(name)))
+
+
+def _skill_lock(scope: str, base) -> dict:
+    """The skills an install at ``scope`` adds to, read once.
+
+    A project install with no base has no lock to read; every skill in it is
+    refused by :func:`store.check_existing` anyway.
+    """
+    if scope == scopes.SCOPE_PROJECT:
+        return projectlock.installed(base) if base is not None else {}
+    return lockfile.installed()
+
+
+def _refusal(entry: dict, counted: dict, *, force: bool, scope: str,
+             base) -> str | None:
+    """Why the run would refuse ``entry``, or None.
+
+    :func:`store.check_existing`'s refusal, then the install policy weighed
+    against ``counted`` — the lock *plus* every skill this install has
+    already taken. Weighing each skill against the lock alone passed all of
+    them under ``max_skills: 2`` and refused three after the user agreed.
+    """
+    try:
+        store.check_existing(entry, force=force, scope=scope, base=base)
+    except BoostError as err:
+        return err.message
+    return store.policy_refusal(entry, counted)
+
+
+def expand_tap(tap: registry.Tap, *, force: bool = False,
+               scope: str = scopes.SCOPE_USER, base=None) -> TapExpansion:
+    """Every skill ``tap`` ships, classified the way the install would.
+
+    One row per name. A registry that vendors a skill per agent ships the
+    same name several times, and the copies that render identically are one
+    skill (:func:`catalog.distinct_candidates`, the collapse ``resolve_one``
+    makes); copies that differ are skipped with the paths to choose from,
+    since nobody can answer a per-name prompt for a whole tap.
+
+    The refusals are the run's own (:func:`_refusal`), asked up front so the
+    list a user confirms is the list that installs. A skill already installed
+    from this tap is reported apart from those refusals: it is the expected
+    state on a second run, and calling it a failure would make that run
+    exit 1.
+    """
+    rows = [e for e in catalog.all_entries() if e.get("tap") == tap.name]
+    by_kind: dict[str, dict[str, list[dict]]] = {}
+    for e in rows:
+        kind = str(e.get("kind") or "skill")
+        by_kind.setdefault(kind, {}).setdefault(str(e["name"]), []).append(e)
+    held = _skill_lock(scope, base)
+    counted = dict(held)
+    entries: list[dict] = []
+    installed: list[str] = []
+    skipped: list[tuple[str, str]] = []
+    for name, copies in sorted(by_kind.get("skill", {}).items()):
+        cands = catalog.distinct_candidates(copies)
+        if len(cands) != 1:
+            skipped.append((name, "ships %d different copies (%s) — pick one "
+                            "with `boost install %s --path <dir>`"
+                            % (len(cands), ", ".join(sorted(
+                                str(c.get("rel_dir", "?")) for c in cands)),
+                               util.shell_arg("%s:%s" % (tap.name, name)))))
+            continue
+        entry = cands[0]
+        mine = held.get(name)
+        if mine and not force and str(mine.get("tap") or "") == tap.name:
+            installed.append(name)
+            continue
+        why = _refusal(entry, counted, force=force, scope=scope, base=base)
+        if why:
+            skipped.append((name, why))
+            continue
+        counted[name] = entry
+        entries.append(entry)
+    return TapExpansion(tap.name, entries, installed, skipped,
+                        {k: len(v) for k, v in sorted(by_kind.items())
+                         if k != "skill"})
+
+
+def _is_skill(entry: dict) -> bool:
+    return (entry.get("kind") or "skill") == "skill"
+
+
+def _owners(entries: list[dict], keep_keys: set) -> dict[str, str]:
+    """Skill name -> tap, for the entries the user named one by one."""
+    owner: dict[str, str] = {}
+    for e in entries:
+        if _item_key(e) in keep_keys and _is_skill(e):
+            owner.setdefault(str(e["name"]), str(e.get("tap") or ""))
+    return owner
+
+
+def _clash(owner: dict[str, str], entry: dict) -> str | None:
+    """Why ``entry`` cannot join an install that already took its name."""
+    name, tap = str(entry["name"]), str(entry.get("tap") or "")
+    first = owner.get(name)
+    if first is None or first == tap:
+        return None
+    return ("%s's copy is already part of this install — `boost install %s "
+            "--force` afterwards takes this one instead"
+            % (first, util.shell_arg("%s:%s" % (tap, name))))
+
+
+def claim_names(entries: list[dict], *, keep: Iterable[dict] = ()
+                ) -> tuple[list[dict], list[tuple[str, str]]]:
+    """One tap per skill name, settled before :func:`plan` sees the list.
+
+    Two taps named on one command line can ship the same name, and the store
+    holds one skill per name. ``plan`` keys its closure by name, so it kept
+    whichever copy came *last* and dropped the other without a word — the
+    listing promised both. The first claim wins instead, in the order the
+    taps were named, and the loser is reported. ``keep`` (the items named one
+    by one) claim their names before any tap does.
+    """
+    keep_keys = {_item_key(e) for e in keep}
+    owner = _owners(entries, keep_keys)
+    kept: list[dict] = []
+    skipped: list[tuple[str, str]] = []
+    for e in entries:
+        if _item_key(e) in keep_keys or not _is_skill(e):
+            kept.append(e)
+            continue
+        why = _clash(owner, e)
+        if why:
+            skipped.append((str(e["name"]), why))
+            continue
+        owner[str(e["name"])] = str(e.get("tap") or "")
+        kept.append(e)
+    return kept, skipped
+
+
+def weigh(entries: list[dict], *, checked: Iterable[dict] = (),
+          keep: Iterable[dict] = (), force: bool = False,
+          scope: str = scopes.SCOPE_USER,
+          base=None) -> tuple[list[dict], list[tuple[str, str]]]:
+    """A planned install that came partly from taps, less what would fail.
+
+    ``entries`` is the plan in install order, ``requires:`` closure and all.
+    Expanding a tap asks its own skills the run's questions, but the plan
+    adds what no expansion saw: a dependency the policy blocks or the store
+    refuses, or one from another tap under a name the install already took.
+    Each is dropped here, with a reason, before the count a user is asked to
+    confirm.
+
+    ``keep`` are entries the user named one by one: passed through, as they
+    always were, and the first claim on their names. ``checked`` are entries
+    :func:`expand_tap` already put through :func:`store.check_existing`; only
+    the policy is weighed again, now against the whole install. Rules and
+    workflows pass through — a tap expands to skills only.
+    """
+    keep_keys = {_item_key(e) for e in keep}
+    checked_keys = {_item_key(e) for e in checked}
+    counted = dict(_skill_lock(scope, base))
+    owner = _owners(entries, keep_keys)
+    for e in entries:
+        if _item_key(e) in keep_keys and _is_skill(e):
+            counted[str(e["name"])] = e
+    kept: list[dict] = []
+    skipped: list[tuple[str, str]] = []
+    for e in entries:
+        key = _item_key(e)
+        if key in keep_keys or not _is_skill(e):
+            kept.append(e)
+            continue
+        name = str(e["name"])
+        why = _clash(owner, e) or (
+            store.policy_refusal(e, counted) if key in checked_keys
+            else _refusal(e, counted, force=force, scope=scope, base=base))
+        if why:
+            skipped.append((name, why))
+            continue
+        owner[name] = str(e.get("tap") or "")
+        counted[name] = e
+        kept.append(e)
+    return kept, skipped

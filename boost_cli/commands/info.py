@@ -511,6 +511,21 @@ def cmd_list(argv):
     return 0
 
 
+def _tap_url_row(entry: dict) -> None:
+    """The ``tap url`` row under ``tap``: where the item's repository lives.
+
+    Not wrapped — a URL is data, and one folded across two lines is one that
+    no longer pastes. A local tap's path is tilded like every other path on
+    the card; a remote URL prints as it is. An import has no tap, and its
+    ``source`` row already shows the URL ``--json`` reports as ``tap_url``.
+    """
+    if store.is_url_import(entry):
+        return              # the `source` row already names the repository
+    url = registry.url_for(entry)
+    if url:
+        out.kv("tap url", url if "://" in url else _tilde(url))
+
+
 def _info_materialized(name: str, kind: str, entry: dict, as_json: bool) -> int:
     """The identity card for an installed rule/workflow — the lock facts,
     plus the catalog description when a tap still carries this entry.
@@ -530,6 +545,8 @@ def _info_materialized(name: str, kind: str, entry: dict, as_json: bool) -> int:
     stranded = scopes.stranded(entry)
     if as_json:
         print(json.dumps({"name": name, "kind": kind, "description": desc,
+                          "tap": entry.get("tap"),
+                          "tap_url": registry.url_for(entry),
                           "upstream_description": upstream or None,
                           "latest": latest or None,
                           "update_available": update,
@@ -561,6 +578,7 @@ def _info_materialized(name: str, kind: str, entry: dict, as_json: bool) -> int:
         out.kv("latest", (latest or "?")
                + out.role("  (content changed)", "muted"))
     out.kv("tap", entry.get("tap", "?"))
+    _tap_url_row(entry)
     if kind == "workflow" and entry.get("slot"):
         out.kv("slot", str(entry["slot"]))
     if entry.get("scope"):
@@ -723,6 +741,7 @@ def cmd_info(argv):
             "mcp_servers": [r["name"] for r in mcp_servers],
             "latest": (cat or {}).get("version"),
             "tap": (lock or plock or cat or {}).get("tap"),
+            "tap_url": registry.url_for(lock or plock or cat or {}),
             "category": (cat or {}).get("category") or None,
             "store": str(sdir) if lock and sdir.is_dir() else None,
             "missing_from_store": bool(lock) and store.missing_from_store(
@@ -820,6 +839,7 @@ def cmd_info(argv):
     else:
         out.kv("latest", str((cat or {}).get("version", "?")))
     out.kv("tap", (entry or cat or {}).get("tap", "?"))
+    _tap_url_row(entry or cat or {})
     category = (cat or {}).get("category")
     if category:
         out.kv("category", category)

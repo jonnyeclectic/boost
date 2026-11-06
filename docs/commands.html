@@ -102,7 +102,7 @@
     <input id="q" type="search" placeholder="Filter 81 commands…" autocomplete="off" aria-label="Filter commands">
     <div class="group" data-group="pkg">
       <div class="group-h">Install &amp; lifecycle</div>
-      <a class="cmd-link" href="#cmd-install" data-search="install install a skill from a tap registry  --force --path p --agent a --scope {user,project} --local --global --dry-run --no-deps --no-mcp --as-skill --no-as-skill name">install</a>
+      <a class="cmd-link" href="#cmd-install" data-search="install install a skill from a tap registry  --force -y, --yes --path p --agent a --scope {user,project} --local --global --dry-run --no-deps --no-mcp --as-skill --no-as-skill name">install</a>
       <a class="cmd-link" href="#cmd-uninstall" data-search="uninstall remove an installed skill, rule, or workflow  --scope {user,project} --local --global --kind {skill,rule,workflow} -y, --yes name">uninstall</a>
       <a class="cmd-link" href="#cmd-sync" data-search="sync reconcile installed skills &amp; symlinks against the lock file  --diff --prune --json -y, --yes --rebuild-lock">sync</a>
       <a class="cmd-link" href="#cmd-update" data-search="update sync taps or update installed skills  --taps-only -y, --yes --force --discard-edits --allow-downgrade --shards --json tap">update</a>
@@ -212,17 +212,18 @@
     <p class="lead">All <b>81</b> commands, generated from the CLI itself —
        run <code>boost &lt;command&gt; --help</code> for the same in your terminal.</p>
       <h2 class="group-h" id="grp-pkg">Install &amp; lifecycle</h2>
-      <section class="cmd" id="cmd-install" data-search="install install a skill from a tap registry  --force --path p --agent a --scope {user,project} --local --global --dry-run --no-deps --no-mcp --as-skill --no-as-skill name">
+      <section class="cmd" id="cmd-install" data-search="install install a skill from a tap registry  --force -y, --yes --path p --agent a --scope {user,project} --local --global --dry-run --no-deps --no-mcp --as-skill --no-as-skill name">
         <h3><span class="cname">install</span><span class="gtag">pkg</span></h3>
         <p class="summary">Install a skill from a tap registry</p>
-        <pre class="syn">boost install [--force] [--path P] [--agent A] [--scope {user,project} | --local | --global] [--dry-run] [--no-deps] [--no-mcp] [--as-skill | --no-as-skill] NAME [NAME ...]</pre>
+        <pre class="syn">boost install [--force] [-y] [--path P] [--agent A] [--scope {user,project} | --local | --global] [--dry-run] [--no-deps] [--no-mcp] [--as-skill | --no-as-skill] NAME [NAME ...]</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
-          <div class="arg"><code>NAME</code><span>skill name, optionally qualified as tap:skill</span></div>
+          <div class="arg"><code>NAME</code><span>skill name, optionally qualified as tap:skill; a tap&#x27;s own name (owner/repo) installs every skill it ships, after listing them and asking</span></div>
         </div>
         <div class="args-h">Options</div>
         <div class="args">
           <div class="arg"><code>--force</code><span>reinstall even if already installed or pinned</span></div>
+          <div class="arg"><code>-y, --yes</code><span>install a tap&#x27;s skills without asking first (not an answer to registering MCP servers a skill declares: that takes BOOST_ASSUME_YES=1)</span></div>
           <div class="arg"><code>--path P</code><span>pick which copy to install when one registry ships the name more than once (see the paths that error lists); may be a trailing path segment</span></div>
           <div class="arg"><code>--agent A</code><span>link only into this agent (repeatable)</span></div>
           <div class="arg"><code>--scope {user,project}</code><span>install into your user config (default) or the current repo (project)</span></div>
