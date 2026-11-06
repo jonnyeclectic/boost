@@ -448,7 +448,7 @@ SKILLS = [
     ("Affitor/affiliate-skills", "marketing", "50 AI agent skills for affiliate marketing. Research trending content... (54 skills)", 54, "high"),
     ("nanocoai/nanoclaw", "meta", "A lightweight alternative to OpenClaw that runs in containers for... (54 skills)", 54, "high"),
     ("skydoves/android-testing-skills", "devops", "A set of skills for Android testing: Compose UI, AndroidX Test, JVM... (54 skills)", 54, "high"),
-    ("AlpacaLabsLLC/skills-for-architects", "architecture", "Claude Code skills for architecture, real estate, and workplace... (46 skills, 7 workflows)", 53, "high"),
+    ("AlpacaLabsLLC/skills-for-architects", "general", "Claude Code skills for architecture, real estate, and workplace... (46 skills, 7 workflows)", 53, "high"),
     ("steipete/agent-scripts", "general", "Scripts for agents, shared between my repositories (53 skills)", 53, "high"),
     ("luongnv89/claude-howto", "general", "A visual, example-driven guide to Claude Code - from basic concepts to... (31 skills, 20 workflows)", 51, "high"),
     ("swyxio/skills", "general", "Agent skills for Claude Code and other AI agents (46 skills)", 46, "high"),

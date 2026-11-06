@@ -62,6 +62,13 @@ UI_PINNED = {
 # on the repo name would file it `ui`; it belongs to `ai`.
 AI_NOT_UI = "Owl-Listener/ai-design-skills"
 
+# The same trap, in the other direction: this one's "architecture" is
+# buildings. It ships `nyc-dob-permits`, `epd-parser`, `ffe-spec-book` and
+# `occupancy-calculator`, and `architecture` here means *software*
+# architecture (FOCUS). No category fits AEC or real estate, so the pin is
+# only that it stays out of the one its name suggests.
+BUILDINGS_NOT_SOFTWARE = "AlpacaLabsLLC/skills-for-architects"
+
 # Token-efficiency registries: repos whose items exist to make an agent emit
 # *less* — less code, or fewer output tokens. Both were filed by reading item
 # names (`ponytail-audit`, `ponytail-debt`, `ponytail-gain`; `caveman-compress`,
@@ -198,6 +205,15 @@ class TestDesignDomain:
         assert row["category"] == "ai", (
             "%s ships prompt/agent-design skills, not interface design; "
             "filing it %r is the repo-name trap" % (AI_NOT_UI, row["category"]))
+
+    def test_skills_for_architects_is_not_software_architecture(self, catalog):
+        name = BUILDINGS_NOT_SOFTWARE
+        row = next((e for e in catalog if e["name"] == name), None)
+        assert row is not None, "%s dropped out of the catalog" % name
+        assert row["category"] != "architecture", (
+            "%s ships AEC and real-estate skills (zoning, permits, EPDs), not "
+            "software architecture; `tap --catalog --category architecture` "
+            "would mix them in with the DDD packs" % name)
 
     def test_playwright_is_carried_as_a_skill_registry(self, catalog):
         """The framework repo ships real SKILL.md items under
