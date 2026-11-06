@@ -556,11 +556,20 @@ class TestPlanCliContract:
 #: predicted to within 5 min this time, and the model is not why. The run
 #: was packed on bbd90ac4's weights at a flat 69.8-70.4 min a shard, and the
 #: jobs took 45.9-100.0, because each shard's re-timed work came in at
-#: 0.65-1.60x what those weights gave it. TAIL_MULTIPLIER is not re-fitted:
-#: over the eight runs at twenty-four (this one and the seven ci.yml lists,
-#: 192 of 192 jobs succeeded) the worst job ran 1.30-1.69x its run's median,
-#: under the 1.91 committed. That is eight samples a shard against the 28
-#: it was fitted over, and every refresh re-packs, so no shard repeats.
+#: 0.65-1.60x what those weights gave it. TAIL_MULTIPLIER is not re-fitted.
+#: Every run at twenty-four since harden-runner left this job (b02f0075)
+#: was measured from the job API: the seven ci.yml lists, this one, and ten
+#: more from 41861286489 to 42182488422. Over those eighteen the worst job
+#: ran 1.27-1.80x its run's median, under the 1.91 committed but closer
+#: than the eight alone showed (1.30-1.69). The worst is main's 41939504662,
+#: 122.0 min against a 67.8 median. Of the 432 first-attempt jobs, 431
+#: succeeded: shard 22 of 41893440023 lost its runner at 57 min and passed
+#: on its rerun, which is what is counted. 42170982098 was cancelled by hand
+#: at 11 min and is not counted. Runs at twenty-four from before b02f0075
+#: still had harden-runner in the job and are left out; this file leaves
+#: lost runners out of tail fits, and 41251356192, for one, lost eight of
+#: its 48 jobs that way. That is eighteen samples a shard against the 28 it
+#: was fitted over.
 FITTED_TOTAL_MS = 373_498_046
 
 #: What the *planner* totals over the same committed file, which is larger, and
