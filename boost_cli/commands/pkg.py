@@ -119,7 +119,8 @@ def _warn_secrets(res: store.InstallResult) -> None:
     _emit_scan(installscan.scan(res, installscan.SECRET))
 
 
-def _offer_mcp(res: store.InstallResult, no_mcp: bool = False) -> None:
+def _offer_mcp(res: store.InstallResult, no_mcp: bool = False,
+               argv_yes: bool = True) -> None:
     """Surface the MCP servers a just-installed skill needs, and offer to wire them.
 
     A skill that only works paired with an MCP server used to install "cleanly"
@@ -134,6 +135,9 @@ def _offer_mcp(res: store.InstallResult, no_mcp: bool = False) -> None:
     The offer targets whichever agent CLIs are actually installed, so a machine
     with only Gemini CLI is offered ``gemini mcp add`` rather than a ``claude``
     command it cannot run.
+
+    ``argv_yes`` is :func:`output.confirm`'s: `boost install` passes False,
+    because its ``-y`` agrees to a tap's skill list, not to this.
     """
     rows = res.mcp_servers
     if not rows or no_mcp or typedvalue.env_flag("BOOST_NO_MCP_OFFER", unknown=True):
@@ -195,7 +199,8 @@ def _offer_mcp(res: store.InstallResult, no_mcp: bool = False) -> None:
     # writes a registration every project on this machine will then launch.
     if not out.confirm(
             "  register %s with %s, for every project on this machine?"
-            % (_plural(len(wirable), "server"), where), default=False):
+            % (_plural(len(wirable), "server"), where), default=False,
+            argv_yes=argv_yes):
         out.dim("  skipped — run these yourself when you're ready:", wrap=True)
         for row in wirable:
             # One line per host, not `targets[0]` — the prompt named every
@@ -275,8 +280,10 @@ def _register_mcp_server(name: str, spec: dict, host: str = "claude",
     journal.log("mcp-register", name, host=host)
 
 
-def _report_result(res: store.InstallResult, no_mcp: bool = False) -> None:
-    """The canonical three-line install report."""
+def _report_result(res: store.InstallResult, no_mcp: bool = False,
+                   argv_yes: bool = True) -> None:
+    """The canonical three-line install report. ``argv_yes`` as in
+    :func:`_offer_mcp`."""
     if res.kind in ("rule", "workflow"):
         where = " (this repo)" if res.scope == "project" else ""
         out.ok("materialized%s → %s"
@@ -312,7 +319,7 @@ def _report_result(res: store.InstallResult, no_mcp: bool = False) -> None:
         _warn_submodules(res)
         _warn_injection(res)
         _warn_secrets(res)
-        _offer_mcp(res, no_mcp=no_mcp)
+        _offer_mcp(res, no_mcp=no_mcp, argv_yes=argv_yes)
         return
     out.ok("copied to %s" % _tilde(res.dest))
     if res.linked:
@@ -328,7 +335,7 @@ def _report_result(res: store.InstallResult, no_mcp: bool = False) -> None:
     out.ok("lock updated (.skill-lock.json)")
     _warn_injection(res)
     _warn_secrets(res)
-    _offer_mcp(res, no_mcp=no_mcp)
+    _offer_mcp(res, no_mcp=no_mcp, argv_yes=argv_yes)
 
 
 def _report_skill_copy(res) -> None:
@@ -618,13 +625,57 @@ def _refuse_preview_by_policy(e: dict, scope: str, pbase, seen) -> None:
         raise BoostError(why, hint="inspect with `boost policy list`")
 
 
+def _expand_tap(tap: registry.Tap, args, pbase) -> installplan.TapExpansion:
+    """List what ``boost install <tap>`` would install, and why not the rest.
+
+    Printed before anything else is decided, so the names a user is asked to
+    confirm are on screen above the question.
+    """
+    if args.path:
+        raise BoostError(
+            "--path picks one copy of one skill, not a tap's worth",
+            hint="name the skill: `boost install %s --path %s`"
+                 % (util.shell_arg("%s:<skill>" % tap.name),
+                    util.shell_arg(args.path)))
+    exp = installplan.expand_tap(tap, force=args.force, scope=args.scope,
+                                 base=pbase)
+    others = ", ".join(_plural(n, k) for k, n in exp.other_kinds.items())
+    if not (exp.entries or exp.installed or exp.skipped):
+        raise BoostError(
+            "%s ships no skills" % tap.name,
+            hint=("it ships %s — install one by name: `boost install %s`"
+                  % (others, util.shell_arg("%s:<name>" % tap.name))
+                  if others else "`boost update %s` refreshes its catalog"
+                  % util.shell_arg(tap.name)), wrap=True)
+    out.heading("%s: %s to install" % (tap.name,
+                                       _plural(len(exp.entries), "skill")))
+    if exp.entries:
+        out.info(", ".join(e["name"] for e in exp.entries), wrap=True)
+    if exp.installed:
+        out.dim("  already installed (%d): %s"
+                % (len(exp.installed), ", ".join(exp.installed)), wrap=True)
+    for name, why in exp.skipped:
+        out.warn("%s: skipped — %s" % (name, why), wrap=True)
+    if others:
+        out.dim("  not included: %s — install those by name, `boost install "
+                "%s`" % (others, util.shell_arg("%s:<name>" % tap.name)),
+                wrap=True)
+    return exp
+
+
 def cmd_install(argv: list[str]) -> int:
     ap = cliparse.parser(prog="boost install",
                                  description="Install a skill from a tap registry")
     ap.add_argument("names", type=util.nonempty_str, nargs="+", metavar="NAME",
-                    help="skill name, optionally qualified as tap:skill")
+                    help="skill name, optionally qualified as tap:skill; a "
+                         "tap's own name (owner/repo) installs every skill "
+                         "it ships, after listing them and asking")
     ap.add_argument("--force", action="store_true",
                     help="reinstall even if already installed or pinned")
+    ap.add_argument("-y", "--yes", action="store_true",
+                    help="install a tap's skills without asking first (not "
+                         "an answer to registering MCP servers a skill "
+                         "declares: that takes BOOST_ASSUME_YES=1)")
     ap.add_argument("--path", type=util.nonempty_str, metavar="P", default=None,
                     help="pick which copy to install when one registry ships "
                          "the name more than once (see the paths that error "
@@ -700,8 +751,15 @@ def cmd_install(argv: list[str]) -> int:
     only = _check_agents(args.agent)
     multi = len(args.names) > 1
     entries, failed = [], 0
+    expansions: list[installplan.TapExpansion] = []
+    named: list[dict] = []          # entries asked for one by one
     for n in args.names:
         try:
+            tap = installplan.tap_target(n)
+            if tap is not None:
+                expansions.append(_expand_tap(tap, args, pbase))
+                entries.extend(expansions[-1].entries)
+                continue
             entry = catalog.resolve_one(n, path=args.path)
             # The slug every other command will know it by, said out loud:
             # `install c++-helper` copied to `c--helper` without a word. Only
@@ -710,23 +768,64 @@ def cmd_install(argv: list[str]) -> int:
             if not util.is_safe_component(bare):
                 catalog.note_catalogued_as(entry["name"], bare)
             entries.append(entry)
+            named.append(entry)
         except BoostError as err:
+            extra = installplan.untapped_hint(n)
+            if extra:
+                err.hint = catalog.join_hints(err.hint, extra)
             if not multi:
                 raise
             out.warn("%s: %s" % (n, err.message), stream=sys.stderr)
+            if extra:
+                out.dim("  " + extra, wrap=True)
             failed += 1
 
     # Grow the request into its `requires:` closure (deps installed first),
     # unless the caller opted out. Only skills carry dependency frontmatter;
     # rules/workflows pass through unchanged. `installplan.plan` is the one
     # plan — `boost browse` and MCP `boost_install` take theirs from it too.
+    if expansions:
+        # A tap and one of its skills named together, or two spellings of
+        # one tap, would list a skill twice — and install it twice, the
+        # second time into "already installed" and exit 1.
+        entries = list({(e.get("tap"), e.get("kind") or "skill", e["name"]): e
+                        for e in entries}.values())
+        entries, clashes = installplan.claim_names(entries, keep=named)
+        for name, why in clashes:
+            out.warn("%s: skipped — %s" % (name, why), wrap=True)
+        if not entries:
+            out.info("nothing to install")
+            return 1 if failed else 0
     the_plan = installplan.plan(entries, pbase=pbase, deps=not args.no_deps)
     _print_plan(the_plan)
     entries = the_plan.entries
+    if expansions:
+        entries, refused = installplan.weigh(
+            entries, keep=named,
+            checked=[e for exp in expansions for e in exp.entries],
+            force=args.force, scope=args.scope, base=pbase)
+        # A dependency the listing already skipped is refused again here for
+        # the same reason; saying it twice reads as two different problems.
+        said = {s for exp in expansions for s in exp.skipped}
+        for name, why in refused:
+            if (name, why) not in said:
+                out.warn("%s: skipped — %s" % (name, why), wrap=True)
+        if not entries:
+            out.info("nothing to install")
+            return 1 if failed else 0
     # Pulling in dependencies can turn a single-name request into a multi-item
     # install (per-item headings); it must never *lower* multi (e.g. when an
     # unknown co-requested name was dropped), so OR rather than reassign.
-    multi = multi or len(entries) > 1
+    # A tap is a many-item request even when it ships a single skill.
+    multi = multi or len(entries) > 1 or bool(expansions)
+    # After the plan, so the count asked about includes the `requires:` it
+    # pulled in; never on a dry run, which writes nothing to agree to.
+    noun = ("skill" if all((e.get("kind") or "skill") == "skill"
+                           for e in entries) else "item")
+    if (expansions and not args.dry_run and not args.yes
+            and not out.confirm("install %s?" % _plural(len(entries), noun))):
+        out.info("cancelled")
+        return 1
 
     if args.dry_run:
         from ..core import mcpdecl, mcphost
@@ -897,7 +996,7 @@ def cmd_install(argv: list[str]) -> int:
             out.warn("%s: %s" % (e["name"], err.message), stream=sys.stderr)
             failed += 1
             continue
-        _report_result(res, no_mcp=args.no_mcp)
+        _report_result(res, no_mcp=args.no_mcp, argv_yes=False)
         results.append(res)
     if results:
         _report_prerequisites([e for e in entries

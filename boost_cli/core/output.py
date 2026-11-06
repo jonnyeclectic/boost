@@ -1376,13 +1376,22 @@ def table(rows, headers=None, stream=None, keep=(), text=(),
 
 
 _CONFIRM_BYPASS_HINT = "pass -y or set BOOST_ASSUME_YES=1 to skip this prompt"
+_ENV_BYPASS_HINT = "set BOOST_ASSUME_YES=1 to skip this prompt"
 
 
-def confirm(prompt: str, default: bool = False, quiet: bool = False) -> bool:
+def confirm(prompt: str, default: bool = False, quiet: bool = False,
+            argv_yes: bool = True) -> bool:
     """Ask a yes/no question and return the answer as a bool.
 
     BOOST_ASSUME_YES or --yes/-y force True; non-TTY stdin and an empty
     answer return `default`; EOF or Ctrl-C returns False.
+
+    ``argv_yes=False`` is for a question a command's own ``-y`` was never
+    meant to answer. `boost install`'s ``-y`` agrees to the skill list a
+    tap install shows; reading it here as well also agreed, unasked, to
+    registering every MCP server those third-party skills declare, machine
+    wide. Only the environment (or a typed answer) says yes to that, and the
+    hint names only the bypass that works.
 
     Every path that resolves to a decline (as opposed to `default` being
     True) prints the bypass hint here, once, so callers inherit it instead
@@ -1391,11 +1400,13 @@ def confirm(prompt: str, default: bool = False, quiet: bool = False) -> bool:
     to print its own machine-readable (``--json``) result on a decline, where
     the hint would land as a stray prose line ahead of it.
     """
-    if typedvalue.env_flag("BOOST_ASSUME_YES") or "--yes" in sys.argv or "-y" in sys.argv:
+    if typedvalue.env_flag("BOOST_ASSUME_YES") or (
+            argv_yes and ("--yes" in sys.argv or "-y" in sys.argv)):
         return True
+    hint = _CONFIRM_BYPASS_HINT if argv_yes else _ENV_BYPASS_HINT
     if not stdin_is_tty():
         if not default and not quiet:
-            dim(_CONFIRM_BYPASS_HINT)
+            dim(hint)
         return default
     suffix = " [Y/n] " if default else " [y/N] "
     try:
@@ -1403,9 +1414,9 @@ def confirm(prompt: str, default: bool = False, quiet: bool = False) -> bool:
     except (EOFError, KeyboardInterrupt):
         print()
         if not quiet:
-            dim(_CONFIRM_BYPASS_HINT)
+            dim(hint)
         return False
     result = answer in ("y", "yes") if answer else default
     if not result and not quiet:
-        dim(_CONFIRM_BYPASS_HINT)
+        dim(hint)
     return result
