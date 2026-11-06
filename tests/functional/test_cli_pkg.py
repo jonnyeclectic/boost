@@ -612,9 +612,35 @@ class TestSync:
         assert "everything in sync" not in r.out
         assert copy.is_dir() and "automate" not in _lock()
         r = boost("sync", "--prune")       # BOOST_ASSUME_YES confirms
-        assert "pruned ~/.agents/skills/automate" in r.out
+        m = re.search(r"pruned ~/\.agents/skills/automate — moved to "
+                      r"(~/\.agents/\.quarantine/[0-9T]+/automate)", _flat(r.out))
+        assert m, r.out
         assert not copy.exists()
+        held = paths.home() / m.group(1)[2:]
+        assert (held / "SKILL.md").read_text(encoding="utf-8") == "# automate\n"
         assert (theirs / "SKILL.md").is_file(), "the original is not boost's"
+
+    def test_prune_keeps_a_changed_copy_unless_asked_by_name(
+            self, boost, installed):
+        # A port is a copy someone edited: --yes or BOOST_ASSUME_YES alone
+        # must not be enough to take it out of the store.
+        _vendor_skill("automate", "# automate\n")
+        copy = paths.store_dir() / "automate"
+        copy.mkdir()
+        (copy / "SKILL.md").write_text("# my port\n", encoding="utf-8")
+        r = boost("sync", "--prune", "--yes")
+        assert ("kept ~/.agents/skills/automate: it differs from the original "
+                "(local changes) — `boost sync --prune --include-changed` moves "
+                "it to quarantine") in _flat(r.out)
+        assert (copy / "SKILL.md").is_file()
+        data = json.loads(boost("sync", "--json", "--prune").out)
+        assert data["pruned"] == [] and copy.is_dir()
+        r = boost("sync", "--prune", "--include-changed")
+        assert "pruned ~/.agents/skills/automate — moved to" in _flat(r.out)
+        assert not copy.exists()
+        held = list((paths.home() / ".agents" / ".quarantine").glob("*/automate"))
+        assert [(h / "SKILL.md").read_text(encoding="utf-8") for h in held] == [
+            "# my port\n"]
 
     def test_prune_names_a_git_repository_and_never_offers_it(
             self, boost, installed, monkeypatch):
@@ -902,8 +928,8 @@ class TestSync:
             shutil.rmtree(theirs)
             return True
         monkeypatch.setattr(output, "confirm", confirm)
-        r = boost("sync", "--prune")
-        assert "it differs from the original, and those changes go too" in _flat(
+        r = boost("sync", "--prune", "--include-changed")
+        assert "it differs from the original, and those changes go with it" in _flat(
             asked[0])
         assert "kept ~/.agents/skills/automate: " in _flat(r.out)
         assert "pruned" not in r.out

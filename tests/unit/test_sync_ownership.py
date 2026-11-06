@@ -1645,16 +1645,16 @@ class TestRemoveForeignCopy:
             _vendor(n, "# same\n")
             _mine(n, "# same\n")
         rows = [self._row("a-first"), self._row("b-next")]
-        real = store.util.remove_path
+        real = store.shutil.move
 
-        def remove(p):
-            if Path(p).name == "a-first":
-                raise PermissionError(13, "Permission denied", str(Path(p) / "refs"))
-            return real(p)
-        monkeypatch.setattr(store.util, "remove_path", remove)
+        def move(src, dst):
+            if Path(src).name == "a-first":
+                raise PermissionError(13, "Permission denied", str(Path(src) / "refs"))
+            return real(src, dst)
+        monkeypatch.setattr(store.shutil, "move", move)
         assert store.remove_foreign_copies(rows) == [
-            "deleting it stopped at ~/.agents/skills/a-first/refs: Permission "
-            "denied — what is left is still there", None]
+            "moving it to quarantine stopped at ~/.agents/skills/a-first/refs: "
+            "Permission denied — what is left is still there", None]
         assert (paths.store_dir() / "a-first").is_dir()
         assert not os.path.lexists(paths.store_dir() / "b-next")
         pulse = [json.loads(x) for x in paths.pulse_path().read_text(
@@ -1666,12 +1666,12 @@ class TestRemoveForeignCopy:
         _mine("automate", "# same\n")
         row = self._row()
 
-        def remove(_p):
+        def move(_src, _dst):
             raise OSError("disk on fire")
-        monkeypatch.setattr(store.util, "remove_path", remove)
+        monkeypatch.setattr(store.shutil, "move", move)
         assert store.remove_foreign_copy(row) == (
-            "deleting it stopped at automate: disk on fire — what is left is "
-            "still there")
+            "moving it to quarantine stopped at automate: disk on fire — what "
+            "is left is still there")
 
     def test_an_identical_copy_edited_since_is_kept(self, installed):
         _vendor("automate", "# same\n")
@@ -1696,6 +1696,33 @@ class TestRemoveForeignCopy:
         (copy / "SKILL.md").write_text("# cursor\n", encoding="utf-8")
         assert store.remove_foreign_copy(row) is None
         assert not os.path.lexists(copy)
+
+    def test_the_copy_is_moved_to_quarantine_not_deleted(self, installed):
+        # A wrong yes to --prune deleted 26 edited ports in one go; a move
+        # makes the same mistake undoable with `mv`.
+        _vendor("automate", "# cursor\n")
+        _mine("automate", "# port\n")
+        row = self._row(how="differs")
+        assert store.remove_foreign_copies([row], stamp="20261024T132000") == [None]
+        held = paths.quarantine_dir() / "20261024T132000" / "automate"
+        assert (held / "SKILL.md").read_text(encoding="utf-8") == "# port\n"
+        assert not os.path.lexists(paths.store_dir() / "automate")
+
+    def test_quarantine_is_outside_the_store(self, sandbox):
+        # Codex and Gemini read the store directly, and sync would call a
+        # quarantined dir unrecorded if it sat inside.
+        assert paths.store_dir() not in paths.quarantine_dir().parents
+        assert paths.quarantine_dir() != paths.store_dir()
+
+    def test_kept_when_its_quarantine_slot_is_taken(self, installed):
+        _vendor("automate", "# same\n")
+        copy = _mine("automate", "# same\n")
+        taken = paths.quarantine_dir() / "s1" / "automate"
+        _skill(taken, "# earlier\n")
+        assert store.remove_foreign_copies([self._row()], stamp="s1") == [
+            "a quarantined copy already sits at %s" % paths.tilde(taken)]
+        assert copy.is_dir()
+        assert (taken / "SKILL.md").read_text(encoding="utf-8") == "# earlier\n"
 
     def test_is_journaled(self, installed):
         theirs = _vendor("automate", "# same\n")
