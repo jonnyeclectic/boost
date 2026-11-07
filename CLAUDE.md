@@ -9,7 +9,8 @@ Package name on PyPI is `boost-skill-cli`; the command is `boost`.
 ```bash
 make venv                                      # .venv from the hash-pinned requirements/*.txt
 .venv/bin/pytest tests/unit/test_catalog.py -q                    # one test file
-.venv/bin/pytest tests/unit/test_catalog.py::test_scan_dir -q     # one test
+.venv/bin/pytest tests/unit/test_catalog.py::TestScanDir -q       # one test class
+.venv/bin/pytest tests/unit/test_catalog.py::TestScanDir::test_skill_md_at_repo_root_uses_root_dirname -q   # one test
 .venv/bin/pytest tests/functional -q -k install                   # functional tests matching "install"
 make lint                                      # the whole static tier — read the recipe, it is long
 make test                                      # unit + functional with 90% coverage gate
@@ -83,15 +84,16 @@ commit one file anyway.
 Before calling any change done, run the full gate:
 
 ```bash
-make check          # == lint eval test smoke mutation
+make check          # == lint eval evals test smoke mutation
 ```
 
-It is five gates and **all must pass**:
+It is six gates and **all must pass**:
 
 | Gate       | Command                                        | Threshold |
 |------------|------------------------------------------------|-----------|
 | `lint`     | `ruff check boost_cli tests` + `mypy`          | zero errors |
 | `eval`     | `ensure_eval_corpus.sh` + `eval_retrieval.py --build -k 10` with four floors | BM25 recall@k **≥ 0.78**, hit@1 ≥ 0.40, MRR ≥ 0.52, nDCG@k ≥ 0.58 |
+| `evals`    | `python3 scripts/eval_gate.py --run`            | floors over the hermetic `evals/` golden set, no significant regression vs `evals/baseline.json` |
 | `test`     | `pytest tests/unit tests/functional --cov`     | **90%** coverage (`fail_under = 90`, `branch = true`) |
 | `smoke`    | `bash tests/smoke.sh`                           | 0 failed |
 | `mutation` | `python3 scripts/mutation_gate.py --run --min 80` | **80%** of `boost_cli/core` mutants killed |

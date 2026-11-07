@@ -19,8 +19,8 @@ COLS = 60
 
 # (argv, the remedy command that must appear whole, or None)
 UNTAPPED = [
-    (("taps",), "`boost tap --defaults`"),
-    (("update",), "`boost tap --defaults`"),
+    (("taps",), "`boost quickstart`"),
+    (("update",), "`boost quickstart`"),
     (("snapshot", "list"), "`boost snapshot save`"),
     (("profile", "list"), "`boost profile save daily`"),
     (("focus",), "`boost focus SKILL...`"),
@@ -57,7 +57,7 @@ def test_empty_screen_fits_and_uses_the_standard_marker(
 
 
 @pytest.mark.parametrize(("argv", "cmd"), [
-    (("trending",), "`boost tap --defaults`"),
+    (("trending",), "`boost quickstart`"),
     (("recommend", "--path", "{empty}"), "`boost search <keyword>`"),
 ], ids=["trending", "recommend"])
 def test_tapped_empty_screen_fits(boost, tapped, tmp_path, monkeypatch,

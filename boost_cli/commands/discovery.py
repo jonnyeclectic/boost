@@ -143,12 +143,12 @@ def cmd_search(argv):
     if not registry.list_taps():
         cfg_err = config.check()
         if isinstance(cfg_err, jsonstate.Unreadable):
-            # The taps may all be in it; `tap --defaults` is refused over it.
+            # The taps may all be in it; setup is refused over it.
             raise BoostError("%s — no taps are read, so nothing was searched"
                              % cfg_err,
                              hint=jsonstate.read_remedy(cfg_err, paths.tilde))
         raise BoostError("no taps configured — nothing to search",
-                        hint="add the recommended registries with `boost tap --defaults`")
+                        hint=config.setup_hint())
     # Full-content (RAG) search is the default: build the index on first use so
     # every user gets BM25 ranking without having to know about `boost reindex`.
     # rag.ensure() is incremental, offline, and degrades to frontmatter search
@@ -648,7 +648,7 @@ def _fetch_index(args) -> int:
     from ..core import shards
     if not registry.list_taps():
         raise BoostError("no taps configured — nothing to fetch",
-                        hint="add registries with `boost tap --defaults`")
+                        hint=config.setup_hint())
     manifest = shards.fetch_manifest()
     why = shards.keyword_incompatible(manifest)
     if why:
@@ -731,7 +731,7 @@ def cmd_reindex(argv):
         return _fetch_index(args)
     if not registry.list_taps():
         raise BoostError("no taps configured — nothing to index",
-                        hint="add the recommended registries with `boost tap --defaults`")
+                        hint=config.setup_hint())
     with spin.Spinner("building full-content index"):
         stats = rag.build(force=args.force)
     dense_stats = None
@@ -1355,7 +1355,7 @@ def cmd_recommend(argv):
                             hint="try `boost recommend` with no --category")
     elif not entries:
         raise BoostError("no skills in any tap to recommend from",
-                        hint="add registries with `boost tap --defaults`")
+                        hint=config.setup_hint())
     stack = detect_stack(target)
     agg: dict[str, dict[str, Any]] = {}
     for kw in stack["keywords"]:
@@ -2615,7 +2615,7 @@ def cmd_browse(argv):
     entries = sorted(catalog.all_entries(), key=operator.itemgetter("name"))
     if not entries:
         raise BoostError("no skills available to browse",
-                        hint="add registries with `boost tap --defaults`")
+                        hint=config.setup_hint())
     categories = _tap_categories()
     if args.categories:
         return _print_categories(entries, categories, args.by_count)
@@ -2700,7 +2700,7 @@ def cmd_trending(argv):
         out.heading("curated picks (no local install data yet)")
         if not curated:
             print(out.empty_state("no curated skills available",
-                                  hint="add taps with `boost tap --defaults`",
+                                  hint=config.setup_hint(),
                                   wrap=True))
             return 0
         # reserve name/version/kind columns

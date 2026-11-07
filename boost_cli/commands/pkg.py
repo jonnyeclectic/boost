@@ -2495,7 +2495,7 @@ def cmd_update(argv: list[str]) -> int:
     results, failures = registry.update(args.tap or None, force=args.force)
     if not results and not failures:
         print(out.empty_state("no taps configured",
-                              hint="start with `boost tap --defaults`",
+                              hint=config.setup_hint(),
                               wrap=True))
         return 0
     moved = []

@@ -11,7 +11,7 @@ and why; the diff already says how.
 
 ## Checks
 
-- [ ] `make check` passes locally (lint · eval · test · smoke · mutation).
+- [ ] `make check` passes locally (lint · eval · evals · test · smoke · mutation).
 - [ ] Behaviour changes have tests. Anything under `boost_cli/core/` is
       mutation-tested, so the tests need to kill mutants, not just cover lines.
 - [ ] No third-party imports added under `boost_cli/` — the runtime is

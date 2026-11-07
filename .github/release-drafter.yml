@@ -1,22 +1,47 @@
 name-template: "boost v$RESOLVED_VERSION"
 tag-template: "v$RESOLVED_VERSION"
+# Changes are grouped by the PR title's conventional-commit type, with the
+# labels as a second way in. Grouping on labels alone put every change of the
+# last 100 releases under "Other changes": no PR carried `feature`, `fix`,
+# `docs` or `ci`, and nothing applied them. Every PR title here already starts
+# `feat(...)`, `fix(...)`, `docs(...)` and so on, so the title is the signal
+# that is actually there. `exclusive` keeps a PR in the first group it matches.
 categories:
   - title: Features
-    labels: [feature, enhancement]
+    exclusive: true
+    when:
+      - conventional: { type: feat }
+      - labels: [feature, enhancement]
   - title: Fixes
-    labels: [fix, bug]
+    exclusive: true
+    when:
+      - conventional: { type: fix }
+      - labels: [fix, bug]
+  - title: Dependencies
+    exclusive: true
+    when:
+      - label: dependencies
   - title: Docs & CI
-    labels: [docs, ci]
+    exclusive: true
+    when:
+      - conventional:
+          types: [docs, ci, build, test, perf, refactor, style, chore]
+      - labels: [docs, documentation, ci]
   - title: Other changes
+  # The version resolver is label-driven, exactly as before: a `feat:` title
+  # files a change under Features but does not by itself cut a minor release.
+  # Every changelog group above contributes `patch` (the default).
+  - type: version-resolver
+    semver-increment: major
+    when:
+      label: major
+  - type: version-resolver
+    semver-increment: minor
+    when:
+      labels: [minor, feature, enhancement]
+  - type: version-resolver
+    semver-increment: patch
 change-template: "- $TITLE (#$NUMBER)"
-version-resolver:
-  major:
-    labels: [major]
-  minor:
-    labels: [minor, feature, enhancement]
-  patch:
-    labels: [patch, fix, bug, docs, ci]
-  default: patch
 template: |
   ## What's changed
 

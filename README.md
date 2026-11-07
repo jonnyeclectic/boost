@@ -2,27 +2,19 @@
 
 [![CI](https://github.com/jonnyeclectic/boost/actions/workflows/ci.yml/badge.svg)](https://github.com/jonnyeclectic/boost/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/jonnyeclectic/boost)](https://github.com/jonnyeclectic/boost/releases/latest)
-[![Python 3.12–3.15](https://img.shields.io/badge/python-3.12%E2%80%933.15-blue)](https://github.com/jonnyeclectic/boost/blob/main/.github/workflows/ci.yml)
+[![Python 3.12–3.14](https://img.shields.io/badge/python-3.12%E2%80%933.14-blue)](https://github.com/jonnyeclectic/boost/blob/main/.github/workflows/ci.yml)
 [![Coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fjonnyeclectic%2Fboost%2Fbadges%2Fcoverage.json)](https://github.com/jonnyeclectic/boost/actions/workflows/ci.yml)
 [![Mutation score](https://img.shields.io/badge/mutation_score-%E2%89%A580%25_killed-blueviolet)](https://github.com/jonnyeclectic/boost/blob/main/scripts/mutation_gate.py)
-[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey)](https://github.com/jonnyeclectic/boost/actions/workflows/ci.yml)
+[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)](https://github.com/jonnyeclectic/boost/actions/workflows/ci.yml)
 [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/14275/badge)](https://www.bestpractices.dev/projects/14275)
 [![OpenSSF Baseline](https://www.bestpractices.dev/projects/14275/baseline)](https://www.bestpractices.dev/projects/14275/baseline-2)
-[![License](https://img.shields.io/github/license/jonnyeclectic/boost)](LICENSE)
+[![License](https://img.shields.io/github/license/jonnyeclectic/boost)](https://github.com/jonnyeclectic/boost/blob/main/LICENSE)
 
 **Homebrew for AI coding skills.** boost finds, installs, and version-tracks skills
 from GitHub-hosted registries, and wires each one into Claude Code, Windsurf,
 Cursor, Gemini CLI, Antigravity CLI and Codex in a single pass.
 
-Antigravity CLI (`agy`) is wired up the same way: skills link into
-`~/.gemini/antigravity-cli/skills`, and `boost mcp register` reaches it through
-`agy mcp add` alongside Claude Code.
-
-Codex — the `codex` CLI and the ChatGPT desktop app, which is the same binary —
-needs no symlink at all: `~/.agents/skills` is one of its own skill roots, so a
-skill boost copies into the canonical store is already there. Rules materialize
-into `~/.codex/AGENTS.md`, and `boost mcp register` reaches it through
-`codex mcp add`.
+**[Docs](https://jonnyeclectic.github.io/boost/) · [Every command](https://jonnyeclectic.github.io/boost/docs/commands.html) · [Roadmap](https://jonnyeclectic.github.io/boost/docs/roadmap.html)**
 
 ```bash
 pipx install boost-skill-cli
@@ -39,10 +31,20 @@ stale. The default install is pure stdlib, with no build step and no
 dependencies.
 
 <p align="center">
-  <img src="docs/demo.gif" alt="boost demo: tap a registry, search for a skill, install it into every agent, then run doctor" width="820">
+  <img src="https://raw.githubusercontent.com/jonnyeclectic/boost/main/docs/demo.gif" alt="boost demo: tap a registry, search for a skill, install it into every agent, then run doctor" width="820">
   <br>
   <sub><em>tap a registry → search → install into every agent → doctor — one flow</em></sub>
 </p>
+
+Then let your agents do the searching. boost is also an MCP server, and one
+command registers it with every agent CLI on your PATH — Claude Code, Gemini
+CLI, Antigravity CLI and Codex — so they can search and install mid-task:
+
+```bash
+boost mcp register             # asks before adding boost's rule to their instructions
+```
+
+[boost as an MCP server](#boost-as-an-mcp-server) has the details.
 
 ## What's a skill, exactly?
 
@@ -92,7 +94,7 @@ way to end up at `boost: command not found`.
 ```bash
 pipx install --python 3.13 --fetch-python=always "boost-skill-cli[rag]"
 boost --version
-boost tap --defaults
+boost quickstart
 ```
 
 With uv it is
@@ -104,7 +106,7 @@ The command pins the interpreter because pipx and uv build boost's
 environment on one Python and keep a link to it. When Homebrew upgrades past
 a `python@3.X` formula it deletes the old one, the link breaks, and `boost`
 fails before it starts with `bad interpreter: no such file or directory`.
-[DEBUGGING](docs/DEBUGGING.md#boost-bad-interpreter-after-a-homebrew-upgrade)
+[DEBUGGING](https://github.com/jonnyeclectic/boost/blob/main/docs/DEBUGGING.md#boost-bad-interpreter-after-a-homebrew-upgrade)
 has the one-command fix. `--fetch-python=always` (pipx 1.18 or later) makes
 pipx download its own 3.13 even when Homebrew has one, and
 `--managed-python` does the same for uv, so a Homebrew cleanup can't touch
@@ -251,14 +253,14 @@ mismatch, and shards for a registry that has moved since publication are
 refused rather than merged — stale vectors would otherwise look fresh forever.
 
 When both indexes exist boost fuses the rankings rather than choosing between
-them. See [docs/semantic-search.md](docs/semantic-search.md) for the whole
+them. See [docs/semantic-search.md](https://github.com/jonnyeclectic/boost/blob/main/docs/semantic-search.md) for the whole
 setup, what it costs, and how to tell which engine is actually serving.
 
 ## The registry catalog
 
-`boost tap --defaults` gives you seven registries. The full catalog is 540+
+`boost tap --defaults` gives you seven registries. The full catalog is 515
 classified GitHub registries of skills, Cursor/Windsurf rules and Claude Code
-workflows, indexing roughly 30,000 items.
+workflows, indexing roughly 35,000 items.
 
 ```bash
 boost tap --catalog --dry-run                 # browse the classified catalog
@@ -273,8 +275,10 @@ Taps clone in parallel — eight at once by default, `--jobs N` (or
 server. A clone is network latency rather than bandwidth, so the whole catalog
 measures **2 min 10 s for 463 registries** where one-at-a-time took 13 minutes.
 
-Every `est_items` is measured from the repository's file tree rather than
-estimated, so `--limit` ranks by real size. Items are counted once however many
+`est_items` is measured from the repository's file tree for every registry
+added since 2026-07, and for older ones wherever a re-measure disagreed with
+the original research estimate; the rest keep that estimate, which is what
+`--limit` ranks by. Items are counted once however many
 agents a repository renders them for, so a pack shipping a copy in `.claude/`,
 `.cursor/` and twelve other dotdirs is not credited with fourteen skills.
 
@@ -325,6 +329,7 @@ GitHub registries  ──boost update──▶  ~/.boost/repos/    (blobless spa
                    ──boost install─▶  ~/.agents/skills/ (canonical store)
                                      .skill-lock.json  (v3 lock file)
                    ────symlinks───▶  ~/.claude/skills/  ~/.windsurf/skills/  ~/.cursor/skills/
+                                     ~/.gemini/antigravity-cli/skills/
 ```
 
 A tap clone holds only the files boost indexes: `SKILL.md`, workflow Markdown
@@ -362,7 +367,10 @@ boost list --kind rule                # just the rules, and where they landed
 boost list --kind workflow            # and which slot each one fills
 ```
 
-Gemini CLI and Codex are the two agents that need no symlink. Both discover
+Antigravity CLI (`agy`) takes real symlinks, into
+`~/.gemini/antigravity-cli/skills`. Gemini CLI and Codex are the two agents
+that need no symlink; Codex here means both the `codex` CLI and the ChatGPT
+desktop app, which ships the same `codex` binary. Both discover
 `~/.agents/skills` directly — Gemini CLI through the
 [Agent Skills](https://agentskills.io) standard, Codex as one of its five skill
 roots — so linking into their own skills directories as well would put the same
@@ -377,10 +385,10 @@ npm `--save` half, for skills a team agrees on, which belong in the repository
 where they can be reviewed in a PR and arrive with a `git clone`.
 
 ```bash
-boost install code-review --local     # into THIS repo (= --scope project)
-boost install code-review             # into your user config (default)
-boost list --local                    # just what this repo carries
-boost uninstall code-review --local
+boost install requesting-code-review --local   # into THIS repo (= --scope project)
+boost install requesting-code-review           # into your user config (default)
+boost list --local                             # just what this repo carries
+boost uninstall requesting-code-review --local
 ```
 
 A `--local` install writes real directories into the repository's own agent
@@ -421,10 +429,10 @@ didn't write, and never overwrites a hand-written `.claude/skills/<name>/`;
 ## The usual workflow
 
 ```bash
-boost search jira          # look across every tapped registry
-boost install my-jira      # copy, link, lock — with a quality score attached
-boost doctor               # broken links, lock drift, stale taps
-boost doctor --json        # the same checks as a payload, for CI or an agent
+boost search debugging                # look across every tapped registry
+boost install systematic-debugging    # copy, link, lock — with a quality score attached
+boost doctor                          # broken links, lock drift, stale taps
+boost doctor --json                   # the same checks as a payload, for CI or an agent
 
 # hand the whole setup to a team:
 boost bundle dump > Boostfile     # everyone else runs: boost bundle install
@@ -506,9 +514,9 @@ crashing mid-draw.
 ## 81 commands, organized into 8 groups
 
 `boost --help` prints the full grouped list. For every flag of every command see
-[`docs/commands.html`](docs/commands.html); for a visual tour,
-[`docs/index.html`](docs/index.html); for how boost is put together internally,
-the C4 diagrams in [`docs/architecture/`](docs/architecture/README.md).
+[`docs/commands.html`](https://jonnyeclectic.github.io/boost/docs/commands.html); for a visual tour,
+[`docs/index.html`](https://jonnyeclectic.github.io/boost/); for how boost is put together internally,
+the C4 diagrams in [`docs/architecture/`](https://github.com/jonnyeclectic/boost/blob/main/docs/architecture/README.md).
 
 | Group | Commands |
 |---|---|
@@ -576,31 +584,32 @@ should show as Connected.
 
 ## Agent hooks and BMAD
 
-`boost hooks` manages hooks for Claude Code, Gemini CLI and Codex CLI —
-`settings.json` for the first two, `$CODEX_HOME/hooks.json` for Codex —
-translating between their event vocabularies and timeout units. `boost bmad on`
+`boost hooks` manages hooks for Claude Code, Gemini CLI and Codex CLI — in the
+project by default (`.claude/settings.json`, `.gemini/settings.json`,
+`.codex/hooks.json`), or with `--scope global` in `~/.claude/settings.json`,
+`~/.gemini/settings.json` and `$CODEX_HOME/hooks.json` — translating between their event vocabularies and timeout units. `boost bmad on`
 uses them to put the BMAD Method's personas in charge of every task, in one
 command with no Node and no network.
 
 ```bash
-boost hooks add SessionStart -c 'echo hello' -n greet --scope project
+boost hooks add SessionStart -c 'echo hello' -n greet
 boost hooks add SessionStart --host codex -c 'echo hello' -n greet
 boost bmad on
 ```
 
-See [docs/bmad.md](docs/bmad.md).
+See [docs/bmad.md](https://github.com/jonnyeclectic/boost/blob/main/docs/bmad.md).
 
 ## The boost style
 
 The visual identity behind the docs and demos ships as a small dependency-free
-design system in [`style/`](style/): the Aurora living-glass look, a
+design system in [`style/`](https://github.com/jonnyeclectic/boost/tree/main/style): the Aurora living-glass look, a
 cyan/violet/pink triad on a near-black ground. Drop
-[`style/boost.css`](style/boost.css) into any static page; see
-[`style/README.md`](style/README.md) for tokens and classes.
+[`style/boost.css`](https://github.com/jonnyeclectic/boost/blob/main/style/boost.css) into any static page; see
+[`style/README.md`](https://github.com/jonnyeclectic/boost/blob/main/style/README.md) for tokens and classes.
 
 The same palette runs in the terminal, in 24-bit color where the terminal
 advertises it, degrading to 16-color and then to plain text. The CLI palette is
-[test-locked](tests/unit/test_token_parity.py) to `style/boost.css` so the two
+[test-locked](https://github.com/jonnyeclectic/boost/blob/main/tests/unit/test_token_parity.py) to `style/boost.css` so the two
 cannot drift. Color follows the [NO_COLOR](https://no-color.org) convention plus
 a `BOOST_COLOR` override: set `BOOST_COLOR=never` to force plain output, or
 `always` to keep color through a pipe.
@@ -627,25 +636,27 @@ python3 tests/make_fixture.py /tmp/fixture-tap
 Every path under `~/.boost` and `~/.agents/skills` is resolved from `$HOME` at
 call time, which is what makes that sandboxing work.
 
-Four test layers are enforced, and `make check` runs all of them:
+Six gates are enforced, and `make check` runs all of them:
 
-| Layer | Gate |
+| Command | Gate |
 |---|---|
+| `make lint` | ruff, mypy, pyright, import-linter and the rest of the static tier — zero findings |
+| `make eval` | four retrieval floors on BM25 over 20 pinned real registries |
 | `make test` | ≥90% coverage of `boost_cli`, statements and branches |
 | `make smoke` | 183 checks through the actual `./boost` shim |
-| `make mutation` | ≥80% of ~9,900 mutants in `boost_cli/core` killed |
+| `make mutation` | ≥80% of the mutants in `boost_cli/core` killed |
 | `make evals` | metric floors on the search ranker, plus no significant regression |
 
-Search quality is the one thing the other three cannot assert: every test can
+Search quality is the one thing the test gates cannot assert: every test can
 pass while the ranker quietly gets worse. The eval harness is pure stdlib and
 fully offline, generating its own corpus so a metric that moves can only mean
-the ranker moved. See [`evals/README.md`](evals/README.md).
+the ranker moved. See [`evals/README.md`](https://github.com/jonnyeclectic/boost/blob/main/evals/README.md).
 
-[CONTRIBUTING.md](CONTRIBUTING.md) has dev setup, the full gate list, the
+[CONTRIBUTING.md](https://github.com/jonnyeclectic/boost/blob/main/CONTRIBUTING.md) has dev setup, the full gate list, the
 generated-file rules and the PR process. Start with
-[Good first tasks](CONTRIBUTING.md#good-first-tasks).
+[Good first tasks](https://github.com/jonnyeclectic/boost/blob/main/CONTRIBUTING.md#good-first-tasks).
 
 When something misbehaves, boost keeps a rotating log at
 `~/.boost/logs/boost.log` and writes a crash report on any unexpected error.
 `boost --verbose` or `boost --debug` turn up detail, `boost log --diagnostics`
-reads the trail, and [`docs/DEBUGGING.md`](docs/DEBUGGING.md) covers the rest.
+reads the trail, and [`docs/DEBUGGING.md`](https://github.com/jonnyeclectic/boost/blob/main/docs/DEBUGGING.md) covers the rest.

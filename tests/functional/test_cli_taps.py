@@ -568,7 +568,7 @@ class TestTaps:
     def test_empty_state_hint(self, boost, sandbox):
         r = boost("taps")
         assert "no taps configured" in r.out
-        assert "boost tap --defaults" in r.out
+        assert "boost quickstart" in r.out
 
     def test_url_under_home_contracts_to_tilde(self, boost, sandbox,
                                                fixture_tap_src):
