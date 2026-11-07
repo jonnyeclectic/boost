@@ -559,8 +559,15 @@ def renamed_twin(url: str, taps: list[Tap],
     Either way round — the old name tapped and the new one asked for, or the
     reverse. Matched on URLs, so a local or GitLab tap that merely carries a
     former name is not the catalogued repository. ``moved`` is :func:`renames`.
+
+    A repository that is neither a former name nor a renamed row has no twin,
+    so it returns before the scan: `plan_specs` asks once per spec, and
+    keying every tap for each of 587 rows over 460 taps cost 270 ms, against
+    8 ms with this return.
     """
     key = _source_key(url)
+    if key not in moved and key not in moved.values():
+        return None
     want = moved.get(key, key)
     return next((t for t in taps if _source_key(t.url) != key
                  and moved.get(_source_key(t.url), _source_key(t.url)) == want),

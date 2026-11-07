@@ -81,6 +81,16 @@ class TestRenamedTwin:
         assert registry.renamed_twin(
             GH + NEW, [new], registry.renames()) is None
 
+    def test_an_unrenamed_repository_does_not_scan_the_taps(self, catalogue):
+        """`plan_specs` asks once per spec over every tap; for the rows no
+        rename touches, keying each tap was all of its cost."""
+        class Untouchable:
+            @property
+            def url(self):
+                raise AssertionError("scanned the taps for an unrenamed row")
+        assert registry.renamed_twin(
+            GH + "plain/repo", [Untouchable()], registry.renames()) is None
+
     def test_another_forge_under_the_old_name_is_not_the_row(self, catalogue):
         lab = registry.Tap(name=OLD, url="https://gitlab.com/" + OLD)
         assert registry.renamed_twin(
