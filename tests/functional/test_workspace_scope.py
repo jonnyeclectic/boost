@@ -619,6 +619,59 @@ def test_dry_run_local_plans_the_mcp_json_record(boost, fixture_tap_src,
     assert not (repo / ".mcp.json").exists()
 
 
+# ── the last uninstall leaves no trace ──────────────────────────────────
+
+def _tree(repo):
+    return sorted(str(p.relative_to(repo)) for p in repo.rglob("*")
+                  if ".git" not in p.relative_to(repo).parts)
+
+
+def test_the_last_local_uninstall_removes_the_lock_and_its_dirs(boost, tapped,
+                                                                repo):
+    """THE BUG: removing the last --local skill left `.boost/skill-lock.json`
+    holding `{"skills": {}}` and five empty agent skills dirs."""
+    boost("install", "brainstorming", "--local")
+    res = boost("uninstall", "brainstorming", "--local", "-y")
+    assert _tree(repo) == []
+    assert "no project skills left — removed .boost/skill-lock.json" in res.out
+
+
+def test_without_git_the_lock_goes_and_its_guard_file_stays(boost, tapped,
+                                                             plain_dir):
+    # With no git dir the cross-process guard lives beside the lock, and a
+    # guard file is never deleted (util.file_lock), so `.boost/` keeps it.
+    boost("install", "brainstorming", "--local")
+    boost("uninstall", "brainstorming", "--local", "-y")
+    assert not projectlock.exists(plain_dir)
+    assert _tree(plain_dir) == [".boost", ".boost/skill-lock.json.lock"]
+
+
+def test_a_local_uninstall_keeps_the_lock_while_a_skill_remains(boost, tapped,
+                                                                repo):
+    boost("install", "brainstorming", "--local")
+    boost("install", "tdd-workflow", "--local")
+    res = boost("uninstall", "brainstorming", "--local", "-y")
+    assert list(projectlock.installed(repo)) == ["tdd-workflow"]
+    assert (repo / ".claude" / "skills" / "tdd-workflow").is_dir()
+    assert "no project skills left" not in res.out
+
+
+def test_the_last_local_uninstall_keeps_what_was_there_before(boost, tapped,
+                                                              repo):
+    # An empty skills dir the user made, and a dotdir holding their file:
+    # neither is boost's to remove.
+    (repo / ".claude" / "skills").mkdir(parents=True)
+    (repo / ".cursor").mkdir()
+    (repo / ".cursor" / "mcp.json").write_text("{}", encoding="utf-8")
+    boost("install", "brainstorming", "--local")
+    (repo / ".windsurf" / "skills" / "notes.txt").write_text(
+        "mine", encoding="utf-8")
+    boost("uninstall", "brainstorming", "--local", "-y")
+    assert _tree(repo) == [".claude", ".claude/skills", ".cursor",
+                           ".cursor/mcp.json", ".windsurf", ".windsurf/skills",
+                           ".windsurf/skills/notes.txt"]
+
+
 # ── sync ─────────────────────────────────────────────────────────────────
 
 def test_sync_diff_reports_a_missing_project_skill(boost, tapped, repo):

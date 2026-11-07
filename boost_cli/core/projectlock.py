@@ -21,9 +21,10 @@ someone's diff.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from pathlib import Path
 
 from ..errors import BoostError
@@ -265,9 +266,12 @@ def set_skill(base, name: str, entry: dict) -> None:
 def remove_skill(base, name: str) -> bool:
     """Drop ``name`` from the project lock; True if it was present.
 
-    When the last skill goes the file is left in place (empty) rather than
-    deleted — it is a tracked file in someone's repo, and removing it would show
-    up as a spurious deletion in their next ``git status``.
+    When the last skill goes this leaves the file in place (empty): it is a
+    row operation. ``store.uninstall_project`` then removes the empty file
+    through :func:`remove_if_empty`. It used to be kept on the grounds that
+    its deletion was spurious in ``git status``, but the same uninstall deletes
+    the skill's own copies from the repo, so the lock going with them is the
+    same change, and an untracked lock was left behind as litter.
 
     Refuses over a corrupt lock even though it reads as holding nothing:
     "not present" would be a false answer about a record boost cannot read.
@@ -283,3 +287,38 @@ def remove_skill(base, name: str) -> bool:
         del lock["skills"][name]
         return True
     return mutate(base, drop)
+
+
+#: The top-level keys every lock carries, which say nothing about a project.
+_BOOKKEEPING = frozenset({"skills", "updated", "version"})
+
+
+def remove_if_empty(base, owned: Collection[str] = ()) -> bool:
+    """Delete ``base``'s lock, and ``.boost/`` if that leaves it empty, when
+    the lock records no skill. True if the file was removed.
+
+    "Records nothing" is strict: ``skills`` is an empty object and every other
+    top-level key is bookkeeping or one of ``owned``, keys boost wrote about
+    things it has since removed. A key boost does not know keeps the file, and
+    so does one that does not parse, which :func:`read` would hand back as an
+    empty skeleton. Checked and deleted under :func:`mutate`'s guard, so an
+    install finishing in another process cannot lose its row to this.
+    ``.boost/`` stays when anything else is in it, such as the guard file of
+    a base with no git directory.
+    """
+    path = lock_path(base)
+    if not path.is_file():
+        return False
+    with util.file_lock(guard_path(base), what="the project lock",
+                        strict=False):
+        lock, _err = jsonstate.read_object(path)
+        if (lock is None or lock.get("skills") != {}
+                or not set(lock) <= _BOOKKEEPING | set(owned)):
+            return False
+        try:
+            path.unlink()
+        except OSError:
+            return False
+    with contextlib.suppress(OSError):
+        path.parent.rmdir()
+    return True

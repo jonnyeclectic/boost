@@ -1234,6 +1234,17 @@ def _rm_target(base, row: str) -> str:
     return util.shell_arg("%s/%s" % (base, row) if base else row)
 
 
+def _report_tidied(info: dict) -> None:
+    """Name what the last project skill's uninstall removed besides itself:
+    the empty lock, and the empty directories its installs created."""
+    gone = (["%s/%s" % (projectlock.LOCK_DIRNAME, projectlock.LOCK_FILENAME)]
+            if info.get("lock_removed") else [])
+    gone += ["%s/" % d for d in info.get("dirs_removed") or ()]
+    if gone:
+        out.dim("  no project skills left — removed %s" % ", ".join(gone),
+                wrap=True)
+
+
 def cmd_uninstall(argv: list[str]) -> int:
     ap = cliparse.parser(
         prog="boost uninstall",
@@ -1412,6 +1423,7 @@ def cmd_uninstall(argv: list[str]) -> int:
                 out.warn("%s left unchanged — remove %s's servers by hand"
                          % (mcpdecl.SIDECAR, name), wrap=True)
                 out.dim("  %s" % info["mcp_error"])
+            _report_tidied(info)
         elif kind == "skill":
             out.ok("removed %s" % _tilde(store.skill_store_dir(name)))
         # A rule/workflow never had a store dir to begin with — the

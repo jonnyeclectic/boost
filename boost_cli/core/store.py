@@ -2736,6 +2736,11 @@ def _load_sidecar(path: Path) -> tuple[dict | None, str | None]:
 #: Project-lock key set when boost's install is what created ``.mcp.json``.
 SIDECAR_CREATED_KEY = "mcp_sidecar_created"
 
+#: Project-lock key listing the directories a project skill install created
+#: on the way to its copies (``.claude``, ``.claude/skills``), relative to the
+#: base, so the last uninstall can remove the ones left empty.
+DIRS_CREATED_KEY = "dirs_created"
+
 
 def sidecar_style(text: str | None) -> tuple[str | int | None, str]:
     """``(indent, end)`` that re-serialize ``text`` the way it was written.
@@ -3858,6 +3863,8 @@ def _install_project_skill(entry: dict, force: bool = False,
                 hint="move it aside, or `boost install %s --local --force` to "
                      "overwrite it" % name)
 
+    # Before the copies, which create them: what is missing now is boost's.
+    fresh = missing_parents(resolved_base, [d for _agent, d in targets])
     materializations: list[dict] = []
     linked: list[str] = []
     # `narrow_project_agents` above refuses an empty set, so there is always a
@@ -3913,6 +3920,7 @@ def _install_project_skill(entry: dict, force: bool = False,
     # leave it pinned: the row is rebuilt from scratch, and a flag it does not
     # name is a pin `boost update` silently stops honouring.
     } | _declared_field(asked, existing) | project_carried_state(existing))
+    _record_created_dirs(resolved_base, fresh)
     journal.log("install", name, tap=entry["tap"], version=entry.get("version"),
                 scope=scopes.SCOPE_PROJECT, via=via)
 
@@ -3934,6 +3942,94 @@ def _install_project_skill(entry: dict, force: bool = False,
         res.mcp_recorded, res.mcp_error = record_project_mcp(
             resolved_base, res.mcp_servers, name)
     return res
+
+
+def missing_parents(base: Path, dests) -> list[str]:
+    """The directories strictly between ``base`` and each of ``dests`` that do
+    not exist yet, relative to ``base`` and sorted.
+
+    A dest outside ``base`` contributes nothing; the install refused it
+    already (:func:`scopes.ensure_in_base`).
+    """
+    fresh: set[str] = set()
+    for dest in dests:
+        for parent in Path(dest).parents:
+            if base not in parent.parents:
+                break       # reached `base`, or never was under it
+            if not os.path.lexists(parent):
+                fresh.add(scopes.relative_to_base(base, parent))
+    return sorted(fresh)
+
+
+def _record_created_dirs(base: Path, fresh: list[str]) -> None:
+    """Add ``fresh`` to the project lock's :data:`DIRS_CREATED_KEY`.
+
+    Best effort, like the sidecar's own marker: a lock that cannot take the
+    note costs a tidy uninstall, never the install."""
+    if not fresh:
+        return
+
+    def add(lock: dict) -> bool:
+        have = lock.get(DIRS_CREATED_KEY)
+        have = [d for d in have if isinstance(d, str)] \
+            if isinstance(have, list) else []
+        merged = sorted(set(have) | set(fresh))
+        if merged == have:
+            return False
+        lock[DIRS_CREATED_KEY] = merged
+        return True
+    with contextlib.suppress(OSError, BoostError):
+        projectlock.mutate(base, add)
+
+
+def remove_created_dirs(base: Path, recorded, legal: Collection[Path]
+                        ) -> list[str]:
+    """Remove the directories in ``recorded`` that are empty -> those removed.
+
+    ``recorded`` is :data:`DIRS_CREATED_KEY` out of a committed lock, so it is
+    input: a row is acted on only when it re-anchors inside ``base``, is an
+    ancestor below ``base`` of a path in ``legal`` (what a project install of
+    the skill writes), and is reached by its own spelling rather than through
+    a symlink. ``os.rmdir`` then removes only a directory that is empty, and
+    never a symlink. Deepest first, so ``.claude/skills`` goes before
+    ``.claude``.
+    """
+    if not isinstance(recorded, list):
+        return []
+    allowed = {p for target in legal for p in Path(target).parents
+               if Path(base) in p.parents}
+    removed: list[str] = []
+    rows = sorted((r for r in recorded if isinstance(r, str)),
+                  key=lambda r: len(PurePosixPath(r).parts), reverse=True)
+    for rel in rows:
+        path = scopes.resolve_in_base(base, rel)
+        if (path is None or path not in allowed or path.is_symlink()
+                or not scopes.parent_matches_spelling(base, rel)):
+            continue
+        try:
+            path.rmdir()
+        except OSError:
+            continue        # not empty, or already gone
+        removed.append(rel)
+    return removed
+
+
+def tidy_empty_project(base, legal: Collection[Path]) -> dict:
+    """Once the project lock holds no skill, remove what installs created.
+
+    The empty directories in :data:`DIRS_CREATED_KEY`, then the lock itself
+    (:func:`projectlock.remove_if_empty`). A project that still holds a skill
+    is left exactly as it is. A lock written before installs recorded their
+    directories names none, so those stay. Returns ``{"dirs_removed": [...],
+    "lock_removed": bool}``.
+    """
+    lock = projectlock.read(base)
+    if lock["skills"]:
+        return {"dirs_removed": [], "lock_removed": False}
+    dirs = remove_created_dirs(Path(base), lock.get(DIRS_CREATED_KEY), legal)
+    gone = projectlock.remove_if_empty(
+        base, owned=(DIRS_CREATED_KEY, SIDECAR_CREATED_KEY))
+    return {"dirs_removed": dirs, "lock_removed": gone}
 
 
 def project_mcp_skipped(record_mcp: bool | None, existing: dict | None) -> bool:
@@ -4253,8 +4349,12 @@ def uninstall_project(name: str, base=None) -> dict:
     # survives. Without this a skill tried once keeps launching its server for
     # every project that clones the repo.
     unregistered, mcp_error = forget_project_mcp(resolved_base, name)
+    # After the sidecar, which reads and edits the lock: the last skill out
+    # takes the empty lock and the empty dirs its installs created with it.
+    tidied = tidy_empty_project(resolved_base, legal)
     journal.log("uninstall", name, scope=scopes.SCOPE_PROJECT)
     return {"name": name, "unlinked": removed, "entry": entry,
+            **tidied,
             # How many paths actually came off disk, which `unlinked` does not
             # answer — see the `gone` note in the body.
             "removed_count": gone,
