@@ -38,6 +38,7 @@ from ..core import (
     localembed,
     lockfile,
     mcp,
+    mcpdecl,
     mcphost,
     paths,
     policy,
@@ -2095,16 +2096,104 @@ def _tool_install(args: dict):
     return "\n".join(lines), False
 
 
-def _install_lines(res: store.InstallResult, entry: dict) -> list[str]:
-    """One installed item's reply lines, scan warning included."""
+def _reach_lines(res: store.InstallResult) -> list[str]:
+    """Who the install reached. A rule names every file it wrote.
+
+    A rule install used to print "linked agents: claude-code, windsurf, …"
+    under the one path in ``res.dest``: measured over MCP, a rule landed in
+    five files every later session loads (CLAUDE.md, GEMINI.md, AGENTS.md
+    and two rules dirs) and the reply named one of them. The lock records
+    each write, so the reply reads them from there.
+    """
+    if res.kind == "rule":
+        rec = lockfile.get_rule(res.name) or {}
+        written = [str(m["path"]) for m in rec.get("materializations") or ()
+                   if isinstance(m, dict) and m.get("path")]
+        return (["standing instructions every session reads from now on, "
+                 "written into:"]
+                + ["  %s" % _tilde(w) for w in written or [str(res.dest)]]
+                + ["`boost uninstall %s` removes it from all of them"
+                   % res.name])
     # A project install copies rather than links — "linked agents" there
     # described a symlink that does not exist.
+    return ["%s: %s" % ("copied into this repository for"
+                        if res.scope == scopes.SCOPE_PROJECT
+                        and res.kind == "skill" else "linked agents",
+                        ", ".join(res.linked) or "none")]
+
+
+def _use_now_lines(res: store.InstallResult) -> list[str]:
+    """How to use what was just installed in THIS session.
+
+    No reply said, and boost_list's description promised installed items were
+    "usable this second". Whether a host loads a skill, command or context
+    file written after its session started was not verified for any host, so
+    the line points at the text, which is usable now on every host.
+    """
+    if res.kind == "skill":
+        return ["to use it now: follow the text boost_read returns for %s, "
+                "or read %s — whether this session's host loads a skill "
+                "installed after it started depends on the host"
+                % (res.name, _tilde(res.dest / "SKILL.md"))]
+    what = "command" if res.kind == "workflow" else "rule"
+    return ["to use it now: boost_read %s returns its text — whether this "
+            "session's host picks up a %s written after it started depends "
+            "on the host" % (res.name, what)]
+
+
+def _mcp_server_lines(res: store.InstallResult) -> list[str]:
+    """The MCP servers the item declares, and how each gets registered.
+
+    The CLI states them at install time and offers the `mcp add`; this reply
+    said nothing, so an agent reported success over a skill that fails later
+    for want of a server. boost_install never registers one itself —
+    registering a server is machine-wide, the user's call, so the line hands
+    the agent the exact command to put in front of them. A project install
+    records them in the repository's .mcp.json instead, and says which.
+    """
+    return [line for row in res.mcp_servers or ()
+            for line in _mcp_server_row(res, row)]
+
+
+def _mcp_server_row(res: store.InstallResult, row: dict) -> list[str]:
+    """One declared server: its command, and who registers it, or where."""
+    name, spec = row["name"], row.get("spec")
+    if not isinstance(spec, dict) or not mcpdecl.command_line(spec):
+        return ["needs MCP server %s (no command declared) — the user "
+                "installs it, then registers it with `boost mcp register` or "
+                "their agent's own `mcp add`" % name]
+    head = "needs MCP server %s: `%s` — " % (name, mcpdecl.command_line(spec))
+    if res.scope == scopes.SCOPE_PROJECT:
+        return [head + _project_mcp_note(res, name)]
+    return [head + "not registered, and registering it is machine-wide, so "
+            "ask the user to run this for each agent they use:",
+            *("  " + mcphost.shell_line(mcpdecl.register_argv(
+                name, spec, host=host, scope=res.scope))
+              for host in _mcp_offer_hosts())]
+
+
+def _project_mcp_note(res: store.InstallResult, name: str) -> str:
+    """What a project install did with one declared server's .mcp.json row."""
+    if name in res.mcp_recorded:
+        return ("recorded in this repository's %s; commit it to share it"
+                % mcpdecl.SIDECAR)
+    if res.mcp_error:
+        return "not recorded, %s left unchanged: %s" % (mcpdecl.SIDECAR,
+                                                       res.mcp_error)
+    return "already in this repository's %s" % mcpdecl.SIDECAR
+
+
+def _mcp_offer_hosts() -> list[str]:
+    """The agent CLIs on PATH, else every host — the CLI's offer list."""
+    return ([h for h in mcphost.hosts() if shutil.which(mcphost.cli(h))]
+            or mcphost.hosts())
+
+
+def _install_lines(res: store.InstallResult, entry: dict) -> list[str]:
+    """One installed item's reply lines, scan warning included."""
     lines = ["installed %s v%s from %s → %s"
              % (res.name, entry.get("version", "?"), entry["tap"], res.dest),
-             "%s: %s" % ("copied into this repository for"
-                         if res.scope == scopes.SCOPE_PROJECT
-                         and res.kind == "skill" else "linked agents",
-                         ", ".join(res.linked) or "none")]
+             *_reach_lines(res)]
     # Without this an agent that reads the canonical store — Gemini CLI — sees
     # only "linked agents: claude-code, windsurf, cursor, antigravity",
     # concludes the skill did not reach *it*, and goes back to reconstructing
@@ -2127,6 +2216,8 @@ def _install_lines(res: store.InstallResult, entry: dict) -> list[str]:
     # score, and "quality score: 0/100" told the agent a valid one scored zero.
     if res.kind == "skill":
         lines.append("quality score: %d/100" % res.score)
+    lines.extend(_mcp_server_lines(res))
+    lines.extend(_use_now_lines(res))
     if res.conflicts:
         lines.append("conflicts (left in place): %s" % ", ".join(res.conflicts))
     lines.extend("not %s: %s — ask the user to run %s, then `boost sync`"
@@ -2526,8 +2617,8 @@ REGISTRY.register(
     _tool_search)
 REGISTRY.register(
     "boost_list",
-    "The skills, rules and workflows already installed on this machine and "
-    "usable this second — capability you own and may not know you own. "
+    "The skills, rules and workflows already installed on this machine — "
+    "capability you own and may not know you own. "
     "Returns one line each: name, version, tap, a [rule] or [workflow] marker "
     "where it is not a skill, [pinned] where the version is held, and "
     "[quarantined] or [sidelined] where no agent loads it, then a "
@@ -2620,7 +2711,8 @@ REGISTRY.register(
     "agent's standing instructions (a managed block in its context file, or a "
     "file in its rules directory), which is the more invasive change because "
     "it applies to every session afterwards, not just when you reach for it. "
-    "Check the marker on the hit you are installing. By default it installs "
+    "Check the marker on the hit you are installing, and ask the user before "
+    "installing a rule. By default it installs "
     "for the user, on this machine; pass scope \"project\" to write real "
     "files into the repository this server runs in instead, for every agent "
     "that works there and for the team to commit — the reply names where it "
