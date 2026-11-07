@@ -164,6 +164,54 @@ class TestCatalogueSizeIsNotHardCoded:
                 assert int(n) == size, "%s says all %s; the catalogue is %d" % (
                     doc.name, n, size)
 
+    def test_the_docs_site_states_the_catalogue_size_the_data_has(self):
+        # The landing page said "spans 100+ registries" and the carousel
+        # "100+ classified registries" while `boost tap --catalog --dry-run`
+        # offered 515; the test above read only Markdown, so neither was
+        # checked. Same size as above: list-only rows link out and are never
+        # tapped.
+        data = json.loads((ROOT / "boost_cli" / "data" / "registries.json")
+                          .read_text(encoding="utf-8"))
+        size = sum(1 for r in data["registries"] if not r.get("list_only"))
+        stated = []
+        for doc in sorted((ROOT / "docs").glob("*.html")):
+            text = doc.read_text(encoding="utf-8")
+            stated += [(doc.name, int(n)) for n in re.findall(
+                r"spans\s+(\d+)\+?\s+registr"
+                r"|(\d+)\+?\s+classified\s+(?:GitHub\s+)?registr", text)
+                for n in n if n]
+        assert ("index.html", size) in stated, stated
+        assert [s for s in stated if s[1] != size] == [], (
+            "the catalogue is %d registries: %s" % (size, stated))
+
+
+class TestLandingPageStatTiles:
+    """The hero tiles are counts the code already holds."""
+
+    def _tile(self, label: str) -> int:
+        m = re.search(r"<b>(\d+)</b><span>%s" % label, INDEX)
+        assert m, "the landing page's %r stat tile is gone" % label
+        return int(m.group(1))
+
+    def test_agents_tile_counts_every_agent_boost_targets(self):
+        # It said 5 under a lede naming six.
+        from boost_cli.core import agents
+        assert self._tile("AI agents supported") == len(agents.DISPLAY)
+
+    def test_starter_registries_tile_counts_the_default_taps(self):
+        from boost_cli.core import config
+        assert self._tile("Starter registries") == len(config.DEFAULT_TAPS)
+
+    def test_nothing_claims_boost_ships_pre_tapped(self):
+        # A fresh install has no taps: `boost doctor` on an empty HOME says
+        # "no registries tapped". `boost quickstart` is what taps them.
+        assert "pre-tapped" not in INDEX.lower()
+
+    def test_the_landing_page_shows_how_to_wire_agents(self):
+        # README showed `boost mcp register`; the landing page never did.
+        assert INDEX.count("mcp</span> register") >= 2
+        assert "<code>boost mcp register</code>" in INDEX
+
 
 #: The README is also the PyPI long description, and pypi.org resolves a
 #: relative target against /project/boost-skill-cli/ — where it serves the
