@@ -81,10 +81,24 @@ jobs:
           egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          fetch-depth: 0    # tags for setuptools-scm version resolution
           persist-credentials: false
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
+      - name: install boost the way the README does (pipx)
+        # The tape types `boost`, so the GIF shows whichever boost is on PATH.
+        # The tape used to put this checkout's ./boost shim there, and the
+        # last frame (held for 4 s) was `boost doctor` printing the
+        # source-checkout hint for the [rag] extra, runner paths included:
+        # `/opt/hostedtoolcache/Python/3.12.16/x64/bin/python3 -m pip install
+        # -e '/home/runner/work/boost/boost[rag]'`. Under pipx the same hint is
+        # the one a reader gets: `pipx inject boost-skill-cli "...[rag]"`.
+        # Same steps as ci.yml's end-user pipx install.
+        run: |
+          python -m pip -q install pipx
+          pipx install .
+          pipx environment --value PIPX_BIN_DIR >> "$GITHUB_PATH"
       - name: install the recorder toolchain (ffmpeg, ttyd, vhs)
         # charmbracelet/vhs-action is gone rather than pinned forward. Its
         # installLatestFfmpeg() scans BtbN/FFmpeg-Builds' *latest* release for
