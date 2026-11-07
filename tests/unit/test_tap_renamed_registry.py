@@ -123,6 +123,16 @@ class TestPlanSkipsAFormerName:
         assert row["tapped_as"] == NEW
         assert "renamed" not in row
 
+    @pytest.mark.parametrize("asked", [NEW, OLD])
+    def test_both_names_held_is_a_plain_name_match(self, sandbox, catalogue,
+                                                   asked):
+        """A machine the old `tap --catalog` gave both clones: the name that
+        holds the spec answers, and nothing calls it a rename of itself."""
+        _rows(OLD, NEW)
+        [row] = registry.plan_specs([asked])
+        assert row["tapped_as"] == asked
+        assert "renamed" not in row
+
 
 class TestTapCommand:
     def test_add_refuses_the_new_name(self, sandbox, catalogue, no_clone):
@@ -134,11 +144,23 @@ class TestTapCommand:
             % (NEW, OLD))
         assert ei.value.hint == "`boost update %s` to refresh it" % OLD
 
+    def test_add_of_a_url_names_the_tap_not_the_url(self, sandbox, catalogue,
+                                                    no_clone):
+        _rows(OLD)
+        with pytest.raises(BoostError) as ei:
+            registry.add(GH + NEW + ".git")
+        assert ei.value.message == (
+            "%s already tapped as %s (one repository, renamed upstream)"
+            % (NEW, OLD))
+
     def test_add_at_a_commit_names_the_held_tap(self, sandbox, catalogue,
                                                 no_clone):
         _rows(OLD)
         with pytest.raises(BoostError) as ei:
             registry.add(NEW, at="a" * 40)
+        assert ei.value.message == (
+            "%s already tapped as %s (one repository, renamed upstream)"
+            % (NEW, OLD))
         assert ei.value.hint.startswith("`boost untap %s`" % OLD)
 
     def test_tap_new_name_skips_and_says_why_once(self, sandbox, catalogue,
