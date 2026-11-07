@@ -171,8 +171,10 @@ def _offer_mcp(res: store.InstallResult, no_mcp: bool = False) -> None:
     _list_mcp_rows(rows)
     wirable = mcpdecl.registrable(rows)
     if not wirable:
-        # Name-only declarations: boost will not invent a command line.
-        out.dim("  install these yourself, then `boost mcp register`", wrap=True)
+        # Name-only declarations: boost will not invent a command line, and
+        # `boost mcp register` registers boost's own server, never a skill's.
+        out.dim("  boost cannot register these — install these yourself and "
+                "add them with your agent's own `mcp add`", wrap=True)
         return
     _offer_registration(wirable, res.scope)
 
@@ -286,10 +288,12 @@ def _offer_mcp_batch(results: list, no_mcp: bool = False) -> None:
     wirable = mcpdecl.registrable(rows)
     named = [r["name"] for r in rows if r not in wirable]
     if named:
-        # Name-only declarations: boost will not invent a command line.
-        out.dim("  %s: install %s yourself, then `boost mcp register`"
-                % (", ".join(named), "it" if len(named) == 1 else "them"),
-                wrap=True)
+        # Name-only declarations: boost will not invent a command line, and
+        # `boost mcp register` registers boost's own server, never a skill's.
+        them = "it" if len(named) == 1 else "them"
+        out.dim("  %s: boost cannot register %s — install %s yourself and "
+                "add %s with your agent's own `mcp add`"
+                % (", ".join(named), them, them, them), wrap=True)
     if wirable:
         _offer_registration(wirable, results[0].scope)
 

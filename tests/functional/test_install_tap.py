@@ -10,6 +10,7 @@ workflows are never swept in.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 
@@ -299,7 +300,10 @@ def registrations(monkeypatch):
 
 
 def _mcp_decline_lines(out):
-    return [ln.strip() for ln in out.splitlines() if "mcp add" in ln]
+    # A command line, `<host> mcp add …` — not prose that names `mcp add`,
+    # which the name-only hint does and which can fold onto its own line.
+    return [s for s in (ln.strip() for ln in out.splitlines())
+            if re.match(r"\S+ mcp add ", s)]
 
 
 def test_y_does_not_also_register_mcp_servers(boost, fixture_tap_src,
@@ -395,7 +399,12 @@ def test_a_tap_asks_about_its_servers_once_after_the_installs(
         "claude mcp add srv-a --scope user -- touch a",
         "claude mcp add srv-b --scope user -- touch b"]
     assert "(needs-a, needs-b)" in r.out
-    assert "github: install it yourself, then `boost mcp register`" in r.out
+    flat = " ".join(r.out.split())
+    assert ("github: boost cannot register it — install it yourself and add "
+            "it with your agent's own `mcp add`") in flat
+    # `boost mcp register` registers boost's own server and nothing else;
+    # naming it here sent the user to a command that cannot add github.
+    assert "boost mcp register" not in flat
 
 
 def test_a_typed_y_registers_every_server_of_the_run_once(
