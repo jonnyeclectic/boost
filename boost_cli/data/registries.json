@@ -1,8 +1,8 @@
 {
   "generated_note": "Curated skill/rule/workflow registries for boost. est_items are research estimates; verify by tapping. list_only repos are index/awesome lists that link out.",
-  "count": 588,
-  "est_items_total": 44801,
-  "est_items_scannable": 38663,
+  "count": 587,
+  "est_items_total": 44643,
+  "est_items_scannable": 38505,
   "registries": [
     {
       "name": "Aaronontheweb/dotnet-cursor-rules",
@@ -3272,17 +3272,6 @@
       "confidence": "high",
       "list_only": false,
       "curated": true
-    },
-    {
-      "name": "microsoft/power-platform-skills",
-      "url": "https://github.com/microsoft/power-platform-skills",
-      "type": "skill",
-      "category": "backend",
-      "focus": "Official Power Platform: canvas, code and model-driven apps, Power Pages, Dataverse, Power Automate flows, connectors; most items expect the plugin's own files (129 skills, 29 workflows)",
-      "est_items": 158,
-      "confidence": "med",
-      "list_only": false,
-      "curated": false
     },
     {
       "name": "microsoft/skills",

@@ -673,16 +673,17 @@ SKILLS = [
 # JimLiu/baoyu-skills (fills X, Weibo and WeChat posts in the user's own
 # Chrome over CDP, "which avoids anti-bot detection" per its Weibo skill, and
 # two items call
-# reverse-engineered Gemini and X APIs); and five repos whose items do not run
+# reverse-engineered Gemini and X APIs); and six repos whose items do not run
 # once copied out
 # of their own installer: github/spec-kit (its core commands carry `{SCRIPT}`
 # placeholders that `specify init` fills), gotalab/cc-sdd (253 of 282 item
 # files carry `{{KIRO_DIR}}` for `npx cc-sdd` to fill), openai/codex-plugin-cc
 # (10 of 12 items read ${CLAUDE_PLUGIN_ROOT}, mostly to run its .mjs scripts),
 # google/elephant-goldfish-model (every skill opens by reading
-# ${CLAUDE_PLUGIN_ROOT}/docs/claude.md) and gmickel/flow-next (67 of 117 items
-# call the plugin's `flowctl`). BMAD-METHOD installs through
-# `boost bmad install`; msitarzewski/agency-agents waits for the scanner to see
+# ${CLAUDE_PLUGIN_ROOT}/docs/claude.md), gmickel/flow-next (67 of 117 items
+# call the plugin's `flowctl`) and microsoft/power-platform-skills (111 of 162
+# item files at 9d26fde0 name the plugin root, 107 of them as ${PLUGIN_ROOT}).
+# BMAD-METHOD installs through `boost bmad install`; msitarzewski/agency-agents waits for the scanner to see
 # its persona files (17 of ~310 indexed today).
     ("openai/plugins", "meta", "Official OpenAI Codex plugin marketplace: vendor plugins (Adobe, Airtable, Canva, Figma, Linear, Stripe, Supabase, Vercel, Zoom) plus life-science and data-analysis packs (535 skills, 51 workflows)", 586, "high"),
     ("cursor/plugins", "meta", "Cursor's official plugins: advisor, pstack, harness and team-kit skills and subagents, plus third-party MCP routing packs (137 skills, 5 rules, 14 workflows)", 156, "high"),
@@ -709,10 +710,6 @@ SKILLS = [
     ("data-goblin/power-bi-agentic-development", "data", "Power BI and Fabric: DAX, TMDL, PBIP, Power Query, Deneb and SVG visuals, semantic-model review (35 skills, 10 workflows)", 45, "med"),
     ("launchdarkly/ai-tooling", "devops", "Official LaunchDarkly: flag create and cleanup, guarded rollouts, experiments, metrics, AI Configs (56 skills, 1 workflows)", 57, "high"),
     ("sanity-io/agent-toolkit", "backend", "Official Sanity CMS: content modeling, Portable Text, schema deploys, migrations, Studio upgrades, typegen (10 skills, 4 workflows)", 14, "high"),
-    # Items named canvas-app-planner, add-dataverse, add-sharepoint, build-flow,
-    # plan-alm: low-code apps over Dataverse, beside the other BaaS rows. 111 of
-    # its 162 item files reference ${PLUGIN_ROOT}, so most expect the plugin.
-    ("microsoft/power-platform-skills", "backend", "Official Power Platform: canvas, code and model-driven apps, Power Pages, Dataverse, Power Automate flows, connectors; most items expect the plugin's own files (129 skills, 29 workflows)", 158, "med"),
     ("HexRaysSA/claude-marketplace", "security", "Official Hex-Rays IDA Pro: IDA Domain API scripting, plugin development and packaging, an IDA expert agent (4 skills, 2 workflows)", 6, "high"),
     ("fal-ai-community/skills", "general", "fal.ai generative media: image, video and audio models, prompting, character and product shots, ad and reel production (36 skills)", 36, "high"),
     ("EpicGames/unreal-engine-skills-for-claude-code-plugin", "general", "Official Epic Games: Unreal Engine skill, Unreal MCP, toolset creation (3 skills)", 3, "high"),

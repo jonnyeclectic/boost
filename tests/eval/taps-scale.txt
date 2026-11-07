@@ -12,9 +12,9 @@
 # fail. It is A scale, not THE scale: hit@1 decays continuously with corpus
 # size and never plateaus, so no size here can be canonical.
 #
-# 109 distractor registries, 20,076 est items (the curated list's own estimate).
+# 109 distractor registries, 20,035 est items (the curated list's own estimate).
 # est_items under-reports by about 2.5x against a real install, so that
-# projects to roughly 50,967 actual entries — a projection, not a measurement.
+# projects to roughly 50,862 actual entries — a projection, not a measurement.
 # The real counts are written in by `eval_corpus.py --refresh`, which is
 # also what pins these rows. Regenerating KEEPS any pin already here, so
 # --check verifies the selection, not the pins.
@@ -139,24 +139,24 @@ aws/agent-toolkit-for-aws
 wshobson/commands
 nexscope-ai/eCommerce-Skills
 0xSteph/pentest-ai-agents
-microsoft/power-platform-skills
-glittercowboy/taches-cc-resources
 cursor/plugins
-aiwonglab/claude_code_agents
+glittercowboy/taches-cc-resources
 claude-office-skills/skills
-CloudAI-X/claude-workflow-v2
+aiwonglab/claude_code_agents
 mohitmishra786/low-level-dev-skills
-trailofbits/skills
+CloudAI-X/claude-workflow-v2
 jabrena/plinth
-cloudflare/agents
+trailofbits/skills
 JetBrains/skills
-pluginagentmarketplace/custom-plugin-nextjs
+cloudflare/agents
 aaron-he-zhu/aaron-marketing-skills
-syahiidkamil/Software-Engineer-AI-Agent-Atlas
+pluginagentmarketplace/custom-plugin-nextjs
 ThibautBaissac/rails_ai_agents
-alirezarezvani/claude-code-skill-factory
+syahiidkamil/Software-Engineer-AI-Agent-Atlas
 Owl-Listener/designer-skills
-datopian/portaljs
+alirezarezvani/claude-code-skill-factory
 rampstackco/claude-skills
-dl-ezo/claude-code-sub-agents
+datopian/portaljs
 MengTo/Skills
+dl-ezo/claude-code-sub-agents
+40RTY-ai/shopify-admin-skills
