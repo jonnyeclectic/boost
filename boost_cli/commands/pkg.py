@@ -234,16 +234,27 @@ def _merge_mcp_rows(results: list) -> tuple[list[dict], dict, list[tuple]]:
     Keyed by server name, because a host holds one registration per name: a
     second skill naming the same server with another command cannot be
     registered beside the first, so it is named rather than offered.
+
+    Only two runnable declarations can disagree. A name-only one (``mcp:
+    github`` in frontmatter) states a need and no command, so it neither
+    conflicts with a runnable spec nor shadows one: the first skill to give
+    a command is the one offered, whichever order the skills ran in.
     """
+    from ..core import mcpdecl
     rows: dict[str, dict] = {}
     needed_by: dict[str, list[str]] = {}
     differs: list[tuple[str, str]] = []
     for res in results:
         for row in res.mcp_servers:
-            first = rows.setdefault(row["name"], row)
-            needed_by.setdefault(row["name"], []).append(res.name)
-            if first is not row and first["spec"] != row["spec"]:
-                differs.append((res.name, row["name"]))
+            name = row["name"]
+            needed_by.setdefault(name, []).append(res.name)
+            first = rows.get(name)
+            runnable = bool(mcpdecl.registrable([row]))
+            if first is None or (runnable
+                                 and not mcpdecl.registrable([first])):
+                rows[name] = row        # keeps the name's first-seen slot
+            elif runnable and first["spec"] != row["spec"]:
+                differs.append((res.name, name))
     return list(rows.values()), needed_by, differs
 
 

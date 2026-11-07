@@ -444,6 +444,41 @@ def test_a_server_two_skills_spell_differently_is_named_not_offered(
     assert registrations == ["srv-a", "srv-b"]
 
 
+@pytest.mark.parametrize(("named", "runner"), [
+    ("a-names-gh", "b-runs-gh"),    # the name-only declaration runs first
+    ("b-names-gh", "a-runs-gh"),    # the runnable one runs first
+])
+def test_a_name_only_declaration_never_shadows_a_runnable_one(
+        boost, fixture_tap_src, tmp_path, monkeypatch, registrations, named,
+        runner):
+    # `mcp: github` states a need and no command; the other skill ships the
+    # command. Neither "differs" from the other, and the command is offered
+    # whichever skill came first.
+    md = "---\nname: %s\ndescription: d.\nversion: 1.0.0\n%s---\n\nBody.\n"
+    boost("tap", _variant(fixture_tap_src, tmp_path / "gh", {
+        "skills/%s/SKILL.md" % named: md % (named, "mcp: github\n"),
+        "skills/%s/SKILL.md" % runner: md % (runner, ""),
+        "skills/%s/.mcp.json" % runner: _sidecar(github="gh"),
+        "skills/needs-a/SKILL.md": md % ("needs-a", ""),
+        "skills/needs-a/.mcp.json": _sidecar(**{"srv-a": "a"}),
+    }))
+    asked = _typed(monkeypatch, "n")
+    r = boost("install", _tap_name(), "-y")
+    assert len(asked) == 1
+    flat = " ".join(r.out.split())
+    assert "different command" not in flat
+    assert "install it yourself" not in flat
+    assert "no command declared" not in flat
+    assert "github `touch gh` (%s)" % ", ".join(sorted([named, runner])) in flat
+    assert "claude mcp add github --scope user -- touch gh" in \
+        _mcp_decline_lines(r.out)
+    registrations.clear()
+    boost("uninstall", named, runner, "needs-a", "-y")
+    _typed(monkeypatch, "y")
+    boost("install", _tap_name(), "-y")
+    assert sorted(registrations) == ["github", "srv-a"]
+
+
 def test_max_skills_is_weighed_across_the_whole_tap(boost, tapped):
     boost("policy", "set", "max_skills", "2")
     r = boost("install", _tap_name())
