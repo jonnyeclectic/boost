@@ -1590,15 +1590,9 @@ NOT ALREADY CARDED, but read the existing card first.
       </article>
 
       <article class="cap rcard" id="mcp-offer-once-per-install-run">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">MCP · UX</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">MCP · UX</span></div>
         <h3><code>install &lt;tap&gt;</code> asks about MCP servers once per skill, not once per run</h3>
-        <p><code>_offer_mcp</code> runs from <code>_report_result</code>, once for each installed item. So a tap
-whose skills declare MCP servers asks <em>register N servers…?</em> once per declaring skill, partway
-through the install output, after <code>-y</code> has already settled the skill list.
-
-<b>Fix.</b> Collect the declared servers across the run and ask once at the end. The question lists
-every server's command line, and a decline prints every <code>&lt;host&gt; mcp add</code> line. A
-single-skill install reads the same as it does today.</p>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/mcp-offer-once-per-install-run.md">Write-up &middot; mcp-offer-once-per-install-run.md</a></p>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Med</b></span>

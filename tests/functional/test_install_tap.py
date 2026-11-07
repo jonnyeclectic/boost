@@ -343,6 +343,107 @@ def test_assume_yes_still_registers_them(boost, fixture_tap_src, tmp_path,
     assert registrations == ["srv"]
 
 
+# ── one MCP question per run, not one per declaring skill ───────────────────
+
+def _sidecar(**servers):
+    return json.dumps({"mcpServers": {
+        name: {"command": "touch", "args": [arg]}
+        for name, arg in servers.items()}})
+
+
+def _mcp_tap_three(fixture_tap_src, dest, b_srv_a="a"):
+    """Two skills that declare runnable servers (both name srv-a) and one that
+    names a server with no command."""
+    md = "---\nname: %s\ndescription: d.\nversion: 1.0.0\n%s---\n\nBody.\n"
+    return _variant(fixture_tap_src, dest, {
+        "skills/needs-a/SKILL.md": md % ("needs-a", ""),
+        "skills/needs-a/.mcp.json": _sidecar(**{"srv-a": "a"}),
+        "skills/needs-b/SKILL.md": md % ("needs-b", ""),
+        "skills/needs-b/.mcp.json": _sidecar(**{"srv-b": "b",
+                                                "srv-a": b_srv_a}),
+        "skills/names-gh/SKILL.md": md % ("names-gh", "mcp: github\n"),
+    })
+
+
+def _typed(monkeypatch, answer):
+    from boost_cli.core import output
+    asked = []
+    monkeypatch.delenv("BOOST_ASSUME_YES", raising=False)
+    monkeypatch.setattr(output, "stdin_is_tty", lambda *a: True)
+    monkeypatch.setattr("builtins.input",
+                        lambda prompt: asked.append(prompt) or answer)
+    return asked
+
+
+def test_a_tap_asks_about_its_servers_once_after_the_installs(
+        boost, fixture_tap_src, tmp_path, monkeypatch, registrations):
+    boost("tap", _mcp_tap_three(fixture_tap_src, tmp_path / "mcp3"))
+    asked = _typed(monkeypatch, "n")
+    r = boost("install", _tap_name(), "-y")
+    assert len(asked) == 1, asked
+    assert "register 2 servers with Claude Code, for every project" in asked[0]
+    assert registrations == []
+    # Every server, once, after the last skill's own report.
+    lines = r.out.splitlines()
+    last_heading = max(i for i, ln in enumerate(lines)
+                       if ln.startswith("==> ") and "(" in ln)
+    block = lines.index(next(ln for ln in lines
+                             if "3 skills need 3 MCP servers" in ln))
+    assert block > last_heading
+    assert "needs one MCP" not in r.out and "needs 1 MCP" not in r.out
+    assert _mcp_decline_lines(r.out) == [
+        "claude mcp add srv-a --scope user -- touch a",
+        "claude mcp add srv-b --scope user -- touch b"]
+    assert "(needs-a, needs-b)" in r.out
+    assert "github: install it yourself, then `boost mcp register`" in r.out
+
+
+def test_a_typed_y_registers_every_server_of_the_run_once(
+        boost, fixture_tap_src, tmp_path, monkeypatch, registrations):
+    boost("tap", _mcp_tap_three(fixture_tap_src, tmp_path / "mcp3"))
+    asked = _typed(monkeypatch, "y")
+    boost("install", _tap_name(), "-y")
+    assert len(asked) == 1
+    assert registrations == ["srv-a", "srv-b"]
+
+
+def test_y_answers_the_list_and_not_the_batched_offer(
+        boost, fixture_tap_src, tmp_path, monkeypatch, registrations):
+    boost("tap", _mcp_tap_three(fixture_tap_src, tmp_path / "mcp3"))
+    monkeypatch.delenv("BOOST_ASSUME_YES", raising=False)
+    r = boost("install", _tap_name(), "-y")
+    assert registrations == []
+    assert r.out.count("skipped — run these yourself") == 1
+    assert "BOOST_ASSUME_YES" not in r.out + r.err
+
+
+def test_assume_yes_answers_the_batched_offer(boost, fixture_tap_src,
+                                              tmp_path, registrations):
+    boost("tap", _mcp_tap_three(fixture_tap_src, tmp_path / "mcp3"))
+    boost("install", _tap_name())
+    assert registrations == ["srv-a", "srv-b"]
+
+
+def test_no_mcp_silences_the_batched_offer(boost, fixture_tap_src, tmp_path,
+                                           monkeypatch, registrations):
+    boost("tap", _mcp_tap_three(fixture_tap_src, tmp_path / "mcp3"))
+    asked = _typed(monkeypatch, "y")
+    r = boost("install", _tap_name(), "-y", "--no-mcp")
+    assert asked == [] and registrations == []
+    assert "MCP server" not in r.out
+
+
+def test_a_server_two_skills_spell_differently_is_named_not_offered(
+        boost, fixture_tap_src, tmp_path, monkeypatch, registrations):
+    boost("tap", _mcp_tap_three(fixture_tap_src, tmp_path / "mcp3",
+                                b_srv_a="other"))
+    _typed(monkeypatch, "y")
+    r = boost("install", _tap_name(), "-y")
+    assert "needs-b declares srv-a with a different command" in r.out
+    # The first declaration is the one registered, once.
+    assert registrations == ["srv-a", "srv-b"]
+
+
 def test_max_skills_is_weighed_across_the_whole_tap(boost, tapped):
     boost("policy", "set", "max_skills", "2")
     r = boost("install", _tap_name())
