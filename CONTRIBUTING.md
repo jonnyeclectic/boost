@@ -116,21 +116,40 @@ list, and neither should be added to it.
 
 ## The gates (CI runs all of these)
 
+`make check` runs six of them, the same six the README lists:
+
 | Command | Gate |
 |---|---|
+| `make lint` | the static tier, zero findings — see below |
+| `make eval` | four retrieval floors on BM25 over 20 pinned real registries (taps them over the network on the first run) |
+| `make evals` | metric floors on the hermetic golden set, plus no significant regression vs `evals/baseline.json` |
 | `make test` | unit + functional suites, **≥90% coverage** (statements + branches) |
-| `make patch-coverage` | changed-line coverage vs `main`, **≥80% of the diff** (PRs) |
-| `bash tests/smoke.sh` | 183 end-to-end checks through the real `./boost` shim |
-| `make bdd` | the Gherkin suite — 11 features, 57 scenarios (needs the `[bdd]` extra) |
+| `make smoke` | 183 end-to-end checks through the real `./boost` shim |
 | `make mutation` | mutmut over `boost_cli/core`, **≥80% mutants killed** |
-| `ruff check boost_cli tests` | lint, zero findings |
-| `mypy` | type check, zero errors |
-| `pyright` | second type checker over `core/` — None-flow & narrowing, zero errors |
-| `lint-imports` | layering: `core/` imports no `commands/`/`cli`; CLI depends inward |
-| `vulture` | dead-code radar: no unused imports / unreachable code (confidence ≥80) |
-| `xenon` | complexity ratchet: aggregate cyclomatic complexity can't regress (avg ≤B) |
-| `refurb boost_cli` | modernization smells the ruff families miss, zero findings |
-| `scripts/lock_toolchain.py --check` | the hash-pinned toolchain matches its `.in` declarations |
+
+CI also requires two that `make check` leaves out, because each needs
+something a plain checkout lacks:
+
+| Command | Gate |
+|---|---|
+| `make patch-coverage` | changed-line coverage vs `origin/main`, **≥80% of the diff** (needs a branch) |
+| `make bdd` | the Gherkin suite — 11 features, 57 scenarios (needs the `[bdd]` extra) |
+
+`make lint` is ruff, mypy, pyright (None-flow and narrowing in `core/`),
+lint-imports (`core/` imports no `commands/` or `cli`), vulture (dead code,
+confidence ≥80), xenon (complexity can't regress past average B), interrogate,
+refurb, codespell, actionlint and zizmor, then the `--check` mode of every
+generator and lock (`build_registries.py`, `build_roadmap.py`,
+`build_command_reference.py`, `build_vex.py`, `lock_toolchain.py`,
+`evals/make_golden.py`), the accessibility, anchor and required-checks audits,
+and the page, import and perf budgets.
+
+Opt-in, and in neither `make check` nor the required checks:
+`make eval-natural` (CI runs it as an advisory step), `make eval-ai`,
+`make eval-rec` and `make eval-tools` (need an LLM host or key),
+`make eval-stats` and `make eval-explain` (need the `[eval]` extra),
+`make evals-online` (network, reported and never gated), and `make bench` and
+`make fuzz`.
 
 ## Sign your commits (DCO)
 

@@ -49,6 +49,36 @@ def test_readme_table_has_a_row_per_gate():
     assert sorted(rows) == sorted(gates)
 
 
+def _contributing_gates() -> str:
+    text = _read("CONTRIBUTING.md")
+    m = re.search(r"^## The gates \(CI runs all of these\)$(.*?)^## ",
+                  text, re.M | re.S)
+    assert m, "CONTRIBUTING.md lost its gate section"
+    return m.group(1)
+
+
+def test_contributing_lists_every_check_gate():
+    # Its table named test, smoke and mutation and spelled lint out tool by
+    # tool, but had no row for `eval` or `evals`, both of which `make check`
+    # and CI run.
+    section = _contributing_gates()
+    gates = _check_gates()
+    assert "`make check` runs %s of them" % _WORDS[len(gates)] in section
+    rows = re.findall(r"^\| `make ([a-z-]+)` \|", section, re.M)
+    assert [g for g in gates if g not in rows] == []
+
+
+def test_contributing_rows_outside_check_are_required_in_ci():
+    # The heading says CI runs all of these, so a row `make check` does not
+    # run has to be a check CI requires, under the same name.
+    required = {line.strip() for line in _read(".github/required-checks.txt")
+                .splitlines() if line.strip() and not line.startswith("#")}
+    rows = re.findall(r"^\| `make ([a-z-]+)` \|", _contributing_gates(), re.M)
+    extra = [r for r in rows if r not in _check_gates()]
+    assert extra, "CONTRIBUTING.md no longer names the CI-only gates"
+    assert [r for r in extra if r not in required] == []
+
+
 def test_pr_template_checklist_names_every_gate():
     m = re.search(r"`make check` passes locally \(([^)]*)\)",
                   _read(".github/PULL_REQUEST_TEMPLATE.md"))
