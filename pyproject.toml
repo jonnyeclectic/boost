@@ -17,7 +17,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "boost-skill-cli"
 dynamic = ["version"]
-description = "boost — Homebrew for AI coding skills"
+description = "Package manager for AI coding-agent skills, rules and workflows: Claude Code, Cursor, Windsurf, Gemini CLI, Antigravity CLI and Codex"
 readme = "README.md"
 requires-python = ">=3.12"
 # PEP 639: an SPDX expression, not the deprecated table form. When a
@@ -27,7 +27,7 @@ requires-python = ">=3.12"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
 authors = [{name = "Jonathan Reyes"}]
-keywords = ["ai", "skills", "package-manager", "claude-code", "cursor", "windsurf", "cli"]
+keywords = ["ai", "skills", "agent-skills", "package-manager", "claude-code", "cursor", "windsurf", "gemini-cli", "antigravity", "codex", "mcp", "cursor-rules", "cli"]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Environment :: Console",
@@ -44,7 +44,9 @@ classifiers = [
 
 [project.urls]
 Homepage = "https://github.com/jonnyeclectic/boost"
-Repository = "https://github.com/jonnyeclectic/boost"
+Documentation = "https://jonnyeclectic.github.io/boost/"
+Source = "https://github.com/jonnyeclectic/boost"
+Issues = "https://github.com/jonnyeclectic/boost/issues"
 Changelog = "https://github.com/jonnyeclectic/boost/releases"
 
 [project.optional-dependencies]
