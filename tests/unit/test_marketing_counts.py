@@ -9,9 +9,11 @@ said 78, while `COMMANDS` held 78; the mutation count was ~2,600 against a real
 it was describing earned.
 
 Only counts derivable from the code are asserted. Numbers that come from
-somewhere else (how many skills the tapped registries expose, say) are marketing
+somewhere else (how many skills a user's own taps expose, say) are marketing
 estimates, not facts this repo can check, and pinning them here would be a test
-that lies about what it proves.
+that lies about what it proves. The catalogue's item count is the exception:
+boost_cli/data/registries.json records it as `est_items_scannable`, so a doc
+that states one is held to that figure.
 """
 from __future__ import annotations
 
@@ -195,6 +197,25 @@ class TestCatalogueSizeIsNotHardCoded:
         said = int(m.group(1).replace(",", ""))
         assert abs(said - data["est_items_scannable"]) <= 0.1 * data["est_items_scannable"]
 
+    def test_the_docs_site_item_counts_sit_at_or_under_the_data(self):
+        # The landing page's tile said "70,000+ Discoverable assets" and
+        # langchain.html "70,000+ retrievable procedures", against an
+        # est_items_scannable of 35,466. "N+" claims a floor, so N may not
+        # exceed the data; and like the README's estimate it may sit no more
+        # than 10% under it, or it has gone stale the other way.
+        data = json.loads((ROOT / "boost_cli" / "data" / "registries.json")
+                          .read_text(encoding="utf-8"))
+        size = data["est_items_scannable"]
+        stated = []
+        for doc in [ROOT / "README.md", *sorted((ROOT / "docs").glob("*.html"))]:
+            text = doc.read_text(encoding="utf-8")
+            stated += [(doc.name, int(n.replace(",", ""))) for n in re.findall(
+                r"(\d{1,3}(?:,\d{3})+)\+\s*(?:</b><span>)?\s*(?:[A-Za-z]+\s+)?"
+                r"(?:items|procedures|assets)\b", text)]
+        assert {"index.html", "langchain.html"} <= {d for d, _ in stated}, stated
+        assert [s for s in stated if not 0.9 * size <= s[1] <= size] == [], (
+            "the catalogue's est_items_scannable is %d: %s" % (size, stated))
+
 
 class TestPlatformClaimsAgree:
     """SUPPORT.md says which operating systems are supported; the README badge
@@ -305,6 +326,12 @@ class TestLandingPageStatTiles:
         # It said 5 under a lede naming six.
         from boost_cli.core import agents
         assert self._tile("AI agents supported") == len(agents.DISPLAY)
+
+    def test_items_tile_is_still_there_to_be_checked(self):
+        # Its number is held to registries.json by
+        # TestCatalogueSizeIsNotHardCoded; this keeps the tile in that sweep.
+        assert re.search(r"<b>\d{1,3}(?:,\d{3})+\+</b><span>Catalogued items<",
+                         INDEX), "the landing page's items tile is gone"
 
     def test_starter_registries_tile_counts_the_default_taps(self):
         from boost_cli.core import config
