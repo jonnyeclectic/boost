@@ -521,7 +521,7 @@ function paintRows(){
   if(!S.rows.length){
     el('rows').innerHTML='<div class="empty"><b>nothing matches</b>'+
       (S.total?'try fewer filters, or a different word':
-       'no taps configured yet \\u2014 run <code>boost tap --defaults</code>')+'</div>';
+       'no taps configured yet \\u2014 run <code>boost quickstart</code>')+'</div>';
     return;
   }
   el('rows').innerHTML=S.rows.map(function(r){
