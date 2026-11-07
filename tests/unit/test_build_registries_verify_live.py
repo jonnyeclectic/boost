@@ -93,6 +93,26 @@ def test_a_rename_onto_a_listed_row_says_it_is_a_duplicate(builder, github, caps
     assert out.splitlines() == ["renamed   a/old -> a/new  (already listed)"]
 
 
+def test_a_body_without_full_name_is_not_a_rename(builder, github, capsys):
+    # A body that omits the field must fall back to the row's own name, not
+    # to the string "None", or every such row would read as renamed.
+    github["a/plain"] = {"archived": False}
+    github["a/null"] = {"full_name": None}
+    assert builder.verify_live(["a/plain", "a/null"]) == 0
+    out, err = capsys.readouterr()
+    assert out == ""
+    assert "2 checked: 0 missing, 0 archived, 0 renamed" in err
+
+
+def test_already_listed_matches_case_blind(builder, github, capsys):
+    # GitHub reports its own spelling, and a row may differ only in case.
+    github["a/old"] = {"full_name": "A/New"}
+    github["a/new"] = {"full_name": "A/New"}
+    builder.verify_live(["a/old", "a/new"])
+    out, _err = capsys.readouterr()
+    assert out.splitlines() == ["renamed   a/old -> A/New  (already listed)"]
+
+
 def test_archived_and_missing_are_still_reported(builder, github, capsys):
     github["a/frozen"] = {"full_name": "a/frozen", "archived": True}
     github["a/moved"] = {"full_name": "b/moved", "archived": True}
