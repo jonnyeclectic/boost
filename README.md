@@ -14,15 +14,7 @@
 from GitHub-hosted registries, and wires each one into Claude Code, Windsurf,
 Cursor, Gemini CLI, Antigravity CLI and Codex in a single pass.
 
-Antigravity CLI (`agy`) is wired up the same way: skills link into
-`~/.gemini/antigravity-cli/skills`, and `boost mcp register` reaches it through
-`agy mcp add` alongside Claude Code.
-
-Codex — the `codex` CLI and the ChatGPT desktop app, which is the same binary —
-needs no symlink at all: `~/.agents/skills` is one of its own skill roots, so a
-skill boost copies into the canonical store is already there. Rules materialize
-into `~/.codex/AGENTS.md`, and `boost mcp register` reaches it through
-`codex mcp add`.
+**[Docs](https://jonnyeclectic.github.io/boost/) · [Every command](https://jonnyeclectic.github.io/boost/docs/commands.html) · [Roadmap](https://jonnyeclectic.github.io/boost/docs/roadmap.html)**
 
 ```bash
 pipx install boost-skill-cli
@@ -43,6 +35,16 @@ dependencies.
   <br>
   <sub><em>tap a registry → search → install into every agent → doctor — one flow</em></sub>
 </p>
+
+Then let your agents do the searching. boost is also an MCP server, and one
+command registers it with every agent CLI on your PATH — Claude Code, Gemini
+CLI, Antigravity CLI and Codex — so they can search and install mid-task:
+
+```bash
+boost mcp register             # asks before adding boost's rule to their instructions
+```
+
+[boost as an MCP server](#boost-as-an-mcp-server) has the details.
 
 ## What's a skill, exactly?
 
@@ -362,7 +364,9 @@ boost list --kind rule                # just the rules, and where they landed
 boost list --kind workflow            # and which slot each one fills
 ```
 
-Gemini CLI and Codex are the two agents that need no symlink. Both discover
+Antigravity CLI (`agy`) takes real symlinks, into
+`~/.gemini/antigravity-cli/skills`. Gemini CLI and Codex are the two agents
+that need no symlink. Both discover
 `~/.agents/skills` directly — Gemini CLI through the
 [Agent Skills](https://agentskills.io) standard, Codex as one of its five skill
 roots — so linking into their own skills directories as well would put the same
