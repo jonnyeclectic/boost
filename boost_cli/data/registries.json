@@ -1,8 +1,8 @@
 {
   "generated_note": "Curated skill/rule/workflow registries for boost. est_items are research estimates; verify by tapping. list_only repos are index/awesome lists that link out.",
   "count": 540,
-  "est_items_total": 39957,
-  "est_items_scannable": 35466,
+  "est_items_total": 41614,
+  "est_items_scannable": 35476,
   "registries": [
     {
       "name": "Aaronontheweb/dotnet-cursor-rules",
@@ -71,6 +71,17 @@
       "curated": false
     },
     {
+      "name": "detailobsessed/awesome-devin",
+      "url": "https://github.com/detailobsessed/awesome-devin",
+      "type": "rule",
+      "category": "meta",
+      "focus": "Awesome resources for the Windsurf editor including rules (formerly ichoosetoaccept/awesome-windsurf)",
+      "est_items": 30,
+      "confidence": "low",
+      "list_only": true,
+      "curated": false
+    },
+    {
       "name": "digitalchild/cursor-best-practices",
       "url": "https://github.com/digitalchild/cursor-best-practices",
       "type": "rule",
@@ -123,17 +134,6 @@
       "est_items": 446,
       "confidence": "high",
       "list_only": false,
-      "curated": false
-    },
-    {
-      "name": "ichoosetoaccept/awesome-windsurf",
-      "url": "https://github.com/ichoosetoaccept/awesome-windsurf",
-      "type": "rule",
-      "category": "meta",
-      "focus": "Awesome resources for the Windsurf editor including rules",
-      "est_items": 30,
-      "confidence": "low",
-      "list_only": true,
       "curated": false
     },
     {
@@ -1094,6 +1094,17 @@
       "curated": false
     },
     {
+      "name": "cheaper-inference/OmniRoute",
+      "url": "https://github.com/cheaper-inference/OmniRoute",
+      "type": "skill",
+      "category": "ai",
+      "focus": "Free MIT AI gateway: one endpoint over many model providers, plus CLI, routing and eval skills (53 skills, 1 workflows)",
+      "est_items": 54,
+      "confidence": "high",
+      "list_only": false,
+      "curated": false
+    },
+    {
       "name": "chrisbanes/skills",
       "url": "https://github.com/chrisbanes/skills",
       "type": "skill",
@@ -1457,17 +1468,6 @@
       "curated": false
     },
     {
-      "name": "diegosouzapw/OmniRoute",
-      "url": "https://github.com/diegosouzapw/OmniRoute",
-      "type": "skill",
-      "category": "ai",
-      "focus": "Never stop coding. Free MIT AI gateway: one endpoint, 290+ providers... (45 skills)",
-      "est_items": 45,
-      "confidence": "high",
-      "list_only": false,
-      "curated": false
-    },
-    {
       "name": "DietrichGebert/ponytail",
       "url": "https://github.com/DietrichGebert/ponytail",
       "type": "skill",
@@ -1728,6 +1728,17 @@
       "focus": "Skills to transform AI Agents into GitOps Engineers (6 skills, 2 workflows)",
       "est_items": 8,
       "confidence": "high",
+      "list_only": false,
+      "curated": false
+    },
+    {
+      "name": "fmind/mlops-coding-skills",
+      "url": "https://github.com/fmind/mlops-coding-skills",
+      "type": "skill",
+      "category": "ai",
+      "focus": "Agent skills based on the MLOps Coding Course (7 skills)",
+      "est_items": 7,
+      "confidence": "med",
       "list_only": false,
       "curated": false
     },
@@ -2580,12 +2591,12 @@
       "curated": false
     },
     {
-      "name": "leogallego/claude-ansible-skills",
-      "url": "https://github.com/leogallego/claude-ansible-skills",
+      "name": "leogallego/ai-skills-ansible",
+      "url": "https://github.com/leogallego/ai-skills-ansible",
       "type": "skill",
       "category": "infra",
-      "focus": "A collection of Claude Code skills for Ansible automation development... (7 skills)",
-      "est_items": 7,
+      "focus": "A collection of AI skills for Ansible automation development... (8 skills)",
+      "est_items": 8,
       "confidence": "med",
       "list_only": false,
       "curated": false
@@ -2983,17 +2994,6 @@
       "focus": "11 skills",
       "est_items": 11,
       "confidence": "high",
-      "list_only": false,
-      "curated": false
-    },
-    {
-      "name": "MLOps-Courses/mlops-coding-skills",
-      "url": "https://github.com/MLOps-Courses/mlops-coding-skills",
-      "type": "skill",
-      "category": "ai",
-      "focus": "Agent skills based on the MLOps Coding Course (7 skills)",
-      "est_items": 7,
-      "confidence": "med",
       "list_only": false,
       "curated": false
     },
@@ -4208,12 +4208,12 @@
       "curated": false
     },
     {
-      "name": "sickn33/antigravity-awesome-skills",
-      "url": "https://github.com/sickn33/antigravity-awesome-skills",
+      "name": "sickn33/agentic-awesome-skills",
+      "url": "https://github.com/sickn33/agentic-awesome-skills",
       "type": "skill",
       "category": "meta",
-      "focus": "Aggregated 1300+ agent skills for Antigravity/Claude Code",
-      "est_items": 1300,
+      "focus": "Aggregated agent skills for Claude Code, Codex, Cursor and Gemini CLI, mostly copies of upstream repos; formerly sickn33/antigravity-awesome-skills (2947 skills)",
+      "est_items": 2947,
       "confidence": "low",
       "list_only": true,
       "curated": false

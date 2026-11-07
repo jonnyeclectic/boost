@@ -41,10 +41,10 @@ LIST_ONLY = {
     "JayZeeDesign/awesome-claude-skills", "VoltAgent/awesome-agent-skills",
     "VoltAgent/awesome-openclaw-skills", "majiayu000/claude-skill-registry",
     "gmh5225/awesome-skills", "heilcheng/awesome-agent-skills",
-    "sickn33/antigravity-awesome-skills", "yusufkaraaslan/Skill_Seekers",
+    "sickn33/agentic-awesome-skills", "yusufkaraaslan/Skill_Seekers",
     "hesreallyhim/awesome-claude-code", "hesreallyhim/a-list-of-claude-code-agents",
     "subinium/awesome-claude-code", "jqueryscript/awesome-claude-code",
-    "rahulvrane/awesome-claude-agents", "ichoosetoaccept/awesome-windsurf",
+    "rahulvrane/awesome-claude-agents", "detailobsessed/awesome-devin",
     "hao-ji-xing/awesome-cursor", "johnlindquist/get-rules",
     "langgptai/awesome-claude-prompts",
     # READMEs of links: measure_registry.py finds 0 items in either (2026-10-16)
@@ -148,7 +148,7 @@ SKILLS = [
     ("heilcheng/awesome-agent-skills", "meta", "Tutorials, guides, and agent skills directories", 40, "med"),
     ("abubakarsiddik31/claude-skills-collection", "general", "Curated collection of official and community-built Claude skills", 40, "med"),
     ("obviousworks/Claude-AI-skills-collection-2026", "general", "Curated collection of official and community Claude skills", 30, "low"),
-    ("sickn33/antigravity-awesome-skills", "meta", "Aggregated 1300+ agent skills for Antigravity/Claude Code", 1300, "low"),
+    ("sickn33/agentic-awesome-skills", "meta", "Aggregated agent skills for Claude Code, Codex, Cursor and Gemini CLI, mostly copies of upstream repos; formerly sickn33/antigravity-awesome-skills (2947 skills)", 2947, "low"),
     ("alirezarezvani/claude-skills", "general", "362 skills across 18 domains (engineering, marketing, C-level, compliance)", 313, "high"),
     ("jeffallan/claude-skills", "web-dev", "66 full-stack developer skills across 12 categories", 66, "high"),
     ("oaustegard/claude-skills", "general", "Personal collection of Claude skills (codebases, data, media, GitHub)", 50, "high"),
@@ -229,7 +229,7 @@ SKILLS = [
     ("doggy8088/litellm-skills", "ai", "LiteLLM Agent Skills SDK Proxy GatewayRoutingCost... (7 skills)", 7, "med"),
     ("langchain-ai/deepagentsjs", "ai", "The batteries included agent harness (7 skills)", 7, "high"),
     ("lhbsaa/embedded-dev-skill", "ai", "Embedded Development Skill for Pi Coding Agent & OpenCode - ESP32... (7 skills)", 7, "low"),
-    ("MLOps-Courses/mlops-coding-skills", "ai", "Agent skills based on the MLOps Coding Course (7 skills)", 7, "med"),
+    ("fmind/mlops-coding-skills", "ai", "Agent skills based on the MLOps Coding Course (7 skills)", 7, "med"),
     ("redis/agent-filesystem", "ai", "7 skills", 7, "high"),
     ("replicate/skills", "ai", "A collection of Agent Skills for building AI-powered apps with Replicate (7 skills)", 7, "high"),
     ("cohere-ai/vllm-skills", "ai", "5 skills, 1 rules", 6, "high"),
@@ -383,7 +383,7 @@ SKILLS = [
     ("NotHarshhaa/devops-skills", "infra", "A collection of reusable DevOps Agent Skills for incident response... (10 skills)", 10, "low"),
     ("thomast1906/github-copilot-skills-terraform", "infra", "Template repository providing specialized GitHub Copilot agents and... (5 skills, 5 workflows)", 10, "med"),
     ("fluxcd/agent-skills", "infra", "Skills to transform AI Agents into GitOps Engineers (6 skills, 2 workflows)", 8, "high"),
-    ("leogallego/claude-ansible-skills", "infra", "A collection of Claude Code skills for Ansible automation development... (7 skills)", 7, "med"),
+    ("leogallego/ai-skills-ansible", "infra", "A collection of AI skills for Ansible automation development... (8 skills)", 8, "med"),
     ("sysdig/skills", "infra", "Sysdig agentic AI skills and plugins (7 skills)", 7, "high"),
     ("ahmedasmar/devops-claude-skills", "infra", "A Claude Code Skills Marketplace for DevOps workflows (6 skills)", 6, "high"),
     ("antoniodiaz02/opencode-devops-skills", "infra", "DevOps Skills Collection for Claude Code and OpenCode - Terraform... (6 skills)", 6, "low"),
@@ -453,7 +453,7 @@ SKILLS = [
     ("luongnv89/claude-howto", "general", "A visual, example-driven guide to Claude Code - from basic concepts to... (31 skills, 20 workflows)", 51, "high"),
     ("swyxio/skills", "general", "Agent skills for Claude Code and other AI agents (46 skills)", 46, "high"),
     ("AgriciDaniel/claude-seo", "marketing", "Technical and content SEO: audits, backlinks, schema, clustering, local, international and ecommerce", 51, "high"),
-    ("diegosouzapw/OmniRoute", "ai", "Never stop coding. Free MIT AI gateway: one endpoint, 290+ providers... (45 skills)", 45, "high"),
+    ("cheaper-inference/OmniRoute", "ai", "Free MIT AI gateway: one endpoint over many model providers, plus CLI, routing and eval skills (53 skills, 1 workflows)", 54, "high"),
     ("intellectronica/agent-skills", "general", "@intellectronica's agent skills (44 skills)", 44, "high"),
     ("davidondrej/skills", "general", "access to david ondrej's personal agent skills (42 skills)", 42, "high"),
     ("xuzhougeng/wisp-science", "general", "Open-source, local-first desktop AI research workbench for scientific... (42 skills)", 42, "high"),
@@ -661,7 +661,7 @@ RULES = [
     ("johnlindquist/get-rules", "meta", "CLI that downloads .mdc rule files for Cursor", 30, "low"),
     ("digitalchild/cursor-best-practices", "general", "Best-practices and example rule files for Cursor AI editor", 10, "low"),
     ("hao-ji-xing/awesome-cursor", "meta", "Curated collection of tools and resources for Cursor", 25, "low"),
-    ("ichoosetoaccept/awesome-windsurf", "meta", "Awesome resources for the Windsurf editor including rules", 30, "low"),
+    ("detailobsessed/awesome-devin", "meta", "Awesome resources for the Windsurf editor including rules (formerly ichoosetoaccept/awesome-windsurf)", 30, "low"),
     # --- 2026-07 batch: AI, architecture, UI, Java, eCommerce, infra ---
     # ai (1 repos, 2 measured items)
     ("wandb/agentic-support-bot-demo", "ai", "A streamlined guide to experience how Weave works in a typical AI... (2 rules)", 2, "med"),
@@ -844,8 +844,32 @@ def _summary(payload: dict) -> None:
         print("  %-9s %3d repos  ~%d items" % (typ, n, est))
 
 
+def _fetch_repo(name: str, token: str | None) -> dict:
+    """GET /repos/<name>. urllib follows GitHub's 301 for a renamed repo."""
+    import urllib.request
+
+    req = urllib.request.Request(  # noqa: S310  the https prefix is a literal
+        "https://api.github.com/repos/%s" % name,
+        headers={"Accept": "application/vnd.github+json",
+                 "User-Agent": "boost-registry-audit"})
+    if token:
+        req.add_header("Authorization", "token %s" % token)
+    with urllib.request.urlopen(req, timeout=30) as fh:  # noqa: S310  same
+        data = json.loads(fh.read().decode("utf-8"))
+    return data if isinstance(data, dict) else {}
+
+
+def _report_renamed(renamed: list[tuple[str, str]], names: list[str]) -> None:
+    listed = {n.lower() for n in names}
+    for old, new in renamed:
+        # A rename onto a name that already has a row is a duplicate to drop,
+        # not a row to move.
+        print("renamed   %s -> %s%s" % (
+            old, new, "  (already listed)" if new.lower() in listed else ""))
+
+
 def verify_live(names: list[str], token: str | None = None) -> int:
-    """Report which of ``names`` no longer resolve on GitHub.
+    """Report which of ``names`` no longer resolve on GitHub, or moved.
 
     Deliberately NOT part of `--check` or any required gate. The lesson
     `tests/eval/taps.txt` already records — pin third-party repos, never let
@@ -854,24 +878,27 @@ def verify_live(names: list[str], token: str | None = None) -> int:
     of them is deleted, which is a fact about GitHub rather than about this
     commit. Run it when curating, and record what it finds in RETIRED.
 
+    A renamed repo answers 301, and urlopen follows it to the new name without
+    a word, so a sweep that only read ``archived`` passed five stale rows as
+    healthy. The body's ``full_name`` is the name the repo has now; when it is
+    not the row's (case aside — GitHub resolves either case), the row is
+    reported as renamed so it can be moved before a later sweep mistakes the
+    new name for a new candidate.
+
     Returns the number of repos that could not be resolved.
     """
     import http.client
     import urllib.error
-    import urllib.request
 
-    missing, archived = [], []
+    missing, archived, renamed = [], [], []
     for i, name in enumerate(names, 1):
-        req = urllib.request.Request(  # noqa: S310  the https prefix is a literal
-            "https://api.github.com/repos/%s" % name,
-            headers={"Accept": "application/vnd.github+json",
-                     "User-Agent": "boost-registry-audit"})
-        if token:
-            req.add_header("Authorization", "token %s" % token)
         try:
-            with urllib.request.urlopen(req, timeout=30) as fh:  # noqa: S310  same
-                if json.loads(fh.read().decode("utf-8")).get("archived"):
-                    archived.append(name)
+            data = _fetch_repo(name, token)
+            if data.get("archived"):
+                archived.append(name)
+            full = str(data.get("full_name") or name)
+            if full.lower() != name.lower():
+                renamed.append((name, full))
         except urllib.error.HTTPError as exc:
             if exc.code in (404, 451):
                 missing.append(name)
@@ -888,10 +915,12 @@ def verify_live(names: list[str], token: str | None = None) -> int:
 
     for name in archived:
         print("archived  %s" % name)
+    _report_renamed(renamed, names)
     for name in missing:
         print("MISSING   %s" % name)
-    print("%d checked: %d missing, %d archived"
-          % (len(names), len(missing), len(archived)), file=sys.stderr)
+    print("%d checked: %d missing, %d archived, %d renamed"
+          % (len(names), len(missing), len(archived), len(renamed)),
+          file=sys.stderr)
     return len(missing)
 
 
