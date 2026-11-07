@@ -165,6 +165,38 @@ class TestCatalogueSizeIsNotHardCoded:
                     doc.name, n, size)
 
 
+#: The README is also the PyPI long description, and pypi.org resolves a
+#: relative target against /project/boost-skill-cli/ — where it serves the
+#: project page as text/html, so the demo GIF rendered as a broken image and
+#: every relative link led back to the page the reader was already on.
+_REPO_FILE = re.compile(
+    r"^https://(?:github\.com/jonnyeclectic/boost/(?:blob|tree)/main"
+    r"|raw\.githubusercontent\.com/jonnyeclectic/boost/main)/([^#?]+)")
+
+
+def _readme_targets() -> list[str]:
+    return (re.findall(r"\]\(([^)\s]+)\)", README)
+            + re.findall(r"""(?:src|href)=["']([^"']+)["']""", README))
+
+
+class TestReadmeRendersOffGitHub:
+    def test_every_link_and_image_is_absolute(self):
+        relative = [t for t in _readme_targets()
+                    if not re.match(r"(?:https?:|#|mailto:)", t)]
+        assert relative == [], (
+            "README.md is the PyPI page too, where these resolve to nothing: "
+            "%s" % relative)
+
+    def test_every_absolute_link_into_this_repo_names_a_real_path(self):
+        # Absolute URLs give up the local-path check a relative link got for
+        # free, so a renamed file would 404 only after it reached main.
+        targets = [m.group(1) for t in _readme_targets()
+                   if (m := _REPO_FILE.match(t))]
+        assert targets, "README.md no longer links into this repository"
+        missing = [t for t in targets if not (ROOT / t).exists()]
+        assert missing == [], "README.md links paths that do not exist: %s" % missing
+
+
 class TestNoStaleCountsElsewhere:
     @pytest.mark.parametrize("doc", ["README.md", "docs/index.html"])
     def test_no_command_count_is_a_stale_literal(self, doc):

@@ -8,7 +8,7 @@
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey)](https://github.com/jonnyeclectic/boost/actions/workflows/ci.yml)
 [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/14275/badge)](https://www.bestpractices.dev/projects/14275)
 [![OpenSSF Baseline](https://www.bestpractices.dev/projects/14275/baseline)](https://www.bestpractices.dev/projects/14275/baseline-2)
-[![License](https://img.shields.io/github/license/jonnyeclectic/boost)](LICENSE)
+[![License](https://img.shields.io/github/license/jonnyeclectic/boost)](https://github.com/jonnyeclectic/boost/blob/main/LICENSE)
 
 **Homebrew for AI coding skills.** boost finds, installs, and version-tracks skills
 from GitHub-hosted registries, and wires each one into Claude Code, Windsurf,
@@ -39,7 +39,7 @@ stale. The default install is pure stdlib, with no build step and no
 dependencies.
 
 <p align="center">
-  <img src="docs/demo.gif" alt="boost demo: tap a registry, search for a skill, install it into every agent, then run doctor" width="820">
+  <img src="https://raw.githubusercontent.com/jonnyeclectic/boost/main/docs/demo.gif" alt="boost demo: tap a registry, search for a skill, install it into every agent, then run doctor" width="820">
   <br>
   <sub><em>tap a registry → search → install into every agent → doctor — one flow</em></sub>
 </p>
@@ -104,7 +104,7 @@ The command pins the interpreter because pipx and uv build boost's
 environment on one Python and keep a link to it. When Homebrew upgrades past
 a `python@3.X` formula it deletes the old one, the link breaks, and `boost`
 fails before it starts with `bad interpreter: no such file or directory`.
-[DEBUGGING](docs/DEBUGGING.md#boost-bad-interpreter-after-a-homebrew-upgrade)
+[DEBUGGING](https://github.com/jonnyeclectic/boost/blob/main/docs/DEBUGGING.md#boost-bad-interpreter-after-a-homebrew-upgrade)
 has the one-command fix. `--fetch-python=always` (pipx 1.18 or later) makes
 pipx download its own 3.13 even when Homebrew has one, and
 `--managed-python` does the same for uv, so a Homebrew cleanup can't touch
@@ -251,7 +251,7 @@ mismatch, and shards for a registry that has moved since publication are
 refused rather than merged — stale vectors would otherwise look fresh forever.
 
 When both indexes exist boost fuses the rankings rather than choosing between
-them. See [docs/semantic-search.md](docs/semantic-search.md) for the whole
+them. See [docs/semantic-search.md](https://github.com/jonnyeclectic/boost/blob/main/docs/semantic-search.md) for the whole
 setup, what it costs, and how to tell which engine is actually serving.
 
 ## The registry catalog
@@ -506,9 +506,9 @@ crashing mid-draw.
 ## 81 commands, organized into 8 groups
 
 `boost --help` prints the full grouped list. For every flag of every command see
-[`docs/commands.html`](docs/commands.html); for a visual tour,
-[`docs/index.html`](docs/index.html); for how boost is put together internally,
-the C4 diagrams in [`docs/architecture/`](docs/architecture/README.md).
+[`docs/commands.html`](https://jonnyeclectic.github.io/boost/docs/commands.html); for a visual tour,
+[`docs/index.html`](https://jonnyeclectic.github.io/boost/); for how boost is put together internally,
+the C4 diagrams in [`docs/architecture/`](https://github.com/jonnyeclectic/boost/blob/main/docs/architecture/README.md).
 
 | Group | Commands |
 |---|---|
@@ -588,19 +588,19 @@ boost hooks add SessionStart --host codex -c 'echo hello' -n greet
 boost bmad on
 ```
 
-See [docs/bmad.md](docs/bmad.md).
+See [docs/bmad.md](https://github.com/jonnyeclectic/boost/blob/main/docs/bmad.md).
 
 ## The boost style
 
 The visual identity behind the docs and demos ships as a small dependency-free
-design system in [`style/`](style/): the Aurora living-glass look, a
+design system in [`style/`](https://github.com/jonnyeclectic/boost/tree/main/style): the Aurora living-glass look, a
 cyan/violet/pink triad on a near-black ground. Drop
-[`style/boost.css`](style/boost.css) into any static page; see
-[`style/README.md`](style/README.md) for tokens and classes.
+[`style/boost.css`](https://github.com/jonnyeclectic/boost/blob/main/style/boost.css) into any static page; see
+[`style/README.md`](https://github.com/jonnyeclectic/boost/blob/main/style/README.md) for tokens and classes.
 
 The same palette runs in the terminal, in 24-bit color where the terminal
 advertises it, degrading to 16-color and then to plain text. The CLI palette is
-[test-locked](tests/unit/test_token_parity.py) to `style/boost.css` so the two
+[test-locked](https://github.com/jonnyeclectic/boost/blob/main/tests/unit/test_token_parity.py) to `style/boost.css` so the two
 cannot drift. Color follows the [NO_COLOR](https://no-color.org) convention plus
 a `BOOST_COLOR` override: set `BOOST_COLOR=never` to force plain output, or
 `always` to keep color through a pipe.
@@ -639,13 +639,13 @@ Four test layers are enforced, and `make check` runs all of them:
 Search quality is the one thing the other three cannot assert: every test can
 pass while the ranker quietly gets worse. The eval harness is pure stdlib and
 fully offline, generating its own corpus so a metric that moves can only mean
-the ranker moved. See [`evals/README.md`](evals/README.md).
+the ranker moved. See [`evals/README.md`](https://github.com/jonnyeclectic/boost/blob/main/evals/README.md).
 
-[CONTRIBUTING.md](CONTRIBUTING.md) has dev setup, the full gate list, the
+[CONTRIBUTING.md](https://github.com/jonnyeclectic/boost/blob/main/CONTRIBUTING.md) has dev setup, the full gate list, the
 generated-file rules and the PR process. Start with
-[Good first tasks](CONTRIBUTING.md#good-first-tasks).
+[Good first tasks](https://github.com/jonnyeclectic/boost/blob/main/CONTRIBUTING.md#good-first-tasks).
 
 When something misbehaves, boost keeps a rotating log at
 `~/.boost/logs/boost.log` and writes a crash report on any unexpected error.
 `boost --verbose` or `boost --debug` turn up detail, `boost log --diagnostics`
-reads the trail, and [`docs/DEBUGGING.md`](docs/DEBUGGING.md) covers the rest.
+reads the trail, and [`docs/DEBUGGING.md`](https://github.com/jonnyeclectic/boost/blob/main/docs/DEBUGGING.md) covers the rest.

@@ -68,6 +68,12 @@ jobs:
       # NOT match the prefix — a card pointing into the wrong directory, say —
       # is still fetched for real, and so are the other 9 github.com links in
       # the docs.
+      #
+      # The second remap is the README's. It doubles as the PyPI long
+      # description, where a relative link resolves to the project page, so
+      # every link into this repository is absolute (blob/main, tree/main, or
+      # raw.githubusercontent.com for the demo GIF). Remapping them back to the
+      # checkout keeps the local-path check those links had while relative.
       - name: lychee (URLs + local paths)
         uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
         # `--max-concurrency` is the one argument here that is not about
@@ -84,6 +90,7 @@ jobs:
             --accept 200,206,403,429
             --max-retries 3 --max-concurrency 8 --retry-wait-time 5
             ${{ format('--remap ''^https://github\.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/ file://{0}/docs/roadmap/items/''', github.workspace) }}
+            ${{ format('--remap ''^https://(github\.com/jonnyeclectic/boost/(blob|tree)|raw\.githubusercontent\.com/jonnyeclectic/boost)/main/ file://{0}/''', github.workspace) }}
             README.md docs/*.html
           fail: true
       - name: anchors (in-page + cross-page fragments)
