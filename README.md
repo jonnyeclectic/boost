@@ -631,16 +631,18 @@ python3 tests/make_fixture.py /tmp/fixture-tap
 Every path under `~/.boost` and `~/.agents/skills` is resolved from `$HOME` at
 call time, which is what makes that sandboxing work.
 
-Four test layers are enforced, and `make check` runs all of them:
+Six gates are enforced, and `make check` runs all of them:
 
-| Layer | Gate |
+| Command | Gate |
 |---|---|
+| `make lint` | ruff, mypy, pyright, import-linter and the rest of the static tier — zero findings |
+| `make eval` | four retrieval floors on BM25 over 20 pinned real registries |
 | `make test` | ≥90% coverage of `boost_cli`, statements and branches |
 | `make smoke` | 183 checks through the actual `./boost` shim |
 | `make mutation` | ≥80% of ~9,900 mutants in `boost_cli/core` killed |
 | `make evals` | metric floors on the search ranker, plus no significant regression |
 
-Search quality is the one thing the other three cannot assert: every test can
+Search quality is the one thing the test gates cannot assert: every test can
 pass while the ranker quietly gets worse. The eval harness is pure stdlib and
 fully offline, generating its own corpus so a metric that moves can only mean
 the ranker moved. See [`evals/README.md`](https://github.com/jonnyeclectic/boost/blob/main/evals/README.md).

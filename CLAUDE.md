@@ -83,15 +83,16 @@ commit one file anyway.
 Before calling any change done, run the full gate:
 
 ```bash
-make check          # == lint eval test smoke mutation
+make check          # == lint eval evals test smoke mutation
 ```
 
-It is five gates and **all must pass**:
+It is six gates and **all must pass**:
 
 | Gate       | Command                                        | Threshold |
 |------------|------------------------------------------------|-----------|
 | `lint`     | `ruff check boost_cli tests` + `mypy`          | zero errors |
 | `eval`     | `ensure_eval_corpus.sh` + `eval_retrieval.py --build -k 10` with four floors | BM25 recall@k **≥ 0.78**, hit@1 ≥ 0.40, MRR ≥ 0.52, nDCG@k ≥ 0.58 |
+| `evals`    | `python3 scripts/eval_gate.py --run`            | floors over the hermetic `evals/` golden set, no significant regression vs `evals/baseline.json` |
 | `test`     | `pytest tests/unit tests/functional --cov`     | **90%** coverage (`fail_under = 90`, `branch = true`) |
 | `smoke`    | `bash tests/smoke.sh`                           | 0 failed |
 | `mutation` | `python3 scripts/mutation_gate.py --run --min 80` | **80%** of `boost_cli/core` mutants killed |
