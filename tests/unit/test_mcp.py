@@ -231,14 +231,37 @@ class TestHandleRequest:
         assert "boost_list" in low and "boost_search" in low
         assert "instant" in low
 
-    def test_instructions_route_search_straight_to_install(self):
-        # boost_info sat between search and install in the advertised flow, but
-        # search already returns each hit's description — the only field that
-        # changes an install decision — so the hop bought a round-trip and a
-        # decision point and nothing else. It stays a registered tool for
-        # looking up a name from elsewhere; it is not a step.
-        assert "boost_search -> boost_install" in mcp.instructions(ai_available=True)
-        assert "boost_info" not in mcp.instructions(ai_available=True)
+    def test_instructions_route_search_through_read_to_install(self):
+        # boost_info sat between search and install in the advertised flow and
+        # was cut: it echoes the description search already returned, so the
+        # hop bought a round-trip and nothing else. It stays a registered tool
+        # for looking up a name from elsewhere; it is not a step.
+        #
+        # boost_read is a step. The description is one line written by the
+        # publisher, and the catalog is indexed rather than reviewed, so the
+        # body is what tells a debugged procedure from a stub. boost_read's own
+        # description already said "on the top hit from boost_search before
+        # boost_install"; the flow said search -> install, and the two
+        # surfaces disagreed.
+        text = mcp.instructions(ai_available=True)
+        assert "boost_search -> boost_read -> boost_install" in text
+        assert "boost_info" not in text
+
+    def test_the_flow_says_where_an_install_lands(self):
+        # Without a scope, an agent cannot tell the user what changed, and
+        # without the CLI's --local it has no route to the repository at all.
+        low = mcp.instructions(ai_available=True).lower()
+        assert "for the user, in every agent they have enabled" in low
+        assert "`boost install <name> --local`" in low
+        assert "say in your reply which you chose and where it landed" in low
+
+    def test_the_flow_draws_the_consent_line(self):
+        # A rule becomes standing text every later session reads, and
+        # `boost mcp register` changes the whole machine: those are the user's
+        # call. A skill install is the agent's, reported afterwards.
+        low = mcp.instructions(ai_available=True).lower()
+        assert "ask the user before installing a rule" in low
+        assert "`boost mcp register`" in low
 
     def test_protocol_version_constant(self):
         assert mcp.PROTOCOL_VERSION == "2024-11-05"

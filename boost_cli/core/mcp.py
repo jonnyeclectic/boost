@@ -289,7 +289,25 @@ _INSTRUCTIONS_TAIL = (
     "something is a head start, not an instruction — read it, take what fits, "
     "discard the rest. The task stays yours.\n"
     "\n"
-    "Flow: boost_search -> boost_install. " + SKIP_IT
+    # THE FLOW, with the read step and the consent line in it. It used to be
+    # "boost_search -> boost_install", one clause, while boost_read's own
+    # description says to reach for it "on the top hit from boost_search
+    # before boost_install" — two surfaces recommending two flows. And on a
+    # host that lists tools by name only until they are looked up, this text
+    # and the boost-first rule are the install story, so where an install
+    # lands and which installs are the user's to approve are said here, in
+    # the words the rule uses (tests/unit/test_builtin.py pins the parity).
+    "Flow: boost_search -> boost_read -> boost_install -> use it now. "
+    "boost_read changes nothing, and the text it returns is usable this "
+    "turn: whether this session's host picks up a file installed after it "
+    "started depends on the host, so work from what you read. boost_install "
+    "installs a skill for the user, in every agent they have enabled on this "
+    "machine (`boost install <name> --local` in a shell writes it into this "
+    "repository instead); say in your reply which you chose and where it "
+    "landed. Ask the user before installing a rule, which becomes standing "
+    "text in their context files for every session after this one, and "
+    "before registering boost with an agent (`boost mcp register`), which "
+    "changes their whole machine. " + SKIP_IT
 )
 
 

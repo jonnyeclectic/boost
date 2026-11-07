@@ -356,7 +356,14 @@ class TestTheRuleDoesNotDriftFromTheMcpSurface:
 
     PARITY = ("has a name", "more than one file", "outlives this session",
               "turns out to be a large one", "one kind of three",
-              "the task stays yours")
+              "the task stays yours",
+              # The install half, added when both surfaces learned it: what
+              # was read is usable now, where an install lands is said aloud,
+              # and a rule or a registration is the user's to approve.
+              "usable this turn", "`boost install <name> --local`",
+              "say in your reply which you chose and where it landed",
+              "ask the user before installing a rule",
+              "`boost mcp register`")
 
     @pytest.mark.parametrize("ai_available", [True, False])
     @pytest.mark.parametrize("phrase", PARITY)
