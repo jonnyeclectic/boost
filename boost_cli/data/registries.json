@@ -4608,7 +4608,7 @@
       "url": "https://github.com/sickn33/agentic-awesome-skills",
       "type": "skill",
       "category": "meta",
-      "focus": "Aggregated agent skills for Claude Code, Codex, Cursor and Gemini CLI, mostly copies of upstream repos; formerly sickn33/antigravity-awesome-skills (2947 skills)",
+      "focus": "Aggregated agent skills for Claude Code, Codex, Cursor and Gemini CLI, some adapted from upstream repos; formerly sickn33/antigravity-awesome-skills (2947 skills)",
       "est_items": 2947,
       "confidence": "low",
       "list_only": true,

@@ -156,7 +156,7 @@ SKILLS = [
     ("heilcheng/awesome-agent-skills", "meta", "Tutorials, guides, and agent skills directories", 40, "med"),
     ("abubakarsiddik31/claude-skills-collection", "general", "Curated collection of official and community-built Claude skills", 40, "med"),
     ("obviousworks/Claude-AI-skills-collection-2026", "general", "Curated collection of official and community Claude skills", 30, "low"),
-    ("sickn33/agentic-awesome-skills", "meta", "Aggregated agent skills for Claude Code, Codex, Cursor and Gemini CLI, mostly copies of upstream repos; formerly sickn33/antigravity-awesome-skills (2947 skills)", 2947, "low"),
+    ("sickn33/agentic-awesome-skills", "meta", "Aggregated agent skills for Claude Code, Codex, Cursor and Gemini CLI, some adapted from upstream repos; formerly sickn33/antigravity-awesome-skills (2947 skills)", 2947, "low"),
     ("alirezarezvani/claude-skills", "general", "362 skills across 18 domains (engineering, marketing, C-level, compliance)", 313, "high"),
     ("jeffallan/claude-skills", "web-dev", "66 full-stack developer skills across 12 categories", 66, "high"),
     ("oaustegard/claude-skills", "general", "Personal collection of Claude skills (codebases, data, media, GitHub)", 50, "high"),
