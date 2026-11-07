@@ -266,7 +266,9 @@ class TestPythonClaimsAgree:
                                         str(advisory)))
 
     def _gated(self) -> set[str]:
-        import yaml
+        # importorskip, like test_ci_tests_extended.py: the free-threaded
+        # canary leg installs no PyYAML (tests/unit/test_canary_deps.py).
+        yaml = pytest.importorskip("yaml")
         ci = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml")
                             .read_text(encoding="utf-8"))
         return self._gated_in(ci["jobs"]["tests"])
