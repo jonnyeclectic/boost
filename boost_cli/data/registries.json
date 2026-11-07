@@ -6104,11 +6104,11 @@
       "url": "https://github.com/Imbad0202/academic-research-skills",
       "type": "workflow",
       "category": "general",
-      "focus": "Academic research pipeline: deep research, paper writing, peer review, citation checks, systematic-review screening (5 skills, 21 workflows)",
+      "focus": "Academic research pipeline: deep research, paper writing, peer review, citation checks, systematic-review screening; half its items expect the plugin's own files (5 skills, 21 workflows)",
       "est_items": 26,
-      "confidence": "high",
+      "confidence": "med",
       "list_only": false,
-      "curated": true
+      "curated": false
     },
     {
       "name": "jaktestowac/awesome-copilot-for-testers",

@@ -131,8 +131,11 @@ CURATED = frozenset({
     "Orchestra-Research/AI-Research-SKILLs", "jeffallan/claude-skills",
     "zubair-trabzada/geo-seo-claude",
     # 2026-11 sweep, stars measured 2026-11-07. Not googleworkspace/cli: its
-    # 32k stars belong to the `gws` binary, not the skills.
-    "Imbad0202/academic-research-skills", "emilkowalski/skills",
+    # 32k stars belong to the `gws` binary, not the skills. Not
+    # Imbad0202/academic-research-skills (55k): 13 of its 26 items are /ars-*
+    # commands that stop when ${CLAUDE_PLUGIN_ROOT} does not resolve, and a
+    # command boost installs is a loose file, so it never does.
+    "emilkowalski/skills",
     "kepano/obsidian-skills", "SuperClaude-Org/SuperClaude_Framework",
     "cursor/plugins", "jakubkrehel/skills", "android/skills",
 })
@@ -842,7 +845,7 @@ WORKFLOWS = [
     ("anthropics/claude-cookbooks", "meta", "A collection of notebooks/recipes showcasing some fun and effective... (4 skills, 11 workflows)", 15, "high"),
     # --- end 2026-07 batch ---
     # --- 2026-11 sweep (see the SKILLS section for how it was measured) ---
-    ("Imbad0202/academic-research-skills", "general", "Academic research pipeline: deep research, paper writing, peer review, citation checks, systematic-review screening (5 skills, 21 workflows)", 26, "high"),
+    ("Imbad0202/academic-research-skills", "general", "Academic research pipeline: deep research, paper writing, peer review, citation checks, systematic-review screening; half its items expect the plugin's own files (5 skills, 21 workflows)", 26, "med"),
     ("microsoft/hve-core", "general", "Microsoft Hypervelocity Engineering for Copilot: PRD, BRD and ADR builders, backlog grooming, code-review, security and accessibility agents (93 skills, 170 workflows)", 263, "high"),
     ("SuperClaude-Org/SuperClaude_Framework", "commands", "SuperClaude: /sc commands (brainstorm, build, troubleshoot, spec-panel, research) plus persona agents (6 skills, 65 workflows)", 71, "high"),
     ("0xSteph/pentest-ai-agents", "security", "Subagents for authorized penetration testing: recon, exploit chaining, AD and cloud attacks, detection engineering, reports (56 workflows)", 56, "med"),
