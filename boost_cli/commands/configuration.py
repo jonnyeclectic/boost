@@ -2920,8 +2920,9 @@ def _boost_first_targets(hosts: list[str]) -> list[str]:
     scoped_agents = {builtin.AGENT_FOR_HOST.get(h) for h in hosts}
     # materializing_agents, not enabled_agents: this is a *rule*, so the
     # preview has to be built from the set the rule install actually writes to,
-    # or it names a path nothing ever creates. AGENT_FOR_HOST lists only
-    # claude-code and gemini today and both materialize rules, so the two sets
+    # or it names a path nothing ever creates. AGENT_FOR_HOST maps every host
+    # to claude-code, gemini or codex, and all three materialize rules (agy
+    # maps to gemini rather than to its skills-only agent), so the two sets
     # coincide and this is a guard rather than a fix.
     #
     # Note what it does and does not cover. `only_agents` below is

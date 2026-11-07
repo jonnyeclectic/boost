@@ -43,13 +43,23 @@ BUILTIN_URL = "builtin:boost"
 #: second a data change rather than a code change.
 BUILTIN_RULES = ("boost-first",)
 
-#: MCP host id -> boost agent id. The two vocabularies genuinely differ
-#: (``mcphost.CLAUDE`` is ``"claude"``; the agent is ``"claude-code"``), and
-#: the offer is scoped through this so standing text naming ``boost_search``
-#: only reaches an agent boost actually registered a server with. Cursor and
-#: Windsurf are absent on purpose: boost registers no MCP server for them, so
-#: the rule would advertise tools they do not have.
-AGENT_FOR_HOST = {"claude": "claude-code", "gemini": "gemini"}
+#: MCP host id -> the boost agent whose rule file that host reads. The two
+#: vocabularies genuinely differ (``mcphost.CLAUDE`` is ``"claude"``; the agent
+#: is ``"claude-code"``), and the offer is scoped through this so standing text
+#: naming ``boost_search`` only reaches an agent boost actually registered a
+#: server with. Cursor and Windsurf are absent on purpose: boost registers no
+#: MCP server for them, so the rule would advertise tools they do not have.
+#:
+#: Every host ``boost mcp register`` registers is here. Codex reads
+#: ``$CODEX_HOME/AGENTS.md``, which the ``codex`` agent writes
+#: (``rules.CONTEXT_FILES``). Antigravity CLI (``agy``) has no rule surface of
+#: its own — its agent is ``skills_only`` because its rule format is
+#: unverified — and reads the ``~/.gemini/GEMINI.md`` the ``gemini`` agent
+#: writes (core/config.py), so it maps there, and ``agy`` with ``gemini``
+#: offers that one file once. Both used to be registered and never offered
+#: the rule, so an agy-only machine got no offer at all.
+AGENT_FOR_HOST = {"claude": "claude-code", "gemini": "gemini",
+                  "agy": "gemini", "codex": "codex"}
 
 
 def source_dir() -> Path:
