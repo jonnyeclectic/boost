@@ -79,7 +79,10 @@
       "est_items": 30,
       "confidence": "low",
       "list_only": true,
-      "curated": false
+      "curated": false,
+      "formerly": [
+        "ichoosetoaccept/awesome-windsurf"
+      ]
     },
     {
       "name": "digitalchild/cursor-best-practices",
@@ -1190,7 +1193,10 @@
       "est_items": 54,
       "confidence": "high",
       "list_only": false,
-      "curated": false
+      "curated": false,
+      "formerly": [
+        "diegosouzapw/OmniRoute"
+      ]
     },
     {
       "name": "chrisbanes/skills",
@@ -1960,7 +1966,10 @@
       "est_items": 7,
       "confidence": "med",
       "list_only": false,
-      "curated": false
+      "curated": false,
+      "formerly": [
+        "MLOps-Courses/mlops-coding-skills"
+      ]
     },
     {
       "name": "forcedotcom/sf-skills",
@@ -2907,7 +2916,10 @@
       "est_items": 8,
       "confidence": "med",
       "list_only": false,
-      "curated": false
+      "curated": false,
+      "formerly": [
+        "leogallego/claude-ansible-skills"
+      ]
     },
     {
       "name": "Leonxlnx/taste-skill",
@@ -4612,7 +4624,10 @@
       "est_items": 2947,
       "confidence": "low",
       "list_only": true,
-      "curated": false
+      "curated": false,
+      "formerly": [
+        "sickn33/antigravity-awesome-skills"
+      ]
     },
     {
       "name": "skydoves/android-testing-skills",

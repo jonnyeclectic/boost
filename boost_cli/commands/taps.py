@@ -102,8 +102,7 @@ def _print_held(plan: list[dict]) -> int:
     rc = 0
     for row in plan:
         if row.get("skipped"):
-            out.info(out.role(registry.already_tapped(
-                row["name"], row.get("tapped_as", row["name"])), "muted"))
+            out.info(out.role(_held_line(row), "muted"))
         elif not row.get("todo"):
             out.warn("would not tap %s: %s" % (row["name"], row["error"]),
                      wrap=True)
@@ -124,6 +123,13 @@ def _dry_run_counts(plan: list[dict]) -> str:
     return ", ".join(parts)
 
 
+def _held_line(row: dict) -> str:
+    """The muted line for a planned spec :func:`registry.plan_specs` skipped."""
+    return registry.already_tapped(row["name"],
+                                   row.get("tapped_as", row["name"]),
+                                   renamed=bool(row.get("renamed")))
+
+
 def _skip_if_already_tapped(spec: str) -> bool:
     """Print the multi-SPEC skip line and return True if `spec` is tapped.
 
@@ -135,17 +141,13 @@ def _skip_if_already_tapped(spec: str) -> bool:
     the ordinary `registry.add` call raises its usual, more specific error.
     Nor is a *different* repository under the same name: it falls through
     too, and `registry.add` refuses it naming the URL that holds the name.
+    Asked of the same plan the multi-SPEC run reads, so a catalogue row tapped
+    under its former name is skipped here too rather than cloned again.
     """
-    try:
-        name, url = registry.parse_spec(spec)
-    except BoostError:
+    [row] = registry.plan_specs([spec])
+    if not row.get("skipped"):
         return False
-    hit = next((t for t in registry.list_taps()
-                if registry.name_key(t.name) == registry.name_key(name)
-                and registry.same_source(t.url, url)), None)
-    if hit is None:
-        return False
-    out.info(out.role(registry.already_tapped(name, hit.name), "muted"))
+    out.info(out.role(_held_line(row), "muted"))
     return True
 
 
@@ -169,8 +171,7 @@ def _tap_all(urls: list[str], jobs: int | None,
     for res in results:
         name = res["name"]
         if res.get("skipped"):
-            out.info(out.role(registry.already_tapped(
-                name, res.get("tapped_as", name)), "muted"))
+            out.info(out.role(_held_line(res), "muted"))
             continue
         if not res.get("ok"):
             out.warn("could not tap %s: %s" % (name, res.get("error", "")),

@@ -406,6 +406,22 @@ class TestSourceTuples:
         back = sorted(shipped & set(builder.RETIRED))
         assert not back, "registries.json still ships retired repos: %s" % back
 
+    def test_every_renamed_row_is_a_row_and_no_former_name_is(self, builder):
+        """`formerly` is how a tap of the old name is told apart from a new
+        repository; a former name that is still a row would be both."""
+        known = {r[0].lower() for tup in (builder.SKILLS, builder.RULES,
+                                          builder.WORKFLOWS) for r in tup}
+        assert sorted(n for n in builder.FORMERLY
+                      if n.lower() not in known) == []
+        olds = [o for olds in builder.FORMERLY.values() for o in olds]
+        assert all(o.count("/") == 1 for o in olds), olds
+        assert sorted(o for o in olds if o.lower() in known) == []
+
+    def test_the_shipped_catalog_carries_formerly(self, catalog, builder):
+        shipped = {e["name"]: e["formerly"] for e in catalog
+                   if "formerly" in e}
+        assert shipped == {n: list(o) for n, o in builder.FORMERLY.items()}
+
     def test_every_retired_repo_records_why(self, builder):
         """A bare name is unfalsifiable later; the reason is what makes it
         checkable against GitHub again in a year."""

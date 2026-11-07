@@ -75,6 +75,20 @@ RETIRED = {
     "besoeasy/open-skills": "404 on 2026-10-16",
 }
 
+# Rows moved to the name GitHub now redirects to, and the names they had. A
+# machine that tapped a row under its old name holds the same repository, and
+# `boost tap --catalog` deduped by name, so it cloned that repository a second
+# time. Shipped as `formerly` on the row; `core.registry` reads it to treat a
+# tap of a former name as this row. Only renames made after boost shipped a
+# row belong here, and a former name must never be a row of its own.
+FORMERLY = {
+    "sickn33/agentic-awesome-skills": ("sickn33/antigravity-awesome-skills",),
+    "detailobsessed/awesome-devin": ("ichoosetoaccept/awesome-windsurf",),
+    "cheaper-inference/OmniRoute": ("diegosouzapw/OmniRoute",),
+    "leogallego/ai-skills-ansible": ("leogallego/claude-ansible-skills",),
+    "fmind/mlops-coding-skills": ("MLOps-Courses/mlops-coding-skills",),
+}
+
 # Repos that ship their own installer and cannot be installed by copying
 # Markdown. boost's install is "copy the item's directory into the canonical
 # store and symlink it out"; for these the item is a thin entry point over a
@@ -874,6 +888,7 @@ def rows(pairs, typ):
             # whole generated file to say nothing about 460 registries.
             **({"self_installing": SELF_INSTALLING[name]}
                if name in SELF_INSTALLING else {}),
+            **({"formerly": list(FORMERLY[name])} if name in FORMERLY else {}),
         }
 
 
