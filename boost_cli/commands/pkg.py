@@ -311,8 +311,10 @@ def _report_project_mcp(res: store.InstallResult, no_mcp: bool = False) -> None:
     sidecar could not be written — a read-only checkout, a root-owned
     .mcp.json — and claiming success there would be the worse failure, because
     the skill really is installed and the servers really are not. They differ
-    under ``--no-mcp`` too, which skips the write and is said here rather than
-    read as "already in .mcp.json".
+    under ``--no-mcp`` too, which skips the write: a server the file did not
+    hold is "not recorded", and one it already held (``res.mcp_present``,
+    from an earlier install or the user) is "already in .mcp.json", because
+    the skip removes nothing.
 
     A server declared by name alone has no command to record, and user scope
     says so ("install these yourself"); this branch used to return before a
