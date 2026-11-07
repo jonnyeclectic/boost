@@ -129,7 +129,9 @@ def _offer_mcp(res: store.InstallResult, no_mcp: bool = False) -> None:
 
     Advisory, never fatal: a declined prompt, a missing agent CLI or a failed
     registration all leave the skill installed. Suppressed by ``--no-mcp`` (passed
-    down as ``no_mcp``) or by exporting ``BOOST_NO_MCP_OFFER``.
+    down as ``no_mcp``) or by exporting ``BOOST_NO_MCP_OFFER``. A project-scope
+    install is reported whatever those say (:func:`_report_project_mcp`): the
+    flag decided whether ``.mcp.json`` was written, and the report says which.
 
     The offer targets whichever agent CLIs are actually installed, so a machine
     with only Gemini CLI is offered ``gemini mcp add`` rather than a ``claude``
@@ -147,7 +149,7 @@ def _offer_mcp(res: store.InstallResult, no_mcp: bool = False) -> None:
     does not advertise it.
     """
     rows = res.mcp_servers
-    if not rows or no_mcp or typedvalue.env_flag("BOOST_NO_MCP_OFFER", unknown=True):
+    if not rows:
         return
     from ..core import mcpdecl, scopes
     # A project-scoped install already recorded these in the repo's .mcp.json
@@ -155,47 +157,47 @@ def _offer_mcp(res: store.InstallResult, no_mcp: bool = False) -> None:
     # registration `--scope project` promises. Offering a `<host> mcp add` on
     # top would register the same servers a second time, machine-wide — which
     # is the bug this path had: the offer never looked at res.scope at all.
+    #
+    # Ahead of the --no-mcp gate: that gate used to sit above this branch, so
+    # `install --local --no-mcp` wrote every server to .mcp.json and said
+    # nothing. The flag now skips the write (store), and this says so.
     if res.scope == scopes.SCOPE_PROJECT:
-        # Report what was RECORDED, not what was declared. The two differ when
-        # the sidecar could not be written — a read-only checkout, a root-owned
-        # .mcp.json — and claiming success there would be the worse failure,
-        # because the skill really is installed and the servers really are not.
-        wanted = [r["name"] for r in mcpdecl.registrable(rows)]
-        if not wanted:
-            return
-        out.info("")
-        if res.mcp_recorded:
-            out.ok("recorded %s in %s"
-                   % (_plural(len(res.mcp_recorded), "MCP server"),
-                      mcpdecl.SIDECAR))
-            out.dim("  %s — commit it to share with the team"
-                    % ", ".join(res.mcp_recorded))
-        elif res.mcp_error:
-            # Refused rather than rebuilt: the file is the user's, and
-            # rewriting an unparseable one from an empty view loses every
-            # server in it.
-            out.warn("%s left unchanged — %s not recorded"
-                     % (mcpdecl.SIDECAR, ", ".join(wanted)))
-            out.dim("  %s" % res.mcp_error)
-            out.dim("  the skill is installed; fix %s and reinstall to record "
-                    "them" % mcpdecl.SIDECAR, wrap=True)
-        else:
-            # Every server was already there — another skill's or the user's.
-            out.dim("  %s already in %s" % (", ".join(wanted), mcpdecl.SIDECAR))
+        _report_project_mcp(res, no_mcp=no_mcp)
+        return
+    if no_mcp or typedvalue.env_flag("BOOST_NO_MCP_OFFER", unknown=True):
         return
     out.info("")
     out.warn("%s needs %s to work:" % (res.name, _plural(len(rows), "MCP server")))
+    _list_mcp_rows(rows)
+    wirable = mcpdecl.registrable(rows)
+    if not wirable:
+        # Name-only declarations: boost will not invent a command line, and
+        # `boost mcp register` registers boost's own server, never a skill's.
+        out.dim("  boost cannot register these — install these yourself and "
+                "add them with your agent's own `mcp add`", wrap=True)
+        return
+    _offer_registration(wirable, res.scope)
+
+
+def _list_mcp_rows(rows: list[dict], needed_by: dict | None = None) -> None:
+    """One line per declared server: its name and command line, and, for a
+    whole run, the skills that declared it."""
+    from ..core import mcpdecl
     for row in rows:
         line = mcpdecl.command_line(row["spec"]) if row["spec"] else ""
         how = "`%s`" % line if line else "no command declared"
-        out.info("  %s  %s" % (out.c(row["name"], out.BOLD),
-                               out.role(how, "muted")))
-    wirable = mcpdecl.registrable(rows)
-    if not wirable:
-        # Name-only declarations: boost will not invent a command line.
-        out.dim("  install these yourself, then `boost mcp register`", wrap=True)
-        return
-    from ..core import mcphost
+        who = (needed_by or {}).get(row["name"])
+        out.info("  %s  %s%s" % (out.c(row["name"], out.BOLD),
+                                 out.role(how, "muted"),
+                                 out.role("  (%s)" % ", ".join(who), "muted")
+                                 if who else ""))
+
+
+def _offer_registration(wirable: list[dict], scope: str) -> None:
+    """The one question: register ``wirable`` machine-wide, or print the
+    ``<host> mcp add`` lines that would. See :func:`_offer_mcp` for why no
+    flag answers it."""
+    from ..core import mcpdecl, mcphost
     # Offer the CLIs that are actually here. With none installed we still fall
     # back to the full list so the manual command lines get printed.
     targets = [h for h in mcphost.hosts() if shutil.which(mcphost.cli(h))] \
@@ -218,13 +220,157 @@ def _offer_mcp(res: store.InstallResult, no_mcp: bool = False) -> None:
             # from Claude's was the one never shown.
             for host in targets:
                 argv = mcpdecl.register_argv(row["name"], row["spec"],
-                                             host=host, scope=res.scope)
+                                             host=host, scope=scope)
                 out.info("    " + mcphost.shell_line(argv))
         return
     for row in wirable:
         for host in targets:
             _register_mcp_server(row["name"], row["spec"], host=host,
-                                 scope=res.scope)
+                                 scope=scope)
+
+
+def _merge_mcp_rows(results: list) -> tuple[list[dict], dict, list[tuple]]:
+    """Every server a run's results declare, once each, in first-seen order:
+    ``(rows, {server: [skills]}, [(skill, server)] whose command differs)``.
+
+    Keyed by server name, because a host holds one registration per name: a
+    second skill naming the same server with another command cannot be
+    registered beside the first, so it is named rather than offered.
+
+    Only two runnable declarations can disagree. A name-only one (``mcp:
+    github`` in frontmatter) states a need and no command, so it neither
+    conflicts with a runnable spec nor shadows one: the first skill to give
+    a command is the one offered, whichever order the skills ran in.
+    """
+    from ..core import mcpdecl
+    rows: dict[str, dict] = {}
+    needed_by: dict[str, list[str]] = {}
+    differs: list[tuple[str, str]] = []
+    for res in results:
+        for row in res.mcp_servers:
+            name = row["name"]
+            needed_by.setdefault(name, []).append(res.name)
+            first = rows.get(name)
+            runnable = bool(mcpdecl.registrable([row]))
+            if first is None or (runnable
+                                 and not mcpdecl.registrable([first])):
+                rows[name] = row        # keeps the name's first-seen slot
+            elif runnable and first["spec"] != row["spec"]:
+                differs.append((res.name, name))
+    return list(rows.values()), needed_by, differs
+
+
+def _offer_mcp_batch(results: list, no_mcp: bool = False) -> None:
+    """:func:`_offer_mcp` once for a whole run, after its installs.
+
+    ``install <tap>`` asked once per declaring skill, partway through the
+    output and after ``-y`` had settled the list. Now every server the run's
+    skills declare is listed together, with the skills that need it, and
+    asked about once; a decline prints every ``<host> mcp add`` line. One
+    declaring skill reads exactly as a single install does.
+    """
+    from ..core import mcpdecl
+    results = [r for r in results if r.mcp_servers]
+    if len(results) <= 1:
+        for res in results:
+            _offer_mcp(res, no_mcp=no_mcp)
+        return
+    if no_mcp or typedvalue.env_flag("BOOST_NO_MCP_OFFER", unknown=True):
+        return
+    rows, needed_by, differs = _merge_mcp_rows(results)
+    out.info("")
+    out.warn("%s need %s to work:" % (_plural(len(results), "skill"),
+                                      _plural(len(rows), "MCP server")))
+    _list_mcp_rows(rows, needed_by)
+    for skill, name in differs:
+        out.dim("  %s declares %s with a different command — not offered"
+                % (skill, name), wrap=True)
+    wirable = mcpdecl.registrable(rows)
+    named = [r["name"] for r in rows if r not in wirable]
+    if named:
+        # Name-only declarations: boost will not invent a command line, and
+        # `boost mcp register` registers boost's own server, never a skill's.
+        them = "it" if len(named) == 1 else "them"
+        out.dim("  %s: boost cannot register %s — install %s yourself and "
+                "add %s with your agent's own `mcp add`"
+                % (", ".join(named), them, them, them), wrap=True)
+    if wirable:
+        _offer_registration(wirable, results[0].scope)
+
+
+def _no_mcp_switch(no_mcp: bool) -> str:
+    """The switch to name when a project install left ``.mcp.json`` alone:
+    ``--no-mcp`` when it was given, else ``BOOST_NO_MCP_OFFER`` when that is
+    what is exported. Saying "--no-mcp" to someone who never typed it sent
+    them looking for a flag instead of their environment."""
+    if no_mcp or not typedvalue.env_flag("BOOST_NO_MCP_OFFER", unknown=True):
+        return "--no-mcp"
+    return "BOOST_NO_MCP_OFFER"
+
+
+def _report_project_mcp(res: store.InstallResult, no_mcp: bool = False) -> None:
+    """What a project install did with its skill's servers in ``.mcp.json``.
+
+    Reports what was RECORDED, not what was declared. The two differ when the
+    sidecar could not be written — a read-only checkout, a root-owned
+    .mcp.json — and claiming success there would be the worse failure, because
+    the skill really is installed and the servers really are not. They differ
+    under ``--no-mcp`` too, which skips the write: a server the file did not
+    hold is "not recorded", and one it already held (``res.mcp_present``,
+    from an earlier install or the user) is "already in .mcp.json", because
+    the skip removes nothing.
+
+    A server declared by name alone has no command to record, and user scope
+    says so ("install these yourself"); this branch used to return before a
+    word, so ``install --local`` of such a skill read as needing nothing.
+    ``--no-mcp`` keeps it quiet, as it does at user scope.
+    """
+    from ..core import mcpdecl
+    wirable = mcpdecl.registrable(res.mcp_servers)
+    wanted = [r["name"] for r in wirable]
+    named = [] if res.mcp_skipped else [
+        r["name"] for r in res.mcp_servers if r not in wirable]
+    if not wanted and not named:
+        return
+    out.info("")
+    if named:
+        out.warn("%s needs %s with no command declared: %s — not recorded in "
+                 "%s; install %s yourself"
+                 % (res.name, _plural(len(named), "MCP server"),
+                    ", ".join(named), mcpdecl.SIDECAR,
+                    "it" if len(named) == 1 else "them"), wrap=True)
+    if not wanted:
+        return
+    if res.mcp_skipped:
+        # Skipped is not absent: a server an earlier install (or the user)
+        # put in the file is still there, and "not recorded" over it would
+        # tell a reader it is not about to be committed.
+        switch = _no_mcp_switch(no_mcp)
+        absent = [w for w in wanted if w not in res.mcp_present]
+        if absent:
+            out.dim("  %s not recorded in %s (%s)"
+                    % (", ".join(absent), mcpdecl.SIDECAR, switch), wrap=True)
+        if res.mcp_present:
+            out.dim("  %s already in %s; %s left the file as it was"
+                    % (", ".join(res.mcp_present), mcpdecl.SIDECAR, switch),
+                    wrap=True)
+    elif res.mcp_recorded:
+        out.ok("recorded %s in %s"
+               % (_plural(len(res.mcp_recorded), "MCP server"),
+                  mcpdecl.SIDECAR))
+        out.dim("  %s — commit it to share with the team"
+                % ", ".join(res.mcp_recorded))
+    elif res.mcp_error:
+        # Refused rather than rebuilt: the file is the user's, and rewriting
+        # an unparseable one from an empty view loses every server in it.
+        out.warn("%s left unchanged — %s not recorded"
+                 % (mcpdecl.SIDECAR, ", ".join(wanted)))
+        out.dim("  %s" % res.mcp_error)
+        out.dim("  the skill is installed; fix %s and reinstall to record "
+                "them" % mcpdecl.SIDECAR, wrap=True)
+    else:
+        # Every server was already there — another skill's or the user's.
+        out.dim("  %s already in %s" % (", ".join(wanted), mcpdecl.SIDECAR))
 
 
 def _register_mcp_server(name: str, spec: dict, host: str = "claude",
@@ -287,8 +433,15 @@ def _register_mcp_server(name: str, spec: dict, host: str = "claude",
     journal.log("mcp-register", name, host=host)
 
 
-def _report_result(res: store.InstallResult, no_mcp: bool = False) -> None:
-    """The canonical three-line install report."""
+def _report_result(res: store.InstallResult, no_mcp: bool = False,
+                   defer_mcp: list | None = None) -> None:
+    """The canonical three-line install report.
+
+    ``defer_mcp`` collects a user-scope result instead of offering its MCP
+    servers here, for a caller that asks once per run
+    (:func:`_offer_mcp_batch`). A project result is still reported in place:
+    its ``.mcp.json`` line is a report of what was written, not a question.
+    """
     if res.kind in ("rule", "workflow"):
         where = " (this repo)" if res.scope == "project" else ""
         out.ok("materialized%s → %s"
@@ -340,7 +493,10 @@ def _report_result(res: store.InstallResult, no_mcp: bool = False) -> None:
     out.ok("lock updated (.skill-lock.json)")
     _warn_injection(res)
     _warn_secrets(res)
-    _offer_mcp(res, no_mcp=no_mcp)
+    if defer_mcp is not None:
+        defer_mcp.append(res)
+    else:
+        _offer_mcp(res, no_mcp=no_mcp)
 
 
 def _report_skill_copy(res) -> None:
@@ -388,6 +544,16 @@ def _warn_unwritable(res, stream=None) -> None:
     for line in getattr(res, "copy_blocked", None) or ():
         out.warn("%s: skill copy not linked: %s" % (res.name, line),
                  stream=stream, wrap=True)
+    # The repo's .mcp.json, written by a project install that did not come
+    # through `install`'s own report: reinstall, update and bundle install
+    # record a server a new version declares, and that write is a change to a
+    # committed file that every teammate's agent then launches.
+    recorded = getattr(res, "mcp_recorded", None) or []
+    if recorded:
+        from ..core import mcpdecl
+        out.info("recorded %s in %s: %s"
+                 % (_plural(len(recorded), "MCP server"), mcpdecl.SIDECAR,
+                    ", ".join(recorded)), stream=stream, wrap=True)
     # Written, but not everything in the source survived the conversion.
     # Plain: a note may quote the file it is about (a subagent's `tools`
     # entries), and that file is a tap's.
@@ -668,6 +834,13 @@ def _expand_tap(tap: registry.Tap, args, pbase) -> installplan.TapExpansion:
     return exp
 
 
+def _mcp_declined(args) -> bool:
+    """``--no-mcp``, or ``BOOST_NO_MCP_OFFER`` exported: no offer at user
+    scope, and no ``.mcp.json`` write at project scope."""
+    return bool(args.no_mcp
+                or typedvalue.env_flag("BOOST_NO_MCP_OFFER", unknown=True))
+
+
 def cmd_install(argv: list[str]) -> int:
     ap = cliparse.parser(prog="boost install",
                                  description="Install a skill from a tap registry")
@@ -695,7 +868,9 @@ def cmd_install(argv: list[str]) -> int:
                     help="install only the named skills, not their `requires:` "
                          "(the wider spellings are reported, never installed)")
     ap.add_argument("--no-mcp", action="store_true",
-                    help="don't offer to register MCP servers a skill declares")
+                    help="don't offer to register MCP servers a skill "
+                         "declares, or, with --local, record them in the "
+                         "repo's .mcp.json (remembered)")
     ap.add_argument("-y", "--yes", action="store_true",
                     help="with a tap as NAME, install its skill list without "
                          "asking first. Never answers the offer to register "
@@ -867,7 +1042,7 @@ def cmd_install(argv: list[str]) -> int:
         # predict. See agents.workflow_agents.
         mat_sets = {"rule": agents.materializing_agents(mbase),
                     "workflow": agents.workflow_agents(mbase)}
-        offer_mcp = not args.no_mcp and not typedvalue.env_flag("BOOST_NO_MCP_OFFER", unknown=True)
+        offer_mcp = not _mcp_declined(args)
         mcp_hosts = [h for h in mcphost.hosts() if shutil.which(mcphost.cli(h))] \
             or mcphost.hosts()
         for e in entries:
@@ -910,11 +1085,16 @@ def cmd_install(argv: list[str]) -> int:
                                  % _tilde(scopes.skill_target(
                                      sdir, e["name"], base=pbase,
                                      dotdir=agents.project_dotdir(agent_name, sdir))))
-                    if offer_mcp:
-                        for row in mcpdecl.registrable(
-                                store.declared_mcp_servers(store.source_dir_for(e))):
-                            out.info("  mcp   → record %s in %s"
-                                     % (row["name"], mcpdecl.SIDECAR))
+                    # Both ways: the run writes .mcp.json unless told not
+                    # to, and a preview that went quiet under --no-mcp read
+                    # the same as one with nothing to record.
+                    for row in mcpdecl.registrable(
+                            store.declared_mcp_servers(store.source_dir_for(e))):
+                        out.info("  mcp   → record %s in %s"
+                                 % (row["name"], mcpdecl.SIDECAR)
+                                 if offer_mcp else
+                                 "  mcp   → not recorded (%s): %s"
+                                 % (_no_mcp_switch(args.no_mcp), row["name"]))
                     continue
                 if e.get("kind") in ("rule", "workflow"):
                     k = e["kind"]
@@ -995,6 +1175,9 @@ def cmd_install(argv: list[str]) -> int:
         return 1 if failed else 0
 
     results = []
+    # Asked once, after the loop, for a run of several items: see
+    # _offer_mcp_batch. A single install offers in its own report.
+    pending: list[store.InstallResult] | None = [] if multi else None
     for e in entries:
         if multi:
             out.heading("%s v%s (%s)"
@@ -1004,15 +1187,17 @@ def cmd_install(argv: list[str]) -> int:
                     and e.get("kind", "skill") == "skill"):
                 store.refuse_unreachable_skill(only, e["name"])
             res = store.install(e, force=args.force, only_agents=only,
-                                scope=args.scope, as_skill=args.as_skill)
+                                scope=args.scope, as_skill=args.as_skill,
+                                record_mcp=not _mcp_declined(args))
         except BoostError as err:
             if not multi:
                 raise
             out.warn("%s: %s" % (e["name"], err.message), stream=sys.stderr)
             failed += 1
             continue
-        _report_result(res, no_mcp=args.no_mcp)
+        _report_result(res, no_mcp=args.no_mcp, defer_mcp=pending)
         results.append(res)
+    _offer_mcp_batch(pending or [], no_mcp=args.no_mcp)
     if results:
         _report_prerequisites([e for e in entries
                                if e["name"] in {r.name for r in results}],
@@ -1084,6 +1269,17 @@ def _rm_target(base, row: str) -> str:
     no longer expands, and a repo path with a space split in two unquoted.
     """
     return util.shell_arg("%s/%s" % (base, row) if base else row)
+
+
+def _report_tidied(info: dict) -> None:
+    """Name what the last project skill's uninstall removed besides itself:
+    the empty lock, and the empty directories its installs created."""
+    gone = (["%s/%s" % (projectlock.LOCK_DIRNAME, projectlock.LOCK_FILENAME)]
+            if info.get("lock_removed") else [])
+    gone += ["%s/" % d for d in info.get("dirs_removed") or ()]
+    if gone:
+        out.dim("  no project skills left — removed %s" % ", ".join(gone),
+                wrap=True)
 
 
 def cmd_uninstall(argv: list[str]) -> int:
@@ -1264,6 +1460,7 @@ def cmd_uninstall(argv: list[str]) -> int:
                 out.warn("%s left unchanged — remove %s's servers by hand"
                          % (mcpdecl.SIDECAR, name), wrap=True)
                 out.dim("  %s" % info["mcp_error"])
+            _report_tidied(info)
         elif kind == "skill":
             out.ok("removed %s" % _tilde(store.skill_store_dir(name)))
         # A rule/workflow never had a store dir to begin with — the
