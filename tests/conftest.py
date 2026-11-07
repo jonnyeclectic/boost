@@ -929,6 +929,9 @@ def _sandbox_home(tmp_path, monkeypatch):
     # which this fixture also sets, so without this guard every register
     # test would silently write a standing block into its sandbox HOME.
     monkeypatch.setenv("BOOST_NO_RULE", "1")
+    # ...and its own skill, an offer that defaults to yes: the same guard, or
+    # every register test installs it.
+    monkeypatch.setenv("BOOST_NO_SKILL", "1")
     # `self-update` asks PyPI which version is newest before it will claim to
     # be up to date. Same contract again: no test reaches the network as a side
     # effect of checking what a command prints.

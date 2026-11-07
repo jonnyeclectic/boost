@@ -980,7 +980,35 @@ class TestQuickstartReadiness:
             ["  ✓ tapped %s (1 items)" % n for n in seven]
             + ["  ✓ indexed 3 items for keyword search",
                "  skipped vectors as asked",
-               "  ✓ ready — try `boost search brainstorming`"])
+               "  ✓ ready — try `boost search brainstorming`",
+               "  next: `boost mcp register` lets your agents search and "
+               "install mid-task"])
+
+    def test_a_ready_run_names_the_step_that_wires_agents_and_takes_none(
+            self, boost, monkeypatch, seven, sandbox):
+        # The onboarding ended at a searchable catalog and never named
+        # `boost mcp register`, so agents learned nothing about boost. The
+        # line names it; quickstart itself registers nothing and offers no
+        # rule.
+        from boost_cli.core import builtin, lockfile
+        _fake_add_many(monkeypatch, ["ok"] * len(seven))
+        res = boost("quickstart", "--no-vectors", expect=0)
+        assert "next: `boost mcp register`" in res.out
+        assert lockfile.get_rule(builtin.BUILTIN_RULES[0]) is None
+        assert not (sandbox / ".claude.json").exists()
+
+    def test_a_run_that_is_not_ready_does_not_point_agents_at_it(
+            self, boost, monkeypatch, seven):
+        _fake_add_many(monkeypatch, ["ok"] * len(seven), entries=0)
+        res = boost("quickstart", "--no-vectors", expect=1)
+        assert "boost mcp register" not in res.out + res.err
+
+    def test_help_names_the_step_that_wires_agents(self, boost):
+        res = boost("quickstart", "--help", expect=0)
+        flat = " ".join(res.out.split())
+        assert "registers nothing with your agents" in flat
+        assert "`boost mcp register` is the step that lets them search and " \
+            "install" in flat
 
     def test_a_dry_run_claims_no_readiness_either_way(self, boost):
         # It changed nothing, so it has nothing to be ready or unready about.

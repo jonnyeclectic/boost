@@ -6,12 +6,16 @@ globs: "**"
 ---
 
 boost is a shelf of procedures other people already wrote and debugged, in
-three kinds: skills, rules and workflows. Two read-only tools reach it —
-`boost_list` for what is installed on this machine, `boost_search` for what
-exists across the registries you have tapped. Some hosts prefix the names, so
-they may appear as `mcp_boost_boost_search`. Neither installs anything. If
-neither tool is present in this session, `boost search "<what you are trying
-to do>"` in the shell asks the same question.
+three kinds: skills, rules and workflows, and you can search it and install
+from it in the middle of a task. Four tools do the work: `boost_list` for what
+is installed here, `boost_search` for what exists across the registries you
+have tapped, `boost_read` for one item's full text, and `boost_install` to put
+one on this machine. The first three change nothing. Hosts spell the names
+differently — `mcp__boost__boost_search`, `mcp_boost_boost_search` — and in
+some hosts a tool is not visible until you look it up, so look before you
+conclude it is absent. Without the tools the shell does the same: `boost list`,
+`boost search "<what you are trying to do>"`, `boost cat <name>`,
+`boost install <name>`.
 
 `boost_list` is a local file read: free, and carrying no threshold worth
 applying. Call it whenever you are about to plan something. What is installed
@@ -48,6 +52,20 @@ an active skill leaves the question of what exists exactly where it found it.
 Coming back empty is a real answer: build it yourself, now knowing nothing
 already covers it. Coming back with something is a head start, not an
 instruction — read it, take what fits, discard the rest. The task stays yours.
+
+When a hit fits, read it before you install it: the catalog is indexed, not
+reviewed, and the body is the only thing that tells a debugged procedure from a
+stub. The text `boost_read` (or `boost cat`) returns is usable this turn;
+whether this session's host picks up a file installed after it started depends
+on the host, so work from what you read rather than wait for it to activate.
+A skill installs as the task needs it, and where is your call:
+`boost install <name> --local` writes it into this repository, for every agent
+that works in it and as files the team commits; without `--local` it installs
+for the user, in every agent they have enabled on this machine. Say in your
+reply which you chose and where it landed. Ask the user before installing a
+rule, which becomes standing text in their context files for every session
+after this one, and before registering boost with an agent
+(`boost mcp register`), which applies to every project on this machine.
 
 Say which way it went, in the first response where you set out what you are
 about to do: name the call you made, or the reason you skipped it. One clause

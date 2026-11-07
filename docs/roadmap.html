@@ -1630,14 +1630,9 @@ line first. The 2026-11-06 design review ranked the pinned-consent variant
       </article>
 
       <article class="cap rcard" id="mcp-install-tool-names-declared-servers">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">MCP · UX</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">MCP · UX</span></div>
         <h3>MCP <code>boost_install</code> replies should name the servers a skill declares</h3>
-        <p>The MCP <code>boost_install</code> tool never registers servers, which is correct: an agent must
-not grant itself machine-wide commands. But its reply does not say the skill declares any. So the
-agent reports success, and the skill fails later for a reason nobody surfaced.
-
-<b>Fix.</b> Add one line per declared server to the reply: its name, its command line, and the
-<code>mcp add</code> line a human would run. This matches what the CLI's decline prints.</p>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/mcp-install-tool-names-declared-servers.md">Write-up &middot; mcp-install-tool-names-declared-servers.md</a></p>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Med</b></span>

@@ -13,6 +13,7 @@ import io
 import json
 import pathlib
 import re
+from typing import ClassVar
 
 import pytest
 
@@ -22,6 +23,84 @@ from boost_cli.errors import BoostError
 
 def _ok(_args):
     return "ok", False
+
+
+class TestUndeclaredArgumentsAreRefused:
+    """A guessed argument used to be dropped without a word.
+
+    `boost_install {"name": ..., "scope": "project", "local": true}` installed
+    for the user and replied as though it had been understood. A schema that
+    lists `properties` is now closed: anything else is refused, by name, with
+    the arguments the tool does take.
+    """
+
+    CLOSED: ClassVar[dict] = {"type": "object",
+                              "properties": {"name": {"type": "string"},
+                                             "path": {"type": "string"}}}
+
+    def _reg(self, schema, seen=None):
+        reg = mcp.Registry()
+
+        def handler(args):
+            if seen is not None:
+                seen.append(args)
+            return "ran", False
+        reg.register("t", "does t", schema, handler)
+        return reg
+
+    def test_an_undeclared_argument_is_refused_by_name(self):
+        seen = []
+        with pytest.raises(BoostError) as exc:
+            self._reg(self.CLOSED, seen).call("t", {"name": "x", "local": True})
+        assert exc.value.message == "t does not take 'local'"
+        assert exc.value.hint == "it takes: name, path"
+        assert seen == []               # refused before the handler ran
+
+    def test_every_undeclared_argument_is_named_in_order(self):
+        with pytest.raises(BoostError) as exc:
+            self._reg(self.CLOSED).call("t", {"zeta": 1, "alpha": 2,
+                                              "name": "x"})
+        assert exc.value.message == "t does not take 'alpha', 'zeta'"
+
+    def test_declared_arguments_reach_the_handler(self):
+        seen = []
+        reg = self._reg(self.CLOSED, seen)
+        assert reg.call("t", {"name": "x", "path": "p"}) == ("ran", False)
+        assert reg.call("t", {}) == ("ran", False)
+        assert seen == [{"name": "x", "path": "p"}, {}]
+
+    def test_a_tool_with_no_arguments_says_so(self):
+        with pytest.raises(BoostError) as exc:
+            self._reg({"type": "object", "properties": {}}).call(
+                "t", {"verbose": True})
+        assert exc.value.message == "t does not take 'verbose'"
+        assert exc.value.hint == "it takes: no arguments"
+
+    def test_explicit_false_is_closed_too(self):
+        schema = dict(self.CLOSED, additionalProperties=False)
+        with pytest.raises(BoostError):
+            self._reg(schema).call("t", {"local": True})
+
+    def test_a_schema_that_allows_more_is_left_open(self):
+        schema = dict(self.CLOSED, additionalProperties=True)
+        assert self._reg(schema).call("t", {"local": True}) == ("ran", False)
+
+    def test_a_schema_without_properties_is_not_checked(self):
+        assert self._reg({"type": "object"}).call("t", {"anything": 1}) \
+            == ("ran", False)
+
+    def test_the_wire_reply_is_an_error_result_naming_the_fix(self):
+        resp = mcp.handle_request(
+            {"jsonrpc": "2.0", "id": 9, "method": "tools/call",
+             "params": {"name": "t", "arguments": {"name": "x", "local": 1}}},
+            version="1", registry=self._reg(self.CLOSED))
+        assert resp["result"]["isError"] is True
+        assert resp["result"]["content"][0]["text"] == (
+            "Error: t does not take 'local'\nhint: it takes: name, path")
+
+    def test_the_advertised_schema_is_unchanged(self):
+        # Enforced at call time, so tools/list sends each host what it did.
+        assert self._reg(self.CLOSED).specs()[0]["inputSchema"] == self.CLOSED
 
 
 class TestRegister:
@@ -231,14 +310,43 @@ class TestHandleRequest:
         assert "boost_list" in low and "boost_search" in low
         assert "instant" in low
 
-    def test_instructions_route_search_straight_to_install(self):
-        # boost_info sat between search and install in the advertised flow, but
-        # search already returns each hit's description — the only field that
-        # changes an install decision — so the hop bought a round-trip and a
-        # decision point and nothing else. It stays a registered tool for
-        # looking up a name from elsewhere; it is not a step.
-        assert "boost_search -> boost_install" in mcp.instructions(ai_available=True)
-        assert "boost_info" not in mcp.instructions(ai_available=True)
+    def test_instructions_route_search_through_read_to_install(self):
+        # boost_info sat between search and install in the advertised flow and
+        # was cut: it echoes the description search already returned, so the
+        # hop bought a round-trip and nothing else. It stays a registered tool
+        # for looking up a name from elsewhere; it is not a step.
+        #
+        # boost_read is a step. The description is one line written by the
+        # publisher, and the catalog is indexed rather than reviewed, so the
+        # body is what tells a debugged procedure from a stub. boost_read's own
+        # description already said "on the top hit from boost_search before
+        # boost_install"; the flow said search -> install, and the two
+        # surfaces disagreed.
+        text = mcp.instructions(ai_available=True)
+        assert "boost_search -> boost_read -> boost_install" in text
+        assert "boost_info" not in text
+
+    def test_the_flow_says_where_an_install_lands(self):
+        # Without a scope, an agent cannot tell the user what changed, and
+        # without the CLI's --local it has no route to the repository at all.
+        low = mcp.instructions(ai_available=True).lower()
+        assert "for the user, in every agent they have enabled" in low
+        assert "`boost install <name> --local`" in low
+        assert 'with scope "project" it writes it into this repository' in low
+        assert "say in your reply which you chose and where it landed" in low
+
+    def test_the_flow_draws_the_consent_line(self):
+        # A rule becomes standing text every later session reads, and
+        # `boost mcp register` applies to every project on this machine: those
+        # are the user's call. A skill install is the agent's, reported
+        # afterwards.
+        low = mcp.instructions(ai_available=True).lower()
+        assert "ask the user before installing a rule" in low
+        assert "`boost mcp register`" in low
+        # Said as what it does — a user-scope registration with each agent
+        # CLI — not as "changes their whole machine", which it does not.
+        assert "applies to every project on this machine" in low
+        assert "whole machine" not in low
 
     def test_protocol_version_constant(self):
         assert mcp.PROTOCOL_VERSION == "2024-11-05"
