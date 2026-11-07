@@ -4493,7 +4493,12 @@ class TestMcpAwareSkills:
         # name-only declarations carry no command, so boost must not offer to run
         # anything — it tells the user to install them instead.
         assert "no command declared" in r.out
-        assert "install these yourself" in r.out
+        flat = " ".join(r.out.split())
+        assert ("boost cannot register these — install these yourself and "
+                "add them with your agent's own `mcp add`") in flat
+        # `boost mcp register` registers boost's own server and nothing else,
+        # so it is not how the user adds github or playwright.
+        assert "boost mcp register" not in flat
 
     def test_singular_wording_for_one_server(self, boost, sandbox, tmp_path):
         d = _mcp_skill_dir(tmp_path, decl="github")

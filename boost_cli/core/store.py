@@ -116,6 +116,14 @@ class InstallResult:
     # Why the project's .mcp.json was left untouched (it exists but does not
     # parse, its mcpServers is not an object, or the write failed), or None.
     mcp_error: str | None = None
+    # True when a project install was told not to write the project's
+    # .mcp.json at all (``--no-mcp``, or a lock row recording it), so the
+    # report can say the servers were left out rather than "already there".
+    mcp_skipped: bool = False
+    # Under ``mcp_skipped``: the declared servers the project's .mcp.json
+    # already held (an earlier install recorded them, or the user did). A
+    # skip writes nothing and removes nothing, so these are still there.
+    mcp_present: list[str] = field(default_factory=list)
     # The tap an import just replaced (`install_from_path` only). Importing over
     # a tapped skill rewrites its lock entry to `local` and so drops the only
     # thing `boost update` refreshes it from; the caller says so.
@@ -2732,6 +2740,11 @@ def _load_sidecar(path: Path) -> tuple[dict | None, str | None]:
 #: Project-lock key set when boost's install is what created ``.mcp.json``.
 SIDECAR_CREATED_KEY = "mcp_sidecar_created"
 
+#: Project-lock key listing the directories a project skill install created
+#: on the way to its copies (``.claude``, ``.claude/skills``), relative to the
+#: base, so the last uninstall can remove the ones left empty.
+DIRS_CREATED_KEY = "dirs_created"
+
 
 def sidecar_style(text: str | None) -> tuple[str | int | None, str]:
     """``(indent, end)`` that re-serialize ``text`` the way it was written.
@@ -2823,6 +2836,26 @@ def record_project_mcp(base, rows, skill: str,
     return added, None
 
 
+def project_mcp_present(base, rows) -> list[str]:
+    """The registrable servers in ``rows`` that ``base``'s ``.mcp.json``
+    already holds, by name. Reads only.
+
+    A skipped write (``install --local --no-mcp``) leaves the file as it was,
+    and an earlier install may have recorded these servers: reporting them as
+    "not recorded" would say they are absent from a committed file that
+    every teammate's agent launches them from. A file boost cannot read
+    names none.
+    """
+    from . import mcpdecl as _decl
+    doc, err = _load_sidecar(project_mcp_sidecar(base))
+    if err is not None or doc is None:
+        return []
+    have = doc.get(_decl.SERVERS_KEY)
+    if not isinstance(have, dict):
+        return []
+    return [r["name"] for r in _decl.registrable(rows) if r["name"] in have]
+
+
 def register_project_mcp(base, rows, skill: str) -> list[str]:
     """:func:`record_project_mcp`'s names alone."""
     return record_project_mcp(base, rows, skill)[0]
@@ -2838,11 +2871,18 @@ def _project_declarers(base) -> tuple[dict[str, str], bool]:
     ``complete`` is False when some entry has no readable copy on this machine
     (a teammate's clone that never ran ``boost sync``): what it declares is
     then unknown.
+
+    A row recording ``no_mcp`` (``install --local --no-mcp``) is not a
+    declarer: that install was told to keep its servers out of
+    ``.mcp.json``, so it must not inherit one another skill's uninstall
+    would otherwise remove.
     """
     from . import scopes
     owners: dict[str, str] = {}
     complete = True
     for name, entry in sorted(projectlock.installed(base).items()):
+        if (entry or {}).get("no_mcp"):
+            continue
         dirs = [scopes.resolve_in_base(base, m.get("path") or "")
                 for m in (entry or {}).get("materializations") or []
                 if isinstance(m, dict)]
@@ -3590,7 +3630,8 @@ def install(entry: dict, force: bool = False,
             only_agents: list[str] | None = None,
             scope: str = "user", base=None,
             via: str | None = None,
-            as_skill: bool | None = None) -> InstallResult:
+            as_skill: bool | None = None,
+            record_mcp: bool | None = None) -> InstallResult:
     """Install a catalog entry. Raises BoostError on policy block or conflict.
 
     ``scope`` is ``"user"`` (default — the canonical store, symlinked into the
@@ -3606,6 +3647,12 @@ def install(entry: dict, force: bool = False,
     ``as_skill`` is a workflow's ``--as-skill``/``--no-as-skill``; ``None``
     replays what the lock recorded, else follows ``workflows_as_skills``. Any
     other kind ignores it.
+
+    ``record_mcp`` is whether a project-scope skill's declared MCP servers go
+    into the repo's ``.mcp.json`` (``install --local --no-mcp`` passes False).
+    ``None`` replays the lock row's ``no_mcp``, so ``reinstall``, ``update``
+    and ``sync`` keep a choice made at install. User scope ignores it: there
+    the command layer's offer is the only writer.
     """
     scopes.check_scope(scope)
     _refuse_self_installing(entry)
@@ -3627,7 +3674,7 @@ def install(entry: dict, force: bool = False,
             hint="known kinds: skill, rule, workflow")
     if scope == scopes.SCOPE_PROJECT:
         return _install_project_skill(entry, force=force, only_agents=only_agents,
-                                      base=base, via=via)
+                                      base=base, via=via, record_mcp=record_mcp)
     name = entry["name"]
     # Resolve the agent table before anything is written: a row it refuses (a
     # relative or unset-${VAR} dir) used to raise after the copy, from inside
@@ -3769,7 +3816,8 @@ def _copy_link_record(entry: dict, name: str, src: Path, dest: Path, tap,
 
 def _install_project_skill(entry: dict, force: bool = False,
                            only_agents: list[str] | None = None,
-                           base=None, via: str | None = None) -> InstallResult:
+                           base=None, via: str | None = None,
+                           record_mcp: bool | None = None) -> InstallResult:
     """Materialize a skill into the repo itself, once per enabled agent.
 
     Unlike a user install there is no canonical store and no symlink. Each agent
@@ -3846,6 +3894,8 @@ def _install_project_skill(entry: dict, force: bool = False,
                 hint="move it aside, or `boost install %s --local --force` to "
                      "overwrite it" % name)
 
+    # Before the copies, which create them: what is missing now is boost's.
+    fresh = missing_parents(resolved_base, [d for _agent, d in targets])
     materializations: list[dict] = []
     linked: list[str] = []
     # `narrow_project_agents` above refuses an empty set, so there is always a
@@ -3874,6 +3924,7 @@ def _install_project_skill(entry: dict, force: bool = False,
     now = util.now_iso()
     tap = registry.get(entry["tap"])
     submodules = unfetched_submodules(entry)
+    skip_mcp = project_mcp_skipped(record_mcp, existing)
     projectlock.set_skill(resolved_base, name, {
         "kind": "skill",
         "version": entry.get("version", "0.0.0"),
@@ -3889,6 +3940,9 @@ def _install_project_skill(entry: dict, force: bool = False,
         "agents": all_agents,
         "materializations": materializations,
         **({"submodules": submodules} if submodules else {}),
+        # Recorded so `reinstall`, `update` and `sync` do not write the
+        # servers an `install --local --no-mcp` left out.
+        **({"no_mcp": True} if skip_mcp else {}),
     # What the user ASKED for, beside what was written: without it an agent
     # enabled afterwards (here or on a teammate's machine) could not be told
     # from one narrowed away, so sync never copied into it.
@@ -3897,6 +3951,7 @@ def _install_project_skill(entry: dict, force: bool = False,
     # leave it pinned: the row is rebuilt from scratch, and a flag it does not
     # name is a pin `boost update` silently stops honouring.
     } | _declared_field(asked, existing) | project_carried_state(existing))
+    _record_created_dirs(resolved_base, fresh)
     journal.log("install", name, tap=entry["tap"], version=entry.get("version"),
                 scope=scopes.SCOPE_PROJECT, via=via)
 
@@ -3911,10 +3966,114 @@ def _install_project_skill(entry: dict, force: bool = False,
     # Project scope registers into the repo's own .mcp.json rather than leaving
     # it to the command layer's `<host> mcp add` offer, which is user-scoped and
     # would put a machine-wide registration behind a --scope project install.
-    # Recorded here so it lands with the skill and reverses with it.
-    res.mcp_recorded, res.mcp_error = record_project_mcp(
-        resolved_base, res.mcp_servers, name)
+    # Recorded here so it lands with the skill and reverses with it -- unless
+    # the install said not to, which is a skip and not a gate on the report.
+    res.mcp_skipped = skip_mcp
+    if skip_mcp:
+        res.mcp_present = project_mcp_present(resolved_base, res.mcp_servers)
+    else:
+        res.mcp_recorded, res.mcp_error = record_project_mcp(
+            resolved_base, res.mcp_servers, name)
     return res
+
+
+def missing_parents(base: Path, dests) -> list[str]:
+    """The directories strictly between ``base`` and each of ``dests`` that do
+    not exist yet, relative to ``base`` and sorted.
+
+    A dest outside ``base`` contributes nothing; the install refused it
+    already (:func:`scopes.ensure_in_base`).
+    """
+    fresh: set[str] = set()
+    for dest in dests:
+        for parent in Path(dest).parents:
+            if base not in parent.parents:
+                break       # reached `base`, or never was under it
+            if not os.path.lexists(parent):
+                fresh.add(scopes.relative_to_base(base, parent))
+    return sorted(fresh)
+
+
+def _record_created_dirs(base: Path, fresh: list[str]) -> None:
+    """Add ``fresh`` to the project lock's :data:`DIRS_CREATED_KEY`.
+
+    Best effort, like the sidecar's own marker: a lock that cannot take the
+    note costs a tidy uninstall, never the install."""
+    if not fresh:
+        return
+
+    def add(lock: dict) -> bool:
+        have = lock.get(DIRS_CREATED_KEY)
+        have = [d for d in have if isinstance(d, str)] \
+            if isinstance(have, list) else []
+        merged = sorted(set(have) | set(fresh))
+        if merged == have:
+            return False
+        lock[DIRS_CREATED_KEY] = merged
+        return True
+    with contextlib.suppress(OSError, BoostError):
+        projectlock.mutate(base, add)
+
+
+def remove_created_dirs(base: Path, recorded, legal: Collection[Path]
+                        ) -> list[str]:
+    """Remove the directories in ``recorded`` that are empty -> those removed.
+
+    ``recorded`` is :data:`DIRS_CREATED_KEY` out of a committed lock, so it is
+    input: a row is acted on only when it re-anchors inside ``base``, is an
+    ancestor below ``base`` of a path in ``legal`` (what a project install of
+    the skill writes), and is reached by its own spelling rather than through
+    a symlink. ``os.rmdir`` then removes only a directory that is empty, and
+    never a symlink. Deepest first, so ``.claude/skills`` goes before
+    ``.claude``.
+    """
+    if not isinstance(recorded, list):
+        return []
+    allowed = {p for target in legal for p in Path(target).parents
+               if Path(base) in p.parents}
+    removed: list[str] = []
+    rows = sorted((r for r in recorded if isinstance(r, str)),
+                  key=lambda r: len(PurePosixPath(r).parts), reverse=True)
+    for rel in rows:
+        path = scopes.resolve_in_base(base, rel)
+        if (path is None or path not in allowed or path.is_symlink()
+                or not scopes.parent_matches_spelling(base, rel)):
+            continue
+        try:
+            path.rmdir()
+        except OSError:
+            continue        # not empty, or already gone
+        removed.append(rel)
+    return removed
+
+
+def tidy_empty_project(base, legal: Collection[Path]) -> dict:
+    """Once the project lock holds no skill, remove what installs created.
+
+    The empty directories in :data:`DIRS_CREATED_KEY`, then the lock itself
+    (:func:`projectlock.remove_if_empty`). A project that still holds a skill
+    is left exactly as it is. A lock written before installs recorded their
+    directories names none, so those stay. Returns ``{"dirs_removed": [...],
+    "lock_removed": bool}``.
+    """
+    lock = projectlock.read(base)
+    if lock["skills"]:
+        return {"dirs_removed": [], "lock_removed": False}
+    dirs = remove_created_dirs(Path(base), lock.get(DIRS_CREATED_KEY), legal)
+    gone = projectlock.remove_if_empty(
+        base, owned=(DIRS_CREATED_KEY, SIDECAR_CREATED_KEY))
+    return {"dirs_removed": dirs, "lock_removed": gone}
+
+
+def project_mcp_skipped(record_mcp: bool | None, existing: dict | None) -> bool:
+    """Whether a project skill install leaves ``.mcp.json`` alone.
+
+    An explicit ``record_mcp`` decides, so ``install --local --force`` without
+    ``--no-mcp`` records again; ``None`` replays the lock row's ``no_mcp``.
+    """
+    if record_mcp is not None:
+        return not record_mcp
+    return bool((existing or {}).get("no_mcp"))
 
 
 def project_materialized(name: str, base) -> tuple[str, dict] | None:
@@ -4223,8 +4382,12 @@ def uninstall_project(name: str, base=None) -> dict:
     # survives. Without this a skill tried once keeps launching its server for
     # every project that clones the repo.
     unregistered, mcp_error = forget_project_mcp(resolved_base, name)
+    # After the sidecar, which reads and edits the lock: the last skill out
+    # takes the empty lock and the empty dirs its installs created with it.
+    tidied = tidy_empty_project(resolved_base, legal)
     journal.log("uninstall", name, scope=scopes.SCOPE_PROJECT)
     return {"name": name, "unlinked": removed, "entry": entry,
+            **tidied,
             # How many paths actually came off disk, which `unlinked` does not
             # answer — see the `gone` note in the body.
             "removed_count": gone,
