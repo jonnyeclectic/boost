@@ -292,12 +292,28 @@ def _report_project_mcp(res: store.InstallResult) -> None:
     the skill really is installed and the servers really are not. They differ
     under ``--no-mcp`` too, which skips the write and is said here rather than
     read as "already in .mcp.json".
+
+    A server declared by name alone has no command to record, and user scope
+    says so ("install these yourself"); this branch used to return before a
+    word, so ``install --local`` of such a skill read as needing nothing.
+    ``--no-mcp`` keeps it quiet, as it does at user scope.
     """
     from ..core import mcpdecl
-    wanted = [r["name"] for r in mcpdecl.registrable(res.mcp_servers)]
-    if not wanted:
+    wirable = mcpdecl.registrable(res.mcp_servers)
+    wanted = [r["name"] for r in wirable]
+    named = [] if res.mcp_skipped else [
+        r["name"] for r in res.mcp_servers if r not in wirable]
+    if not wanted and not named:
         return
     out.info("")
+    if named:
+        out.warn("%s needs %s with no command declared: %s — not recorded in "
+                 "%s; install %s yourself"
+                 % (res.name, _plural(len(named), "MCP server"),
+                    ", ".join(named), mcpdecl.SIDECAR,
+                    "it" if len(named) == 1 else "them"), wrap=True)
+    if not wanted:
+        return
     if res.mcp_skipped:
         out.dim("  %s not recorded in %s (--no-mcp)"
                 % (", ".join(wanted), mcpdecl.SIDECAR), wrap=True)

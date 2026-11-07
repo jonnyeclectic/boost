@@ -805,6 +805,27 @@ def test_dry_run_local_no_mcp_names_the_skipped_record(boost, fixture_tap_src,
     assert "record github in" not in r.out
 
 
+def test_a_local_install_names_a_server_declared_without_a_command(
+        boost, fixture_tap_src, tmp_path, repo):
+    """THE BUG: `mcp: github` with no command was dropped in silence at
+    project scope, where user scope says the server must be installed by
+    hand. Nothing is written, since there is no command to record."""
+    from boost_cli.core import mcpdecl
+    boost("tap", _mcp_skill_tap(fixture_tap_src, tmp_path))
+    res = boost("install", "mcp-proj-skill", "--local")
+    assert ("mcp-proj-skill needs 1 MCP server with no command declared: "
+            "github — not recorded in .mcp.json; install it yourself"
+            in " ".join(res.out.split()))
+    assert not (repo / mcpdecl.SIDECAR).exists()
+
+
+def test_a_local_no_mcp_install_stays_quiet_about_a_name_only_server(
+        boost, fixture_tap_src, tmp_path, repo):
+    boost("tap", _mcp_skill_tap(fixture_tap_src, tmp_path))
+    res = boost("install", "mcp-proj-skill", "--local", "--no-mcp")
+    assert "github" not in res.out
+
+
 def test_uninstalling_locally_removes_the_servers_it_added(boost, tapped, repo):
     from boost_cli.core import mcpdecl
     _declare_mcp(tapped, "brainstorming")
