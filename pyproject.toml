@@ -153,7 +153,7 @@ tag_regex = "^v(?P<version>[0-9]+[^+]*)$"
 include = ["boost_cli*", "boost_langchain*"]
 
 [tool.setuptools.package-data]
-boost_cli = ["data/*.json", "data/rules/*.mdc"]
+boost_cli = ["data/*.json", "data/rules/*.mdc", "data/skills/*/SKILL.md"]
 boost_langchain = ["py.typed"]
 
 # check-wheel-contents (dist-check + the package-metadata workflow) flags a

@@ -25,6 +25,14 @@ becomes `.claude\\*` and would never match the `/`-joined output of
 `git ls-files` — which is a property of this simulation, not of the sdist, and
 would have failed the three Windows legs of the matrix while the packaging was
 correct.
+
+The wheel is the second link. A data file reaches it through the
+`package-data` globs in pyproject.toml, which `build_py` expands; anything
+else is left to `include-package-data` and the setuptools-scm file finder, a
+path no test pins. `boost_cli/data/skills/<name>/SKILL.md` landed with no glob
+at all — `builtin.skill_is_available()` guards the offer against exactly that
+file being absent. So the last test runs `build_py`'s own matcher with the
+manifest switched off and asks it to reach every tracked data file.
 """
 from __future__ import annotations
 
@@ -58,7 +66,8 @@ FORBIDDEN = (
 RUNTIME = (
     ("boost_cli sources and data",
      lambda p: Path(p).parts[0] == "boost_cli"
-     and Path(p).suffix in (".py", ".json")),
+     and (Path(p).suffix in (".py", ".json")
+          or Path(p).parts[:2] == ("boost_cli", "data"))),
     ("boost_langchain sources",
      lambda p: Path(p).parts[0] == "boost_langchain"
      and (Path(p).suffix == ".py" or Path(p).name == "py.typed")),
@@ -144,3 +153,40 @@ def test_the_runtime_still_ships(shipped, label, matches):
 def test_the_named_payload_still_ships(shipped, wanted):
     """And the metadata the derived rule above does not describe."""
     assert _native(wanted) in shipped, "%s no longer ships in the sdist" % wanted
+
+
+def _package_data_reaches() -> set[str]:
+    """The repo paths pyproject's `package-data` globs carry into the wheel.
+
+    `get_data_files_without_manifest` is `build_py`'s own expansion with the
+    manifest left out — the globs alone, not whatever `include-package-data`
+    and the scm file finder happen to add on top of them.
+    """
+    import tomllib
+
+    from setuptools.dist import Distribution
+
+    spec = tomllib.loads((ROOT / "pyproject.toml").read_text(
+        encoding="utf-8"))["tool"]["setuptools"]["package-data"]
+    dist = Distribution({"packages": list(spec), "package_data": spec,
+                         "package_dir": {"": str(ROOT)}})
+    build_py = dist.get_command_obj("build_py")
+    build_py.ensure_finalized()
+    return {os.path.relpath(os.path.join(src_dir, name), ROOT)
+            for _pkg, src_dir, _build, names
+            in build_py.get_data_files_without_manifest()
+            for name in names}
+
+
+def test_every_shipped_data_file_has_a_package_data_glob():
+    data = sorted(p for p in _tracked()
+                  if Path(p).parts[:2] == ("boost_cli", "data")
+                  and Path(p).suffix != ".py")
+    assert _native("boost_cli/data/registries.json") in data, (
+        "no tracked data found — the walk, not the packaging, is broken")
+    unmatched = sorted(set(data) - _package_data_reaches())
+    assert not unmatched, (
+        "no [tool.setuptools.package-data] glob matches %s — the wheel "
+        "carries it only if include-package-data and the scm file finder "
+        "happen to, and the code reading it degrades to a silent no-op "
+        "when it is absent" % ", ".join(unmatched))

@@ -37,7 +37,7 @@ def _install(monkeypatch, tmp_path, body, **kw):
                         linked=["claude"], score=70, **kw)
     monkeypatch.setattr(catalog, "resolve_one",
                         lambda _n, path=None: dict(ENTRY))
-    monkeypatch.setattr(store, "install", lambda _e: res)
+    monkeypatch.setattr(store, "install", lambda _e, **_kw: res)
     return configuration._mcp_tool("boost_install", {"name": "evil-skill"})
 
 
