@@ -225,6 +225,74 @@ class TestPlatformClaimsAgree:
         assert got == self._support()
 
 
+class TestPythonClaimsAgree:
+    """SUPPORT.md, the README badge and the classifiers name the Pythons CI gates.
+
+    SUPPORT.md said 3.12-3.14 while the badge and the classifiers said
+    3.12-3.15, and ci.yml runs its 3.15 cell under `continue-on-error`,
+    outside .github/required-checks.txt: a 3.15 regression blocks neither a
+    merge nor a release. The gated set is read from ci.yml's `tests` job, so a
+    cell that becomes advisory, or stops being, moves all three docs.
+    """
+
+    @staticmethod
+    def _gated_in(job: dict) -> set[str]:
+        pythons = set(job["strategy"]["matrix"]["python"])
+        advisory = job.get("continue-on-error", False)
+        if advisory is True:
+            return set()
+        return pythons - set(re.findall(r"matrix\.python == '([\d.]+)'",
+                                        str(advisory)))
+
+    def _gated(self) -> set[str]:
+        import yaml
+        ci = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml")
+                            .read_text(encoding="utf-8"))
+        return self._gated_in(ci["jobs"]["tests"])
+
+    @pytest.mark.parametrize("advisory, gated", [
+        ("${{ matrix.python == '3.15' }}", {"3.12"}),
+        (True, set()),
+        (None, {"3.12", "3.15"}),
+    ])
+    def test_an_advisory_cell_is_not_gated(self, advisory, gated):
+        # The reader, on ci.yml's own spelling: a continue-on-error cell
+        # holds nothing back, so no doc may call it supported.
+        job: dict = {"strategy": {"matrix": {"python": ["3.12", "3.15"]}}}
+        if advisory is not None:
+            job["continue-on-error"] = advisory
+        assert self._gated_in(job) == gated
+
+    def test_support_md_lists_the_gated_pythons(self):
+        text = (ROOT / "SUPPORT.md").read_text(encoding="utf-8")
+        m = re.search(r"^\| Python \| ([^|]+) \|$", text, re.M)
+        assert m, "SUPPORT.md no longer lists supported Pythons"
+        assert {v.strip() for v in m.group(1).split(",")} == self._gated()
+
+    def test_classifiers_list_the_gated_pythons(self):
+        import tomllib
+        meta = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+        got = {c.removeprefix("Programming Language :: Python :: ")
+               for c in meta["project"]["classifiers"]
+               if re.fullmatch(r"Programming Language :: Python :: 3\.\d+", c)}
+        assert got == self._gated()
+
+    def test_readme_badge_spans_the_gated_pythons(self):
+        m = re.search(r"\[!\[Python (3\.\d+)–(3\.\d+)\]\(https://img\.shields\.io"
+                      r"/badge/python-(3\.\d+)%E2%80%93(3\.\d+)-", README)
+        assert m, "README lost its Python badge"
+        assert m.group(1, 2) == m.group(3, 4), "badge text and image disagree"
+        lo, hi = (int(v.split(".")[1]) for v in m.group(1, 2))
+        # A range claims every version inside it.
+        assert {"3.%d" % n for n in range(lo, hi + 1)} == self._gated()
+
+    def test_the_gated_floor_is_requires_python(self):
+        import tomllib
+        meta = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+        floor = meta["project"]["requires-python"].removeprefix(">=")
+        assert floor == min(self._gated(), key=lambda v: int(v.split(".")[1]))
+
+
 class TestLandingPageStatTiles:
     """The hero tiles are counts the code already holds."""
 

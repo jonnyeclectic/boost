@@ -149,10 +149,11 @@ class TestPackaging:
         assert {r.split(">")[0] for r in rest} == {"sqlite-vec", "tokenizers"}
         assert not any(";" in r for r in rest)
 
-    def test_the_classifier_names_the_new_interpreter(self):
-        with (ROOT / "pyproject.toml").open("rb") as fh:
-            classifiers = tomllib.load(fh)["project"]["classifiers"]
-        assert "Programming Language :: Python :: 3.15" in classifiers
+    # No classifier assertion here. Whether 3.15 gets one is decided by
+    # whether CI gates it, not by this marker: its `tests` cell is
+    # continue-on-error and not a required check, so it does not, and
+    # test_marketing_counts.TestPythonClaimsAgree holds the classifiers to
+    # ci.yml's gated cells.
 
     def test_the_recommended_python_is_below_the_ceiling(self):
         major, minor = map(int, localembed.RECOMMENDED_PYTHON.split("."))
