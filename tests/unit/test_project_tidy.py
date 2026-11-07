@@ -169,3 +169,75 @@ class TestTidyEmptyProject:
             "dirs_removed": [".claude/skills"], "lock_removed": True}
         assert not path.exists()
         assert (base / ".claude").is_dir(), "not recorded, so not boost's"
+
+
+class TestInstallRecordsAndUninstallTidies:
+    """The two ends wired into ``store.install`` / ``store.uninstall_project``,
+    at the unit tier the mutation gate runs."""
+
+    @pytest.fixture()
+    def entries(self, tapped):
+        from boost_cli.core import catalog
+        return {n: next(iter(catalog.find(n)))
+                for n in ("brainstorming", "tdd-workflow")}
+
+    @staticmethod
+    def _install(base, entry, agent):
+        from boost_cli.core import scopes
+        return store.install(entry, scope=scopes.SCOPE_PROJECT, base=base,
+                             only_agents=[agent])
+
+    @staticmethod
+    def _recorded(base):
+        return json.loads(projectlock.lock_path(base).read_text(
+            encoding="utf-8")).get(store.DIRS_CREATED_KEY)
+
+    def test_an_install_records_the_dirs_it_created(self, base, entries):
+        self._install(base, entries["brainstorming"], "claude-code")
+        assert self._recorded(base) == [".claude", ".claude/skills"]
+
+    def test_a_later_install_adds_to_the_record(self, base, entries):
+        self._install(base, entries["brainstorming"], "claude-code")
+        self._install(base, entries["tdd-workflow"], "cursor")
+        assert self._recorded(base) == [
+            ".claude", ".claude/skills", ".cursor", ".cursor/skills"]
+
+    def test_an_install_into_existing_dirs_records_nothing(self, base,
+                                                            entries):
+        (base / ".claude" / "skills").mkdir(parents=True)
+        self._install(base, entries["brainstorming"], "claude-code")
+        assert self._recorded(base) is None
+
+    def test_a_malformed_record_keeps_only_its_strings(self, base, entries):
+        _lock(base, **{store.DIRS_CREATED_KEY: [3, ".old", None]})
+        self._install(base, entries["brainstorming"], "claude-code")
+        assert self._recorded(base) == [".claude", ".claude/skills", ".old"]
+        _lock(base, **{store.DIRS_CREATED_KEY: "x"})
+        self._install(base, entries["tdd-workflow"], "cursor")
+        assert self._recorded(base) == [".cursor", ".cursor/skills"]
+
+    def test_nothing_new_writes_nothing(self, base, monkeypatch):
+        _lock(base, **{store.DIRS_CREATED_KEY: [".claude"]})
+
+        def refuse(*_a, **_kw):
+            raise AssertionError("rewrote a lock that already had the record")
+        monkeypatch.setattr(projectlock, "write", refuse)
+        store._record_created_dirs(base, [".claude"])
+        store._record_created_dirs(base, [])
+
+    def test_no_fresh_dirs_creates_no_lock(self, base):
+        store._record_created_dirs(base, [])
+        assert not projectlock.exists(base)
+
+    def test_the_last_uninstall_reports_and_removes(self, base, entries):
+        self._install(base, entries["brainstorming"], "claude-code")
+        self._install(base, entries["tdd-workflow"], "cursor")
+        first = store.uninstall_project("brainstorming", base=str(base))
+        assert (first["dirs_removed"], first["lock_removed"]) == ([], False)
+        assert projectlock.exists(base)
+        last = store.uninstall_project("tdd-workflow", base=str(base))
+        assert last["lock_removed"] is True
+        assert sorted(last["dirs_removed"]) == [
+            ".claude", ".claude/skills", ".cursor", ".cursor/skills"]
+        assert not projectlock.exists(base)
+        assert sorted(p.name for p in base.iterdir()) == [".git"]
