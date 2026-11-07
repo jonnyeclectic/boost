@@ -173,6 +173,25 @@ class TestTapCommand:
             % (NEW, OLD))
         assert ei.value.hint.startswith("`boost untap %s`" % OLD)
 
+    def test_at_preview_names_the_held_tap(self, sandbox, catalogue,
+                                           no_clone, capsys):
+        """The real `--at` run names OLD; its preview said only "already
+        tapped", which left the reader to find which tap holds it."""
+        _rows(OLD)
+        assert taps_cmd.cmd_tap([NEW, "--at", "a" * 40, "--dry-run"]) == 1
+        cap = capsys.readouterr()
+        assert ("would not tap %s: already tapped as %s (one repository, "
+                "renamed upstream), and --at does not move it" % (NEW, OLD)
+                ) in " ".join((cap.out + cap.err).split())
+
+    def test_at_preview_of_a_name_match_keeps_its_words(self, sandbox,
+                                                        catalogue, capsys):
+        _rows(NEW)
+        assert taps_cmd.cmd_tap([NEW, "--at", "a" * 40, "--dry-run"]) == 1
+        cap = capsys.readouterr()
+        assert ("would not tap %s: already tapped, and --at does not move "
+                "it" % NEW) in " ".join((cap.out + cap.err).split())
+
     def test_tap_new_name_skips_and_says_why_once(self, sandbox, catalogue,
                                                   no_clone, capsys):
         _rows(OLD)

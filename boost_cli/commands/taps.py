@@ -80,10 +80,13 @@ def _print_dry_run(specs: list[str], at: str | None = None) -> int:
     if at:
         # `--at` never skips: a tap already configured is an error there
         # (see cmd_tap), so the preview says so instead of "already tapped".
+        # Worded by `_held_line` after the name `would not tap` already says,
+        # so a tap held under another name is named, as the real run names it.
         for row in plan:
             if row.get("skipped"):
                 row.pop("skipped")
-                row["error"] = "already tapped, and --at does not move it"
+                row["error"] = "%s, and --at does not move it" % (
+                    _held_line(row).removeprefix(row["name"] + " "))
     todo = [(row["name"], row["url"]) for row in plan if row.get("todo")]
     if todo:
         out.table(todo, headers=("NAME", "URL"), whole=("NAME",))
