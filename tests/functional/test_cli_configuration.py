@@ -1896,9 +1896,12 @@ class TestMcp:
         assert "healthy — no issues found" not in doctor
         assert "nothing is searchable yet" in doctor
         # The count an agent reads as "how many registries can answer me" is
-        # the configured one; the builtin's single item still shows up under
-        # "items available", so the two numbers have to explain each other.
-        assert "taps: 0 + boost's own (1 items available)" in doctor
+        # the configured one; the builtin's items (its rule and its skill)
+        # still show up under "items available", so the two numbers have to
+        # explain each other.
+        shipped = len(builtin.BUILTIN_RULES) + len(builtin.BUILTIN_SKILLS)
+        assert ("taps: 0 + boost's own (%d items available)" % shipped
+                in doctor)
 
     def test_boost_doctor_reads_a_non_list_taps_as_a_broken_config(
             self, sandbox):

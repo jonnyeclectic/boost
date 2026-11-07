@@ -3007,6 +3007,59 @@ def _offer_boost_first(hosts: list[str], yes: bool = False) -> None:
     _warn_unwritable(res)
 
 
+#: Escape hatch for the skill offer, the shape of NO_RULE_ENV and checked
+#: before `out.confirm` for the same reason — more so here, because this offer
+#: defaults to yes and BOOST_ASSUME_YES answers it. The test fixtures set it.
+NO_SKILL_ENV = "BOOST_NO_SKILL"
+
+
+def _boost_skill_offered() -> str | None:
+    """The skill :func:`_offer_boost_skill` would offer, or None for no offer."""
+    from ..core import builtin
+
+    name = builtin.BUILTIN_SKILLS[0]
+    if (typedvalue.env_flag(NO_SKILL_ENV, unknown=True)
+            or not builtin.skill_is_available()
+            or lockfile.get_skill(name)):        # installed: do not re-ask
+        return None
+    return name
+
+
+def _offer_boost_skill(yes: bool = False) -> None:
+    """Offer boost's own skill, which teaches agents to use boost. Default yes.
+
+    The rule offer defaults to No because it writes standing text into a file
+    every session reads. A skill adds one directory to the store, every agent
+    reads skills, and its body loads only when an agent reaches for it, so
+    the answer that leaves the user better off by default is yes. Reversible
+    the ordinary way, and the line says how. Non-fatal, like the rule offer.
+    """
+    from ..core import builtin
+
+    name = _boost_skill_offered()
+    if name is None:
+        return
+    out.info("")
+    out.info("boost can also install its own skill, `%s`, which tells your "
+             "agents when and how to search, read and install from boost "
+             "(one directory under %s)" % (name, _tilde(paths.store_dir())),
+             wrap=True)
+    if not (yes or out.confirm("Install it?", default=True)):
+        out.info("Not installed. `boost install %s` any time." % name)
+        return
+    try:
+        builtin.ensure_tap()
+        catalog.rebuild_tap(registry.get(builtin.BUILTIN_TAP))
+        res = store.install(catalog.resolve_one(
+            "%s:%s" % (builtin.BUILTIN_TAP, name)))
+    except (BoostError, OSError) as exc:
+        out.warn("could not install %s: %s" % (name, exc))
+        return
+    out.ok("installed %s — remove it with `boost uninstall %s`" % (name, name))
+    from .pkg import _warn_unwritable
+    _warn_unwritable(res)
+
+
 def cmd_mcp(argv) -> int:
     """boost mcp [register|unregister] [--host H] [--stdio] [--seed|--no-seed] [--dry-run]"""
     p = cliparse.parser(
@@ -3042,7 +3095,7 @@ def cmd_mcp(argv) -> int:
     # The boost-first offer's decline hint says "pass -y"; without this the
     # advice died on `unrecognized arguments: -y`.
     p.add_argument("-y", "--yes", action="store_true",
-                   help="install the boost-first rule without asking")
+                   help="install boost's own rule and skill without asking")
     args = p.parse_args(argv)
 
     if args.stdio:
@@ -3094,6 +3147,10 @@ def cmd_mcp(argv) -> int:
             out.info("would then offer to add the `%s` rule to %s (asks first)"
                      % (builtin.BUILTIN_RULES[0], ", ".join(rule_targets)),
                      wrap=True)
+        if (args.action == "register" and would_settle
+                and (skill := _boost_skill_offered())):
+            out.info("would then offer to install the `%s` skill (default yes)"
+                     % skill, wrap=True)
         out.dim("  dry run — nothing was %sed, nothing tapped" % verb, wrap=True)
         return 0
 
@@ -3187,6 +3244,7 @@ def cmd_mcp(argv) -> int:
         return 1 if named else 0
     if args.action == "register":
         _offer_boost_first(settled, yes=args.yes)
+        _offer_boost_skill(yes=args.yes)
     journal.log("mcp", args.action, hosts=",".join(settled))
     # Same rule as `boost update` across taps: a partial sweep is a success
     # with a warning, because the hosts that worked really did work.
