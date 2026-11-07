@@ -17,8 +17,8 @@ from pathlib import Path
 
 import pytest
 
+from boost_cli.core import config, serve
 from boost_cli.core import output as out
-from boost_cli.core import serve
 from boost_cli.errors import BoostError
 
 
@@ -1173,8 +1173,10 @@ class TestTheTaggingEdgesTheCoverageReportFound:
 
     def test_unreadable_registry_data_reads_as_no_categories(self, monkeypatch):
         # A page that failed to render because a shipped data file moved would
-        # be a worse outcome than one with no topic facet.
+        # be a worse outcome than one with no topic facet. The memo is reset
+        # too: the parse lives in `config`, which keeps the last one it read.
         monkeypatch.setattr(serve, "_CATEGORIES", None)
+        monkeypatch.setattr(config, "_REGISTRY_MEMO", None)
         monkeypatch.setattr(serve.Path, "read_text",
                             lambda *a, **k: (_ for _ in ()).throw(OSError("gone")))
         assert serve.registry_categories() == {}
@@ -1182,6 +1184,7 @@ class TestTheTaggingEdgesTheCoverageReportFound:
 
     def test_malformed_registry_json_reads_as_no_categories(self, monkeypatch):
         monkeypatch.setattr(serve, "_CATEGORIES", None)
+        monkeypatch.setattr(config, "_REGISTRY_MEMO", None)
         monkeypatch.setattr(serve.Path, "read_text", lambda *a, **k: "{not json")
         assert serve.registry_categories() == {}
         monkeypatch.setattr(serve, "_CATEGORIES", None)

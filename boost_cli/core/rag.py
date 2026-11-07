@@ -1600,15 +1600,12 @@ def _confidence_map() -> dict[str, str]:
 
     Cached because dedup asks per hit and the catalog is 466 rows; parsing it
     inside a search loop would be a real cost for a value that cannot change
-    while the process runs.
+    while the process runs. A tap held under a row's former name has the
+    row's confidence (:func:`config.registry_rows_by_name`).
     """
-    out: dict[str, str] = {}
-    for row in config.load_registry_catalog():
-        name = row.get("name")
-        conf = row.get("confidence")
-        if name and conf:
-            out[str(name)] = str(conf)
-    return out
+    return {name: str(row["confidence"])
+            for name, row in config.registry_rows_by_name().items()
+            if row.get("confidence")}
 
 
 def registry_confidence(tap: str) -> str | None:

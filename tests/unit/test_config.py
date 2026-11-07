@@ -549,7 +549,9 @@ class TestRegistryCategories:
         cats = config.registry_categories()
         raw = config.load_registry_catalog()
         assert cats  # the bundled catalog does carry categories
-        assert set(cats) == {e["name"] for e in raw if e.get("category")}
+        # ...under each name the row has had, too (`registry_rows_by_name`).
+        assert set(cats) == {n for e in raw if e.get("category")
+                             for n in (e["name"], *e.get("formerly", ()))}
         assert all(isinstance(v, str) and v for v in cats.values())
 
 

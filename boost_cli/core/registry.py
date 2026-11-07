@@ -1025,9 +1025,11 @@ def overstarred() -> list[str]:
     named, nor is a row whose star the user asked for (``curated_by``). A row
     written before that marker existed cannot say who starred it, so an
     explicit `--curated` on a catalogue repo from back then reads as drift.
+    A tap held under a row's former name is that row: every renamed row is
+    unstarred, and a miss read as "not catalogued", hiding the stale ★.
     """
-    wanted = {str(e.get("name")): bool(e.get("curated"))
-              for e in config.load_registry_catalog()}
+    wanted = {name: bool(row.get("curated"))
+              for name, row in config.registry_rows_by_name().items()}
     rows = config.get("taps", []) or []
     if not isinstance(rows, list):
         return []

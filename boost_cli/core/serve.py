@@ -22,7 +22,7 @@ from pathlib import Path
 
 from .. import __version__
 from ..errors import BoostError
-from . import catalog, frontmatter, lockfile, logs, paths, registry, store
+from . import catalog, config, frontmatter, lockfile, logs, paths, registry, store
 from . import output as out
 
 SKILL_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
@@ -67,10 +67,12 @@ def registry_categories() -> dict:
 
     That taxonomy is decided from the names of the items a repo ships rather
     than from its README, and is pinned by
-    ``tests/unit/test_registry_categories.py``. Reading it here rather than
-    re-deriving one means the served facets and `boost browse` cannot
-    disagree — that TUI reads the same file through
-    ``discovery._tap_categories`` -> ``config.registry_categories``. (This
+    ``tests/unit/test_registry_categories.py``. Asking
+    ``config.registry_categories`` rather than re-reading the file means the
+    served facets and `boost browse` cannot disagree — that TUI asks the same
+    function through ``discovery._tap_categories``. A copy of the parse lived
+    here, and missed a tap held under a row's former name once
+    ``config`` learned them. (This
     named "boost registries", a command that has never existed; the comment
     predates `browse`. Quoted rather than backticked so the dead-hint scan in
     ``tests/unit/test_command_reference_fresh.py`` does not read this sentence
@@ -79,16 +81,8 @@ def registry_categories() -> dict:
     """
     global _CATEGORIES
     if _CATEGORIES is None:
-        _CATEGORIES = {}
-        try:
-            raw = (Path(__file__).resolve().parent.parent
-                   / "data" / "registries.json").read_text(encoding="utf-8")
-            for row in json.loads(raw).get("registries", []):
-                name, cat = row.get("name"), row.get("category")
-                if name and cat:
-                    _CATEGORIES[str(name)] = str(cat)
-        except (OSError, ValueError, AttributeError, TypeError):
-            _CATEGORIES = {}
+        _CATEGORIES = {str(name): str(cat) for name, cat
+                       in config.registry_categories().items()}
     return _CATEGORIES
 
 
