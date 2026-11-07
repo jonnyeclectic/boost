@@ -745,6 +745,66 @@ def test_a_local_install_reports_the_recorded_mcp_servers(boost, tapped, repo):
     assert mcpdecl.SIDECAR in res.out
 
 
+@pytest.mark.parametrize("how", ["flag", "env"])
+def test_local_no_mcp_skips_the_mcp_json_write_and_says_so(
+        boost, tapped, repo, monkeypatch, how):
+    """THE BUG: `install --local --no-mcp` wrote every server and said nothing.
+
+    The write had no gate, and the report sat behind the --no-mcp return, so
+    the flag hid the write instead of skipping it. BOOST_NO_MCP_OFFER is the
+    same switch exported.
+    """
+    from boost_cli.core import mcpdecl
+    _declare_mcp(tapped, "brainstorming")
+    argv = ["install", "brainstorming", "--local"]
+    if how == "flag":
+        argv.append("--no-mcp")
+    else:
+        monkeypatch.setenv("BOOST_NO_MCP_OFFER", "1")
+    res = boost(*argv)
+    assert not (repo / mcpdecl.SIDECAR).exists()
+    assert "gh not recorded in .mcp.json (--no-mcp)" in res.out
+    assert "already in" not in res.out
+    assert projectlock.get_skill(repo, "brainstorming")["no_mcp"] is True
+
+
+def test_reinstall_local_keeps_a_no_mcp_install_out_of_mcp_json(
+        boost, tapped, repo):
+    from boost_cli.core import mcpdecl
+    _declare_mcp(tapped, "brainstorming")
+    boost("install", "brainstorming", "--local", "--no-mcp")
+    boost("reinstall", "brainstorming", "--local")
+    assert not (repo / mcpdecl.SIDECAR).exists(), \
+        "a reinstall recorded what the install was told to leave out"
+    # Naming the install again without the flag is the way back in.
+    res = boost("install", "brainstorming", "--local", "--force")
+    assert "recorded 1 MCP server in .mcp.json" in res.out
+    assert "no_mcp" not in projectlock.get_skill(repo, "brainstorming")
+
+
+def test_a_reinstall_that_records_a_server_names_it(boost, tapped, repo):
+    # Every writer of .mcp.json says so, not only `install`: a reinstall
+    # whose source now declares a server records it into a committed file.
+    from boost_cli.core import mcpdecl
+    boost("install", "brainstorming", "--local")
+    _declare_mcp(tapped, "brainstorming")
+    res = boost("reinstall", "brainstorming", "--local")
+    assert "recorded 1 MCP server in .mcp.json: gh" in res.out
+    assert (repo / mcpdecl.SIDECAR).is_file()
+
+
+def test_dry_run_local_no_mcp_names_the_skipped_record(boost, fixture_tap_src,
+                                                       tmp_path, repo):
+    tap_dir = _mcp_skill_tap(
+        fixture_tap_src, tmp_path,
+        sidecar={"mcpServers": {"github": {"command": "npx",
+                                           "args": ["-y", "srv"]}}})
+    boost("tap", tap_dir)
+    r = boost("install", "mcp-proj-skill", "--local", "--no-mcp", "--dry-run")
+    assert "mcp   → not recorded (--no-mcp): github" in r.out
+    assert "record github in" not in r.out
+
+
 def test_uninstalling_locally_removes_the_servers_it_added(boost, tapped, repo):
     from boost_cli.core import mcpdecl
     _declare_mcp(tapped, "brainstorming")

@@ -116,6 +116,10 @@ class InstallResult:
     # Why the project's .mcp.json was left untouched (it exists but does not
     # parse, its mcpServers is not an object, or the write failed), or None.
     mcp_error: str | None = None
+    # True when a project install was told not to write the project's
+    # .mcp.json at all (``--no-mcp``, or a lock row recording it), so the
+    # report can say the servers were left out rather than "already there".
+    mcp_skipped: bool = False
     # The tap an import just replaced (`install_from_path` only). Importing over
     # a tapped skill rewrites its lock entry to `local` and so drops the only
     # thing `boost update` refreshes it from; the caller says so.
@@ -3590,7 +3594,8 @@ def install(entry: dict, force: bool = False,
             only_agents: list[str] | None = None,
             scope: str = "user", base=None,
             via: str | None = None,
-            as_skill: bool | None = None) -> InstallResult:
+            as_skill: bool | None = None,
+            record_mcp: bool | None = None) -> InstallResult:
     """Install a catalog entry. Raises BoostError on policy block or conflict.
 
     ``scope`` is ``"user"`` (default — the canonical store, symlinked into the
@@ -3606,6 +3611,12 @@ def install(entry: dict, force: bool = False,
     ``as_skill`` is a workflow's ``--as-skill``/``--no-as-skill``; ``None``
     replays what the lock recorded, else follows ``workflows_as_skills``. Any
     other kind ignores it.
+
+    ``record_mcp`` is whether a project-scope skill's declared MCP servers go
+    into the repo's ``.mcp.json`` (``install --local --no-mcp`` passes False).
+    ``None`` replays the lock row's ``no_mcp``, so ``reinstall``, ``update``
+    and ``sync`` keep a choice made at install. User scope ignores it: there
+    the command layer's offer is the only writer.
     """
     scopes.check_scope(scope)
     _refuse_self_installing(entry)
@@ -3627,7 +3638,7 @@ def install(entry: dict, force: bool = False,
             hint="known kinds: skill, rule, workflow")
     if scope == scopes.SCOPE_PROJECT:
         return _install_project_skill(entry, force=force, only_agents=only_agents,
-                                      base=base, via=via)
+                                      base=base, via=via, record_mcp=record_mcp)
     name = entry["name"]
     # Resolve the agent table before anything is written: a row it refuses (a
     # relative or unset-${VAR} dir) used to raise after the copy, from inside
@@ -3769,7 +3780,8 @@ def _copy_link_record(entry: dict, name: str, src: Path, dest: Path, tap,
 
 def _install_project_skill(entry: dict, force: bool = False,
                            only_agents: list[str] | None = None,
-                           base=None, via: str | None = None) -> InstallResult:
+                           base=None, via: str | None = None,
+                           record_mcp: bool | None = None) -> InstallResult:
     """Materialize a skill into the repo itself, once per enabled agent.
 
     Unlike a user install there is no canonical store and no symlink. Each agent
@@ -3874,6 +3886,7 @@ def _install_project_skill(entry: dict, force: bool = False,
     now = util.now_iso()
     tap = registry.get(entry["tap"])
     submodules = unfetched_submodules(entry)
+    skip_mcp = project_mcp_skipped(record_mcp, existing)
     projectlock.set_skill(resolved_base, name, {
         "kind": "skill",
         "version": entry.get("version", "0.0.0"),
@@ -3889,6 +3902,9 @@ def _install_project_skill(entry: dict, force: bool = False,
         "agents": all_agents,
         "materializations": materializations,
         **({"submodules": submodules} if submodules else {}),
+        # Recorded so `reinstall`, `update` and `sync` do not write the
+        # servers an `install --local --no-mcp` left out.
+        **({"no_mcp": True} if skip_mcp else {}),
     # What the user ASKED for, beside what was written: without it an agent
     # enabled afterwards (here or on a teammate's machine) could not be told
     # from one narrowed away, so sync never copied into it.
@@ -3911,10 +3927,24 @@ def _install_project_skill(entry: dict, force: bool = False,
     # Project scope registers into the repo's own .mcp.json rather than leaving
     # it to the command layer's `<host> mcp add` offer, which is user-scoped and
     # would put a machine-wide registration behind a --scope project install.
-    # Recorded here so it lands with the skill and reverses with it.
-    res.mcp_recorded, res.mcp_error = record_project_mcp(
-        resolved_base, res.mcp_servers, name)
+    # Recorded here so it lands with the skill and reverses with it -- unless
+    # the install said not to, which is a skip and not a gate on the report.
+    res.mcp_skipped = skip_mcp
+    if not skip_mcp:
+        res.mcp_recorded, res.mcp_error = record_project_mcp(
+            resolved_base, res.mcp_servers, name)
     return res
+
+
+def project_mcp_skipped(record_mcp: bool | None, existing: dict | None) -> bool:
+    """Whether a project skill install leaves ``.mcp.json`` alone.
+
+    An explicit ``record_mcp`` decides, so ``install --local --force`` without
+    ``--no-mcp`` records again; ``None`` replays the lock row's ``no_mcp``.
+    """
+    if record_mcp is not None:
+        return not record_mcp
+    return bool((existing or {}).get("no_mcp"))
 
 
 def project_materialized(name: str, base) -> tuple[str, dict] | None:

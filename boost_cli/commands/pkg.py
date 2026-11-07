@@ -129,7 +129,9 @@ def _offer_mcp(res: store.InstallResult, no_mcp: bool = False) -> None:
 
     Advisory, never fatal: a declined prompt, a missing agent CLI or a failed
     registration all leave the skill installed. Suppressed by ``--no-mcp`` (passed
-    down as ``no_mcp``) or by exporting ``BOOST_NO_MCP_OFFER``.
+    down as ``no_mcp``) or by exporting ``BOOST_NO_MCP_OFFER``. A project-scope
+    install is reported whatever those say (:func:`_report_project_mcp`): the
+    flag decided whether ``.mcp.json`` was written, and the report says which.
 
     The offer targets whichever agent CLIs are actually installed, so a machine
     with only Gemini CLI is offered ``gemini mcp add`` rather than a ``claude``
@@ -147,7 +149,7 @@ def _offer_mcp(res: store.InstallResult, no_mcp: bool = False) -> None:
     does not advertise it.
     """
     rows = res.mcp_servers
-    if not rows or no_mcp or typedvalue.env_flag("BOOST_NO_MCP_OFFER", unknown=True):
+    if not rows:
         return
     from ..core import mcpdecl, scopes
     # A project-scoped install already recorded these in the repo's .mcp.json
@@ -155,33 +157,14 @@ def _offer_mcp(res: store.InstallResult, no_mcp: bool = False) -> None:
     # registration `--scope project` promises. Offering a `<host> mcp add` on
     # top would register the same servers a second time, machine-wide — which
     # is the bug this path had: the offer never looked at res.scope at all.
+    #
+    # Ahead of the --no-mcp gate: that gate used to sit above this branch, so
+    # `install --local --no-mcp` wrote every server to .mcp.json and said
+    # nothing. The flag now skips the write (store), and this says so.
     if res.scope == scopes.SCOPE_PROJECT:
-        # Report what was RECORDED, not what was declared. The two differ when
-        # the sidecar could not be written — a read-only checkout, a root-owned
-        # .mcp.json — and claiming success there would be the worse failure,
-        # because the skill really is installed and the servers really are not.
-        wanted = [r["name"] for r in mcpdecl.registrable(rows)]
-        if not wanted:
-            return
-        out.info("")
-        if res.mcp_recorded:
-            out.ok("recorded %s in %s"
-                   % (_plural(len(res.mcp_recorded), "MCP server"),
-                      mcpdecl.SIDECAR))
-            out.dim("  %s — commit it to share with the team"
-                    % ", ".join(res.mcp_recorded))
-        elif res.mcp_error:
-            # Refused rather than rebuilt: the file is the user's, and
-            # rewriting an unparseable one from an empty view loses every
-            # server in it.
-            out.warn("%s left unchanged — %s not recorded"
-                     % (mcpdecl.SIDECAR, ", ".join(wanted)))
-            out.dim("  %s" % res.mcp_error)
-            out.dim("  the skill is installed; fix %s and reinstall to record "
-                    "them" % mcpdecl.SIDECAR, wrap=True)
-        else:
-            # Every server was already there — another skill's or the user's.
-            out.dim("  %s already in %s" % (", ".join(wanted), mcpdecl.SIDECAR))
+        _report_project_mcp(res)
+        return
+    if no_mcp or typedvalue.env_flag("BOOST_NO_MCP_OFFER", unknown=True):
         return
     out.info("")
     out.warn("%s needs %s to work:" % (res.name, _plural(len(rows), "MCP server")))
@@ -225,6 +208,43 @@ def _offer_mcp(res: store.InstallResult, no_mcp: bool = False) -> None:
         for host in targets:
             _register_mcp_server(row["name"], row["spec"], host=host,
                                  scope=res.scope)
+
+
+def _report_project_mcp(res: store.InstallResult) -> None:
+    """What a project install did with its skill's servers in ``.mcp.json``.
+
+    Reports what was RECORDED, not what was declared. The two differ when the
+    sidecar could not be written — a read-only checkout, a root-owned
+    .mcp.json — and claiming success there would be the worse failure, because
+    the skill really is installed and the servers really are not. They differ
+    under ``--no-mcp`` too, which skips the write and is said here rather than
+    read as "already in .mcp.json".
+    """
+    from ..core import mcpdecl
+    wanted = [r["name"] for r in mcpdecl.registrable(res.mcp_servers)]
+    if not wanted:
+        return
+    out.info("")
+    if res.mcp_skipped:
+        out.dim("  %s not recorded in %s (--no-mcp)"
+                % (", ".join(wanted), mcpdecl.SIDECAR), wrap=True)
+    elif res.mcp_recorded:
+        out.ok("recorded %s in %s"
+               % (_plural(len(res.mcp_recorded), "MCP server"),
+                  mcpdecl.SIDECAR))
+        out.dim("  %s — commit it to share with the team"
+                % ", ".join(res.mcp_recorded))
+    elif res.mcp_error:
+        # Refused rather than rebuilt: the file is the user's, and rewriting
+        # an unparseable one from an empty view loses every server in it.
+        out.warn("%s left unchanged — %s not recorded"
+                 % (mcpdecl.SIDECAR, ", ".join(wanted)))
+        out.dim("  %s" % res.mcp_error)
+        out.dim("  the skill is installed; fix %s and reinstall to record "
+                "them" % mcpdecl.SIDECAR, wrap=True)
+    else:
+        # Every server was already there — another skill's or the user's.
+        out.dim("  %s already in %s" % (", ".join(wanted), mcpdecl.SIDECAR))
 
 
 def _register_mcp_server(name: str, spec: dict, host: str = "claude",
@@ -388,6 +408,16 @@ def _warn_unwritable(res, stream=None) -> None:
     for line in getattr(res, "copy_blocked", None) or ():
         out.warn("%s: skill copy not linked: %s" % (res.name, line),
                  stream=stream, wrap=True)
+    # The repo's .mcp.json, written by a project install that did not come
+    # through `install`'s own report: reinstall, update and bundle install
+    # record a server a new version declares, and that write is a change to a
+    # committed file that every teammate's agent then launches.
+    recorded = getattr(res, "mcp_recorded", None) or []
+    if recorded:
+        from ..core import mcpdecl
+        out.info("recorded %s in %s: %s"
+                 % (_plural(len(recorded), "MCP server"), mcpdecl.SIDECAR,
+                    ", ".join(recorded)), stream=stream, wrap=True)
     # Written, but not everything in the source survived the conversion.
     # Plain: a note may quote the file it is about (a subagent's `tools`
     # entries), and that file is a tap's.
@@ -668,6 +698,13 @@ def _expand_tap(tap: registry.Tap, args, pbase) -> installplan.TapExpansion:
     return exp
 
 
+def _mcp_declined(args) -> bool:
+    """``--no-mcp``, or ``BOOST_NO_MCP_OFFER`` exported: no offer at user
+    scope, and no ``.mcp.json`` write at project scope."""
+    return bool(args.no_mcp
+                or typedvalue.env_flag("BOOST_NO_MCP_OFFER", unknown=True))
+
+
 def cmd_install(argv: list[str]) -> int:
     ap = cliparse.parser(prog="boost install",
                                  description="Install a skill from a tap registry")
@@ -695,7 +732,9 @@ def cmd_install(argv: list[str]) -> int:
                     help="install only the named skills, not their `requires:` "
                          "(the wider spellings are reported, never installed)")
     ap.add_argument("--no-mcp", action="store_true",
-                    help="don't offer to register MCP servers a skill declares")
+                    help="don't offer to register MCP servers a skill "
+                         "declares, or, with --local, record them in the "
+                         "repo's .mcp.json (remembered)")
     ap.add_argument("-y", "--yes", action="store_true",
                     help="with a tap as NAME, install its skill list without "
                          "asking first. Never answers the offer to register "
@@ -867,7 +906,7 @@ def cmd_install(argv: list[str]) -> int:
         # predict. See agents.workflow_agents.
         mat_sets = {"rule": agents.materializing_agents(mbase),
                     "workflow": agents.workflow_agents(mbase)}
-        offer_mcp = not args.no_mcp and not typedvalue.env_flag("BOOST_NO_MCP_OFFER", unknown=True)
+        offer_mcp = not _mcp_declined(args)
         mcp_hosts = [h for h in mcphost.hosts() if shutil.which(mcphost.cli(h))] \
             or mcphost.hosts()
         for e in entries:
@@ -910,11 +949,16 @@ def cmd_install(argv: list[str]) -> int:
                                  % _tilde(scopes.skill_target(
                                      sdir, e["name"], base=pbase,
                                      dotdir=agents.project_dotdir(agent_name, sdir))))
-                    if offer_mcp:
-                        for row in mcpdecl.registrable(
-                                store.declared_mcp_servers(store.source_dir_for(e))):
-                            out.info("  mcp   → record %s in %s"
-                                     % (row["name"], mcpdecl.SIDECAR))
+                    # Both ways: the run writes .mcp.json unless told not
+                    # to, and a preview that went quiet under --no-mcp read
+                    # the same as one with nothing to record.
+                    for row in mcpdecl.registrable(
+                            store.declared_mcp_servers(store.source_dir_for(e))):
+                        out.info("  mcp   → record %s in %s"
+                                 % (row["name"], mcpdecl.SIDECAR)
+                                 if offer_mcp else
+                                 "  mcp   → not recorded (--no-mcp): %s"
+                                 % row["name"])
                     continue
                 if e.get("kind") in ("rule", "workflow"):
                     k = e["kind"]
@@ -1004,7 +1048,8 @@ def cmd_install(argv: list[str]) -> int:
                     and e.get("kind", "skill") == "skill"):
                 store.refuse_unreachable_skill(only, e["name"])
             res = store.install(e, force=args.force, only_agents=only,
-                                scope=args.scope, as_skill=args.as_skill)
+                                scope=args.scope, as_skill=args.as_skill,
+                                record_mcp=not _mcp_declined(args))
         except BoostError as err:
             if not multi:
                 raise
