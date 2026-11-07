@@ -188,3 +188,37 @@ class TestAGuessedArgumentIsNotDropped:
         for spec in configuration.REGISTRY.specs():
             assert isinstance(spec["inputSchema"].get("properties"), dict), \
                 spec["name"]
+
+
+class TestReadNamesTheProjectASkillLivesIn:
+    """boost_read said "installed: yes" for a `--local` skill and stopped.
+
+    boost_info, from the same directory, said "scope: project (<repo>)":
+    a project skill lives in the project lock, whose rows carry no scope or
+    base, and boost_read read the label off the row.
+    """
+
+    def test_a_local_skill_reads_as_installed_in_its_project(
+            self, boost, tapped, tmp_path, monkeypatch):
+        repo = _repo(tmp_path, monkeypatch)
+        boost("install", "brainstorming", "--local")
+        text, is_err = _call("boost_read", name="brainstorming")
+        assert is_err is False
+        assert ("installed: yes (project %s)" % paths.tilde(repo)) in text
+
+    def test_reading_one_copy_by_path_names_the_project_too(
+            self, boost, tapped, tmp_path, monkeypatch):
+        repo = _repo(tmp_path, monkeypatch)
+        _call("boost_install", name="brainstorming", scope="project")
+        text, _ = _call("boost_read", name="brainstorming",
+                        path="skills/brainstorming")
+        assert ("installed: yes (project %s)" % paths.tilde(repo)) in text
+
+    def test_a_user_skill_reads_without_a_project(self, boost, tapped):
+        _call("boost_install", name="brainstorming")
+        text, _ = _call("boost_read", name="brainstorming")
+        assert "\ninstalled: yes\n" in text
+
+    def test_an_uninstalled_item_reads_as_not_installed(self, boost, tapped):
+        text, _ = _call("boost_read", name="brainstorming")
+        assert "\ninstalled: no\n" in text

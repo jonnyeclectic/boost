@@ -2203,6 +2203,11 @@ class TestMcp:
         assert is_err is False
         assert "octo/skills — great skills" in text
         assert "acme/pack — b/SKILL.md" in text          # falls back to path
+        # No tool taps a repo: the reply says whose step it is, and how.
+        assert text.endswith(
+            "\nTo add one, ask the user to run `boost tap <owner/repo>` — it "
+            "clones over the network and changes their tap list; boost_search "
+            "covers it afterwards.")
 
     def test_discover_github_leaves_out_tapped_repos(self, sandbox,
                                                       monkeypatch):
@@ -2223,7 +2228,8 @@ class TestMcp:
                                                {"query": "react"})
         assert is_err is False
         assert text == ("acme/pack — b/SKILL.md\n(1 already-tapped repo(s) "
-                        "not shown — boost_search covers them)")
+                        "not shown — boost_search covers them)"
+                        + configuration._TAP_IT)
 
     def test_discover_github_only_tapped_repos(self, sandbox, monkeypatch):
         from boost_cli.commands import configuration, discovery

@@ -1976,13 +1976,29 @@ def _tool_read(args: dict):
                 and rec.get("source_dir", cat.get("rel_dir"))
                 == cat.get("rel_dir"))
         return mcp.read_reply(name, text, kind=cat.get("kind") or "skill",
-                              installed=here,
-                              where=scopes.project_label(rec or {}),
+                              installed=here, where=_installed_where(found),
                               held=mcp.held_line(name, rec)), False
     text, kind, lock, _cat = info._resolve_text(name)
     return mcp.read_reply(name, text, kind=kind, installed=lock is not None,
-                          where=scopes.project_label(lock or {}),
+                          where=(_installed_where(integrity.find_installed(name))
+                                 if lock is not None else None),
                           held=mcp.held_line(name, lock)), False
+
+
+def _installed_where(found) -> str | None:
+    """The checkout a project install lives in, or None at user scope.
+
+    A rule or workflow row carries its own scope and base
+    (:func:`scopes.project_label`). A ``--local`` *skill* lives in the
+    project lock, whose rows carry neither, so boost_read said a plain
+    "installed: yes" for one while boost_info, which asks
+    :func:`integrity.find_installed`, said "scope: project (…)". The base
+    that lookup returns is the answer for both.
+    """
+    if found is None:
+        return None
+    _kind, entry, pbase = found
+    return _tilde(pbase) if pbase is not None else scopes.project_label(entry)
 
 
 def _server_cwd() -> str:
@@ -2501,8 +2517,18 @@ def _tool_discover_github(args: dict):
     if not hits:
         return ("no SKILL.md repositories found on GitHub for %r%s"
                 % (query.strip() or "any query", note)), False
-    return "\n".join("%s — %s" % (h["repo"], h.get("description") or h.get("path", ""))
-                     for h in hits) + note, False
+    # No tool taps a repository, and tapping clones over the network and
+    # rewrites the user's tap list, so the reply says whose step it is. It
+    # used to end at the list, under a description promising registries
+    # "you can add", with nothing saying how.
+    return ("\n".join("%s — %s" % (h["repo"], h.get("description")
+                                   or h.get("path", "")) for h in hits)
+            + note + _TAP_IT), False
+
+
+_TAP_IT = ("\nTo add one, ask the user to run `boost tap <owner/repo>` — it "
+           "clones over the network and changes their tap list; boost_search "
+           "covers it afterwards.")
 
 
 # These descriptions do more work than they look like they should. Gemini CLI
@@ -2744,7 +2770,8 @@ REGISTRY.register(
     "boost_discover_github",
     "The move when boost_search comes back empty: search GitHub itself for "
     "SKILL.md repositories nobody here has tapped yet, and get back registries "
-    "you can add to widen every future search. An empty result means the corpus "
+    "the user can add with `boost tap` to widen every future search. An empty "
+    "result means the corpus "
     "has not caught up yet, not that the problem is unsolved (needs the `gh` "
     "CLI; degrades to a hint when unavailable).",
     {"type": "object",
