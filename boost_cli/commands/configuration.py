@@ -3086,9 +3086,13 @@ def _offer_boost_skill(yes: bool = False) -> None:
     if name is None:
         return
     out.info("")
+    # The install also symlinks the directory into every agent that does not
+    # read the store itself (Claude Code, Cursor, Windsurf, Antigravity on a
+    # default config), so "one directory" alone undersold a default-yes write.
     out.info("boost can also install its own skill, `%s`, which tells your "
              "agents when and how to search, read and install from boost "
-             "(one directory under %s)" % (name, _tilde(paths.store_dir())),
+             "(one directory under %s, linked into each agent that does not "
+             "read it there)" % (name, _tilde(paths.store_dir())),
              wrap=True)
     if not (yes or out.confirm("Install it?", default=True)):
         out.info("Not installed. `boost install %s` any time." % name)

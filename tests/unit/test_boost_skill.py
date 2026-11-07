@@ -199,6 +199,25 @@ class TestTheOfferDefaultsToYes:
         assert lockfile.get_skill(SKILL) is None
         assert ("boost install %s" % SKILL) in capsys.readouterr().out
 
+    def test_the_offer_names_the_agent_links_it_would_make(
+            self, offering, monkeypatch, capsys):
+        # A yes writes the store directory and a symlink in each linking
+        # agent's skills dir; "one directory" alone undersold it.
+        monkeypatch.setattr(configuration.out, "confirm",
+                            lambda *a, **kw: False)
+        configuration._offer_boost_skill()
+        flat = " ".join(capsys.readouterr().out.split())
+        assert ("one directory under %s, linked into each agent that does "
+                "not read it there" % paths.tilde(paths.store_dir())) in flat
+
+    def test_accepting_links_it_where_the_offer_said(self, offering):
+        from boost_cli.core import agents
+        configuration._offer_boost_skill(yes=True)
+        linking = agents.linking_agents()
+        assert linking                      # the claim is not vacuous
+        for agent, skills_dir in linking.items():
+            assert (pathlib.Path(skills_dir) / SKILL).is_symlink(), agent
+
     def test_yes_installs_without_asking(self, offering, monkeypatch):
         def boom(*_a, **_k):
             raise AssertionError("asked despite yes")
