@@ -1021,8 +1021,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--verify-live", action="store_true",
-        help="ask GitHub whether every shipped registry still exists and print "
-             "the ones that do not. Needs network; never part of a gate. Set "
+        help="ask GitHub about every shipped registry and print the ones that "
+             "are missing, archived or renamed (exit 1 only for missing). "
+             "Needs network; never part of a gate. Set "
              "GITHUB_TOKEN to lift the 60/hour anonymous rate limit.",
     )
     args = parser.parse_args(argv)
