@@ -87,11 +87,42 @@ class Registry:
         return name in self._handlers
 
     def call(self, name: str, args: dict) -> tuple[str | None, bool]:
-        """Dispatch to a handler. ``(None, False)`` for an unknown tool."""
+        """Dispatch to a handler. ``(None, False)`` for an unknown tool.
+
+        Raises :class:`BoostError` for an argument the tool's schema does not
+        declare (:func:`refuse_undeclared`), before the handler runs.
+        """
         handler = self._handlers.get(name)
         if handler is None:
             return None, False
+        refuse_undeclared(name, self._specs[name]["inputSchema"], args)
         return handler(args)
+
+
+def refuse_undeclared(name: str, schema: Mapping, args: Mapping) -> None:
+    """Refuse an argument ``schema`` does not declare, naming the ones it does.
+
+    Handlers read the keys they know and ignored the rest, so a guessed
+    argument changed nothing and said nothing: ``boost_install`` called with
+    ``{"name": ..., "scope": "project", "local": true}`` installed for the
+    user and replied as though the call had been understood. The caller
+    learns the argument was dropped only from what happened afterwards.
+
+    A schema that lists ``properties`` is closed unless it says
+    ``"additionalProperties": true``; one without ``properties`` is not
+    checked. The check runs here rather than as ``additionalProperties:
+    false`` on the advertised schemas, so what each host is sent in
+    ``tools/list`` stays exactly what it was.
+    """
+    props = schema.get("properties")
+    if not isinstance(props, Mapping) or schema.get("additionalProperties"):
+        return
+    extra = sorted(k for k in args if k not in props)
+    if extra:
+        raise BoostError("%s does not take %s"
+                         % (name, ", ".join(repr(k) for k in extra)),
+                         hint="it takes: %s" % (", ".join(props)
+                                                or "no arguments"))
 
 
 # ── JSON-RPC 2.0 protocol ─────────────────────────────────────────────────

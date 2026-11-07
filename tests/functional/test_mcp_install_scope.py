@@ -173,3 +173,18 @@ class TestTheReplySaysWhichScope:
     def test_no_note_without_a_second_copy(self, boost, tapped):
         text, _ = _call("boost_install", name="tdd-workflow")
         assert "note:" not in text
+
+
+class TestAGuessedArgumentIsNotDropped:
+    def test_local_is_refused_and_the_real_arguments_named(self, boost, tapped):
+        text, is_err = _call("boost_install", name="tdd-workflow", local=True)
+        assert is_err is True
+        assert text == ("Error: boost_install does not take 'local'\n"
+                        "hint: it takes: name, path, scope")
+        assert lockfile.get_skill("tdd-workflow") is None
+
+    def test_every_boost_tool_declares_its_arguments(self):
+        # A tool registered without `properties` would be left unchecked.
+        for spec in configuration.REGISTRY.specs():
+            assert isinstance(spec["inputSchema"].get("properties"), dict), \
+                spec["name"]

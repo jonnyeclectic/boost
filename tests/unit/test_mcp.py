@@ -13,6 +13,7 @@ import io
 import json
 import pathlib
 import re
+from typing import ClassVar
 
 import pytest
 
@@ -22,6 +23,84 @@ from boost_cli.errors import BoostError
 
 def _ok(_args):
     return "ok", False
+
+
+class TestUndeclaredArgumentsAreRefused:
+    """A guessed argument used to be dropped without a word.
+
+    `boost_install {"name": ..., "scope": "project", "local": true}` installed
+    for the user and replied as though it had been understood. A schema that
+    lists `properties` is now closed: anything else is refused, by name, with
+    the arguments the tool does take.
+    """
+
+    CLOSED: ClassVar[dict] = {"type": "object",
+                              "properties": {"name": {"type": "string"},
+                                             "path": {"type": "string"}}}
+
+    def _reg(self, schema, seen=None):
+        reg = mcp.Registry()
+
+        def handler(args):
+            if seen is not None:
+                seen.append(args)
+            return "ran", False
+        reg.register("t", "does t", schema, handler)
+        return reg
+
+    def test_an_undeclared_argument_is_refused_by_name(self):
+        seen = []
+        with pytest.raises(BoostError) as exc:
+            self._reg(self.CLOSED, seen).call("t", {"name": "x", "local": True})
+        assert exc.value.message == "t does not take 'local'"
+        assert exc.value.hint == "it takes: name, path"
+        assert seen == []               # refused before the handler ran
+
+    def test_every_undeclared_argument_is_named_in_order(self):
+        with pytest.raises(BoostError) as exc:
+            self._reg(self.CLOSED).call("t", {"zeta": 1, "alpha": 2,
+                                              "name": "x"})
+        assert exc.value.message == "t does not take 'alpha', 'zeta'"
+
+    def test_declared_arguments_reach_the_handler(self):
+        seen = []
+        reg = self._reg(self.CLOSED, seen)
+        assert reg.call("t", {"name": "x", "path": "p"}) == ("ran", False)
+        assert reg.call("t", {}) == ("ran", False)
+        assert seen == [{"name": "x", "path": "p"}, {}]
+
+    def test_a_tool_with_no_arguments_says_so(self):
+        with pytest.raises(BoostError) as exc:
+            self._reg({"type": "object", "properties": {}}).call(
+                "t", {"verbose": True})
+        assert exc.value.message == "t does not take 'verbose'"
+        assert exc.value.hint == "it takes: no arguments"
+
+    def test_explicit_false_is_closed_too(self):
+        schema = dict(self.CLOSED, additionalProperties=False)
+        with pytest.raises(BoostError):
+            self._reg(schema).call("t", {"local": True})
+
+    def test_a_schema_that_allows_more_is_left_open(self):
+        schema = dict(self.CLOSED, additionalProperties=True)
+        assert self._reg(schema).call("t", {"local": True}) == ("ran", False)
+
+    def test_a_schema_without_properties_is_not_checked(self):
+        assert self._reg({"type": "object"}).call("t", {"anything": 1}) \
+            == ("ran", False)
+
+    def test_the_wire_reply_is_an_error_result_naming_the_fix(self):
+        resp = mcp.handle_request(
+            {"jsonrpc": "2.0", "id": 9, "method": "tools/call",
+             "params": {"name": "t", "arguments": {"name": "x", "local": 1}}},
+            version="1", registry=self._reg(self.CLOSED))
+        assert resp["result"]["isError"] is True
+        assert resp["result"]["content"][0]["text"] == (
+            "Error: t does not take 'local'\nhint: it takes: name, path")
+
+    def test_the_advertised_schema_is_unchanged(self):
+        # Enforced at call time, so tools/list sends each host what it did.
+        assert self._reg(self.CLOSED).specs()[0]["inputSchema"] == self.CLOSED
 
 
 class TestRegister:
