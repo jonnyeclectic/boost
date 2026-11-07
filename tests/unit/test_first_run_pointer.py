@@ -118,11 +118,26 @@ class TestSetupHint:
         # The drift this replaced: one `hint="... tap --defaults"` literal per
         # call site. A new literal is the next drift.
         root = Path(boost_cli.__file__).parent
-        files = [*sorted((root / "commands").glob("*.py")), root / "core" / "catalog.py"]
+        files = [*sorted((root / "commands").glob("*.py")),
+                 *sorted((root / "core").glob("*.py"))]
         literals = [(f.name, m) for f in files
                     for m in re.findall(r'hint="[^"]*tap --defaults[^"]*"',
                                         f.read_text(encoding="utf-8"))]
         assert literals == []
+
+    def test_no_message_tells_a_newcomer_to_run_tap_defaults(self):
+        # The same drift without a `hint=`: bootstrap's offline summary and
+        # the web UI's empty state each said "run `boost tap --defaults`".
+        # The MCP replies are left out on purpose: boost_doctor and
+        # mcp.no_results ask the *user* to run `boost tap --defaults` (the
+        # precise fix an agent can relay), and test_mcp.py pins that wording.
+        root = Path(boost_cli.__file__).parent
+        mcp_surfaces = {"commands/configuration.py", "core/mcp.py"}
+        pattern = re.compile(r"run (?:`|<code>)boost tap --defaults")
+        hits = [rel for f in sorted(root.rglob("*.py"))
+                if (rel := f.relative_to(root).as_posix()) not in mcp_surfaces
+                and pattern.search(f.read_text(encoding="utf-8"))]
+        assert hits == []
 
 
 class TestHelpScreen:

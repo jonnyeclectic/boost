@@ -302,4 +302,4 @@ class TestSeedRecordsAndReportsFaithfully:
               fail=tuple(str(t["name"]) for t in config.DEFAULT_TAPS))
         res = bootstrap.seed_catalog()
         assert "could not reach any default registry" in res.summary()
-        assert "boost tap --defaults" in res.summary()
+        assert "`boost quickstart` once you have a network" in res.summary()
