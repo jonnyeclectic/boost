@@ -131,7 +131,8 @@ class TestItSaysWhatTheRuleSays:
               "ask the user before installing a rule", "`boost mcp register`",
               "has a name", "more than one file", "outlives this session",
               "the task stays yours", "mcp__boost__boost_search",
-              "look before you conclude it is absent")
+              "look before you conclude it is absent",
+              "applies to every project on this machine")
 
     @pytest.mark.parametrize("phrase", PARITY)
     def test_a_load_bearing_phrase_sits_in_both(self, phrase):

@@ -32,7 +32,8 @@ from it in the middle of a task.
 
 Ask the user before installing a rule, which becomes standing text in their
 context files for every session after this one, and before registering boost
-with an agent (`boost mcp register`), which changes their whole machine.
+with an agent (`boost mcp register`), which applies to every project on this
+machine.
 
 Coming back empty is a real answer: build it yourself, now knowing nothing
 already covers it. Coming back with something is a head start, not an
