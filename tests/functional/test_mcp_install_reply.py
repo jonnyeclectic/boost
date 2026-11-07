@@ -181,9 +181,13 @@ class TestDeclaredMcpServersAreNamed:
             self, reply_tap):
         text, is_err = _call("boost_install", name="needs-mcp")
         assert is_err is False
-        assert "needs MCP server github: `npx -y gh-mcp` — not registered" \
-            in text
-        assert "ask the user to run this for each agent they use:" in text
+        assert ("needs MCP server github: `npx -y gh-mcp` — boost_install "
+                "did not register it") in text
+        # boost never looks for an existing registration, so it must not
+        # claim there is none.
+        assert "not registered" not in text
+        assert "unless the user already has, ask them to run this for each " \
+            "agent they use:" in text
         assert "  claude mcp add github --scope user -- npx -y gh-mcp" in text
         # Named, never acted on: registering is the user's call.
         assert not (paths.home() / ".claude.json").exists()
@@ -192,7 +196,10 @@ class TestDeclaredMcpServersAreNamed:
         text, _ = _call("boost_install", name="name-only")
         line = next(ln for ln in text.splitlines() if "linear" in ln)
         assert line.startswith("needs MCP server linear (no command declared)")
-        assert "`boost mcp register`" in line
+        # `boost mcp register` registers boost's own server and nothing else;
+        # naming it here sent the user to a command that cannot add linear.
+        assert "boost mcp register" not in line
+        assert "their agent's own `mcp add`" in line
         # boost will not invent a command line on the author's behalf.
         assert "claude mcp add" not in text
 

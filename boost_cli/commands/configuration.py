@@ -2210,17 +2210,25 @@ def _mcp_server_lines(res: store.InstallResult) -> list[str]:
 
 
 def _mcp_server_row(res: store.InstallResult, row: dict) -> list[str]:
-    """One declared server: its command, and who registers it, or where."""
+    """One declared server: its command, and who registers it, or where.
+
+    Two things here are the user's to know and boost's not to claim.
+    `boost mcp register` registers boost's own server and nothing else, so
+    it is not how a skill's server gets added. And boost does not look for an
+    existing registration, so the line says boost_install did not register
+    the server rather than that nobody has.
+    """
     name, spec = row["name"], row.get("spec")
     if not isinstance(spec, dict) or not mcpdecl.command_line(spec):
-        return ["needs MCP server %s (no command declared) — the user "
-                "installs it, then registers it with `boost mcp register` or "
-                "their agent's own `mcp add`" % name]
+        return ["needs MCP server %s (no command declared) — boost cannot "
+                "register it; the user installs it and adds it with their "
+                "agent's own `mcp add`" % name]
     head = "needs MCP server %s: `%s` — " % (name, mcpdecl.command_line(spec))
     if res.scope == scopes.SCOPE_PROJECT:
         return [head + _project_mcp_note(res, name)]
-    return [head + "not registered, and registering it is machine-wide, so "
-            "ask the user to run this for each agent they use:",
+    return [head + "boost_install did not register it, and registering it is "
+            "machine-wide, so unless the user already has, ask them to run "
+            "this for each agent they use:",
             *("  " + mcphost.shell_line(mcpdecl.register_argv(
                 name, spec, host=host, scope=res.scope))
               for host in _mcp_offer_hosts())]
