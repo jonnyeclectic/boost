@@ -9,7 +9,8 @@ Package name on PyPI is `boost-skill-cli`; the command is `boost`.
 ```bash
 make venv                                      # .venv from the hash-pinned requirements/*.txt
 .venv/bin/pytest tests/unit/test_catalog.py -q                    # one test file
-.venv/bin/pytest tests/unit/test_catalog.py::test_scan_dir -q     # one test
+.venv/bin/pytest tests/unit/test_catalog.py::TestScanDir -q       # one test class
+.venv/bin/pytest tests/unit/test_catalog.py::TestScanDir::test_skill_md_at_repo_root_uses_root_dirname -q   # one test
 .venv/bin/pytest tests/functional -q -k install                   # functional tests matching "install"
 make lint                                      # the whole static tier — read the recipe, it is long
 make test                                      # unit + functional with 90% coverage gate
