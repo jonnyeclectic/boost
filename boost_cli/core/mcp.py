@@ -87,11 +87,42 @@ class Registry:
         return name in self._handlers
 
     def call(self, name: str, args: dict) -> tuple[str | None, bool]:
-        """Dispatch to a handler. ``(None, False)`` for an unknown tool."""
+        """Dispatch to a handler. ``(None, False)`` for an unknown tool.
+
+        Raises :class:`BoostError` for an argument the tool's schema does not
+        declare (:func:`refuse_undeclared`), before the handler runs.
+        """
         handler = self._handlers.get(name)
         if handler is None:
             return None, False
+        refuse_undeclared(name, self._specs[name]["inputSchema"], args)
         return handler(args)
+
+
+def refuse_undeclared(name: str, schema: Mapping, args: Mapping) -> None:
+    """Refuse an argument ``schema`` does not declare, naming the ones it does.
+
+    Handlers read the keys they know and ignored the rest, so a guessed
+    argument changed nothing and said nothing: ``boost_install`` called with
+    ``{"name": ..., "scope": "project", "local": true}`` installed for the
+    user and replied as though the call had been understood. The caller
+    learns the argument was dropped only from what happened afterwards.
+
+    A schema that lists ``properties`` is closed unless it says
+    ``"additionalProperties": true``; one without ``properties`` is not
+    checked. The check runs here rather than as ``additionalProperties:
+    false`` on the advertised schemas, so what each host is sent in
+    ``tools/list`` stays exactly what it was.
+    """
+    props = schema.get("properties")
+    if not isinstance(props, Mapping) or schema.get("additionalProperties"):
+        return
+    extra = sorted(k for k in args if k not in props)
+    if extra:
+        raise BoostError("%s does not take %s"
+                         % (name, ", ".join(repr(k) for k in extra)),
+                         hint="it takes: %s" % (", ".join(props)
+                                                or "no arguments"))
 
 
 # ── JSON-RPC 2.0 protocol ─────────────────────────────────────────────────
@@ -289,7 +320,26 @@ _INSTRUCTIONS_TAIL = (
     "something is a head start, not an instruction — read it, take what fits, "
     "discard the rest. The task stays yours.\n"
     "\n"
-    "Flow: boost_search -> boost_install. " + SKIP_IT
+    # THE FLOW, with the read step and the consent line in it. It used to be
+    # "boost_search -> boost_install", one clause, while boost_read's own
+    # description says to reach for it "on the top hit from boost_search
+    # before boost_install" — two surfaces recommending two flows. And on a
+    # host that lists tools by name only until they are looked up, this text
+    # and the boost-first rule are the install story, so where an install
+    # lands and which installs are the user's to approve are said here, in
+    # the words the rule uses (tests/unit/test_builtin.py pins the parity).
+    "Flow: boost_search -> boost_read -> boost_install -> use it now. "
+    "boost_read changes nothing, and the text it returns is usable this "
+    "turn: whether this session's host picks up a file installed after it "
+    "started depends on the host, so work from what you read. boost_install "
+    "installs a skill for the user, in every agent they have enabled on this "
+    "machine; with scope \"project\" it writes it into this repository "
+    "instead, as `boost install <name> --local` does in a shell. Say in your "
+    "reply which you chose and where it landed. Ask the user before "
+    "installing a rule, which becomes standing "
+    "text in their context files for every session after this one, and "
+    "before registering boost with an agent (`boost mcp register`), which "
+    "applies to every project on this machine. " + SKIP_IT
 )
 
 

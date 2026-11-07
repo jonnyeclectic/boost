@@ -125,7 +125,7 @@ def export_bundle(dest: Path) -> dict:
     if not packed:
         raise BoostError(
             "nothing to export — no tapped registry has a built catalogue",
-            hint="tap a registry first, e.g. `boost tap --defaults`")
+            hint=config.setup_hint("tap a registry first, e.g. with"))
 
     manifest = {
         "format": BUNDLE_FORMAT,

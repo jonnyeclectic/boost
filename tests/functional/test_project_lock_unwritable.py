@@ -46,7 +46,10 @@ def readonly(boost, tapped, repo):
     try:
         yield d, raw
     finally:
-        d.chmod(0o755)
+        # A rerun that succeeds removes the last skill, and the now-empty
+        # lock and `.boost/` with it.
+        if d.exists():
+            d.chmod(0o755)
 
 
 def _flat(text: str) -> str:
@@ -102,3 +105,4 @@ def test_once_writable_the_rerun_succeeds(boost, repo, readonly):
     boost("uninstall", "brainstorming", "--local")
     assert not (repo / ".claude" / "skills" / "brainstorming").exists()
     assert projectlock.get_skill(repo, "brainstorming") is None
+    assert not d.exists()

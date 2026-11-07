@@ -280,6 +280,12 @@ if [ "${1:-}" = "--online" ]; then
   # that is what the fixture-name test upstream of this one rules out.
   HERO="$(awk '/^```bash$/{inb=1;anchored=0;name="";next} /^```$/{if(inb&&anchored&&name!=""){print name;exit} inb=0;next} inb&&/^pipx install boost-skill-cli/{anchored=1} inb&&/^boost install /&&name==""{name=$3}' README.md)"
   run "README hero install ($HERO)" 0 ./boost install "$HERO"
+  # Every other name a README fence installs, uninstalls or describes must
+  # resolve from the same starter taps; `info` asks without installing. The
+  # scope and workflow examples named `code-review` and `my-jira`, which no
+  # starter registry ships, and both exited 1.
+  EXAMPLES="$(awk '/^```bash$/{inb=1;next} /^```$/{inb=0;next} inb&&/^boost (install|uninstall|info) [a-z]/{print $3}' README.md | sort -u)"
+  for name in $EXAMPLES; do run "README example ($name)" 0 ./boost info "$name"; done
 fi
 
 echo

@@ -9,7 +9,7 @@ Feature: boost doctor
     Then the exit code should be 0
     And the output should contain "boost doctor"
     And the output should contain "no registries tapped"
-    And the output should contain "boost tap --defaults"
+    And the output should contain "boost quickstart"
     And the output should contain "ready to set up"
     And the output should contain "0 skills installed · 0 taps synced · 0 broken links"
 

@@ -172,7 +172,7 @@ class TestServePage:
         _patch_catalog(monkeypatch, installed={}, entries=[], taps=[])
         page = serve.serve_page()
         assert "no taps configured yet" in page
-        assert "boost tap --defaults" in page
+        assert "run <code>boost quickstart</code>" in page
 
     def test_counts_come_from_the_search_endpoint(self, monkeypatch):
         _patch_catalog(

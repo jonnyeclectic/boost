@@ -92,6 +92,54 @@ class TestHint:
         assert any("`boost quickstart`" in line for line in lines), lines
 
 
+class TestSetupHint:
+    """Every "nothing tapped yet" message names the setup command bare
+    `boost` names. Bare `boost` said `boost quickstart` while search,
+    install, doctor, taps, list and update each spelled out `boost tap
+    --defaults` on their own; `config.setup_hint` is now the one spelling."""
+
+    def test_the_default_sentence(self):
+        assert config.setup_hint() == (
+            "add the recommended registries with `boost quickstart`")
+
+    def test_a_surface_can_change_the_lead_but_not_the_command(self):
+        assert config.setup_hint("start with") == "start with `boost quickstart`"
+
+    def test_it_is_the_command_the_first_run_hint_names(self):
+        assert "`%s`" % config.SETUP_CMD in config.FIRST_RUN_HINT
+        assert config.SETUP_CMD == "boost quickstart"
+
+    def test_the_catalog_miss_hint_is_built_from_it(self):
+        from boost_cli.core import catalog
+        assert catalog.NO_TAPS_HINT == (
+            "no taps configured — start with `boost quickstart`")
+
+    def test_no_command_spells_its_own_setup_hint(self):
+        # The drift this replaced: one `hint="... tap --defaults"` literal per
+        # call site. A new literal is the next drift.
+        root = Path(boost_cli.__file__).parent
+        files = [*sorted((root / "commands").glob("*.py")),
+                 *sorted((root / "core").glob("*.py"))]
+        literals = [(f.name, m) for f in files
+                    for m in re.findall(r'hint="[^"]*tap --defaults[^"]*"',
+                                        f.read_text(encoding="utf-8"))]
+        assert literals == []
+
+    def test_no_message_tells_a_newcomer_to_run_tap_defaults(self):
+        # The same drift without a `hint=`: bootstrap's offline summary and
+        # the web UI's empty state each said "run `boost tap --defaults`".
+        # The MCP replies are left out on purpose: boost_doctor and
+        # mcp.no_results ask the *user* to run `boost tap --defaults` (the
+        # precise fix an agent can relay), and test_mcp.py pins that wording.
+        root = Path(boost_cli.__file__).parent
+        mcp_surfaces = {"commands/configuration.py", "core/mcp.py"}
+        pattern = re.compile(r"run (?:`|<code>)boost tap --defaults")
+        hits = [rel for f in sorted(root.rglob("*.py"))
+                if (rel := f.relative_to(root).as_posix()) not in mcp_surfaces
+                and pattern.search(f.read_text(encoding="utf-8"))]
+        assert hits == []
+
+
 class TestHelpScreen:
     """Bare `boost` adapts to the machine it is run on."""
 

@@ -579,10 +579,10 @@
       <a class="btn btn-ghost" href="#commands">Explore all 81 commands</a>
     </div>
     <div class="stats">
-      <div class="stat reveal"><b>70,000+</b><span>Discoverable assets</span></div>
+      <div class="stat reveal"><b>35,000+</b><span>Catalogued items</span></div>
       <div class="stat reveal"><b>81</b><span>Commands · 8 groups</span></div>
-      <div class="stat reveal"><b>7</b><span>Pre-tapped registries</span></div>
-      <div class="stat reveal"><b>5</b><span>AI agents supported</span></div>
+      <div class="stat reveal"><b>7</b><span>Starter registries</span></div>
+      <div class="stat reveal"><b>6</b><span>AI agents supported</span></div>
     </div>
 
     <nav class="jump" aria-label="Sections on this page">
@@ -659,7 +659,7 @@ facilitate structured divergent thinking:
           <div class="node src">
             <span class="tag">Source</span>
             <h3>GitHub registries</h3>
-            <p>7 pre-tapped registries + live GitHub discovery</p>
+            <p>7 starter registries via <code>boost quickstart</code> + live GitHub discovery</p>
           </div>
         </div>
         <div class="flow-arrow reveal">
@@ -745,27 +745,30 @@ facilitate structured divergent thinking:
       <div class="window reveal" style="max-width: 860px; margin: 56px auto 0;">
         <div class="bar"><div class="dots"><i></i><i></i><i></i></div>
           <div class="bar-title">zsh — boost</div></div>
-        <pre><span class="tp">$</span> <span class="tv">boost</span> <span class="tc">search</span> jira
-  <span class="tacc">▰▰▰▰</span>   <span class="tacc">jira-integration</span>  <span class="tdim">[skill]  acme/git</span>  Sync commits and PRs to Jira tickets  <span class="tstar">★ curated</span>
-  <span class="tpnk">▰▱▱▱</span> <span class="tok">●</span> <span class="tacc">commit-messages</span>   <span class="tdim">[skill]  acme/git</span>  Conventional, atomic commit message discipline
-  <span class="tdim">2 matches · ranked by AI relevance (claude CLI)</span>
+        <pre tabindex="0" aria-label="Example boost terminal session"><span class="tp">$</span> <span class="tv">boost</span> <span class="tc">search</span> tdd
+  <span class="tacc">▰▰▰▰</span>   <span class="tacc">test-driven-development</span>  <span class="tdim">[skill]  obra/superpowers</span>  Use when implementing any feature or bugfix…  <span class="tstar">★ curated</span>
+  <span class="tpnk">▰▰▰▱</span>   <span class="tacc">writing-skills</span>           <span class="tdim">[skill]  obra/superpowers</span>  Use when creating new skills, editing existing…  <span class="tstar">★ curated</span>
+  <span class="tdim">11 matches · ranked by full-content BM25</span>
 
-<span class="tp">$</span> <span class="tv">boost</span> <span class="tc">install</span> jira-integration
-  <span class="tok">✓</span> copied to ~/.agents/skills/jira-integration
-  <span class="tok">✓</span> linked → claude-code · windsurf · cursor
+<span class="tp">$</span> <span class="tv">boost</span> <span class="tc">install</span> test-driven-development
+  <span class="tok">✓</span> copied to ~/.agents/skills/test-driven-development
+  <span class="tok">✓</span> linked → claude-code · windsurf · cursor · antigravity
   <span class="tok">✓</span> available to Gemini CLI · Codex (reads the store directly)
   <span class="tok">✓</span> lock updated (.skill-lock.json)
-  <span class="tbox">╭─ </span><b>installed</b><span class="tbox"> ────────────────────────────────────────╮</span>
-  <span class="tbox">│</span> Installed 1 new skill; quality score 92/100        <span class="tbox">│</span>
-  <span class="tbox">│</span> <span class="tdim">jira-integration → claude-code · windsurf · cursor</span> <span class="tbox">│</span>
-  <span class="tbox">│</span> <span class="tdim">next: boost info jira-integration</span>                  <span class="tbox">│</span>
-  <span class="tbox">╰────────────────────────────────────────────────────╯</span>
+  <span class="tbox">╭─ </span><b>installed</b><span class="tbox"> ─────────────────────────────────────────────────────────────╮</span>
+  <span class="tbox">│</span> Installed 1 new skill; quality score 90/100                             <span class="tbox">│</span>
+  <span class="tbox">│</span> <span class="tdim">test-driven-development → claude-code · windsurf · cursor · antigravity</span> <span class="tbox">│</span>
+  <span class="tbox">╰─────────────────────────────────────────────────────────────────────────╯</span>
+  <span class="tdim">next: boost info test-driven-development</span>
 
 <span class="tp">$</span> <span class="tv">boost</span> <span class="tc">doctor</span>
   <span class="tacc">==&gt;</span> <b>boost doctor</b>
-  <span class="tok">✓</span> 14 skills installed · 5 taps synced · 0 broken links
+  <span class="tok">✓</span> 1 skill installed · 7 taps synced · 0 broken links
   <span class="tok">✓</span> lock file integrity OK · log rotation healthy
   <span class="tok">● healthy</span>
+
+<span class="cm"># let your agents search and install mid-task:</span>
+<span class="tp">$</span> <span class="tv">boost</span> <span class="tc">mcp</span> register   <span class="cm"># Claude Code, Gemini CLI, Antigravity CLI, Codex</span>
 
 <span class="cm"># share the whole setup with your team:</span>
 <span class="tp">$</span> <span class="tv">boost</span> <span class="tc">bundle</span> dump &gt; Boostfile   <span class="cm"># teammates run: boost bundle install</span></pre>
@@ -842,9 +845,9 @@ facilitate structured divergent thinking:
         <div class="cap reveal" style="--ic-bg: rgba(96,165,250,.12); --ic-fg: #93c5fd;">
           <div class="ic">⇄</div>
           <h3>Multi-agent &amp; integration</h3>
-          <p>Install once, land in <b>Claude Code, Windsurf, Cursor, Antigravity CLI and Codex</b>.</p>
+          <p>Install once, land in <b>Claude Code, Cursor, Windsurf, Gemini CLI, Antigravity CLI and Codex</b>.</p>
           <ul class="bullets">
-            <li>Run as a native <b>MCP server</b>, so the agent can search for itself.</li>
+            <li>Let your agents search and install mid-task: <code>boost mcp register</code> registers boost&rsquo;s <b>MCP server</b> with Claude Code, Gemini CLI, Antigravity CLI and Codex.</li>
             <li>Register a <code style="color:var(--cyan)">boost://</code> handler for
               one-click installs.</li>
             <li>Serve a catalog over HTTP, or auto-sync on a schedule.</li>
@@ -881,11 +884,11 @@ facilitate structured divergent thinking:
   <section id="registries">
     <div class="wrap">
       <span class="eyebrow">Where Skills Come From</span>
-      <h2 class="sec-title">Pre-tapped registries + open discovery</h2>
-      <p class="sec-sub">Boost ships pre-tapped to seven curated registries covering all three
-        item kinds — skills, rules and workflows — and <code>boost mcp</code> taps them for you
+      <h2 class="sec-title">Starter registries + open discovery</h2>
+      <p class="sec-sub"><code>boost quickstart</code> taps seven curated registries covering all three
+        item kinds — skills, rules and workflows — and <code>boost mcp register</code> taps them for you
         on a machine that has none. Beyond that,
-        the curated catalog spans 100+ registries and <code>boost discover</code> searches
+        the curated catalog spans 515 registries and <code>boost discover</code> searches
         GitHub live for skill repositories you have not tapped. Tap your own team’s repo anytime.</p>
 
       <div class="reg-wrap reveal">
@@ -947,7 +950,7 @@ facilitate structured divergent thinking:
           </table>
         </div>
       </div>
-      <p class="reg-note">Item counts (skills + rules + workflows) measured from the live repositories ·
+      <p class="reg-note">Item counts (skills + rules + workflows) measured by tapping each repository at its default branch on 2026-11-07 ·
         <code>boost discover &lt;query&gt;</code> searches GitHub live; <code>boost index</code> builds the offline index that bare <code>discover</code> and <code>--local</code> browse</p>
     </div>
   </section>
@@ -1005,6 +1008,9 @@ pipx install boost-skill-cli
 <span class="tv">boost</span> <span class="tc">quickstart</span>
 <span class="tv">boost</span> <span class="tc">search</span> brainstorming
 
+<span class="cm"># let your agents search and install mid-task</span>
+<span class="tv">boost</span> <span class="tc">mcp</span> register
+
 <span class="cm"># semantic search: add the extra first, then quickstart again</span>
 pipx inject boost-skill-cli <span class="yv">"boost-skill-cli[rag]"</span>
 
@@ -1016,7 +1022,7 @@ pipx inject boost-skill-cli <span class="yv">"boost-skill-cli[rag]"</span>
       </div>
 
       <div class="mini reveal">
-        <a href="#commands"><span class="name"><span class="v">boost</span> search jira</span><p>Find skills across taps</p></a>
+        <a href="#commands"><span class="name"><span class="v">boost</span> search tdd</span><p>Find skills across taps</p></a>
         <a href="#commands"><span class="name"><span class="v">boost</span> install brainstorming</span><p>Install into every agent</p></a>
         <a href="#commands"><span class="name"><span class="v">boost</span> recommend</span><p>Suggestions for your stack</p></a>
         <a href="#commands"><span class="name"><span class="v">boost</span> browse</span><p>Interactive TUI explorer</p></a>
@@ -1034,7 +1040,7 @@ pipx inject boost-skill-cli <span class="yv">"boost-skill-cli[rag]"</span>
 <footer>
   <div class="wrap">
     <p class="foot-brand"><b>boost</b> — a package manager for AI skills</p>
-    <p class="foot-note">Install with <code>pip install boost-skill-cli</code> · requires Python 3.12+ and <code>git</code></p>
+    <p class="foot-note">Install with <code>pipx install boost-skill-cli</code> · requires Python 3.12+ and <code>git</code></p>
     <nav class="foot-links" aria-label="Documentation">
       <a aria-current="page" href="#top">Guide</a>
       <a href="commands.html">Commands</a>
@@ -1164,7 +1170,7 @@ const COMMANDS = [
 // live-measured registry ITEM counts — skills + rules + workflows, which is
 // what the catalog actually indexes. Skill-only counts understated the two
 // registries that carry no skills at all (a pure rules repo read as 0).
-const REG_COUNTS = { anthropic: "18", superpowers: "14", trailofbits: "118", expo: "23", scientific: "158", cursorrules: "257", commandsuite: "358" };
+const REG_COUNTS = { anthropic: "20", superpowers: "15", trailofbits: "139", expo: "25", scientific: "177", cursorrules: "257", commandsuite: "358" };
 
 // ---------- render ----------
 const groupsEl = document.getElementById("cmd-groups");

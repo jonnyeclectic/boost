@@ -57,7 +57,7 @@ class SeedResult:
             # not have — see the `--seed` repair path, which hits it head-on.
             if self.failed:
                 return ("could not reach any default registry — run "
-                        "`boost tap --defaults` once you have a network")
+                        "`%s` once you have a network" % config.SETUP_CMD)
             return "catalog already tapped — leaving it alone"
         line = ("tapped %d registries (%d items searchable)"
                 % (len(self.tapped), self.item_count))

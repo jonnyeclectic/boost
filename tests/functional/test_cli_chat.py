@@ -21,7 +21,7 @@ class TestChatRequiresATap:
     def test_no_taps_is_an_error_with_a_hint(self, boost):
         r = boost("chat", "anything", expect=1)
         assert "no taps configured" in r.err
-        assert "boost tap --defaults" in r.err
+        assert "boost quickstart" in r.err
 
 
 class TestOneShot:
