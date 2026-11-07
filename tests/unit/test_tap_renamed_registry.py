@@ -158,3 +158,14 @@ class TestTapCommand:
         assert "%s already tapped as %s (one repository, renamed upstream)" % (
             NEW, OLD) in out
         assert "1 registry to tap, 1 already tapped" in out
+
+    def test_quickstart_says_it_the_way_tap_does(self, sandbox, catalogue,
+                                                 cloned, capsys):
+        from boost_cli.commands import quickstart
+        _rows(OLD)
+        _names, outcome = quickstart._tap_defaults(
+            [{"name": NEW, "url": GH + NEW}], {}, dry_run=False)
+        assert cloned == []
+        assert outcome.already == [NEW]
+        assert "%s already tapped as %s (one repository, renamed upstream)" % (
+            NEW, OLD) in capsys.readouterr().out
