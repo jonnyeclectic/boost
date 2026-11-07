@@ -10,6 +10,7 @@ wow: 2
 note: an agent installing through MCP never learns a human has to register the skill's server
 order: 382
 owner: loop/agent-awareness
+pr: 1324
 title: "MCP <code>boost_install</code> replies should name the servers a skill declares"
 ---
 The MCP <code>boost_install</code> tool never registers servers, which is correct: an agent must
