@@ -86,3 +86,24 @@ def test_the_default_still_records(project):
     assert res.mcp_recorded == ["gh"]
     assert (base / mcpdecl.SIDECAR).is_file()
     assert "no_mcp" not in projectlock.get_skill(base, "brainstorming")
+
+
+def test_a_no_mcp_skill_does_not_inherit_a_server_another_uninstall_frees(
+        project):
+    """An opt-out is not a declaration. `tdd-workflow` was installed with
+    --no-mcp and declares the same server `brainstorming` recorded; when
+    `brainstorming` goes, the server goes with it instead of being re-marked
+    to the skill that was told to keep it out of .mcp.json."""
+    base, _entry = project
+    tdd = next(e for e in catalog.find("tdd-workflow"))
+    (store.source_dir_for(tdd) / mcpdecl.SIDECAR).write_text(json.dumps(
+        {mcpdecl.SERVERS_KEY: {"gh": {"command": "npx", "args": ["-y", "gh"]}}}),
+        encoding="utf-8")
+    store.install(tdd, scope=scopes.SCOPE_PROJECT, base=base, record_mcp=False)
+    _install(project)
+    assert store._project_declarers(base) == ({"gh": "brainstorming"}, True)
+    projectlock.remove_skill(base, "brainstorming")
+    removed, err = store.forget_project_mcp(base, "brainstorming")
+    assert (removed, err) == (["gh"], None)
+    # Empty again, and boost created it, so the file goes too.
+    assert not (base / mcpdecl.SIDECAR).exists()

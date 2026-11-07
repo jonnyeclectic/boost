@@ -2847,11 +2847,18 @@ def _project_declarers(base) -> tuple[dict[str, str], bool]:
     ``complete`` is False when some entry has no readable copy on this machine
     (a teammate's clone that never ran ``boost sync``): what it declares is
     then unknown.
+
+    A row recording ``no_mcp`` (``install --local --no-mcp``) is not a
+    declarer: that install was told to keep its servers out of
+    ``.mcp.json``, so it must not inherit one another skill's uninstall
+    would otherwise remove.
     """
     from . import scopes
     owners: dict[str, str] = {}
     complete = True
     for name, entry in sorted(projectlock.installed(base).items()):
+        if (entry or {}).get("no_mcp"):
+            continue
         dirs = [scopes.resolve_in_base(base, m.get("path") or "")
                 for m in (entry or {}).get("materializations") or []
                 if isinstance(m, dict)]
