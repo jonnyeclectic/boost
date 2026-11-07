@@ -805,7 +805,7 @@ def test_local_no_mcp_skips_the_mcp_json_write_and_says_so(
 
     The write had no gate, and the report sat behind the --no-mcp return, so
     the flag hid the write instead of skipping it. BOOST_NO_MCP_OFFER is the
-    same switch exported.
+    same switch exported, and the line names whichever one was used.
     """
     from boost_cli.core import mcpdecl
     _declare_mcp(tapped, "brainstorming")
@@ -816,7 +816,8 @@ def test_local_no_mcp_skips_the_mcp_json_write_and_says_so(
         monkeypatch.setenv("BOOST_NO_MCP_OFFER", "1")
     res = boost(*argv)
     assert not (repo / mcpdecl.SIDECAR).exists()
-    assert "gh not recorded in .mcp.json (--no-mcp)" in res.out
+    switch = "--no-mcp" if how == "flag" else "BOOST_NO_MCP_OFFER"
+    assert "gh not recorded in .mcp.json (%s)" % switch in res.out
     assert "already in" not in res.out
     assert projectlock.get_skill(repo, "brainstorming")["no_mcp"] is True
 
@@ -856,6 +857,21 @@ def test_dry_run_local_no_mcp_names_the_skipped_record(boost, fixture_tap_src,
     r = boost("install", "mcp-proj-skill", "--local", "--no-mcp", "--dry-run")
     assert "mcp   → not recorded (--no-mcp): github" in r.out
     assert "record github in" not in r.out
+
+
+def test_dry_run_names_the_exported_switch_not_the_flag(
+        boost, fixture_tap_src, tmp_path, repo, monkeypatch):
+    # Nobody typed --no-mcp here, so naming it would send the reader to the
+    # command line instead of their environment.
+    tap_dir = _mcp_skill_tap(
+        fixture_tap_src, tmp_path,
+        sidecar={"mcpServers": {"github": {"command": "npx",
+                                           "args": ["-y", "srv"]}}})
+    boost("tap", tap_dir)
+    monkeypatch.setenv("BOOST_NO_MCP_OFFER", "1")
+    r = boost("install", "mcp-proj-skill", "--local", "--dry-run")
+    assert "mcp   → not recorded (BOOST_NO_MCP_OFFER): github" in r.out
+    assert "--no-mcp" not in r.out
 
 
 def test_a_local_install_names_a_server_declared_without_a_command(

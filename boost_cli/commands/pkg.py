@@ -162,7 +162,7 @@ def _offer_mcp(res: store.InstallResult, no_mcp: bool = False) -> None:
     # `install --local --no-mcp` wrote every server to .mcp.json and said
     # nothing. The flag now skips the write (store), and this says so.
     if res.scope == scopes.SCOPE_PROJECT:
-        _report_project_mcp(res)
+        _report_project_mcp(res, no_mcp=no_mcp)
         return
     if no_mcp or typedvalue.env_flag("BOOST_NO_MCP_OFFER", unknown=True):
         return
@@ -283,7 +283,17 @@ def _offer_mcp_batch(results: list, no_mcp: bool = False) -> None:
         _offer_registration(wirable, results[0].scope)
 
 
-def _report_project_mcp(res: store.InstallResult) -> None:
+def _no_mcp_switch(no_mcp: bool) -> str:
+    """The switch to name when a project install left ``.mcp.json`` alone:
+    ``--no-mcp`` when it was given, else ``BOOST_NO_MCP_OFFER`` when that is
+    what is exported. Saying "--no-mcp" to someone who never typed it sent
+    them looking for a flag instead of their environment."""
+    if no_mcp or not typedvalue.env_flag("BOOST_NO_MCP_OFFER", unknown=True):
+        return "--no-mcp"
+    return "BOOST_NO_MCP_OFFER"
+
+
+def _report_project_mcp(res: store.InstallResult, no_mcp: bool = False) -> None:
     """What a project install did with its skill's servers in ``.mcp.json``.
 
     Reports what was RECORDED, not what was declared. The two differ when the
@@ -315,8 +325,9 @@ def _report_project_mcp(res: store.InstallResult) -> None:
     if not wanted:
         return
     if res.mcp_skipped:
-        out.dim("  %s not recorded in %s (--no-mcp)"
-                % (", ".join(wanted), mcpdecl.SIDECAR), wrap=True)
+        out.dim("  %s not recorded in %s (%s)"
+                % (", ".join(wanted), mcpdecl.SIDECAR, _no_mcp_switch(no_mcp)),
+                wrap=True)
     elif res.mcp_recorded:
         out.ok("recorded %s in %s"
                % (_plural(len(res.mcp_recorded), "MCP server"),
@@ -1056,8 +1067,8 @@ def cmd_install(argv: list[str]) -> int:
                         out.info("  mcp   → record %s in %s"
                                  % (row["name"], mcpdecl.SIDECAR)
                                  if offer_mcp else
-                                 "  mcp   → not recorded (--no-mcp): %s"
-                                 % row["name"])
+                                 "  mcp   → not recorded (%s): %s"
+                                 % (_no_mcp_switch(args.no_mcp), row["name"]))
                     continue
                 if e.get("kind") in ("rule", "workflow"):
                     k = e["kind"]
