@@ -84,6 +84,20 @@ class TestLookups:
         assert rag.registry_confidence(NEW) == "med"
         assert rag.registry_confidence("other/repo") is None
 
+    def test_a_row_without_confidence_has_none(self, monkeypatch):
+        """Not a crash, and not the string "None": unranked, under either
+        name, like a tap the catalogue does not list."""
+        monkeypatch.setattr(config, "load_registry_catalog", lambda: [
+            {"name": NEW, "category": "infra", "formerly": [OLD]},
+            {"name": "plain/repo", "confidence": "high"}])
+        rag._confidence_map.cache_clear()
+        try:
+            assert rag.registry_confidence(NEW) is None
+            assert rag.registry_confidence(OLD) is None
+            assert rag.registry_confidence("plain/repo") == "high"
+        finally:
+            rag._confidence_map.cache_clear()
+
     def test_served_facets_agree_with_browse(self, catalogue):
         assert serve.registry_categories() == config.registry_categories()
         assert serve.registry_categories()[OLD] == "infra"
