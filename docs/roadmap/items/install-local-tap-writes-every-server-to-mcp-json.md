@@ -10,6 +10,7 @@ wow: 2
 note: --local writes a whole tap's declared servers into .mcp.json unasked, and with --no-mcp says nothing at all
 order: 383
 owner: loop/mcp-offer-cards
+pr: 1325
 title: "<code>install &lt;tap&gt; --local</code> records every declared MCP server in <code>.mcp.json</code> unasked — and <code>--no-mcp</code> hides it"
 ---
 A project-scoped install records declared servers in the repo's <code>.mcp.json</code> with no

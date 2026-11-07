@@ -10,6 +10,7 @@ wow: 2
 note: a tap with k skills that declare servers asks the registration question k times
 order: 380
 owner: loop/mcp-offer-cards
+pr: 1325
 title: "<code>install &lt;tap&gt;</code> asks about MCP servers once per skill, not once per run"
 ---
 <code>_offer_mcp</code> runs from <code>_report_result</code>, once for each installed item. So a tap
