@@ -796,7 +796,7 @@ def join_hints(*hints: str | None) -> str | None:
     return "; ".join(h for h in hints if h) or None
 
 
-NO_TAPS_HINT = "no taps configured — start with `boost tap --defaults`"
+NO_TAPS_HINT = config.setup_hint("no taps configured — start with")
 
 
 def search_hint(name: str) -> str:

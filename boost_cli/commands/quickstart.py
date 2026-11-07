@@ -417,11 +417,26 @@ def _relocate(argv: list[str], dry_run: bool) -> None:
     os.execv(again[0], again)  # noqa: S606 -- argv list, no shell; the venv just rebuilt
 
 
+#: The step after this one. The CLI's own onboarding — the first-run hint,
+#: then quickstart — ended at "ready — try `boost search brainstorming`" and
+#: never named `boost mcp register`, so a user who followed it had a
+#: searchable catalog and agents that knew nothing about boost. Short enough
+#: to fit an 80-column pane unwrapped, indent included.
+MCP_NEXT = "next: `boost mcp register` lets your agents search and install mid-task"
+
+_MCP_NEXT_HELP = (
+    "quickstart sets up the catalog and registers nothing with your agents. "
+    "`boost mcp register` is the step that lets them search and install "
+    "from it mid-task; it asks before adding boost's rule to their "
+    "instructions.")
+
+
 def cmd_quickstart(argv) -> int:
     """boost quickstart [--catalog] [--no-vectors] [--keep-python] [--dry-run]"""
     p = cliparse.parser(
         prog="boost quickstart",
-        description="Tap the starter registries and load prebuilt vectors")
+        description="Tap the starter registries and load prebuilt vectors",
+        epilog=_MCP_NEXT_HELP)
     p.add_argument("--catalog", action="store_true",
                    help="tap every catalogued registry, not just the 7 "
                         "starters, and fetch vectors for all of them")
@@ -565,6 +580,10 @@ def cmd_quickstart(argv) -> int:
     message, hint = outcome.verdict()
     if outcome.ok:
         out.ok(message)
+        # The catalog is searchable from here; nothing yet tells an agent it
+        # exists. quickstart registers nothing itself — that writes each agent
+        # CLI's config, machine-wide — so it names the command that does.
+        out.info(MCP_NEXT)
         return 0
     # Raised rather than returned so the failure wears the same `Error:`/`hint:`
     # shape as `boost search`'s own "no taps configured" — the command a user

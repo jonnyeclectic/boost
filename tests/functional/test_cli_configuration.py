@@ -1760,8 +1760,10 @@ class TestMcp:
         # hand, which is the one failure this tool exists to prevent.
         assert "linked agents: claude-code, windsurf, cursor" in text(8)
         assert "available without linking" in text(8)
-        assert text(8).rstrip().endswith(
-            "directly): gemini, codex\nquality score: 95/100")
+        assert ("directly): gemini, codex\nquality score: 95/100\n"
+                in text(8))
+        # ...and then where it landed, so the agent can tell the user.
+        assert "\nscope: user — every project on this machine" in text(8)
         assert "quality score:" in text(8)
         assert "brainstorming v1.4.0 (fixture-tap)" in text(9)
         assert "installed: yes" in text(10)
@@ -1894,9 +1896,12 @@ class TestMcp:
         assert "healthy — no issues found" not in doctor
         assert "nothing is searchable yet" in doctor
         # The count an agent reads as "how many registries can answer me" is
-        # the configured one; the builtin's single item still shows up under
-        # "items available", so the two numbers have to explain each other.
-        assert "taps: 0 + boost's own (1 items available)" in doctor
+        # the configured one; the builtin's items (its rule and its skill)
+        # still show up under "items available", so the two numbers have to
+        # explain each other.
+        shipped = len(builtin.BUILTIN_RULES) + len(builtin.BUILTIN_SKILLS)
+        assert ("taps: 0 + boost's own (%d items available)" % shipped
+                in doctor)
 
     def test_boost_doctor_reads_a_non_list_taps_as_a_broken_config(
             self, sandbox):
@@ -2201,6 +2206,11 @@ class TestMcp:
         assert is_err is False
         assert "octo/skills — great skills" in text
         assert "acme/pack — b/SKILL.md" in text          # falls back to path
+        # No tool taps a repo: the reply says whose step it is, and how.
+        assert text.endswith(
+            "\nTo add one, ask the user to run `boost tap <owner/repo>` — it "
+            "clones over the network and changes their tap list; boost_search "
+            "covers it afterwards.")
 
     def test_discover_github_leaves_out_tapped_repos(self, sandbox,
                                                       monkeypatch):
@@ -2221,7 +2231,8 @@ class TestMcp:
                                                {"query": "react"})
         assert is_err is False
         assert text == ("acme/pack — b/SKILL.md\n(1 already-tapped repo(s) "
-                        "not shown — boost_search covers them)")
+                        "not shown — boost_search covers them)"
+                        + configuration._TAP_IT)
 
     def test_discover_github_only_tapped_repos(self, sandbox, monkeypatch):
         from boost_cli.commands import configuration, discovery

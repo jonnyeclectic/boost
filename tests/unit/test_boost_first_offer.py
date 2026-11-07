@@ -19,6 +19,7 @@ silently writes a managed block into a real `CLAUDE.md`.
 from __future__ import annotations
 
 import os
+import pathlib
 import sys
 
 import pytest
@@ -114,14 +115,58 @@ class TestTheOfferIsScopedToHostsBoostRegistered:
         assert "CLAUDE.md" in out and "GEMINI.md" in out
 
 
+class TestEveryRegisteredHostIsOffered:
+    """`boost mcp register` registers four hosts and offered the rule to two.
+
+    Measured on origin/main: `boost mcp register --dry-run --host all
+    --no-seed` listed argv for Claude Code, Gemini CLI, Antigravity CLI and
+    Codex CLI, then offered the rule for CLAUDE.md and GEMINI.md only. An
+    agy-only machine got no offer at all.
+    """
+
+    def test_every_host_maps_to_an_agent_that_writes_rules(self, sandbox):
+        from boost_cli.core import agents, mcphost
+        writers = set(agents.materializing_agents())
+        for host in mcphost.hosts():
+            assert builtin.AGENT_FOR_HOST.get(host) in writers, host
+
+    def test_codex_is_offered_its_agents_md(self, offering):
+        targets = configuration._boost_first_targets(["codex"])
+        assert len(targets) == 1
+        assert targets[0].endswith(str(pathlib.Path(".codex") / "AGENTS.md"))
+
+    def test_agy_is_offered_the_gemini_md_it_reads(self, offering):
+        targets = configuration._boost_first_targets(["agy"])
+        assert len(targets) == 1
+        assert targets[0].endswith(str(pathlib.Path(".gemini") / "GEMINI.md"))
+
+    def test_agy_and_gemini_name_one_file_once(self, offering):
+        assert (configuration._boost_first_targets(["agy", "gemini"])
+                == configuration._boost_first_targets(["gemini"]))
+
+    def test_all_four_hosts_name_three_files(self, offering):
+        names = sorted(pathlib.Path(t).name for t in
+                       configuration._boost_first_targets(
+                           ["claude", "gemini", "agy", "codex"]))
+        assert names == ["AGENTS.md", "CLAUDE.md", "GEMINI.md"]
+
+    def test_accepting_for_codex_writes_agents_md_and_nothing_else(
+            self, offering, capsys):
+        configuration._offer_boost_first(["codex"], yes=True)
+        agents_md = paths.home() / ".codex" / "AGENTS.md"
+        assert RULE in agents_md.read_text(encoding="utf-8")
+        assert not (paths.home() / ".claude" / "CLAUDE.md").exists()
+        assert not (paths.home() / ".gemini" / "GEMINI.md").exists()
+
+
 class TestThePreviewIsBuiltFromTheRuleInstallSet:
     """The printed paths come from `agents.materializing_agents()`.
 
     `enabled_agents()` is the wrong set for a *rule*: `skills_only` exists so
     an agent can take skills and not standing text, and the preview naming a
     path the install then refuses is a promise boost does not keep.
-    AGENT_FOR_HOST maps only claude-code and gemini today and both materialize
-    rules, so this is only observable by flipping the flag.
+    AGENT_FOR_HOST maps every host to claude-code, gemini or codex, and all
+    three materialize rules, so this is only observable by flipping the flag.
     """
 
     @staticmethod

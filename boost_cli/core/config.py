@@ -200,11 +200,22 @@ DEFAULT_TAPS = [
 # `quickstart` rather than `tap --defaults` on purpose: the two setup paths are
 # not equivalent. `quickstart` pins each registry to the commit its published
 # vectors describe and can import those vectors; `tap --defaults` does neither.
-# README leads with quickstart while ~15 source sites route to tap --defaults
+# README leads with quickstart while ~15 source sites routed to tap --defaults
 # and none of the newcomer-plausible surfaces (search, doctor, taps, browse,
-# list) named quickstart at all.
-FIRST_RUN_HINT = ("new here? `boost quickstart` taps the starter registries "
-                  "and indexes them for search")
+# list) named quickstart at all. Those surfaces now build their hint from
+# `setup_hint` below, so the command is spelled in one place.
+SETUP_CMD = "boost quickstart"
+FIRST_RUN_HINT = ("new here? `%s` taps the starter registries "
+                  "and indexes them for search" % SETUP_CMD)
+
+
+def setup_hint(lead: str = "add the recommended registries with") -> str:
+    """The hint for a command that found nothing tapped: names `boost quickstart`.
+
+    ``lead`` is the words before the command, for the one surface whose
+    sentence reads differently (doctor's "add the recommended ones with").
+    """
+    return "%s `%s`" % (lead, SETUP_CMD)
 
 
 def first_run() -> bool:

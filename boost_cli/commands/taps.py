@@ -469,7 +469,7 @@ def cmd_taps(argv) -> int:
     if not taps:
         print(out.empty_state(
             "no taps configured",
-            hint="add the recommended registries with `boost tap --defaults`",
+            hint=config.setup_hint(),
             wrap=True))
         return 0
     # A pinned tap reads as its commit rather than its date: the date of a

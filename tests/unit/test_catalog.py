@@ -1222,17 +1222,17 @@ class TestResolveOne:
         with pytest.raises(BoostError) as ei:
             catalog.resolve_one("anything")
         assert ei.value.message == "no skill named 'anything' in any tap"
-        assert ei.value.hint == "no taps configured — start with `boost tap --defaults`"
+        assert ei.value.hint == "no taps configured — start with `boost quickstart`"
 
     def test_only_the_builtin_tap_still_reads_as_no_taps(self, sandbox):
         # boost's own tap is not a registry the user configured: a machine
-        # holding it alone still needs `boost tap --defaults`, and the hint
+        # holding it alone still needs `boost quickstart`, and the hint
         # was silent there because it counted with `registry.list_taps()`.
         from boost_cli.core import builtin
         builtin.ensure_tap()
         with pytest.raises(BoostError) as ei:
             catalog.resolve_one("anything")
-        assert ei.value.hint == "no taps configured — start with `boost tap --defaults`"
+        assert ei.value.hint == "no taps configured — start with `boost quickstart`"
 
     def test_typo_gets_fuzzy_hint_scored_search_misses(self, sandbox):
         # 'brainstormng' shares no aligned substring or token with
@@ -2341,7 +2341,7 @@ class TestSearchHint:
         from boost_cli.core import builtin
         monkeypatch.setattr(builtin, "configured_tap_count", lambda: 0)
         assert catalog.search_hint("brainstorming") == (
-            "no taps configured — start with `boost tap --defaults`")
+            "no taps configured — start with `boost quickstart`")
         assert catalog.search_hint("x") == catalog.NO_TAPS_HINT
 
     def test_with_a_tap_points_at_search(self, sandbox, monkeypatch):

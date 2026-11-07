@@ -43,13 +43,33 @@ BUILTIN_URL = "builtin:boost"
 #: second a data change rather than a code change.
 BUILTIN_RULES = ("boost-first",)
 
-#: MCP host id -> boost agent id. The two vocabularies genuinely differ
-#: (``mcphost.CLAUDE`` is ``"claude"``; the agent is ``"claude-code"``), and
-#: the offer is scoped through this so standing text naming ``boost_search``
-#: only reaches an agent boost actually registered a server with. Cursor and
-#: Windsurf are absent on purpose: boost registers no MCP server for them, so
-#: the rule would advertise tools they do not have.
-AGENT_FOR_HOST = {"claude": "claude-code", "gemini": "gemini"}
+#: The skill boost authors: the same search -> read -> install -> use-now
+#: guidance as the rule, as the one item kind every agent reads. A rule is
+#: offered only to hosts boost registered and defaults to No; a skill's name
+#: and description sit wherever the host lists its skills, and the body loads
+#: only when the agent reaches for it. Shipped as ``data/skills/<name>/
+#: SKILL.md`` and copied into the tap at ``skills/<name>/SKILL.md``. ``boost
+#: update`` refreshes an installed skill when its ``version:`` moves, so the
+#: text and the version change together.
+BUILTIN_SKILLS = ("boost-find-and-install",)
+
+#: MCP host id -> the boost agent whose rule file that host reads. The two
+#: vocabularies genuinely differ (``mcphost.CLAUDE`` is ``"claude"``; the agent
+#: is ``"claude-code"``), and the offer is scoped through this so standing text
+#: naming ``boost_search`` only reaches an agent boost actually registered a
+#: server with. Cursor and Windsurf are absent on purpose: boost registers no
+#: MCP server for them, so the rule would advertise tools they do not have.
+#:
+#: Every host ``boost mcp register`` registers is here. Codex reads
+#: ``$CODEX_HOME/AGENTS.md``, which the ``codex`` agent writes
+#: (``rules.CONTEXT_FILES``). Antigravity CLI (``agy``) has no rule surface of
+#: its own — its agent is ``skills_only`` because its rule format is
+#: unverified — and reads the ``~/.gemini/GEMINI.md`` the ``gemini`` agent
+#: writes (core/config.py), so it maps there, and ``agy`` with ``gemini``
+#: offers that one file once. Both used to be registered and never offered
+#: the rule, so an agy-only machine got no offer at all.
+AGENT_FOR_HOST = {"claude": "claude-code", "gemini": "gemini",
+                  "agy": "gemini", "codex": "codex"}
 
 
 def source_dir() -> Path:
@@ -60,6 +80,12 @@ def source_dir() -> Path:
     the user's to modify.
     """
     return Path(__file__).resolve().parent.parent / "data" / "rules"
+
+
+def skills_source_dir() -> Path:
+    """The shipped skills inside the installed package. **Read-only**, as
+    :func:`source_dir` is, for the same reasons."""
+    return Path(__file__).resolve().parent.parent / "data" / "skills"
 
 
 def is_builtin(tap_name: str) -> bool:
@@ -91,9 +117,10 @@ def configured_tap_count() -> int:
 
 
 def ensure_tap() -> registry.Tap:
-    """Materialize the shipped rules on disk and register the tap. Idempotent.
+    """Materialize the shipped rules and skills on disk and register the tap.
 
-    Copies each shipped ``.mdc`` into ``~/.boost/repos/boost__builtin/`` and
+    Idempotent. Copies each shipped ``.mdc``, and each shipped skill's
+    ``SKILL.md`` under ``skills/``, into ``~/.boost/repos/boost__builtin/`` and
     appends the config row if it is not already there. Safe to call on every
     install: an existing file is overwritten from the wheel, which is what
     makes the rule track boost's own version rather than drifting once written.
@@ -106,9 +133,24 @@ def ensure_tap() -> registry.Tap:
         origin = src / (rule + ".mdc")
         if origin.is_file():
             shutil.copyfile(origin, tap.path / (rule + ".mdc"))
+    _copy_skills(tap.path)
     if not any(t.name == BUILTIN_TAP for t in registry.list_taps()):
         config.mutate(_register)    # checked unlocked first: the common case
     return tap
+
+
+def _copy_skills(tap_dir: Path) -> None:
+    """Copy each shipped skill to ``skills/<name>/SKILL.md`` under the tap.
+
+    A wheel without the skill (a package-data regression) copies nothing,
+    and :func:`skill_is_available` keeps the offer from being made.
+    """
+    for skill in BUILTIN_SKILLS:
+        origin = skills_source_dir() / skill / "SKILL.md"
+        if origin.is_file():
+            dest = tap_dir / "skills" / skill
+            dest.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(origin, dest / "SKILL.md")
 
 
 def _register(cfg: dict) -> bool:
@@ -131,3 +173,9 @@ def rule_is_available() -> bool:
     traceback on the one command new users are told to run.
     """
     return (source_dir() / (BUILTIN_RULES[0] + ".mdc")).is_file()
+
+
+def skill_is_available() -> bool:
+    """Whether the wheel carries the skill — :func:`rule_is_available`'s
+    guard, for the same packaging reason: no file means no offer."""
+    return (skills_source_dir() / BUILTIN_SKILLS[0] / "SKILL.md").is_file()

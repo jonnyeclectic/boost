@@ -84,6 +84,7 @@ SANDBOX_ENV = {
     "BOOST_NO_AI": "1",         # deterministic: no AI calls
     "BOOST_NO_SEED": "1",       # no seven-registry clone on an empty machine
     "BOOST_NO_RULE": "1",       # no standing block written into a context file
+    "BOOST_NO_SKILL": "1",      # no built-in skill installed by `mcp register`
     "BOOST_NO_NET": "1",        # nothing reaches PyPI as a side effect
     "NO_COLOR": "1",            # plain output
     "BOOST_ASSUME_YES": "1",    # never block on a confirm

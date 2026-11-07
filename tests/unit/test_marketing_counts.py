@@ -9,9 +9,11 @@ said 78, while `COMMANDS` held 78; the mutation count was ~2,600 against a real
 it was describing earned.
 
 Only counts derivable from the code are asserted. Numbers that come from
-somewhere else (how many skills the tapped registries expose, say) are marketing
+somewhere else (how many skills a user's own taps expose, say) are marketing
 estimates, not facts this repo can check, and pinning them here would be a test
-that lies about what it proves.
+that lies about what it proves. The catalogue's item count is the exception:
+boost_cli/data/registries.json records it as `est_items_scannable`, so a doc
+that states one is held to that figure.
 """
 from __future__ import annotations
 
@@ -164,6 +166,221 @@ class TestCatalogueSizeIsNotHardCoded:
                 assert int(n) == size, "%s says all %s; the catalogue is %d" % (
                     doc.name, n, size)
 
+    def test_the_docs_site_states_the_catalogue_size_the_data_has(self):
+        # The landing page said "spans 100+ registries" and the carousel
+        # "100+ classified registries" while `boost tap --catalog --dry-run`
+        # offered 515; the test above read only Markdown, so neither was
+        # checked. Same size as above: list-only rows link out and are never
+        # tapped.
+        data = json.loads((ROOT / "boost_cli" / "data" / "registries.json")
+                          .read_text(encoding="utf-8"))
+        size = sum(1 for r in data["registries"] if not r.get("list_only"))
+        stated = []
+        for doc in [ROOT / "README.md", *sorted((ROOT / "docs").glob("*.html"))]:
+            text = doc.read_text(encoding="utf-8")
+            stated += [(doc.name, int(n)) for n in re.findall(
+                r"spans\s+(\d+)\+?\s+registr"
+                r"|(\d+)\+?\s+classified\s+(?:GitHub\s+)?registr", text)
+                for n in n if n]
+        assert ("index.html", size) in stated, stated
+        assert ("README.md", size) in stated, stated
+        assert [s for s in stated if s[1] != size] == [], (
+            "the catalogue is %d registries: %s" % (size, stated))
+
+    def test_the_readme_item_estimate_is_near_the_data(self):
+        # "roughly 30,000 items" stood while the catalogue summed to 35,466.
+        # It is an estimate, so it gets 10%; a figure outside that is stale.
+        data = json.loads((ROOT / "boost_cli" / "data" / "registries.json")
+                          .read_text(encoding="utf-8"))
+        m = re.search(r"roughly\s+([\d,]+)\s+items", README)
+        assert m, "README no longer estimates the catalogue's item count"
+        said = int(m.group(1).replace(",", ""))
+        assert abs(said - data["est_items_scannable"]) <= 0.1 * data["est_items_scannable"]
+
+    def test_the_docs_site_item_counts_sit_at_or_under_the_data(self):
+        # The landing page's tile said "70,000+ Discoverable assets" and
+        # langchain.html "70,000+ retrievable procedures", against an
+        # est_items_scannable of 35,466. "N+" claims a floor, so N may not
+        # exceed the data; and like the README's estimate it may sit no more
+        # than 10% under it, or it has gone stale the other way.
+        data = json.loads((ROOT / "boost_cli" / "data" / "registries.json")
+                          .read_text(encoding="utf-8"))
+        size = data["est_items_scannable"]
+        stated = []
+        for doc in [ROOT / "README.md", *sorted((ROOT / "docs").glob("*.html"))]:
+            text = doc.read_text(encoding="utf-8")
+            stated += [(doc.name, int(n.replace(",", ""))) for n in re.findall(
+                r"(\d{1,3}(?:,\d{3})+)\+\s*(?:</b><span>)?\s*(?:[A-Za-z]+\s+)?"
+                r"(?:items|procedures|assets)\b", text)]
+        assert {"index.html", "langchain.html"} <= {d for d, _ in stated}, stated
+        assert [s for s in stated if not 0.9 * size <= s[1] <= size] == [], (
+            "the catalogue's est_items_scannable is %d: %s" % (size, stated))
+
+
+class TestPlatformClaimsAgree:
+    """SUPPORT.md says which operating systems are supported; the README badge
+    and the PyPI classifiers said macOS and Linux while SUPPORT.md listed
+    Windows too and `tests (windows-latest, 3.12)` is a required check."""
+
+    def _support(self) -> set[str]:
+        text = (ROOT / "SUPPORT.md").read_text(encoding="utf-8")
+        m = re.search(r"^\| Operating system \| ([^|]+) \|$", text, re.M)
+        assert m, "SUPPORT.md no longer lists supported operating systems"
+        return {o.strip().lower() for o in m.group(1).split(",")}
+
+    def test_readme_badge_lists_the_supported_systems(self):
+        m = re.search(r"badge/platform-([^-)]+)-", README)
+        assert m, "README lost its platform badge"
+        badge = {o.strip().lower() for o in
+                 m.group(1).replace("%20", " ").split("%7C")}
+        assert badge == self._support()
+
+    def test_classifiers_list_the_supported_systems(self):
+        import tomllib
+        meta = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+        names = {"MacOS": "macos", "POSIX :: Linux": "linux",
+                 "Microsoft :: Windows": "windows"}
+        got = {names[c.removeprefix("Operating System :: ")]
+               for c in meta["project"]["classifiers"]
+               if c.startswith("Operating System :: ")}
+        assert got == self._support()
+
+
+class TestPythonClaimsAgree:
+    """SUPPORT.md, the README badge and the classifiers name the Pythons CI gates.
+
+    SUPPORT.md said 3.12-3.14 while the badge and the classifiers said
+    3.12-3.15, and ci.yml runs its 3.15 cell under `continue-on-error`,
+    outside .github/required-checks.txt: a 3.15 regression blocks neither a
+    merge nor a release. The gated set is read from ci.yml's `tests` job, so a
+    cell that becomes advisory, or stops being, moves all three docs.
+    """
+
+    @staticmethod
+    def _gated_in(job: dict) -> set[str]:
+        pythons = set(job["strategy"]["matrix"]["python"])
+        advisory = job.get("continue-on-error", False)
+        if advisory is True:
+            return set()
+        return pythons - set(re.findall(r"matrix\.python == '([\d.]+)'",
+                                        str(advisory)))
+
+    def _gated(self) -> set[str]:
+        # importorskip, like test_ci_tests_extended.py: the free-threaded
+        # canary leg installs no PyYAML (tests/unit/test_canary_deps.py).
+        yaml = pytest.importorskip("yaml")
+        ci = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml")
+                            .read_text(encoding="utf-8"))
+        return self._gated_in(ci["jobs"]["tests"])
+
+    @pytest.mark.parametrize("advisory, gated", [
+        ("${{ matrix.python == '3.15' }}", {"3.12"}),
+        (True, set()),
+        (None, {"3.12", "3.15"}),
+    ])
+    def test_an_advisory_cell_is_not_gated(self, advisory, gated):
+        # The reader, on ci.yml's own spelling: a continue-on-error cell
+        # holds nothing back, so no doc may call it supported.
+        job: dict = {"strategy": {"matrix": {"python": ["3.12", "3.15"]}}}
+        if advisory is not None:
+            job["continue-on-error"] = advisory
+        assert self._gated_in(job) == gated
+
+    def test_support_md_lists_the_gated_pythons(self):
+        text = (ROOT / "SUPPORT.md").read_text(encoding="utf-8")
+        m = re.search(r"^\| Python \| ([^|]+) \|$", text, re.M)
+        assert m, "SUPPORT.md no longer lists supported Pythons"
+        assert {v.strip() for v in m.group(1).split(",")} == self._gated()
+
+    def test_classifiers_list_the_gated_pythons(self):
+        import tomllib
+        meta = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+        got = {c.removeprefix("Programming Language :: Python :: ")
+               for c in meta["project"]["classifiers"]
+               if re.fullmatch(r"Programming Language :: Python :: 3\.\d+", c)}
+        assert got == self._gated()
+
+    def test_readme_badge_spans_the_gated_pythons(self):
+        m = re.search(r"\[!\[Python (3\.\d+)–(3\.\d+)\]\(https://img\.shields\.io"
+                      r"/badge/python-(3\.\d+)%E2%80%93(3\.\d+)-", README)
+        assert m, "README lost its Python badge"
+        assert m.group(1, 2) == m.group(3, 4), "badge text and image disagree"
+        lo, hi = (int(v.split(".")[1]) for v in m.group(1, 2))
+        # A range claims every version inside it.
+        assert {"3.%d" % n for n in range(lo, hi + 1)} == self._gated()
+
+    def test_the_gated_floor_is_requires_python(self):
+        import tomllib
+        meta = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+        floor = meta["project"]["requires-python"].removeprefix(">=")
+        assert floor == min(self._gated(), key=lambda v: int(v.split(".")[1]))
+
+
+class TestLandingPageStatTiles:
+    """The hero tiles are counts the code already holds."""
+
+    def _tile(self, label: str) -> int:
+        m = re.search(r"<b>(\d+)</b><span>%s" % label, INDEX)
+        assert m, "the landing page's %r stat tile is gone" % label
+        return int(m.group(1))
+
+    def test_agents_tile_counts_every_agent_boost_targets(self):
+        # It said 5 under a lede naming six.
+        from boost_cli.core import agents
+        assert self._tile("AI agents supported") == len(agents.DISPLAY)
+
+    def test_items_tile_is_still_there_to_be_checked(self):
+        # Its number is held to registries.json by
+        # TestCatalogueSizeIsNotHardCoded; this keeps the tile in that sweep.
+        assert re.search(r"<b>\d{1,3}(?:,\d{3})+\+</b><span>Catalogued items<",
+                         INDEX), "the landing page's items tile is gone"
+
+    def test_starter_registries_tile_counts_the_default_taps(self):
+        from boost_cli.core import config
+        assert self._tile("Starter registries") == len(config.DEFAULT_TAPS)
+
+    def test_nothing_claims_boost_ships_pre_tapped(self):
+        # A fresh install has no taps: `boost doctor` on an empty HOME says
+        # "no registries tapped". `boost quickstart` is what taps them.
+        assert "pre-tapped" not in INDEX.lower()
+
+    def test_the_landing_page_shows_how_to_wire_agents(self):
+        # README showed `boost mcp register`; the landing page never did.
+        assert INDEX.count("mcp</span> register") >= 2
+        assert "<code>boost mcp register</code>" in INDEX
+
+
+#: The README is also the PyPI long description, and pypi.org resolves a
+#: relative target against /project/boost-skill-cli/ — where it serves the
+#: project page as text/html, so the demo GIF rendered as a broken image and
+#: every relative link led back to the page the reader was already on.
+_REPO_FILE = re.compile(
+    r"^https://(?:github\.com/jonnyeclectic/boost/(?:blob|tree)/main"
+    r"|raw\.githubusercontent\.com/jonnyeclectic/boost/main)/([^#?]+)")
+
+
+def _readme_targets() -> list[str]:
+    return (re.findall(r"\]\(([^)\s]+)\)", README)
+            + re.findall(r"""(?:src|href)=["']([^"']+)["']""", README))
+
+
+class TestReadmeRendersOffGitHub:
+    def test_every_link_and_image_is_absolute(self):
+        relative = [t for t in _readme_targets()
+                    if not re.match(r"(?:https?:|#|mailto:)", t)]
+        assert relative == [], (
+            "README.md is the PyPI page too, where these resolve to nothing: "
+            "%s" % relative)
+
+    def test_every_absolute_link_into_this_repo_names_a_real_path(self):
+        # Absolute URLs give up the local-path check a relative link got for
+        # free, so a renamed file would 404 only after it reached main.
+        targets = [m.group(1) for t in _readme_targets()
+                   if (m := _REPO_FILE.match(t))]
+        assert targets, "README.md no longer links into this repository"
+        missing = [t for t in targets if not (ROOT / t).exists()]
+        assert missing == [], "README.md links paths that do not exist: %s" % missing
+
 
 class TestNoStaleCountsElsewhere:
     @pytest.mark.parametrize("doc", ["README.md", "docs/index.html"])
@@ -311,6 +528,62 @@ class TestHeroBlock:
         assert name not in _fixture_skill_names() - ONLINE_VERIFIED_FIXTURE_NAMES, (
             "the README's hero block installs %r, which only "
             "tests/make_fixture.py defines" % name)
+
+
+def _smoke_examples_pipeline() -> str:
+    """smoke.sh's own extraction of every README example name, verbatim."""
+    m = re.search(r'^\s*EXAMPLES="\$\((.*)\)"\s*$', SMOKE, re.M)
+    assert m, "tests/smoke.sh no longer extracts the README's example names"
+    return m.group(1)
+
+
+def _readme_example_names(readme: str = README) -> set[str]:
+    names = set()
+    for body in re.findall(r"```bash\n(.*?)```", readme, re.S):
+        names |= set(re.findall(r"^boost (?:install|uninstall|info) ([a-z]\S*)",
+                                body, re.M))
+    return names
+
+
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason="runs smoke.sh's own bash/awk line; smoke.sh is POSIX")
+class TestReadmeExamples:
+    """Every skill a README fence names is checked online, not just the hero's.
+
+    `boost install code-review --local` and `boost install my-jira` sat in
+    the scope and workflow sections and both exited 1 after `boost
+    quickstart`: no starter registry ships either name. Only `smoke.sh
+    --online` can prove a name resolves, so these pin that it is asked about
+    every one of them.
+    """
+
+    def _run(self, cwd: Path) -> set[str]:
+        got = subprocess.run(["bash", "-c", _smoke_examples_pipeline()], cwd=cwd,
+                             capture_output=True, text=True, check=True)
+        return set(got.stdout.split())
+
+    def test_smoke_checks_every_name_the_readme_fences_use(self):
+        assert self._run(ROOT) == _readme_example_names()
+        assert _hero_install_name() in self._run(ROOT)
+
+    def test_the_names_that_exited_1_would_have_been_checked(self, tmp_path):
+        old = ("```bash\nboost install code-review --local\n"
+               "boost uninstall code-review --local\n```\n\n"
+               "```bash\nboost search jira\nboost install my-jira\n```\n")
+        (tmp_path / "README.md").write_text(old, encoding="utf-8")
+        assert self._run(tmp_path) == {"code-review", "my-jira"}
+
+    def test_the_online_block_runs_them(self):
+        _marker, _, online = SMOKE.partition('"${1:-}" = "--online"')
+        assert 'in $EXAMPLES; do run' in online
+        assert './boost info "$name"' in online
+
+    def test_no_example_is_a_test_fixture_identifier(self):
+        clash = _readme_example_names() & (
+            _fixture_skill_names() - ONLINE_VERIFIED_FIXTURE_NAMES)
+        assert clash == set(), (
+            "README examples name skills only tests/make_fixture.py defines: "
+            "%s" % sorted(clash))
 
 
 class TestHeroBlockPromises:

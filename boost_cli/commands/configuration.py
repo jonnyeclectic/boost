@@ -38,6 +38,7 @@ from ..core import (
     localembed,
     lockfile,
     mcp,
+    mcpdecl,
     mcphost,
     paths,
     policy,
@@ -1975,13 +1976,123 @@ def _tool_read(args: dict):
                 and rec.get("source_dir", cat.get("rel_dir"))
                 == cat.get("rel_dir"))
         return mcp.read_reply(name, text, kind=cat.get("kind") or "skill",
-                              installed=here,
-                              where=scopes.project_label(rec or {}),
+                              installed=here, where=_installed_where(found),
                               held=mcp.held_line(name, rec)), False
     text, kind, lock, _cat = info._resolve_text(name)
     return mcp.read_reply(name, text, kind=kind, installed=lock is not None,
-                          where=scopes.project_label(lock or {}),
+                          where=(_installed_where(integrity.find_installed(name))
+                                 if lock is not None else None),
                           held=mcp.held_line(name, lock)), False
+
+
+def _installed_where(found) -> str | None:
+    """The checkout a project install lives in, or None at user scope.
+
+    A rule or workflow row carries its own scope and base
+    (:func:`scopes.project_label`). A ``--local`` *skill* lives in the
+    project lock, whose rows carry neither, so boost_read said a plain
+    "installed: yes" for one while boost_info, which asks
+    :func:`integrity.find_installed`, said "scope: project (…)". The base
+    that lookup returns is the answer for both.
+    """
+    if found is None:
+        return None
+    _kind, entry, pbase = found
+    return _tilde(pbase) if pbase is not None else scopes.project_label(entry)
+
+
+def _no_repository(base: Path | None) -> str:
+    """Why project scope has nowhere to go, naming this server's directory.
+
+    :func:`scopes.project_base` answers ``None`` for the home directory even
+    when it is itself a checkout (dotfile setups), because a project there
+    would be the directories user scope owns. The refusal used to say "~,
+    which is not inside a git, hg or svn checkout" for that case too, which a
+    user whose home is a repository can see is false.
+    """
+    try:
+        cwd = Path.cwd()
+    except OSError:
+        return "this server's working directory no longer exists"
+    if base is None:
+        return ("this server is running in your home directory (%s), which "
+                "is never a project, even when it is a checkout"
+                % _tilde(cwd))
+    return ("this server is running in %s, which is not inside a git, hg or "
+            "svn checkout" % _tilde(cwd))
+
+
+def _install_scope(args: dict) -> tuple[str, Path | None]:
+    """``boost_install``'s ``scope`` and, for ``"project"``, the repository.
+
+    Project scope resolves from this server's working directory, the walk
+    ``boost install --local`` makes (:func:`scopes.project_base`), with one
+    difference on purpose: the CLI accepts a directory with no version control
+    marker and warns, while this refuses it and names the directory. A user at
+    a terminal sees that warning before anything is written; an agent cannot
+    see where its host started this server, so a guessed directory would
+    become a project nobody chose.
+    """
+    scope = scopes.check_scope(mcp.str_arg(args, "scope") or scopes.SCOPE_USER)
+    if scope == scopes.SCOPE_USER:
+        return scope, None
+    base, how = scopes.project_base()
+    if base is None or how != scopes.BASE_VCS:
+        raise BoostError(
+            "no repository to install into: " + _no_repository(base),
+            hint='pass scope "user" to install for the user, or start the '
+                 'agent from inside the repository')
+    why = scopes.managed_by_boost(base)
+    if why is not None:
+        raise BoostError("cannot install into this repository: " + why,
+                         hint='pass scope "user" to install for the user')
+    return scope, base
+
+
+def _scope_lines(scope: str, base: Path | None, done: list[dict]) -> list[str]:
+    """Where the install landed, said once, so the agent can tell the user.
+
+    An install of a skill the other scope already holds gets a note: search
+    and info call a name installed in either scope, and the install that
+    followed used to add a second copy beside the first without a word.
+    """
+    names = [str(e["name"]) for e in done]
+    if base is not None:
+        return [*_project_scope_lines(base, done),
+                *("note: %s is also installed for the user; this added a "
+                  "project copy beside it" % n
+                  for n in names if lockfile.get_skill(n))]
+    pbase, project = integrity.project_skills()
+    return ["scope: user — every project on this machine",
+            *("note: %s is also installed in this project (%s); this added "
+              "a user-scope copy beside it" % (n, _tilde(pbase))
+              for n in names if n in project)]
+
+
+def _project_scope_lines(base: Path, done: list[dict]) -> list[str]:
+    """Where a project install was recorded, by kind.
+
+    Only a skill goes into the repository's own lock, .boost/skill-lock.json,
+    which is what teammates get by committing .boost/. A project rule or
+    workflow is written into the repository and recorded in the user's lock
+    with its base — `boost install --local` reports "lock updated
+    (.skill-lock.json)" for those kinds and no commit hint — and a rule's
+    Claude target is the personal, git-ignored CLAUDE.local.md. The reply
+    used to tell the agent to commit .boost/ for all three kinds, over a
+    rule install that had created no .boost/ at all.
+    """
+    head = "scope: project (%s)" % _tilde(base)
+    kinds = {e.get("kind") or "skill" for e in done}
+    lines = []
+    if "skill" in kinds:
+        lines.append(head + " — real files in this repository, recorded in "
+                     ".boost/skill-lock.json; commit .boost/ and the agent "
+                     "directories to share them with the team")
+    if kinds - {"skill"}:
+        lines.append(head + " — written into this repository, recorded in "
+                     "%s rather than in .boost/"
+                     % _tilde(paths.lockfile_path()))
+    return lines or [head]
 
 
 @_path_hint
@@ -1993,22 +2104,27 @@ def _tool_install(args: dict):
     from another tap, while this path installed the one item silently. That is
     the wrong way round — here an agent chose the item with nobody watching —
     so both now take their plan and their words from ``core.installplan``.
+
+    ``scope`` is the CLI's ``--local``. It had no MCP spelling, so a
+    ``{"scope": "project"}`` call was dropped and the skill landed in the
+    user's store while the repository the agent was working in got nothing.
     """
     name = mcp.str_arg(args, "name") or ""
     if not name.strip():
         return mcp.needs_name("boost_install"), True
+    scope, base = _install_scope(args)
     entry = catalog.resolve_one(name, path=mcp.str_arg(args, "path"))
     # The requested item's own refusal ("already installed", "is pinned")
     # first, so a refused call changes nothing — not its dependencies either.
-    store.check_existing(entry)
-    the_plan = installplan.plan([entry])
+    store.check_existing(entry, scope=scope, base=base)
+    the_plan = installplan.plan([entry], pbase=base)
     entries = the_plan.entries
     warnings = [*the_plan.confusions, *the_plan.dep_warnings]
     lines: list[str] = [the_plan.added] if the_plan.added else []
     done: list[dict] = []
     for e in entries:
         try:
-            res = store.install(e)
+            res = store.install(e, scope=scope, base=base)
         except BoostError as err:
             if e is entry:
                 raise
@@ -2021,7 +2137,9 @@ def _tool_install(args: dict):
             continue
         lines.extend(_install_lines(res, e))
         done.append(e)
-    prereq_warn, prereq_hint = installplan.prerequisite_lines(done)
+    lines.extend(_scope_lines(scope, base, done))
+    prereq_warn, prereq_hint = installplan.prerequisite_lines(done,
+                                                              pbase=base)
     warnings.extend(prereq_warn)
     if prereq_hint:
         warnings.append(prereq_hint)
@@ -2031,11 +2149,113 @@ def _tool_install(args: dict):
     return "\n".join(lines), False
 
 
+def _reach_lines(res: store.InstallResult) -> list[str]:
+    """Who the install reached. A rule names every file it wrote.
+
+    A rule install used to print "linked agents: claude-code, windsurf, …"
+    under the one path in ``res.dest``: measured over MCP, a rule landed in
+    five files every later session loads (CLAUDE.md, GEMINI.md, AGENTS.md
+    and two rules dirs) and the reply named one of them. The lock records
+    each write, so the reply reads them from there.
+    """
+    if res.kind == "rule":
+        rec = lockfile.get_rule(res.name) or {}
+        written = [str(m["path"]) for m in rec.get("materializations") or ()
+                   if isinstance(m, dict) and m.get("path")]
+        return (["standing instructions every session reads from now on, "
+                 "written into:"]
+                + ["  %s" % _tilde(w) for w in written or [str(res.dest)]]
+                + ["`boost uninstall %s` removes it from all of them"
+                   % res.name])
+    # A project install copies a skill and writes a workflow's per-agent file
+    # — "linked agents" there described a symlink that does not exist.
+    if res.scope == scopes.SCOPE_PROJECT:
+        return ["%s into this repository for: %s"
+                % ("copied" if res.kind == "skill" else "written",
+                   ", ".join(res.linked) or "none")]
+    return ["linked agents: %s" % (", ".join(res.linked) or "none")]
+
+
+def _use_now_lines(res: store.InstallResult) -> list[str]:
+    """How to use what was just installed in THIS session.
+
+    No reply said, and boost_list's description promised installed items were
+    "usable this second". Whether a host loads a skill, command or context
+    file written after its session started was not verified for any host, so
+    the line points at the text, which is usable now on every host.
+    """
+    if res.kind == "skill":
+        return ["to use it now: follow the text boost_read returns for %s, "
+                "or read %s — whether this session's host loads a skill "
+                "installed after it started depends on the host"
+                % (res.name, _tilde(res.dest / "SKILL.md"))]
+    what = "command" if res.kind == "workflow" else "rule"
+    return ["to use it now: boost_read %s returns its text — whether this "
+            "session's host picks up a %s written after it started depends "
+            "on the host" % (res.name, what)]
+
+
+def _mcp_server_lines(res: store.InstallResult) -> list[str]:
+    """The MCP servers the item declares, and how each gets registered.
+
+    The CLI states them at install time and offers the `mcp add`; this reply
+    said nothing, so an agent reported success over a skill that fails later
+    for want of a server. boost_install never registers one itself —
+    registering a server is machine-wide, the user's call, so the line hands
+    the agent the exact command to put in front of them. A project install
+    records them in the repository's .mcp.json instead, and says which.
+    """
+    return [line for row in res.mcp_servers or ()
+            for line in _mcp_server_row(res, row)]
+
+
+def _mcp_server_row(res: store.InstallResult, row: dict) -> list[str]:
+    """One declared server: its command, and who registers it, or where.
+
+    Two things here are the user's to know and boost's not to claim.
+    `boost mcp register` registers boost's own server and nothing else, so
+    it is not how a skill's server gets added. And boost does not look for an
+    existing registration, so the line says boost_install did not register
+    the server rather than that nobody has.
+    """
+    name, spec = row["name"], row.get("spec")
+    if not isinstance(spec, dict) or not mcpdecl.command_line(spec):
+        return ["needs MCP server %s (no command declared) — boost cannot "
+                "register it; the user installs it and adds it with their "
+                "agent's own `mcp add`" % name]
+    head = "needs MCP server %s: `%s` — " % (name, mcpdecl.command_line(spec))
+    if res.scope == scopes.SCOPE_PROJECT:
+        return [head + _project_mcp_note(res, name)]
+    return [head + "boost_install did not register it, and registering it is "
+            "machine-wide, so unless the user already has, ask them to run "
+            "this for each agent they use:",
+            *("  " + mcphost.shell_line(mcpdecl.register_argv(
+                name, spec, host=host, scope=res.scope))
+              for host in _mcp_offer_hosts())]
+
+
+def _project_mcp_note(res: store.InstallResult, name: str) -> str:
+    """What a project install did with one declared server's .mcp.json row."""
+    if name in res.mcp_recorded:
+        return ("recorded in this repository's %s; commit it to share it"
+                % mcpdecl.SIDECAR)
+    if res.mcp_error:
+        return "not recorded, %s left unchanged: %s" % (mcpdecl.SIDECAR,
+                                                       res.mcp_error)
+    return "already in this repository's %s" % mcpdecl.SIDECAR
+
+
+def _mcp_offer_hosts() -> list[str]:
+    """The agent CLIs on PATH, else every host — the CLI's offer list."""
+    return ([h for h in mcphost.hosts() if shutil.which(mcphost.cli(h))]
+            or mcphost.hosts())
+
+
 def _install_lines(res: store.InstallResult, entry: dict) -> list[str]:
     """One installed item's reply lines, scan warning included."""
     lines = ["installed %s v%s from %s → %s"
              % (res.name, entry.get("version", "?"), entry["tap"], res.dest),
-             "linked agents: %s" % (", ".join(res.linked) or "none")]
+             *_reach_lines(res)]
     # Without this an agent that reads the canonical store — Gemini CLI — sees
     # only "linked agents: claude-code, windsurf, cursor, antigravity",
     # concludes the skill did not reach *it*, and goes back to reconstructing
@@ -2058,6 +2278,8 @@ def _install_lines(res: store.InstallResult, entry: dict) -> list[str]:
     # score, and "quality score: 0/100" told the agent a valid one scored zero.
     if res.kind == "skill":
         lines.append("quality score: %d/100" % res.score)
+    lines.extend(_mcp_server_lines(res))
+    lines.extend(_use_now_lines(res))
     if res.conflicts:
         lines.append("conflicts (left in place): %s" % ", ".join(res.conflicts))
     lines.extend("not %s: %s — ask the user to run %s, then `boost sync`"
@@ -2341,8 +2563,18 @@ def _tool_discover_github(args: dict):
     if not hits:
         return ("no SKILL.md repositories found on GitHub for %r%s"
                 % (query.strip() or "any query", note)), False
-    return "\n".join("%s — %s" % (h["repo"], h.get("description") or h.get("path", ""))
-                     for h in hits) + note, False
+    # No tool taps a repository, and tapping clones over the network and
+    # rewrites the user's tap list, so the reply says whose step it is. It
+    # used to end at the list, under a description promising registries
+    # "you can add", with nothing saying how.
+    return ("\n".join("%s — %s" % (h["repo"], h.get("description")
+                                   or h.get("path", "")) for h in hits)
+            + note + _TAP_IT), False
+
+
+_TAP_IT = ("\nTo add one, ask the user to run `boost tap <owner/repo>` — it "
+           "clones over the network and changes their tap list; boost_search "
+           "covers it afterwards.")
 
 
 # These descriptions do more work than they look like they should. Gemini CLI
@@ -2353,6 +2585,13 @@ def _tool_discover_github(args: dict):
 # declarations are the only boost text reliably in context at the moment an
 # agent chooses a tool, so each one repeats the trigger, the cost and the
 # miss protocol rather than deferring to the server instructions.
+#
+# That holds for Gemini, not for every host. A Claude Code session was seen
+# listing these tools by name only (`mcp__boost__boost_search`, ...) until
+# they were looked up, while the server instructions arrived in full. There,
+# the instructions and the boost-first rule are what is in context, so what an
+# agent needs to know about installing has to be in those two and not only in
+# boost_install's description.
 _SEARCH_PITCH = (
     "Someone has probably solved this already — one call tells you. Searches "
     "every skill, rule and workflow in every registry you have tapped and "
@@ -2424,6 +2663,17 @@ _PATH_PROP = {"type": "string",
               "enough)"}
 
 
+# The CLI's `--local`, in this surface's grammar. "project" resolves from the
+# server's working directory and is refused outside a checkout
+# (`_install_scope`), because an agent cannot see where its host started it.
+_SCOPE_PROP = {"type": "string", "enum": list(scopes.SCOPES),
+               "description": "\"user\" (default): installed for the user, "
+               "in every agent they have enabled on this machine. "
+               "\"project\": real files in the repository this server runs "
+               "in, recorded in its .boost/skill-lock.json for the team to "
+               "commit; refused outside a git, hg or svn checkout"}
+
+
 REGISTRY.register(
     "boost_search",
     # A lambda rather than the function itself so `ai.available` is looked up
@@ -2439,8 +2689,8 @@ REGISTRY.register(
     _tool_search)
 REGISTRY.register(
     "boost_list",
-    "The skills, rules and workflows already installed on this machine and "
-    "usable this second — capability you own and may not know you own. "
+    "The skills, rules and workflows already installed on this machine — "
+    "capability you own and may not know you own. "
     "Returns one line each: name, version, tap, a [rule] or [workflow] marker "
     "where it is not a skill, [pinned] where the version is held, and "
     "[quarantined] or [sidelined] where no agent loads it, then a "
@@ -2533,14 +2783,20 @@ REGISTRY.register(
     "agent's standing instructions (a managed block in its context file, or a "
     "file in its rules directory), which is the more invasive change because "
     "it applies to every session afterwards, not just when you reach for it. "
-    "Check the marker on the hit you are installing.",
+    "Check the marker on the hit you are installing, and ask the user before "
+    "installing a rule. By default it installs "
+    "for the user, on this machine; pass scope \"project\" to write real "
+    "files into the repository this server runs in instead, for every agent "
+    "that works there and for the team to commit — the reply names where it "
+    "landed.",
     {"type": "object",
      "properties": {"name": {"type": "string",
                              "description": "the name exactly as boost_search "
                              "or boost_list returned it; qualify with the tap "
                              "(\"owner/repo:name\") when the same name exists "
                              "in more than one"},
-                    "path": _PATH_PROP},
+                    "path": _PATH_PROP,
+                    "scope": _SCOPE_PROP},
      "required": ["name"]},
     _tool_install)
 REGISTRY.register(
@@ -2560,7 +2816,8 @@ REGISTRY.register(
     "boost_discover_github",
     "The move when boost_search comes back empty: search GitHub itself for "
     "SKILL.md repositories nobody here has tapped yet, and get back registries "
-    "you can add to widen every future search. An empty result means the corpus "
+    "the user can add with `boost tap` to widen every future search. An empty "
+    "result means the corpus "
     "has not caught up yet, not that the problem is unsolved (needs the `gh` "
     "CLI; degrades to a hint when unavailable).",
     {"type": "object",
@@ -2709,8 +2966,9 @@ def _boost_first_targets(hosts: list[str]) -> list[str]:
     scoped_agents = {builtin.AGENT_FOR_HOST.get(h) for h in hosts}
     # materializing_agents, not enabled_agents: this is a *rule*, so the
     # preview has to be built from the set the rule install actually writes to,
-    # or it names a path nothing ever creates. AGENT_FOR_HOST lists only
-    # claude-code and gemini today and both materialize rules, so the two sets
+    # or it names a path nothing ever creates. AGENT_FOR_HOST maps every host
+    # to claude-code, gemini or codex, and all three materialize rules (agy
+    # maps to gemini rather than to its skills-only agent), so the two sets
     # coincide and this is a guard rather than a fix.
     #
     # Note what it does and does not cover. `only_agents` below is
@@ -2795,6 +3053,63 @@ def _offer_boost_first(hosts: list[str], yes: bool = False) -> None:
     _warn_unwritable(res)
 
 
+#: Escape hatch for the skill offer, the shape of NO_RULE_ENV and checked
+#: before `out.confirm` for the same reason — more so here, because this offer
+#: defaults to yes and BOOST_ASSUME_YES answers it. The test fixtures set it.
+NO_SKILL_ENV = "BOOST_NO_SKILL"
+
+
+def _boost_skill_offered() -> str | None:
+    """The skill :func:`_offer_boost_skill` would offer, or None for no offer."""
+    from ..core import builtin
+
+    name = builtin.BUILTIN_SKILLS[0]
+    if (typedvalue.env_flag(NO_SKILL_ENV, unknown=True)
+            or not builtin.skill_is_available()
+            or lockfile.get_skill(name)):        # installed: do not re-ask
+        return None
+    return name
+
+
+def _offer_boost_skill(yes: bool = False) -> None:
+    """Offer boost's own skill, which teaches agents to use boost. Default yes.
+
+    The rule offer defaults to No because it writes standing text into a file
+    every session reads. A skill adds one directory to the store, every agent
+    reads skills, and its body loads only when an agent reaches for it, so
+    the answer that leaves the user better off by default is yes. Reversible
+    the ordinary way, and the line says how. Non-fatal, like the rule offer.
+    """
+    from ..core import builtin
+
+    name = _boost_skill_offered()
+    if name is None:
+        return
+    out.info("")
+    # The install also symlinks the directory into every agent that does not
+    # read the store itself (Claude Code, Cursor, Windsurf, Antigravity on a
+    # default config), so "one directory" alone undersold a default-yes write.
+    out.info("boost can also install its own skill, `%s`, which tells your "
+             "agents when and how to search, read and install from boost "
+             "(one directory under %s, linked into each agent that does not "
+             "read it there)" % (name, _tilde(paths.store_dir())),
+             wrap=True)
+    if not (yes or out.confirm("Install it?", default=True)):
+        out.info("Not installed. `boost install %s` any time." % name)
+        return
+    try:
+        builtin.ensure_tap()
+        catalog.rebuild_tap(registry.get(builtin.BUILTIN_TAP))
+        res = store.install(catalog.resolve_one(
+            "%s:%s" % (builtin.BUILTIN_TAP, name)))
+    except (BoostError, OSError) as exc:
+        out.warn("could not install %s: %s" % (name, exc))
+        return
+    out.ok("installed %s — remove it with `boost uninstall %s`" % (name, name))
+    from .pkg import _warn_unwritable
+    _warn_unwritable(res)
+
+
 def cmd_mcp(argv) -> int:
     """boost mcp [register|unregister] [--host H] [--stdio] [--seed|--no-seed] [--dry-run]"""
     p = cliparse.parser(
@@ -2830,7 +3145,7 @@ def cmd_mcp(argv) -> int:
     # The boost-first offer's decline hint says "pass -y"; without this the
     # advice died on `unrecognized arguments: -y`.
     p.add_argument("-y", "--yes", action="store_true",
-                   help="install the boost-first rule without asking")
+                   help="install boost's own rule and skill without asking")
     args = p.parse_args(argv)
 
     if args.stdio:
@@ -2882,6 +3197,10 @@ def cmd_mcp(argv) -> int:
             out.info("would then offer to add the `%s` rule to %s (asks first)"
                      % (builtin.BUILTIN_RULES[0], ", ".join(rule_targets)),
                      wrap=True)
+        if (args.action == "register" and would_settle
+                and (skill := _boost_skill_offered())):
+            out.info("would then offer to install the `%s` skill (default yes)"
+                     % skill, wrap=True)
         out.dim("  dry run — nothing was %sed, nothing tapped" % verb, wrap=True)
         return 0
 
@@ -2975,6 +3294,7 @@ def cmd_mcp(argv) -> int:
         return 1 if named else 0
     if args.action == "register":
         _offer_boost_first(settled, yes=args.yes)
+        _offer_boost_skill(yes=args.yes)
     journal.log("mcp", args.action, hosts=",".join(settled))
     # Same rule as `boost update` across taps: a partial sweep is a success
     # with a warning, because the hosts that worked really did work.

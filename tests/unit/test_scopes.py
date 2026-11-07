@@ -598,11 +598,18 @@ def test_a_case_variant_that_is_another_directory_is_outside(tmp_path,
     base = tmp_path / "Repo"
     base.mkdir()
     real_stat = os.stat
+    base_ino = real_stat(base).st_ino
     other = tmp_path / "repo"
 
+    # Derived from base's inode, never from repo's own. ``st.st_ino + 1`` made
+    # this test flaky on case-sensitive disks: there ``repo`` is a real
+    # directory with its own inode, and whenever the filesystem handed it the
+    # number just below ``Repo``'s (ext4 reuses the lowest free inode, and a
+    # parallel worker can free one at any time), the +1 landed exactly on base,
+    # so ``contains`` rightly answered "inside".
     def stat(p, *a, **kw):
         st = real_stat(p, *a, **kw)
-        return _restat(st, st.st_ino + 1) if Path(p) == other else st
+        return _restat(st, base_ino + 1) if Path(p) == other else st
 
     if not _folds_case(tmp_path):
         other.mkdir()
