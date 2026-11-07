@@ -337,11 +337,16 @@ class TestHandleRequest:
 
     def test_the_flow_draws_the_consent_line(self):
         # A rule becomes standing text every later session reads, and
-        # `boost mcp register` changes the whole machine: those are the user's
-        # call. A skill install is the agent's, reported afterwards.
+        # `boost mcp register` applies to every project on this machine: those
+        # are the user's call. A skill install is the agent's, reported
+        # afterwards.
         low = mcp.instructions(ai_available=True).lower()
         assert "ask the user before installing a rule" in low
         assert "`boost mcp register`" in low
+        # Said as what it does — a user-scope registration with each agent
+        # CLI — not as "changes their whole machine", which it does not.
+        assert "applies to every project on this machine" in low
+        assert "whole machine" not in low
 
     def test_protocol_version_constant(self):
         assert mcp.PROTOCOL_VERSION == "2024-11-05"

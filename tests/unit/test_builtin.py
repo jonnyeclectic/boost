@@ -363,7 +363,8 @@ class TestTheRuleDoesNotDriftFromTheMcpSurface:
               "usable this turn", "`boost install <name> --local`",
               "say in your reply which you chose and where it landed",
               "ask the user before installing a rule",
-              "`boost mcp register`")
+              "`boost mcp register`",
+              "applies to every project on this machine")
 
     @pytest.mark.parametrize("ai_available", [True, False])
     @pytest.mark.parametrize("phrase", PARITY)
