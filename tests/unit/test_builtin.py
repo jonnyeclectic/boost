@@ -268,7 +268,8 @@ class TestTheRuleBodyHoldsTheSameLineAsTheMcpSurface:
         from boost_cli.commands import configuration
         names = {s["name"] for s in configuration.REGISTRY.specs()}
         body = self._body()
-        for mentioned in ("boost_list", "boost_search"):
+        for mentioned in ("boost_list", "boost_search", "boost_read",
+                          "boost_install"):
             assert mentioned in body and mentioned in names
 
     def test_it_quotes_no_number_boost_cannot_compute(self):
@@ -440,3 +441,65 @@ class TestTheRulePricesBothKindsOfMachine:
         # currency. The signals still bound the call on both machines; they
         # just no longer name a cost one of them does not pay.
         assert "the seconds" not in _rule_body()
+
+
+class TestTheRuleSaysTheShelfCanBeInstalledFrom:
+    """The rule used to describe boost as two read-only tools.
+
+    "Two read-only tools reach it ... Neither installs anything", with
+    `boost search` as the only shell fallback. An agent reading the one boost
+    text that reaches every host learned it could look and nothing else —
+    while the server registers `boost_read` and `boost_install`, and
+    `boost install <name> --local` writes a skill into the repository for
+    every agent that works in it. The consent boundary is part of the same
+    change: skills install as the task needs them and the reply says where;
+    a rule and `boost mcp register` are the user's to approve.
+    """
+
+    def test_it_says_the_shelf_can_be_installed_from(self):
+        low = _rule_body()
+        assert "neither installs anything" not in low
+        assert "install from it in the middle of a task" in low
+
+    def test_every_shell_fallback_names_a_real_command(self):
+        # Without the MCP tools an agent has the shell, and a fallback that
+        # covers search alone leaves it no way to read or install.
+        import re
+
+        from boost_cli import cli
+        real = {row[0] for row in cli.COMMANDS}
+        named = set(re.findall(r"`boost (\w[\w-]*)", _rule_body()))
+        assert {"list", "search", "cat", "install"} <= named
+        assert named <= real, named - real
+
+    def test_it_names_both_install_scopes(self):
+        low = _rule_body()
+        assert "`boost install <name> --local` writes it into this repository" \
+            in low
+        assert "without `--local` it installs for the user" in low
+
+    def test_it_asks_for_where_an_install_landed(self):
+        assert "say in your reply which you chose and where it landed" \
+            in _rule_body()
+
+    def test_the_consent_boundary_is_a_rule_or_a_registration(self):
+        low = _rule_body()
+        assert "ask the user before installing a rule" in low
+        assert "(`boost mcp register`)" in low
+        # A skill install is the agent's call, said aloud afterwards; asking
+        # first for a --local skill is the boundary that was not chosen.
+        assert "before a `--local` install" not in low
+
+    def test_it_spells_the_tool_names_the_hosts_use(self):
+        # Claude Code shows the tools as mcp__boost__boost_search, Gemini CLI
+        # as mcp_boost_boost_search. An agent matching only the bare name
+        # concludes the tool is absent and falls back for no reason.
+        low = _rule_body()
+        assert "mcp__boost__boost_search" in low
+        assert "mcp_boost_boost_search" in low
+        assert "look before you conclude it is absent" in low
+
+    def test_what_was_read_is_usable_now(self):
+        # Whether a host loads a skill installed after its session started was
+        # not verified for any host, so the rule says to work from the text.
+        assert "usable this turn" in _rule_body()

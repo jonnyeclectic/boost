@@ -2353,6 +2353,13 @@ def _tool_discover_github(args: dict):
 # declarations are the only boost text reliably in context at the moment an
 # agent chooses a tool, so each one repeats the trigger, the cost and the
 # miss protocol rather than deferring to the server instructions.
+#
+# That holds for Gemini, not for every host. A Claude Code session was seen
+# listing these tools by name only (`mcp__boost__boost_search`, ...) until
+# they were looked up, while the server instructions arrived in full. There,
+# the instructions and the boost-first rule are what is in context, so what an
+# agent needs to know about installing has to be in those two and not only in
+# boost_install's description.
 _SEARCH_PITCH = (
     "Someone has probably solved this already — one call tells you. Searches "
     "every skill, rule and workflow in every registry you have tapped and "
