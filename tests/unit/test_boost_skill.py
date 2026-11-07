@@ -16,6 +16,7 @@ from __future__ import annotations
 import pathlib
 import re
 import subprocess
+from typing import ClassVar
 
 import pytest
 
@@ -120,6 +121,41 @@ class TestItShips:
         assert lockfile.get_skill(SKILL)["tap"] == builtin.BUILTIN_TAP
         assert (paths.store_dir() / SKILL / "SKILL.md").read_text(
             encoding="utf-8") == _text()
+
+
+class TestItsVersionMovesWithItsText:
+    """An installed copy refreshes on `boost update` only when `version:` moves.
+
+    `boost update` re-copies the wheel's SKILL.md into boost's tap every
+    run, but upgrades an installed skill by version. Measured in a sandbox:
+    with the text edited and `version:` left alone, update reported
+    "everything up to date" and the installed copy kept the old text; with
+    the version bumped it reported "upgraded boost-find-and-install v1.0.0 →
+    v1.0.1". So an edit without a bump reaches nobody who already has it.
+    (The boost-first rule is refreshed by content hash and has no such trap.)
+    """
+
+    #: ``version:`` -> sha256 of the whole SKILL.md at that version. To change
+    #: the text, bump ``version:`` and add the new pair; never edit a row.
+    KNOWN: ClassVar[dict[str, str]] = {
+        "1.0.0":
+            "0d77bd2ac7435024663778c7eb7367e25a2c11a1ba01cf860179dbd2c7cc3666",
+    }
+
+    def test_the_text_is_the_one_its_version_names(self):
+        import hashlib
+        text = _text()     # universal newlines: a CRLF checkout hashes alike
+        version = frontmatter.parse(text)[0]["version"]
+        digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        if version in self.KNOWN:
+            assert self.KNOWN[version] == digest, (
+                "%s/SKILL.md changed but `version: %s` did not. Bump it and "
+                "add the new version's row to KNOWN — `boost update` upgrades "
+                "an installed copy only when the version moves."
+                % (SKILL, version))
+        else:
+            pytest.fail("version %s has no row: add %r: %r to KNOWN"
+                        % (version, version, digest))
 
 
 class TestItSaysWhatTheRuleSays:
