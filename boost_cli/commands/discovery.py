@@ -215,6 +215,11 @@ def cmd_search(argv):
     # Stopwords and bare punctuation are not "dropped" (a notice on every
     # ordinary phrase is noise), so a query of nothing else needs its own test.
     ignored = tokenized_only and rag.ignored_by_design(query)
+    # Said once, in place of the generic hint below, which would name the same
+    # remedy; on stderr under --json, which prints no hint at all.
+    collapse_note = _collapse_ignored(args)
+    if collapse_note and args.as_json:
+        out.warn(collapse_note, wrap=True, stream=sys.stderr)
     if not scored:
         if args.as_json:
             print(json.dumps([]))
@@ -263,7 +268,7 @@ def cmd_search(argv):
                 "no matches for %r" % query,
                 "try `boost discover %s` to search all of GitHub" % query))
             _note_dropped_terms(dropped)
-        _hint_semantic_search(engine)
+        _hint_semantic_search(engine, collapse_note)
         # Especially here: "no matches" is exactly the answer an out-of-date
         # tap set produces, and the user has no other way to suspect it.
         _hint_stale_taps()
@@ -343,9 +348,27 @@ def cmd_search(argv):
     if use_rag:
         _note_stem_expansions(query)
         _note_dropped_terms(dropped)
-    _hint_semantic_search(engine)
+    _hint_semantic_search(engine, collapse_note)
     _hint_stale_taps()
     return 0
+
+
+def _collapse_ignored(args) -> str | None:
+    """The note for a ``--collapse-near-duplicates`` this search dropped.
+
+    The collapse reads stored vectors, so with no dense index `retrieve_any`
+    skips it (``dense.ready()``, the same gate) and the output was identical
+    to a run without the flag. The remedy is :func:`dense.fix_hint`'s, the
+    table `boost doctor` and the hint below read too.
+    """
+    if not args.collapse_dupes:
+        return None
+    from ..core import dense
+    if dense.ready():
+        return None
+    st = dense.status()
+    return ("--collapse-near-duplicates needs the dense index, so this search "
+            "ignored it — %s" % dense.fix_hint(st.get("reason", ""), st))
 
 
 def _note_stem_expansions(query: str) -> None:
@@ -463,8 +486,12 @@ def _hint_stale_shards() -> bool:
     return True
 
 
-def _hint_semantic_search(engine: str) -> None:
+def _hint_semantic_search(engine: str, note: str | None = None) -> None:
     """Say that a better engine exists, when BM25 answered alone.
+
+    ``note`` replaces the hint when a flag that needs the dense index was
+    ignored (:func:`_collapse_ignored`): it names the same remedy, so the
+    two together would say it twice.
 
     `boost search` reported which engine *ran* and never that a better one was
     available, so a user who installed the extra but never reindexed had no way
@@ -477,21 +504,14 @@ def _hint_semantic_search(engine: str) -> None:
     from core.dense.fix_hint — the same table doctor reads — so the two surfaces
     can never disagree about whether an API key is needed.
     """
-    if engine != "BM25 full-content":
-        # Anything else either already used vectors ("dense vectors", "hybrid
-        # RRF") or is the frontmatter fallback, where the BM25 index failed to
-        # build — a louder problem that this hint would only paper over.
-        return
-    from ..core import dense
-    st = dense.status()
-    if st.get("ready"):
+    msg = note or _semantic_hint(engine)
+    if not msg:
         return
     # Wrap to the pane like every other row here: at COLUMNS=60 the longest
     # remedy is 82 characters and would be the one line in this output that
     # blows the terminal width. `break_long_words=False` keeps the shell command
     # runnable — a copy-pasteable `pip install ...` matters more than a hard
     # clamp, and _FIX is tested to hold no token long enough to overflow.
-    msg = "semantic search is off — %s" % dense.fix_hint(st.get("reason", ""), st)
     # `- 2` pays for the indent `out.info` adds: wrapping to the full width and
     # then indenting is what put this hint one column over the pane. Wrap
     # first, colour each line after — `out.role` brackets its argument with a
@@ -499,6 +519,22 @@ def _hint_semantic_search(engine: str) -> None:
     # first line unterminated and the second uncoloured.
     for line in out.wrap(msg, max(out.term_width() - 2, 20)):
         out.info(out.role(line, "muted"))
+
+
+def _semantic_hint(engine: str) -> str | None:
+    """:func:`_hint_semantic_search`'s line, or None when it has nothing to
+    say."""
+    if engine != "BM25 full-content":
+        # Anything else either already used vectors ("dense vectors", "hybrid
+        # RRF") or is the frontmatter fallback, where the BM25 index failed to
+        # build — a louder problem that this hint would only paper over.
+        return None
+    from ..core import dense
+    st = dense.status()
+    if st.get("ready"):
+        return None
+    return "semantic search is off — %s" % dense.fix_hint(st.get("reason", ""),
+                                                         st)
 
 
 def _shard_io(args) -> int:

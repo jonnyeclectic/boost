@@ -519,11 +519,40 @@ class TestSearch:
             self, boost, tapped):
         # Opt-in and unwired into the default path (see
         # rag.NEAR_DUPLICATE_THRESHOLD): with no dense index built, the flag
-        # must parse and change nothing about a plain BM25 search.
+        # must parse and change nothing about the results of a BM25 search.
         with_flag = boost("search", "commit", "messages",
                           "--collapse-near-duplicates")
         without_flag = boost("search", "commit", "messages")
-        assert with_flag.out == without_flag.out
+        assert (with_flag.out.split("--collapse-near-duplicates")[0]
+                == without_flag.out.split("semantic search is off")[0])
+
+    def test_an_ignored_collapse_flag_says_so_once(self, boost, tapped):
+        # THE BUG: the output was byte-identical to a run without the flag,
+        # so nothing said the flag had done nothing. The note replaces the
+        # generic hint, whose remedy it repeats.
+        r = boost("search", "commit", "messages", "--collapse-near-duplicates")
+        flat = " ".join(r.out.split())
+        assert flat.count("--collapse-near-duplicates needs the dense index, "
+                          "so this search ignored it — ") == 1
+        assert "semantic search is off" not in flat
+        assert "pip install" in flat or "boost " in flat.split("ignored it")[1]
+
+    def test_an_ignored_collapse_flag_is_named_on_a_miss_too(self, boost,
+                                                             tapped):
+        r = boost("search", "zzzznotathinginanycatalog",
+                  "--collapse-near-duplicates")
+        assert "no matches" in r.out
+        assert "--collapse-near-duplicates needs the dense index" in r.out
+
+    def test_an_ignored_collapse_flag_goes_to_stderr_under_json(self, boost,
+                                                                tapped):
+        with_flag = boost("search", "commit", "messages", "--json",
+                          "--collapse-near-duplicates")
+        without_flag = boost("search", "commit", "messages", "--json")
+        assert json.loads(with_flag.out) == json.loads(without_flag.out)
+        assert ("--collapse-near-duplicates needs the dense index"
+                in " ".join(with_flag.err.split()))
+        assert "dense index" not in without_flag.err
 
 
 class TestSearchDroppedTerms:
