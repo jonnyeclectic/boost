@@ -440,7 +440,7 @@ def cmd_list(argv):
     if not skills and not rules and not workflows and not project:
         # Name the kind that was asked for. "no skills installed" in answer to
         # `--kind rule` sends you looking for a skill that was never the point.
-        # The `boost tap --defaults` half of the hint is itself only useful
+        # The `boost quickstart` half of the hint is itself only useful
         # when there is nothing tapped yet — with registries already
         # configured, the fix is `search`+`install`, not tapping more of them.
         # Counted the way every other setup message counts: boost's own tap is
@@ -450,7 +450,7 @@ def cmd_list(argv):
             "no %ss installed" % (args.kind or "skill")
             + (" with tag #%s" % args.tag.lstrip("#") if args.tag else ""),
             hint=("boost search <topic>" if builtin.configured_tap_count()
-                 else "boost tap --defaults && boost search <topic>")))
+                 else "%s && boost search <topic>" % config.SETUP_CMD)))
         return 0
     if skills:
         out.heading("installed skills")

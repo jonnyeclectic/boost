@@ -863,14 +863,14 @@ def cmd_doctor(argv):
                                               "" if cache_block
                                               else " & cached"))
     elif not configured and not cfg_err:
-        # `boost tap --defaults` leads, and it is the same command in the same
-        # order that `boost search`'s error, `mcp.no_results` and the MCP
-        # `boost_doctor` tool all name. A user who hits two of these surfaces
-        # in one session must not see the recommendation flip and read it as
-        # two different fixes — which is exactly what happened here: search
-        # said `--defaults`, doctor said `owner/repo`.
-        rep.note("taps", "no registries tapped — nothing is searchable yet; add the "
-                 "recommended ones with `boost tap --defaults`", wrap=True)
+        # `config.setup_hint` names the command, the same one `boost
+        # search`'s error, `taps`, `install` and bare `boost` name. A user who
+        # hits two of these surfaces in one session must not see the
+        # recommendation flip and read it as two different fixes — which is
+        # exactly what happened here: search said `--defaults`, doctor said
+        # `owner/repo`, and bare `boost` said `quickstart`.
+        rep.note("taps", "no registries tapped — nothing is searchable yet; "
+                 + config.setup_hint("add the recommended ones with"), wrap=True)
 
     # lockfile.read() collapses missing/corrupt/wrong-schema into an empty
     # skeleton so ordinary reads degrade cleanly — but that is exactly why

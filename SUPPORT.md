@@ -30,14 +30,28 @@ If you are on an older version, the supported answer is to upgrade:
 pipx upgrade boost-skill-cli     # or: pip install -U boost-skill-cli
 ```
 
-**Supported environments** — these are what CI runs on every pull request, so a
-regression on any of them fails the build:
+**Supported environments** — CI gates every one of these, so a regression on
+any of them stops a merge or a release:
 
 | | Supported |
 |---|---|
-| Python | 3.12, 3.13, 3.14 (and a non-blocking 3.14 free-threaded canary) |
+| Python | 3.12, 3.13, 3.14 |
 | Operating system | Linux, macOS, Windows |
 | Required external tools | `git` |
+
+Every pull request runs Linux on all three Pythons and macOS and Windows on
+3.12, as required checks. The push to `main` adds macOS and Windows on 3.13 and
+3.14 (`tests-extended` in `ci.yml`), and `publish.yml` releases only once that
+run passes.
+
+**Tested, not gated: Python 3.15.** It runs on Linux in every pull request, and
+on macOS and Windows after each merge that changes the package and once a day
+(`compat.yml`, beside a free-threaded 3.14t canary). Neither blocks a merge or
+a release — the Linux cell is `continue-on-error` and not a required check, and
+a red `compat` run opens a tracking issue instead — so 3.15 is not listed above
+and carries no PyPI classifier. boost installs and runs on it; the `[rag]`
+extra's local embedding model does not yet, because onnxruntime publishes no
+3.15 wheel.
 
 Python 3.11 and earlier are **not** supported: the project's floor is
 `requires-python = ">=3.12"`.
