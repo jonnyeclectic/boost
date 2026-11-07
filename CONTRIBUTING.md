@@ -69,7 +69,8 @@ Regenerating needs `uv` (installed by `make venv`); *installing* never does.
 ### Reproduce the whole gate — `nox`
 
 [`noxfile.py`](noxfile.py) runs the exact gate the CI jobs run, in isolated
-venvs, across the supported interpreters:
+venvs, across every interpreter CI's `tests` matrix runs — the three
+[SUPPORT.md](SUPPORT.md) lists and the advisory 3.15:
 
 ```bash
 pipx install nox        # or: pip install nox
