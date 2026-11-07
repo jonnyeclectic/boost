@@ -2907,6 +2907,9 @@ def _bundle_install(file: str | None, dry_run: bool = False) -> int:
     # Taps whose Boostfile URL names another repository than the one
     # configured under that name; skill lines qualified with one are refused.
     conflicted: set[str] = set()
+    # Boostfile tap name -> the configured tap holding that repository under
+    # its other name (a catalogue row renamed upstream), for skill lines.
+    held_as: dict[str, str] = {}
     # name -> (kind, lock entry) across every lock section, so a `skill` line
     # naming an already-installed rule/workflow is counted present, not
     # re-installed — and so its tap and version can be held to the line.
@@ -2942,6 +2945,20 @@ def _bundle_install(file: str | None, dry_run: bool = False) -> int:
                     conflicted.add(tname)
                     failed += 1
                 elif verdict == "drift":
+                    drifted += 1
+                continue
+            # Held under the repository's other name: `registry.add` refuses
+            # to clone it twice, which failed this line on a machine that
+            # tapped the row before its rename. Asked of the plan `boost tap`
+            # reads, and before the dry-run branch, so a preview agrees.
+            [plan] = registry.plan_specs([turl or tname])
+            if plan.get("renamed"):
+                held = plan["tapped_as"]
+                held_as[tname] = held_as[plan["name"]] = held
+                out.info(out.role(registry.already_tapped(
+                    tname, held, renamed=True), "muted"))
+                # One repository, so only the --at half of `_held_tap` applies.
+                if _held_tap(held, "", tat, where) == "drift":
                     drifted += 1
                 continue
             at_label = " @ %s" % tat[:7] if tat else ""
@@ -2991,6 +3008,9 @@ def _bundle_install(file: str | None, dry_run: bool = False) -> int:
                 failed += 1
                 continue
             tapq, sname, sver, local = spec.tap, spec.name, spec.version, spec.local
+            # A tap line above found it under its other name: that is the tap
+            # the catalogue and the lock know it by.
+            tapq = held_as.get(tapq, tapq)
             if local and pbase is None:
                 out.warn("%s: %s is a project-scope skill and there is no "
                          "project directory here — skipped" % (where, sname))
