@@ -1,4 +1,5 @@
 ABM
+actionlint
 agentic
 agy
 Algolia
@@ -115,18 +116,21 @@ onnxruntime
 OpenShift
 OpenSSF
 overclaiming
+perf
 Pinecone
 pipx
 plaintext
 prehash
 PrestaShop
 Pulumi
+pyright
 pytest
 Qdrant
 quantized
 Quantizing
 Quarkus
 rebased
+refurb
 reimplement
 reimplemented
 reimplements
