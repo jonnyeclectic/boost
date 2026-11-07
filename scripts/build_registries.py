@@ -657,7 +657,8 @@ SKILLS = [
 # generated stubs) and its command twin convex/convex-agent-plugins, both of
 # which pipe a script from a *.convex.site deployment into bash;
 # JimLiu/baoyu-skills (fills X, Weibo and WeChat posts in the user's own
-# Chrome over CDP "to avoid anti-bot detection", and two items call
+# Chrome over CDP, "which avoids anti-bot detection" per its Weibo skill, and
+# two items call
 # reverse-engineered Gemini and X APIs); and five repos whose items do not run
 # once copied out
 # of their own installer: github/spec-kit (its core commands carry `{SCRIPT}`
