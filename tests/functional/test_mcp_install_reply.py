@@ -24,7 +24,7 @@ import subprocess
 import pytest
 
 from boost_cli.commands import configuration
-from boost_cli.core import mcp, paths
+from boost_cli.core import lockfile, mcp, paths
 
 
 def _call(tool, **args):
@@ -130,6 +130,50 @@ class TestARuleNamesEveryFileItWrote:
         desc = {s["name"]: s["description"]
                 for s in configuration.REGISTRY.specs()}["boost_install"]
         assert "ask the user before installing a rule" in desc
+
+
+
+class TestAProjectRuleOrWorkflowIsNotInTheProjectLock:
+    """Only a skill is recorded in the repository's .boost/skill-lock.json.
+
+    A project rule or workflow is written into the repository and recorded in
+    the user's lock with its base, and a rule's Claude target is the personal,
+    git-ignored CLAUDE.local.md. The reply told the agent "recorded in
+    .boost/skill-lock.json; commit .boost/ ..." for all three kinds, over a
+    rule install that had created no .boost/ at all.
+    """
+
+    def test_a_project_rule_names_the_lock_that_holds_it(self, reply_tap,
+                                                         repo):
+        text, is_err = _call("boost_install", name="house-style",
+                             scope="project")
+        assert is_err is False
+        assert lockfile.get_rule("house-style")["scope"] == "project"
+        assert not (repo / ".boost").exists()
+        assert ".boost/skill-lock.json" not in text
+        assert "commit .boost/" not in text
+        assert ("scope: project (%s) — written into this repository, "
+                "recorded in %s rather than in .boost/"
+                % (paths.tilde(repo), paths.tilde(paths.lockfile_path()))
+                ) in text
+
+    def test_a_project_workflow_is_written_not_linked(self, reply_tap, repo):
+        text, is_err = _call("boost_install", name="ship-it", scope="project")
+        assert is_err is False
+        assert (repo / ".claude" / "commands" / "ship-it.md").is_file()
+        assert "written into this repository for: claude-code" in text
+        assert "linked agents" not in text
+        assert "commit .boost/" not in text
+        assert not (repo / ".boost").exists()
+
+    def test_a_project_skill_still_points_at_the_project_lock(self, reply_tap,
+                                                               repo):
+        text, _ = _call("boost_install", name="brainstorming", scope="project")
+        assert (repo / ".boost" / "skill-lock.json").is_file()
+        assert ("scope: project (%s) — real files in this repository, "
+                "recorded in .boost/skill-lock.json" % paths.tilde(repo)) \
+            in text
+        assert "rather than in .boost/" not in text
 
 
 class TestDeclaredMcpServersAreNamed:

@@ -2037,17 +2037,16 @@ def _install_scope(args: dict) -> tuple[str, Path | None]:
     return scope, base
 
 
-def _scope_lines(scope: str, base: Path | None, names: list[str]) -> list[str]:
+def _scope_lines(scope: str, base: Path | None, done: list[dict]) -> list[str]:
     """Where the install landed, said once, so the agent can tell the user.
 
     An install of a skill the other scope already holds gets a note: search
     and info call a name installed in either scope, and the install that
     followed used to add a second copy beside the first without a word.
     """
+    names = [str(e["name"]) for e in done]
     if base is not None:
-        return ["scope: project (%s) — real files in this repository, "
-                "recorded in .boost/skill-lock.json; commit .boost/ and the "
-                "agent directories to share them with the team" % _tilde(base),
+        return [*_project_scope_lines(base, done),
                 *("note: %s is also installed for the user; this added a "
                   "project copy beside it" % n
                   for n in names if lockfile.get_skill(n))]
@@ -2056,6 +2055,32 @@ def _scope_lines(scope: str, base: Path | None, names: list[str]) -> list[str]:
             *("note: %s is also installed in this project (%s); this added "
               "a user-scope copy beside it" % (n, _tilde(pbase))
               for n in names if n in project)]
+
+
+def _project_scope_lines(base: Path, done: list[dict]) -> list[str]:
+    """Where a project install was recorded, by kind.
+
+    Only a skill goes into the repository's own lock, .boost/skill-lock.json,
+    which is what teammates get by committing .boost/. A project rule or
+    workflow is written into the repository and recorded in the user's lock
+    with its base — `boost install --local` reports "lock updated
+    (.skill-lock.json)" for those kinds and no commit hint — and a rule's
+    Claude target is the personal, git-ignored CLAUDE.local.md. The reply
+    used to tell the agent to commit .boost/ for all three kinds, over a
+    rule install that had created no .boost/ at all.
+    """
+    head = "scope: project (%s)" % _tilde(base)
+    kinds = {e.get("kind") or "skill" for e in done}
+    lines = []
+    if "skill" in kinds:
+        lines.append(head + " — real files in this repository, recorded in "
+                     ".boost/skill-lock.json; commit .boost/ and the agent "
+                     "directories to share them with the team")
+    if kinds - {"skill"}:
+        lines.append(head + " — written into this repository, recorded in "
+                     "%s rather than in .boost/"
+                     % _tilde(paths.lockfile_path()))
+    return lines or [head]
 
 
 @_path_hint
@@ -2100,7 +2125,7 @@ def _tool_install(args: dict):
             continue
         lines.extend(_install_lines(res, e))
         done.append(e)
-    lines.extend(_scope_lines(scope, base, [str(e["name"]) for e in done]))
+    lines.extend(_scope_lines(scope, base, done))
     prereq_warn, prereq_hint = installplan.prerequisite_lines(done,
                                                               pbase=base)
     warnings.extend(prereq_warn)
@@ -2130,12 +2155,13 @@ def _reach_lines(res: store.InstallResult) -> list[str]:
                 + ["  %s" % _tilde(w) for w in written or [str(res.dest)]]
                 + ["`boost uninstall %s` removes it from all of them"
                    % res.name])
-    # A project install copies rather than links — "linked agents" there
-    # described a symlink that does not exist.
-    return ["%s: %s" % ("copied into this repository for"
-                        if res.scope == scopes.SCOPE_PROJECT
-                        and res.kind == "skill" else "linked agents",
-                        ", ".join(res.linked) or "none")]
+    # A project install copies a skill and writes a workflow's per-agent file
+    # — "linked agents" there described a symlink that does not exist.
+    if res.scope == scopes.SCOPE_PROJECT:
+        return ["%s into this repository for: %s"
+                % ("copied" if res.kind == "skill" else "written",
+                   ", ".join(res.linked) or "none")]
+    return ["linked agents: %s" % (", ".join(res.linked) or "none")]
 
 
 def _use_now_lines(res: store.InstallResult) -> list[str]:
