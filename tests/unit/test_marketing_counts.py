@@ -345,6 +345,62 @@ class TestHeroBlock:
             "tests/make_fixture.py defines" % name)
 
 
+def _smoke_examples_pipeline() -> str:
+    """smoke.sh's own extraction of every README example name, verbatim."""
+    m = re.search(r'^\s*EXAMPLES="\$\((.*)\)"\s*$', SMOKE, re.M)
+    assert m, "tests/smoke.sh no longer extracts the README's example names"
+    return m.group(1)
+
+
+def _readme_example_names(readme: str = README) -> set[str]:
+    names = set()
+    for body in re.findall(r"```bash\n(.*?)```", readme, re.S):
+        names |= set(re.findall(r"^boost (?:install|uninstall|info) ([a-z]\S*)",
+                                body, re.M))
+    return names
+
+
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason="runs smoke.sh's own bash/awk line; smoke.sh is POSIX")
+class TestReadmeExamples:
+    """Every skill a README fence names is checked online, not just the hero's.
+
+    `boost install code-review --local` and `boost install my-jira` sat in
+    the scope and workflow sections and both exited 1 after `boost
+    quickstart`: no starter registry ships either name. Only `smoke.sh
+    --online` can prove a name resolves, so these pin that it is asked about
+    every one of them.
+    """
+
+    def _run(self, cwd: Path) -> set[str]:
+        got = subprocess.run(["bash", "-c", _smoke_examples_pipeline()], cwd=cwd,
+                             capture_output=True, text=True, check=True)
+        return set(got.stdout.split())
+
+    def test_smoke_checks_every_name_the_readme_fences_use(self):
+        assert self._run(ROOT) == _readme_example_names()
+        assert _hero_install_name() in self._run(ROOT)
+
+    def test_the_names_that_exited_1_would_have_been_checked(self, tmp_path):
+        old = ("```bash\nboost install code-review --local\n"
+               "boost uninstall code-review --local\n```\n\n"
+               "```bash\nboost search jira\nboost install my-jira\n```\n")
+        (tmp_path / "README.md").write_text(old, encoding="utf-8")
+        assert self._run(tmp_path) == {"code-review", "my-jira"}
+
+    def test_the_online_block_runs_them(self):
+        _marker, _, online = SMOKE.partition('"${1:-}" = "--online"')
+        assert 'in $EXAMPLES; do run' in online
+        assert './boost info "$name"' in online
+
+    def test_no_example_is_a_test_fixture_identifier(self):
+        clash = _readme_example_names() & (
+            _fixture_skill_names() - ONLINE_VERIFIED_FIXTURE_NAMES)
+        assert clash == set(), (
+            "README examples name skills only tests/make_fixture.py defines: "
+            "%s" % sorted(clash))
+
+
 class TestHeroBlockPromises:
     """The block may only promise what the block's own install line buys."""
 

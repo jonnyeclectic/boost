@@ -381,10 +381,10 @@ npm `--save` half, for skills a team agrees on, which belong in the repository
 where they can be reviewed in a PR and arrive with a `git clone`.
 
 ```bash
-boost install code-review --local     # into THIS repo (= --scope project)
-boost install code-review             # into your user config (default)
-boost list --local                    # just what this repo carries
-boost uninstall code-review --local
+boost install requesting-code-review --local   # into THIS repo (= --scope project)
+boost install requesting-code-review           # into your user config (default)
+boost list --local                             # just what this repo carries
+boost uninstall requesting-code-review --local
 ```
 
 A `--local` install writes real directories into the repository's own agent
@@ -425,10 +425,10 @@ didn't write, and never overwrites a hand-written `.claude/skills/<name>/`;
 ## The usual workflow
 
 ```bash
-boost search jira          # look across every tapped registry
-boost install my-jira      # copy, link, lock — with a quality score attached
-boost doctor               # broken links, lock drift, stale taps
-boost doctor --json        # the same checks as a payload, for CI or an agent
+boost search debugging                # look across every tapped registry
+boost install systematic-debugging    # copy, link, lock — with a quality score attached
+boost doctor                          # broken links, lock drift, stale taps
+boost doctor --json                   # the same checks as a payload, for CI or an agent
 
 # hand the whole setup to a team:
 boost bundle dump > Boostfile     # everyone else runs: boost bundle install
