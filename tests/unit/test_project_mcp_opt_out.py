@@ -107,3 +107,44 @@ def test_a_no_mcp_skill_does_not_inherit_a_server_another_uninstall_frees(
     assert (removed, err) == (["gh"], None)
     # Empty again, and boost created it, so the file goes too.
     assert not (base / mcpdecl.SIDECAR).exists()
+
+
+def test_a_skip_over_an_earlier_record_says_the_server_is_still_there(project):
+    # --no-mcp writes nothing and removes nothing: a server the first
+    # install recorded stays in the file, and the result says so.
+    base, _entry = project
+    _install(project)
+    res = _install(project, force=True, record_mcp=False)
+    assert res.mcp_skipped is True
+    assert res.mcp_present == ["gh"]
+    servers = json.loads((base / mcpdecl.SIDECAR).read_text(
+        encoding="utf-8"))[mcpdecl.SERVERS_KEY]
+    assert "gh" in servers
+
+
+def test_a_skip_with_nothing_recorded_names_nothing_present(project):
+    res = _install(project, record_mcp=False)
+    assert res.mcp_present == []
+
+
+def test_a_recording_install_leaves_present_empty(project):
+    res = _install(project)
+    assert res.mcp_present == []
+
+
+@pytest.mark.parametrize(("text", "present"), [
+    (None, []),
+    ("{not json", []),
+    (json.dumps({"mcpServers": {"other": {"command": "x"}}}), []),
+    (json.dumps({"other": 1}), []),
+    # A name-only declaration is never "present": boost records none.
+    (json.dumps({"mcpServers": {"gh": {"command": "y"},
+                                "named-only": {"command": "z"}}}), ["gh"]),
+])
+def test_project_mcp_present(project, text, present):
+    base, _entry = project
+    if text is not None:
+        (base / mcpdecl.SIDECAR).write_text(text, encoding="utf-8")
+    rows = [{"name": "gh", "spec": {"command": "npx"}},
+            {"name": "named-only", "spec": None}]
+    assert store.project_mcp_present(base, rows) == present

@@ -325,9 +325,18 @@ def _report_project_mcp(res: store.InstallResult, no_mcp: bool = False) -> None:
     if not wanted:
         return
     if res.mcp_skipped:
-        out.dim("  %s not recorded in %s (%s)"
-                % (", ".join(wanted), mcpdecl.SIDECAR, _no_mcp_switch(no_mcp)),
-                wrap=True)
+        # Skipped is not absent: a server an earlier install (or the user)
+        # put in the file is still there, and "not recorded" over it would
+        # tell a reader it is not about to be committed.
+        switch = _no_mcp_switch(no_mcp)
+        absent = [w for w in wanted if w not in res.mcp_present]
+        if absent:
+            out.dim("  %s not recorded in %s (%s)"
+                    % (", ".join(absent), mcpdecl.SIDECAR, switch), wrap=True)
+        if res.mcp_present:
+            out.dim("  %s already in %s; %s left the file as it was"
+                    % (", ".join(res.mcp_present), mcpdecl.SIDECAR, switch),
+                    wrap=True)
     elif res.mcp_recorded:
         out.ok("recorded %s in %s"
                % (_plural(len(res.mcp_recorded), "MCP server"),

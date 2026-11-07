@@ -836,6 +836,21 @@ def test_reinstall_local_keeps_a_no_mcp_install_out_of_mcp_json(
     assert "no_mcp" not in projectlock.get_skill(repo, "brainstorming")
 
 
+def test_no_mcp_over_an_earlier_record_does_not_say_not_recorded(
+        boost, tapped, repo):
+    # The first install wrote gh; --no-mcp on the second writes nothing and
+    # removes nothing, so "gh not recorded in .mcp.json" would be false.
+    from boost_cli.core import mcpdecl
+    _declare_mcp(tapped, "brainstorming")
+    boost("install", "brainstorming", "--local")
+    res = boost("install", "brainstorming", "--local", "--force", "--no-mcp")
+    flat = " ".join(res.out.split())
+    assert "gh already in .mcp.json; --no-mcp left the file as it was" in flat
+    assert "not recorded" not in flat
+    assert "gh" in json.loads((repo / mcpdecl.SIDECAR).read_text(
+        encoding="utf-8"))[mcpdecl.SERVERS_KEY]
+
+
 def test_a_reinstall_that_records_a_server_names_it(boost, tapped, repo):
     # Every writer of .mcp.json says so, not only `install`: a reinstall
     # whose source now declares a server records it into a committed file.

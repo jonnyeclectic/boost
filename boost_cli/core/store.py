@@ -120,6 +120,10 @@ class InstallResult:
     # .mcp.json at all (``--no-mcp``, or a lock row recording it), so the
     # report can say the servers were left out rather than "already there".
     mcp_skipped: bool = False
+    # Under ``mcp_skipped``: the declared servers the project's .mcp.json
+    # already held (an earlier install recorded them, or the user did). A
+    # skip writes nothing and removes nothing, so these are still there.
+    mcp_present: list[str] = field(default_factory=list)
     # The tap an import just replaced (`install_from_path` only). Importing over
     # a tapped skill rewrites its lock entry to `local` and so drops the only
     # thing `boost update` refreshes it from; the caller says so.
@@ -2832,6 +2836,26 @@ def record_project_mcp(base, rows, skill: str,
     return added, None
 
 
+def project_mcp_present(base, rows) -> list[str]:
+    """The registrable servers in ``rows`` that ``base``'s ``.mcp.json``
+    already holds, by name. Reads only.
+
+    A skipped write (``install --local --no-mcp``) leaves the file as it was,
+    and an earlier install may have recorded these servers: reporting them as
+    "not recorded" would say they are absent from a committed file that
+    every teammate's agent launches them from. A file boost cannot read
+    names none.
+    """
+    from . import mcpdecl as _decl
+    doc, err = _load_sidecar(project_mcp_sidecar(base))
+    if err is not None or doc is None:
+        return []
+    have = doc.get(_decl.SERVERS_KEY)
+    if not isinstance(have, dict):
+        return []
+    return [r["name"] for r in _decl.registrable(rows) if r["name"] in have]
+
+
 def register_project_mcp(base, rows, skill: str) -> list[str]:
     """:func:`record_project_mcp`'s names alone."""
     return record_project_mcp(base, rows, skill)[0]
@@ -3945,7 +3969,9 @@ def _install_project_skill(entry: dict, force: bool = False,
     # Recorded here so it lands with the skill and reverses with it -- unless
     # the install said not to, which is a skip and not a gate on the report.
     res.mcp_skipped = skip_mcp
-    if not skip_mcp:
+    if skip_mcp:
+        res.mcp_present = project_mcp_present(resolved_base, res.mcp_servers)
+    else:
         res.mcp_recorded, res.mcp_error = record_project_mcp(
             resolved_base, res.mcp_servers, name)
     return res
