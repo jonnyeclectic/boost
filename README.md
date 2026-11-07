@@ -369,7 +369,8 @@ boost list --kind workflow            # and which slot each one fills
 
 Antigravity CLI (`agy`) takes real symlinks, into
 `~/.gemini/antigravity-cli/skills`. Gemini CLI and Codex are the two agents
-that need no symlink. Both discover
+that need no symlink; Codex here means both the `codex` CLI and the ChatGPT
+desktop app, which ships the same `codex` binary. Both discover
 `~/.agents/skills` directly — Gemini CLI through the
 [Agent Skills](https://agentskills.io) standard, Codex as one of its five skill
 roots — so linking into their own skills directories as well would put the same
