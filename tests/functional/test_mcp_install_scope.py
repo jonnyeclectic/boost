@@ -122,8 +122,21 @@ class TestProjectScopeNeverGuessesTheRepository:
         text, is_err = _call("boost_install", name="tdd-workflow",
                              scope="project")
         assert is_err is True
-        assert "this server is running in ~" in text
+        assert "this server is running in your home directory (~)" in text
         assert not (paths.home() / ".boost" / "skill-lock.json").exists()
+
+    def test_a_home_that_is_a_repository_is_refused_as_home(
+            self, boost, tapped, sandbox, monkeypatch):
+        # Dotfile setups make $HOME a checkout. It is still never a project,
+        # and the refusal must not tell that user it is not a checkout.
+        (sandbox / ".git").mkdir()
+        monkeypatch.chdir(sandbox)
+        text, is_err = _call("boost_install", name="tdd-workflow",
+                             scope="project")
+        assert is_err is True
+        assert "your home directory (~), which is never a project" in text
+        assert "not inside a git" not in text
+        assert not (sandbox / ".claude" / "skills" / "tdd-workflow").exists()
 
     def test_a_checkout_boost_manages_is_refused(self, boost, tapped,
                                                  monkeypatch):

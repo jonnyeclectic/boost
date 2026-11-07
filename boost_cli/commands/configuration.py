@@ -2001,12 +2001,25 @@ def _installed_where(found) -> str | None:
     return _tilde(pbase) if pbase is not None else scopes.project_label(entry)
 
 
-def _server_cwd() -> str:
-    """This server's working directory for a reply, or why there is none."""
+def _no_repository(base: Path | None) -> str:
+    """Why project scope has nowhere to go, naming this server's directory.
+
+    :func:`scopes.project_base` answers ``None`` for the home directory even
+    when it is itself a checkout (dotfile setups), because a project there
+    would be the directories user scope owns. The refusal used to say "~,
+    which is not inside a git, hg or svn checkout" for that case too, which a
+    user whose home is a repository can see is false.
+    """
     try:
-        return _tilde(Path.cwd())
+        cwd = Path.cwd()
     except OSError:
-        return "a working directory that no longer exists"
+        return "this server's working directory no longer exists"
+    if base is None:
+        return ("this server is running in your home directory (%s), which "
+                "is never a project, even when it is a checkout"
+                % _tilde(cwd))
+    return ("this server is running in %s, which is not inside a git, hg or "
+            "svn checkout" % _tilde(cwd))
 
 
 def _install_scope(args: dict) -> tuple[str, Path | None]:
@@ -2026,8 +2039,7 @@ def _install_scope(args: dict) -> tuple[str, Path | None]:
     base, how = scopes.project_base()
     if base is None or how != scopes.BASE_VCS:
         raise BoostError(
-            "no repository to install into: this server is running in %s, "
-            "which is not inside a git, hg or svn checkout" % _server_cwd(),
+            "no repository to install into: " + _no_repository(base),
             hint='pass scope "user" to install for the user, or start the '
                  'agent from inside the repository')
     why = scopes.managed_by_boost(base)
