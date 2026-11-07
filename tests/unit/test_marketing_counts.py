@@ -174,15 +174,55 @@ class TestCatalogueSizeIsNotHardCoded:
                           .read_text(encoding="utf-8"))
         size = sum(1 for r in data["registries"] if not r.get("list_only"))
         stated = []
-        for doc in sorted((ROOT / "docs").glob("*.html")):
+        for doc in [ROOT / "README.md", *sorted((ROOT / "docs").glob("*.html"))]:
             text = doc.read_text(encoding="utf-8")
             stated += [(doc.name, int(n)) for n in re.findall(
                 r"spans\s+(\d+)\+?\s+registr"
                 r"|(\d+)\+?\s+classified\s+(?:GitHub\s+)?registr", text)
                 for n in n if n]
         assert ("index.html", size) in stated, stated
+        assert ("README.md", size) in stated, stated
         assert [s for s in stated if s[1] != size] == [], (
             "the catalogue is %d registries: %s" % (size, stated))
+
+    def test_the_readme_item_estimate_is_near_the_data(self):
+        # "roughly 30,000 items" stood while the catalogue summed to 35,466.
+        # It is an estimate, so it gets 10%; a figure outside that is stale.
+        data = json.loads((ROOT / "boost_cli" / "data" / "registries.json")
+                          .read_text(encoding="utf-8"))
+        m = re.search(r"roughly\s+([\d,]+)\s+items", README)
+        assert m, "README no longer estimates the catalogue's item count"
+        said = int(m.group(1).replace(",", ""))
+        assert abs(said - data["est_items_scannable"]) <= 0.1 * data["est_items_scannable"]
+
+
+class TestPlatformClaimsAgree:
+    """SUPPORT.md says which operating systems are supported; the README badge
+    and the PyPI classifiers said macOS and Linux while SUPPORT.md listed
+    Windows too and `tests (windows-latest, 3.12)` is a required check."""
+
+    def _support(self) -> set[str]:
+        text = (ROOT / "SUPPORT.md").read_text(encoding="utf-8")
+        m = re.search(r"^\| Operating system \| ([^|]+) \|$", text, re.M)
+        assert m, "SUPPORT.md no longer lists supported operating systems"
+        return {o.strip().lower() for o in m.group(1).split(",")}
+
+    def test_readme_badge_lists_the_supported_systems(self):
+        m = re.search(r"badge/platform-([^-)]+)-", README)
+        assert m, "README lost its platform badge"
+        badge = {o.strip().lower() for o in
+                 m.group(1).replace("%20", " ").split("%7C")}
+        assert badge == self._support()
+
+    def test_classifiers_list_the_supported_systems(self):
+        import tomllib
+        meta = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+        names = {"MacOS": "macos", "POSIX :: Linux": "linux",
+                 "Microsoft :: Windows": "windows"}
+        got = {names[c.removeprefix("Operating System :: ")]
+               for c in meta["project"]["classifiers"]
+               if c.startswith("Operating System :: ")}
+        assert got == self._support()
 
 
 class TestLandingPageStatTiles:

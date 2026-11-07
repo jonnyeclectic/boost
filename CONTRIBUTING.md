@@ -156,7 +156,7 @@ the commit it sits on — a sign-off from anyone else certifies nothing, so it i
 rejected rather than counted. And the check only ever looks at the commits your
 pull request adds: DCO applies from the commit that introduced it, and history
 before that is left alone. Backfilling sign-offs would mean rewriting `main`,
-breaking 478 tags and invalidating the build-provenance attestation on every
+breaking every release tag and invalidating the build-provenance attestation on every
 published release, to record an assertion nobody actually made.
 
 Bot authors (Dependabot and friends) are exempt — an account cannot agree to a

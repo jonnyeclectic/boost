@@ -5,7 +5,7 @@
 [![Python 3.12–3.15](https://img.shields.io/badge/python-3.12%E2%80%933.15-blue)](https://github.com/jonnyeclectic/boost/blob/main/.github/workflows/ci.yml)
 [![Coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fjonnyeclectic%2Fboost%2Fbadges%2Fcoverage.json)](https://github.com/jonnyeclectic/boost/actions/workflows/ci.yml)
 [![Mutation score](https://img.shields.io/badge/mutation_score-%E2%89%A580%25_killed-blueviolet)](https://github.com/jonnyeclectic/boost/blob/main/scripts/mutation_gate.py)
-[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey)](https://github.com/jonnyeclectic/boost/actions/workflows/ci.yml)
+[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)](https://github.com/jonnyeclectic/boost/actions/workflows/ci.yml)
 [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/14275/badge)](https://www.bestpractices.dev/projects/14275)
 [![OpenSSF Baseline](https://www.bestpractices.dev/projects/14275/baseline)](https://www.bestpractices.dev/projects/14275/baseline-2)
 [![License](https://img.shields.io/github/license/jonnyeclectic/boost)](https://github.com/jonnyeclectic/boost/blob/main/LICENSE)
@@ -258,9 +258,9 @@ setup, what it costs, and how to tell which engine is actually serving.
 
 ## The registry catalog
 
-`boost tap --defaults` gives you seven registries. The full catalog is 540+
+`boost tap --defaults` gives you seven registries. The full catalog is 515
 classified GitHub registries of skills, Cursor/Windsurf rules and Claude Code
-workflows, indexing roughly 30,000 items.
+workflows, indexing roughly 35,000 items.
 
 ```bash
 boost tap --catalog --dry-run                 # browse the classified catalog
@@ -275,8 +275,10 @@ Taps clone in parallel — eight at once by default, `--jobs N` (or
 server. A clone is network latency rather than bandwidth, so the whole catalog
 measures **2 min 10 s for 463 registries** where one-at-a-time took 13 minutes.
 
-Every `est_items` is measured from the repository's file tree rather than
-estimated, so `--limit` ranks by real size. Items are counted once however many
+`est_items` is measured from the repository's file tree for every registry
+added since 2026-07, and for older ones wherever a re-measure disagreed with
+the original research estimate; the rest keep that estimate, which is what
+`--limit` ranks by. Items are counted once however many
 agents a repository renders them for, so a pack shipping a copy in `.claude/`,
 `.cursor/` and twelve other dotdirs is not credited with fourteen skills.
 
@@ -327,6 +329,7 @@ GitHub registries  ──boost update──▶  ~/.boost/repos/    (blobless spa
                    ──boost install─▶  ~/.agents/skills/ (canonical store)
                                      .skill-lock.json  (v3 lock file)
                    ────symlinks───▶  ~/.claude/skills/  ~/.windsurf/skills/  ~/.cursor/skills/
+                                     ~/.gemini/antigravity-cli/skills/
 ```
 
 A tap clone holds only the files boost indexes: `SKILL.md`, workflow Markdown
@@ -580,14 +583,15 @@ should show as Connected.
 
 ## Agent hooks and BMAD
 
-`boost hooks` manages hooks for Claude Code, Gemini CLI and Codex CLI —
-`settings.json` for the first two, `$CODEX_HOME/hooks.json` for Codex —
-translating between their event vocabularies and timeout units. `boost bmad on`
+`boost hooks` manages hooks for Claude Code, Gemini CLI and Codex CLI — in the
+project by default (`.claude/settings.json`, `.gemini/settings.json`,
+`.codex/hooks.json`), or with `--scope global` in `~/.claude/settings.json`,
+`~/.gemini/settings.json` and `$CODEX_HOME/hooks.json` — translating between their event vocabularies and timeout units. `boost bmad on`
 uses them to put the BMAD Method's personas in charge of every task, in one
 command with no Node and no network.
 
 ```bash
-boost hooks add SessionStart -c 'echo hello' -n greet --scope project
+boost hooks add SessionStart -c 'echo hello' -n greet
 boost hooks add SessionStart --host codex -c 'echo hello' -n greet
 boost bmad on
 ```
@@ -639,7 +643,7 @@ Six gates are enforced, and `make check` runs all of them:
 | `make eval` | four retrieval floors on BM25 over 20 pinned real registries |
 | `make test` | ≥90% coverage of `boost_cli`, statements and branches |
 | `make smoke` | 183 checks through the actual `./boost` shim |
-| `make mutation` | ≥80% of ~9,900 mutants in `boost_cli/core` killed |
+| `make mutation` | ≥80% of the mutants in `boost_cli/core` killed |
 | `make evals` | metric floors on the search ranker, plus no significant regression |
 
 Search quality is the one thing the test gates cannot assert: every test can
