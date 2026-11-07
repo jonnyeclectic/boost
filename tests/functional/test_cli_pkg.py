@@ -969,7 +969,7 @@ class TestUpdate:
     def test_no_taps(self, boost, sandbox):
         r = boost("update")
         assert "○ no taps configured" in r.out
-        assert "→ start with `boost tap --defaults`" in r.out
+        assert "→ add the recommended registries with `boost quickstart`" in r.out
 
     def test_up_to_date(self, boost, installed):
         r = boost("update")

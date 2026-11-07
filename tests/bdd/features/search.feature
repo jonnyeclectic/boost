@@ -8,7 +8,7 @@ Feature: boost search
     When I run "boost search anything"
     Then the exit code should be 1
     And the output should contain "no taps configured — nothing to search"
-    And the output should contain "boost tap --defaults"
+    And the output should contain "boost quickstart"
 
   Scenario: multi-word query ranks the exact match first
     Given the fixture tap is added

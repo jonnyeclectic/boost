@@ -26,6 +26,7 @@ from .. import cliparse
 from ..core import (
     ai,
     catalog,
+    config,
     frontmatter,
     gitutil,
     imperative,
@@ -1519,7 +1520,7 @@ def cmd_chat(argv: list[str]) -> int:
 
     if not registry.list_taps():
         raise BoostError("no taps configured — nothing to chat about",
-                        hint="add the recommended registries with `boost tap --defaults`")
+                        hint=config.setup_hint())
 
     question = " ".join(args.question).strip()
     if args.as_json:

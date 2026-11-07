@@ -8,7 +8,7 @@ Feature: boost list
     When I run "boost list"
     Then the exit code should be 0
     And the output should contain "no skills installed"
-    And the output should contain "boost tap --defaults"
+    And the output should contain "boost quickstart"
 
   Scenario: an installed skill is listed with its version and tap
     Given the "brainstorming" skill is installed

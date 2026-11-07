@@ -94,7 +94,7 @@ way to end up at `boost: command not found`.
 ```bash
 pipx install --python 3.13 --fetch-python=always "boost-skill-cli[rag]"
 boost --version
-boost tap --defaults
+boost quickstart
 ```
 
 With uv it is

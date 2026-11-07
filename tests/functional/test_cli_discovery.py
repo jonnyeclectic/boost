@@ -240,7 +240,7 @@ class TestSearch:
     def test_no_taps_fails_with_hint(self, boost):
         r = boost("search", "anything", expect=1)
         assert "no taps configured — nothing to search" in r.err
-        assert "boost tap --defaults" in r.err
+        assert "boost quickstart" in r.err
 
     def test_no_matches_hints_discover(self, boost, tapped):
         r = boost("search", "zzzznothing")
@@ -2360,7 +2360,7 @@ class TestTrending:
         r = boost("trending")
         assert "curated picks (no local install data yet)" in r.out
         assert "○ no curated skills available" in r.out
-        assert "→ add taps with `boost tap --defaults`" in r.out
+        assert "→ add the recommended registries with `boost quickstart`" in r.out
 
     def test_no_installs_curated_picks(self, boost, fixture_tap_src):
         boost("tap", fixture_tap_src, "--curated")
@@ -2574,7 +2574,7 @@ class TestStats:
         # sent a new user from one error to another.
         r = boost("stats", "brainstorming", expect=1)
         assert "no skill named 'brainstorming' installed or in any tap" in r.err
-        assert "hint: no taps configured — start with `boost tap --defaults`" \
+        assert "hint: no taps configured — start with `boost quickstart`" \
             in r.err
         assert "boost search" not in r.err
 
@@ -2974,7 +2974,7 @@ class TestReindex:
     def test_no_taps_errors(self, boost):
         r = boost("reindex", expect=1)
         assert "no taps configured" in r.err
-        assert "boost tap --defaults" in r.err
+        assert "boost quickstart" in r.err
 
     def test_search_switches_to_full_content_after_reindex(self, boost, tapped):
         boost("reindex")
