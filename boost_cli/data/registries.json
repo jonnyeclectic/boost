@@ -1,8 +1,8 @@
 {
   "generated_note": "Curated skill/rule/workflow registries for boost. est_items are research estimates; verify by tapping. list_only repos are index/awesome lists that link out.",
-  "count": 540,
-  "est_items_total": 41614,
-  "est_items_scannable": 35476,
+  "count": 588,
+  "est_items_total": 44801,
+  "est_items_scannable": 38663,
   "registries": [
     {
       "name": "Aaronontheweb/dotnet-cursor-rules",
@@ -181,6 +181,17 @@
       "curated": false
     },
     {
+      "name": "madebyaris/advance-minimax-m3-cursor-rules",
+      "url": "https://github.com/madebyaris/advance-minimax-m3-cursor-rules",
+      "type": "rule",
+      "category": "general",
+      "focus": "Cursor rules for clarify-first prompting, verification, design systems and MCP use; part of it is MiniMax-M3 specific (7 skills, 20 rules, 2 workflows)",
+      "est_items": 29,
+      "confidence": "low",
+      "list_only": false,
+      "curated": false
+    },
+    {
       "name": "matank001/cursor-security-rules",
       "url": "https://github.com/matank001/cursor-security-rules",
       "type": "rule",
@@ -199,6 +210,17 @@
       "focus": "110+ tested .mdc and .cursorrules files with validation tooling",
       "est_items": 110,
       "confidence": "high",
+      "list_only": false,
+      "curated": false
+    },
+    {
+      "name": "obviousworks/vibe-coding-ai-rules",
+      "url": "https://github.com/obviousworks/vibe-coding-ai-rules",
+      "type": "rule",
+      "category": "general",
+      "focus": "Numbered rule set for Cursor, Windsurf and Cline: core principles, code style, security, workflow, React and Python patterns (16 rules)",
+      "est_items": 16,
+      "confidence": "low",
       "list_only": false,
       "curated": false
     },
@@ -275,6 +297,17 @@
       "category": "web-dev",
       "focus": "39+ framework-specific .cursorrules for React, Next.js, Python, Node",
       "est_items": 39,
+      "confidence": "med",
+      "list_only": false,
+      "curated": false
+    },
+    {
+      "name": "thehimel/cursor-rules-and-prompts",
+      "url": "https://github.com/thehimel/cursor-rules-and-prompts",
+      "type": "rule",
+      "category": "general",
+      "focus": "Cursor .mdc rules for code formatting, documentation, project organization, comments and Mermaid diagrams (32 rules, 1 workflows)",
+      "est_items": 33,
       "confidence": "med",
       "list_only": false,
       "curated": false
@@ -566,6 +599,17 @@
       "curated": false
     },
     {
+      "name": "android/skills",
+      "url": "https://github.com/android/skills",
+      "type": "skill",
+      "category": "java",
+      "focus": "Official Android: AGP 9 upgrade, Compose migration and performance, CameraX, Media3, ML Kit GenAI, Wear OS, Play Billing (36 skills)",
+      "est_items": 36,
+      "confidence": "high",
+      "list_only": false,
+      "curated": true
+    },
+    {
       "name": "angular/skills",
       "url": "https://github.com/angular/skills",
       "type": "skill",
@@ -682,6 +726,17 @@
       "category": "general",
       "focus": "Agent Skills for medical research - literature search... (58 skills)",
       "est_items": 58,
+      "confidence": "high",
+      "list_only": false,
+      "curated": false
+    },
+    {
+      "name": "apify/agent-skills",
+      "url": "https://github.com/apify/agent-skills",
+      "type": "skill",
+      "category": "ai",
+      "focus": "Official Apify: Actor development and actorization, output schemas, integrations, scraping (5 skills, 2 workflows)",
+      "est_items": 7,
       "confidence": "high",
       "list_only": false,
       "curated": false
@@ -830,6 +885,17 @@
       "curated": false
     },
     {
+      "name": "awslabs/agent-plugins",
+      "url": "https://github.com/awslabs/agent-plugins",
+      "type": "skill",
+      "category": "infra",
+      "focus": "AWS Labs: Lambda, Step Functions, API Gateway, serverless deploys, architecture diagrams, SageMaker HyperPod and fine-tuning (34 skills)",
+      "est_items": 34,
+      "confidence": "high",
+      "list_only": false,
+      "curated": false
+    },
+    {
       "name": "BagelHole/DevOps-Security-Agent-Skills",
       "url": "https://github.com/BagelHole/DevOps-Security-Agent-Skills",
       "type": "skill",
@@ -973,6 +1039,17 @@
       "curated": false
     },
     {
+      "name": "browserbase/skills",
+      "url": "https://github.com/browserbase/skills",
+      "type": "skill",
+      "category": "ai",
+      "focus": "Official Browserbase: cloud browser automation, browser-to-API, traces, Stagehand, WebMCP; cookie-sync copies local Chrome cookies to a Browserbase context (18 skills)",
+      "est_items": 18,
+      "confidence": "high",
+      "list_only": false,
+      "curated": false
+    },
+    {
       "name": "bryntum/skills",
       "url": "https://github.com/bryntum/skills",
       "type": "skill",
@@ -1067,6 +1144,17 @@
       "category": "java",
       "focus": "Camunda AI Agent skills (13 skills)",
       "est_items": 13,
+      "confidence": "high",
+      "list_only": false,
+      "curated": false
+    },
+    {
+      "name": "canonical/copilot-collections",
+      "url": "https://github.com/canonical/copilot-collections",
+      "type": "skill",
+      "category": "general",
+      "focus": "Canonical: Go review and style, Ubuntu SRU and freeze reviews, Terraform migration, Temporal tests, docs review (27 skills, 6 workflows)",
+      "est_items": 33,
       "confidence": "high",
       "list_only": false,
       "curated": false
@@ -1336,6 +1424,39 @@
       "curated": false
     },
     {
+      "name": "cursor/plugins",
+      "url": "https://github.com/cursor/plugins",
+      "type": "skill",
+      "category": "meta",
+      "focus": "Cursor's official plugins: advisor, pstack, harness and team-kit skills and subagents, plus third-party MCP routing packs (137 skills, 5 rules, 14 workflows)",
+      "est_items": 156,
+      "confidence": "high",
+      "list_only": false,
+      "curated": true
+    },
+    {
+      "name": "czlonkowski/n8n-skills",
+      "url": "https://github.com/czlonkowski/n8n-skills",
+      "type": "skill",
+      "category": "general",
+      "focus": "n8n workflows: node configuration, expressions, Code node JS and Python, error handling, n8n MCP tools (15 skills)",
+      "est_items": 15,
+      "confidence": "high",
+      "list_only": false,
+      "curated": false
+    },
+    {
+      "name": "data-goblin/power-bi-agentic-development",
+      "url": "https://github.com/data-goblin/power-bi-agentic-development",
+      "type": "skill",
+      "category": "data",
+      "focus": "Power BI and Fabric: DAX, TMDL, PBIP, Power Query, Deneb and SVG visuals, semantic-model review (35 skills, 10 workflows)",
+      "est_items": 45,
+      "confidence": "med",
+      "list_only": false,
+      "curated": false
+    },
+    {
       "name": "datadog-labs/agent-skills",
       "url": "https://github.com/datadog-labs/agent-skills",
       "type": "skill",
@@ -1397,6 +1518,17 @@
       "category": "backend",
       "focus": "Official DBOS: Postgres-backed durable workflows for Python, TypeScript, Go and Java",
       "est_items": 4,
+      "confidence": "high",
+      "list_only": false,
+      "curated": false
+    },
+    {
+      "name": "dbt-labs/dbt-agent-skills",
+      "url": "https://github.com/dbt-labs/dbt-agent-skills",
+      "type": "skill",
+      "category": "data",
+      "focus": "Official dbt: unit tests, semantic layer, upgrades and Core-to-v2 migration, dbt MCP, job troubleshooting (17 skills)",
+      "est_items": 17,
       "confidence": "high",
       "list_only": false,
       "curated": false
@@ -1611,6 +1743,17 @@
       "curated": false
     },
     {
+      "name": "elevenlabs/skills",
+      "url": "https://github.com/elevenlabs/skills",
+      "type": "skill",
+      "category": "ai",
+      "focus": "Official ElevenLabs API: text-to-speech, speech-to-text, voice agents, dubbing, music, sound effects (13 skills)",
+      "est_items": 13,
+      "confidence": "high",
+      "list_only": false,
+      "curated": false
+    },
+    {
       "name": "emartos/prestashop-skills",
       "url": "https://github.com/emartos/prestashop-skills",
       "type": "skill",
@@ -1622,12 +1765,34 @@
       "curated": false
     },
     {
+      "name": "emilkowalski/skills",
+      "url": "https://github.com/emilkowalski/skills",
+      "type": "skill",
+      "category": "ui",
+      "focus": "Design engineering: animation, motion choreography, Apple-style design, UI library choice and animation review (17 skills)",
+      "est_items": 17,
+      "confidence": "high",
+      "list_only": false,
+      "curated": true
+    },
+    {
       "name": "encoredev/skills",
       "url": "https://github.com/encoredev/skills",
       "type": "skill",
       "category": "backend",
       "focus": "Official Encore.ts and Encore Go: APIs, services, databases and migrations, pub/sub, cron",
       "est_items": 31,
+      "confidence": "high",
+      "list_only": false,
+      "curated": false
+    },
+    {
+      "name": "EpicGames/unreal-engine-skills-for-claude-code-plugin",
+      "url": "https://github.com/EpicGames/unreal-engine-skills-for-claude-code-plugin",
+      "type": "skill",
+      "category": "general",
+      "focus": "Official Epic Games: Unreal Engine skill, Unreal MCP, toolset creation (3 skills)",
+      "est_items": 3,
       "confidence": "high",
       "list_only": false,
       "curated": false
@@ -1677,6 +1842,39 @@
       "curated": true
     },
     {
+      "name": "fal-ai-community/skills",
+      "url": "https://github.com/fal-ai-community/skills",
+      "type": "skill",
+      "category": "general",
+      "focus": "fal.ai generative media: image, video and audio models, prompting, character and product shots, ad and reel production (36 skills)",
+      "est_items": 36,
+      "confidence": "high",
+      "list_only": false,
+      "curated": false
+    },
+    {
+      "name": "feiskyer/claude-code-settings",
+      "url": "https://github.com/feiskyer/claude-code-settings",
+      "type": "skill",
+      "category": "general",
+      "focus": "Claude Code settings collection: deep research, GitHub issue and PR fixing and review, handoff, reflection agents (12 skills, 6 workflows)",
+      "est_items": 18,
+      "confidence": "med",
+      "list_only": false,
+      "curated": false
+    },
+    {
+      "name": "figma/mcp-server-guide",
+      "url": "https://github.com/figma/mcp-server-guide",
+      "type": "skill",
+      "category": "ui",
+      "focus": "Official Figma MCP: design-to-code, Code Connect, generate designs, libraries and diagrams, FigJam, motion, SwiftUI (22 skills)",
+      "est_items": 22,
+      "confidence": "high",
+      "list_only": false,
+      "curated": false
+    },
+    {
       "name": "finsilabs/awesome-ecommerce-skills",
       "url": "https://github.com/finsilabs/awesome-ecommerce-skills",
       "type": "skill",
@@ -1694,6 +1892,17 @@
       "category": "backend",
       "focus": "Official Firebase: Firestore, Data Connect (Postgres/GraphQL), Auth, security rules",
       "est_items": 14,
+      "confidence": "high",
+      "list_only": false,
+      "curated": false
+    },
+    {
+      "name": "firecrawl/skills",
+      "url": "https://github.com/firecrawl/skills",
+      "type": "skill",
+      "category": "ai",
+      "focus": "Official Firecrawl: scrape, crawl, map, search, parse and interact with pages, plus research and lead-gen recipes (37 skills)",
+      "est_items": 37,
       "confidence": "high",
       "list_only": false,
       "curated": false
@@ -1717,6 +1926,17 @@
       "focus": "Opinionated web design skills from curated sources - one install... (22 skills, 2 rules)",
       "est_items": 24,
       "confidence": "med",
+      "list_only": false,
+      "curated": false
+    },
+    {
+      "name": "flutter/agent-plugins",
+      "url": "https://github.com/flutter/agent-plugins",
+      "type": "skill",
+      "category": "ui",
+      "focus": "Official Flutter and Dart: widget and integration tests, responsive layout, routing, localization, static analysis, FFI (31 skills, 1 rules)",
+      "est_items": 32,
+      "confidence": "high",
       "list_only": false,
       "curated": false
     },
@@ -1831,6 +2051,17 @@
       "curated": false
     },
     {
+      "name": "gamedev-skills/awesome-gamedev-agent-skills",
+      "url": "https://github.com/gamedev-skills/awesome-gamedev-agent-skills",
+      "type": "skill",
+      "category": "general",
+      "focus": "Game development: Godot, Unity, Unreal, Roblox, Phaser, Bevy, three.js, game feel, level design, procedural generation (78 skills)",
+      "est_items": 78,
+      "confidence": "high",
+      "list_only": false,
+      "curated": false
+    },
+    {
       "name": "garrytan/gstack",
       "url": "https://github.com/garrytan/gstack",
       "type": "skill",
@@ -1931,6 +2162,28 @@
       "curated": false
     },
     {
+      "name": "google-gemini/gemini-skills",
+      "url": "https://github.com/google-gemini/gemini-skills",
+      "type": "skill",
+      "category": "ai",
+      "focus": "Official Gemini API: API/SDK development, Live API, Gemini CLI, Omni Flash (4 skills)",
+      "est_items": 4,
+      "confidence": "high",
+      "list_only": false,
+      "curated": false
+    },
+    {
+      "name": "google-labs-code/stitch-skills",
+      "url": "https://github.com/google-labs-code/stitch-skills",
+      "type": "skill",
+      "category": "ui",
+      "focus": "Official Google Stitch: generate designs, DESIGN.md, design systems, code-to-design, React and shadcn components (16 skills)",
+      "est_items": 16,
+      "confidence": "high",
+      "list_only": false,
+      "curated": false
+    },
+    {
       "name": "google/skills",
       "url": "https://github.com/google/skills",
       "type": "skill",
@@ -1940,6 +2193,17 @@
       "confidence": "high",
       "list_only": false,
       "curated": true
+    },
+    {
+      "name": "googleworkspace/cli",
+      "url": "https://github.com/googleworkspace/cli",
+      "type": "skill",
+      "category": "general",
+      "focus": "Official Google Workspace CLI skills: Gmail, Drive, Calendar, Docs, Sheets, Chat, Admin; they drive the gws binary (95 skills, 1 workflows)",
+      "est_items": 96,
+      "confidence": "high",
+      "list_only": false,
+      "curated": false
     },
     {
       "name": "grafana/skills",
@@ -2005,6 +2269,17 @@
       "est_items": 40,
       "confidence": "med",
       "list_only": true,
+      "curated": false
+    },
+    {
+      "name": "HexRaysSA/claude-marketplace",
+      "url": "https://github.com/HexRaysSA/claude-marketplace",
+      "type": "skill",
+      "category": "security",
+      "focus": "Official Hex-Rays IDA Pro: IDA Domain API scripting, plugin development and packaging, an IDA expert agent (4 skills, 2 workflows)",
+      "est_items": 6,
+      "confidence": "high",
+      "list_only": false,
       "curated": false
     },
     {
@@ -2206,6 +2481,17 @@
       "curated": false
     },
     {
+      "name": "jakubkrehel/skills",
+      "url": "https://github.com/jakubkrehel/skills",
+      "type": "skill",
+      "category": "ui",
+      "focus": "Interface craft: layout, typography, color, accessibility, interface review and teardown (15 skills)",
+      "est_items": 15,
+      "confidence": "high",
+      "list_only": false,
+      "curated": true
+    },
+    {
       "name": "jamditis/claude-skills-journalism",
       "url": "https://github.com/jamditis/claude-skills-journalism",
       "type": "skill",
@@ -2393,6 +2679,17 @@
       "curated": false
     },
     {
+      "name": "kepano/obsidian-skills",
+      "url": "https://github.com/kepano/obsidian-skills",
+      "type": "skill",
+      "category": "general",
+      "focus": "Obsidian CLI, Obsidian Markdown, Bases, JSON Canvas and Defuddle, from Obsidian's CEO (6 skills)",
+      "est_items": 6,
+      "confidence": "high",
+      "list_only": false,
+      "curated": true
+    },
+    {
       "name": "kgelster/awesome-ecom-skills",
       "url": "https://github.com/kgelster/awesome-ecom-skills",
       "type": "skill",
@@ -2569,6 +2866,17 @@
       "curated": false
     },
     {
+      "name": "launchdarkly/ai-tooling",
+      "url": "https://github.com/launchdarkly/ai-tooling",
+      "type": "skill",
+      "category": "devops",
+      "focus": "Official LaunchDarkly: flag create and cleanup, guarded rollouts, experiments, metrics, AI Configs (56 skills, 1 workflows)",
+      "est_items": 57,
+      "confidence": "high",
+      "list_only": false,
+      "curated": false
+    },
+    {
       "name": "LeadMagic/gtm-skills",
       "url": "https://github.com/LeadMagic/gtm-skills",
       "type": "skill",
@@ -2701,6 +3009,17 @@
       "curated": false
     },
     {
+      "name": "livekit/agent-skills",
+      "url": "https://github.com/livekit/agent-skills",
+      "type": "skill",
+      "category": "ai",
+      "focus": "Official LiveKit voice agents: build, test, debug, operate, simulate (7 skills)",
+      "est_items": 7,
+      "confidence": "high",
+      "list_only": false,
+      "curated": false
+    },
+    {
       "name": "LokiCheckout/loki-checkout-ai-skills",
       "url": "https://github.com/LokiCheckout/loki-checkout-ai-skills",
       "type": "skill",
@@ -2784,6 +3103,17 @@
       "category": "ui",
       "focus": "Agent skills for building playable, polished Three.js browser games... (9 skills)",
       "est_items": 9,
+      "confidence": "high",
+      "list_only": false,
+      "curated": false
+    },
+    {
+      "name": "makenotion/claude-code-notion-plugin",
+      "url": "https://github.com/makenotion/claude-code-notion-plugin",
+      "type": "skill",
+      "category": "general",
+      "focus": "Official Notion plugin: knowledge capture, meeting notes, research docs, spec-to-implementation, page, database and task commands (12 skills, 10 workflows)",
+      "est_items": 22,
       "confidence": "high",
       "list_only": false,
       "curated": false
@@ -2930,6 +3260,17 @@
       "confidence": "high",
       "list_only": false,
       "curated": true
+    },
+    {
+      "name": "microsoft/power-platform-skills",
+      "url": "https://github.com/microsoft/power-platform-skills",
+      "type": "skill",
+      "category": "backend",
+      "focus": "Official Power Platform: canvas, code and model-driven apps, Power Pages, Dataverse, Power Automate flows, connectors; most items expect the plugin's own files (129 skills, 29 workflows)",
+      "est_items": 158,
+      "confidence": "med",
+      "list_only": false,
+      "curated": false
     },
     {
       "name": "microsoft/skills",
@@ -3405,6 +3746,17 @@
       "curated": false
     },
     {
+      "name": "openai/plugins",
+      "url": "https://github.com/openai/plugins",
+      "type": "skill",
+      "category": "meta",
+      "focus": "Official OpenAI Codex plugin marketplace: vendor plugins (Adobe, Airtable, Canva, Figma, Linear, Stripe, Supabase, Vercel, Zoom) plus life-science and data-analysis packs (535 skills, 51 workflows)",
+      "est_items": 586,
+      "confidence": "high",
+      "list_only": false,
+      "curated": false
+    },
+    {
       "name": "openai/skills",
       "url": "https://github.com/openai/skills",
       "type": "skill",
@@ -3713,6 +4065,17 @@
       "curated": false
     },
     {
+      "name": "PostHog/skills",
+      "url": "https://github.com/PostHog/skills",
+      "type": "skill",
+      "category": "data",
+      "focus": "Official PostHog: product signals, integrations, feature flags and experiments, error tracking, logs, session replay, warehouse (276 skills)",
+      "est_items": 276,
+      "confidence": "high",
+      "list_only": false,
+      "curated": false
+    },
+    {
       "name": "pproenca/dot-skills",
       "url": "https://github.com/pproenca/dot-skills",
       "type": "skill",
@@ -3922,6 +4285,17 @@
       "curated": false
     },
     {
+      "name": "remotion-dev/skills",
+      "url": "https://github.com/remotion-dev/skills",
+      "type": "skill",
+      "category": "ui",
+      "focus": "Official Remotion (video in React): create, render, captions, studio, maps, multimedia, upgrades (13 skills)",
+      "est_items": 13,
+      "confidence": "high",
+      "list_only": false,
+      "curated": false
+    },
+    {
       "name": "render-oss/skills",
       "url": "https://github.com/render-oss/skills",
       "type": "skill",
@@ -4006,6 +4380,17 @@
       "focus": "Claude Code skills for Apple platform development (iOS, macOS, iPadOS)... (183 skills)",
       "est_items": 183,
       "confidence": "high",
+      "list_only": false,
+      "curated": false
+    },
+    {
+      "name": "rsmdt/the-startup",
+      "url": "https://github.com/rsmdt/the-startup",
+      "type": "skill",
+      "category": "workflow",
+      "focus": "The Agentic Startup: specify, plan, build and review workflow with role skills and agents for Claude Code (34 skills, 16 workflows)",
+      "est_items": 50,
+      "confidence": "med",
       "list_only": false,
       "curated": false
     },
@@ -4104,6 +4489,17 @@
       "category": "general",
       "focus": "Multi-modal Generative Media Skills for AI Agents (Claude Code... (73 skills)",
       "est_items": 73,
+      "confidence": "high",
+      "list_only": false,
+      "curated": false
+    },
+    {
+      "name": "sanity-io/agent-toolkit",
+      "url": "https://github.com/sanity-io/agent-toolkit",
+      "type": "skill",
+      "category": "backend",
+      "focus": "Official Sanity CMS: content modeling, Portable Text, schema deploys, migrations, Studio upgrades, typegen (10 skills, 4 workflows)",
+      "est_items": 14,
       "confidence": "high",
       "list_only": false,
       "curated": false
@@ -4417,6 +4813,17 @@
       "curated": false
     },
     {
+      "name": "sveltejs/ai-tools",
+      "url": "https://github.com/sveltejs/ai-tools",
+      "type": "skill",
+      "category": "ui",
+      "focus": "Official Svelte: Svelte 5 code writer, core best practices, Svelte MCP tools (5 skills, 1 rules, 1 workflows)",
+      "est_items": 7,
+      "confidence": "high",
+      "list_only": false,
+      "curated": false
+    },
+    {
       "name": "swyxio/skills",
       "url": "https://github.com/swyxio/skills",
       "type": "skill",
@@ -4472,6 +4879,17 @@
       "curated": false
     },
     {
+      "name": "tavily-ai/skills",
+      "url": "https://github.com/tavily-ai/skills",
+      "type": "skill",
+      "category": "ai",
+      "focus": "Official Tavily: web search, research, entity lookup, monitoring, SDK, plus an always-on Tavily routing rule (6 skills, 1 rules)",
+      "est_items": 7,
+      "confidence": "high",
+      "list_only": false,
+      "curated": false
+    },
+    {
       "name": "tech-leads-club/agent-skills",
       "url": "https://github.com/tech-leads-club/agent-skills",
       "type": "skill",
@@ -4490,6 +4908,17 @@
       "focus": "Official Temporal: workflows, activities, workers, determinism and versioning",
       "est_items": 1,
       "confidence": "high",
+      "list_only": false,
+      "curated": false
+    },
+    {
+      "name": "TheBushidoCollective/han",
+      "url": "https://github.com/TheBushidoCollective/han",
+      "type": "skill",
+      "category": "general",
+      "focus": "Han marketplace: discipline, framework, language and tool plugins (Angular, Django, Ecto, Ansible, BDD, SRE) with role agents (434 skills, 79 workflows)",
+      "est_items": 513,
+      "confidence": "med",
       "list_only": false,
       "curated": false
     },
@@ -4522,6 +4951,17 @@
       "category": "ui",
       "focus": "Codex-first Agent Skills library for premium frontend, website... (70 skills, 1 rules)",
       "est_items": 71,
+      "confidence": "high",
+      "list_only": false,
+      "curated": false
+    },
+    {
+      "name": "TheQtCompanyRnD/agent-skills",
+      "url": "https://github.com/TheQtCompanyRnD/agent-skills",
+      "type": "skill",
+      "category": "ui",
+      "focus": "Official Qt: QML and C++ review, docs, QML tests and profiling, CMake projects, Figma-to-Qt (13 skills, 2 workflows)",
+      "est_items": 15,
       "confidence": "high",
       "list_only": false,
       "curated": false
@@ -4923,6 +5363,17 @@
       "curated": false
     },
     {
+      "name": "WordPress/agent-skills",
+      "url": "https://github.com/WordPress/agent-skills",
+      "type": "skill",
+      "category": "web-dev",
+      "focus": "Official WordPress: blocks, block themes, Interactivity and Abilities APIs, plugins, REST API, wp-env, Playground, PHPStan (20 skills)",
+      "est_items": 20,
+      "confidence": "high",
+      "list_only": false,
+      "curated": false
+    },
+    {
       "name": "workos/skills",
       "url": "https://github.com/workos/skills",
       "type": "skill",
@@ -5073,6 +5524,17 @@
       "focus": "100+ production-ready domain-specialist development subagents",
       "est_items": 100,
       "confidence": "high",
+      "list_only": false,
+      "curated": false
+    },
+    {
+      "name": "0xSteph/pentest-ai-agents",
+      "url": "https://github.com/0xSteph/pentest-ai-agents",
+      "type": "workflow",
+      "category": "security",
+      "focus": "Subagents for authorized penetration testing: recon, exploit chaining, AD and cloud attacks, detection engineering, reports (56 workflows)",
+      "est_items": 56,
+      "confidence": "med",
       "list_only": false,
       "curated": false
     },
@@ -5281,6 +5743,17 @@
       "category": "agents",
       "focus": "75 production-ready domain-specialist subagents",
       "est_items": 75,
+      "confidence": "med",
+      "list_only": false,
+      "curated": false
+    },
+    {
+      "name": "CloudAI-X/claude-workflow-v2",
+      "url": "https://github.com/CloudAI-X/claude-workflow-v2",
+      "type": "workflow",
+      "category": "general",
+      "focus": "Claude Code workflow plugin: plan, review, commit, refactor, test and security-scan commands with role agents (14 skills, 33 workflows)",
+      "est_items": 47,
       "confidence": "med",
       "list_only": false,
       "curated": false
@@ -5627,6 +6100,28 @@
       "curated": false
     },
     {
+      "name": "Imbad0202/academic-research-skills",
+      "url": "https://github.com/Imbad0202/academic-research-skills",
+      "type": "workflow",
+      "category": "general",
+      "focus": "Academic research pipeline: deep research, paper writing, peer review, citation checks, systematic-review screening (5 skills, 21 workflows)",
+      "est_items": 26,
+      "confidence": "high",
+      "list_only": false,
+      "curated": true
+    },
+    {
+      "name": "jaktestowac/awesome-copilot-for-testers",
+      "url": "https://github.com/jaktestowac/awesome-copilot-for-testers",
+      "type": "workflow",
+      "category": "devops",
+      "focus": "Copilot agents, prompts and skills for test automation: exploratory testing, page objects, API contract tests, quality metrics (52 skills, 82 workflows)",
+      "est_items": 134,
+      "confidence": "low",
+      "list_only": false,
+      "curated": false
+    },
+    {
       "name": "jeremylongshore/tons-of-skills-marketplace",
       "url": "https://github.com/jeremylongshore/tons-of-skills-marketplace",
       "type": "workflow",
@@ -5704,12 +6199,34 @@
       "curated": false
     },
     {
+      "name": "microsoft/hve-core",
+      "url": "https://github.com/microsoft/hve-core",
+      "type": "workflow",
+      "category": "general",
+      "focus": "Microsoft Hypervelocity Engineering for Copilot: PRD, BRD and ADR builders, backlog grooming, code-review, security and accessibility agents (93 skills, 170 workflows)",
+      "est_items": 263,
+      "confidence": "high",
+      "list_only": false,
+      "curated": false
+    },
+    {
       "name": "nth5693/gemini-kit",
       "url": "https://github.com/nth5693/gemini-kit",
       "type": "workflow",
       "category": "general",
       "focus": "19 AI Agents + 44 Commands for Gemini CLI - Code 10x faster with auto... (15 skills, 58 workflows)",
       "est_items": 73,
+      "confidence": "high",
+      "list_only": false,
+      "curated": false
+    },
+    {
+      "name": "paypal/AI-Toolkit",
+      "url": "https://github.com/paypal/AI-Toolkit",
+      "type": "workflow",
+      "category": "backend",
+      "focus": "Official PayPal: integration best practices, routing, sandbox and test accounts, error explanations (2 skills, 5 workflows)",
+      "est_items": 7,
       "confidence": "high",
       "list_only": false,
       "curated": false
@@ -5823,6 +6340,17 @@
       "confidence": "med",
       "list_only": true,
       "curated": false
+    },
+    {
+      "name": "SuperClaude-Org/SuperClaude_Framework",
+      "url": "https://github.com/SuperClaude-Org/SuperClaude_Framework",
+      "type": "workflow",
+      "category": "commands",
+      "focus": "SuperClaude: /sc commands (brainstorm, build, troubleshoot, spec-panel, research) plus persona agents (6 skills, 65 workflows)",
+      "est_items": 71,
+      "confidence": "high",
+      "list_only": false,
+      "curated": true
     },
     {
       "name": "syahiidkamil/Software-Engineer-AI-Agent-Atlas",
