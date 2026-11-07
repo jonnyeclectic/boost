@@ -622,7 +622,7 @@ def test_dry_run_local_plans_the_mcp_json_record(boost, fixture_tap_src,
 # ── the last uninstall leaves no trace ──────────────────────────────────
 
 def _tree(repo):
-    return sorted(str(p.relative_to(repo)) for p in repo.rglob("*")
+    return sorted(p.relative_to(repo).as_posix() for p in repo.rglob("*")
                   if ".git" not in p.relative_to(repo).parts)
 
 
