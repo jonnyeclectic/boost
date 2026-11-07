@@ -1984,6 +1984,63 @@ def _tool_read(args: dict):
                           held=mcp.held_line(name, lock)), False
 
 
+def _server_cwd() -> str:
+    """This server's working directory for a reply, or why there is none."""
+    try:
+        return _tilde(Path.cwd())
+    except OSError:
+        return "a working directory that no longer exists"
+
+
+def _install_scope(args: dict) -> tuple[str, Path | None]:
+    """``boost_install``'s ``scope`` and, for ``"project"``, the repository.
+
+    Project scope resolves from this server's working directory, the walk
+    ``boost install --local`` makes (:func:`scopes.project_base`), with one
+    difference on purpose: the CLI accepts a directory with no version control
+    marker and warns, while this refuses it and names the directory. A user at
+    a terminal sees that warning before anything is written; an agent cannot
+    see where its host started this server, so a guessed directory would
+    become a project nobody chose.
+    """
+    scope = scopes.check_scope(mcp.str_arg(args, "scope") or scopes.SCOPE_USER)
+    if scope == scopes.SCOPE_USER:
+        return scope, None
+    base, how = scopes.project_base()
+    if base is None or how != scopes.BASE_VCS:
+        raise BoostError(
+            "no repository to install into: this server is running in %s, "
+            "which is not inside a git, hg or svn checkout" % _server_cwd(),
+            hint='pass scope "user" to install for the user, or start the '
+                 'agent from inside the repository')
+    why = scopes.managed_by_boost(base)
+    if why is not None:
+        raise BoostError("cannot install into this repository: " + why,
+                         hint='pass scope "user" to install for the user')
+    return scope, base
+
+
+def _scope_lines(scope: str, base: Path | None, names: list[str]) -> list[str]:
+    """Where the install landed, said once, so the agent can tell the user.
+
+    An install of a skill the other scope already holds gets a note: search
+    and info call a name installed in either scope, and the install that
+    followed used to add a second copy beside the first without a word.
+    """
+    if base is not None:
+        return ["scope: project (%s) — real files in this repository, "
+                "recorded in .boost/skill-lock.json; commit .boost/ and the "
+                "agent directories to share them with the team" % _tilde(base),
+                *("note: %s is also installed for the user; this added a "
+                  "project copy beside it" % n
+                  for n in names if lockfile.get_skill(n))]
+    pbase, project = integrity.project_skills()
+    return ["scope: user — every project on this machine",
+            *("note: %s is also installed in this project (%s); this added "
+              "a user-scope copy beside it" % (n, _tilde(pbase))
+              for n in names if n in project)]
+
+
 @_path_hint
 def _tool_install(args: dict):
     """`boost_install` — the same plan `boost install` makes, in text.
@@ -1993,22 +2050,27 @@ def _tool_install(args: dict):
     from another tap, while this path installed the one item silently. That is
     the wrong way round — here an agent chose the item with nobody watching —
     so both now take their plan and their words from ``core.installplan``.
+
+    ``scope`` is the CLI's ``--local``. It had no MCP spelling, so a
+    ``{"scope": "project"}`` call was dropped and the skill landed in the
+    user's store while the repository the agent was working in got nothing.
     """
     name = mcp.str_arg(args, "name") or ""
     if not name.strip():
         return mcp.needs_name("boost_install"), True
+    scope, base = _install_scope(args)
     entry = catalog.resolve_one(name, path=mcp.str_arg(args, "path"))
     # The requested item's own refusal ("already installed", "is pinned")
     # first, so a refused call changes nothing — not its dependencies either.
-    store.check_existing(entry)
-    the_plan = installplan.plan([entry])
+    store.check_existing(entry, scope=scope, base=base)
+    the_plan = installplan.plan([entry], pbase=base)
     entries = the_plan.entries
     warnings = [*the_plan.confusions, *the_plan.dep_warnings]
     lines: list[str] = [the_plan.added] if the_plan.added else []
     done: list[dict] = []
     for e in entries:
         try:
-            res = store.install(e)
+            res = store.install(e, scope=scope, base=base)
         except BoostError as err:
             if e is entry:
                 raise
@@ -2021,7 +2083,9 @@ def _tool_install(args: dict):
             continue
         lines.extend(_install_lines(res, e))
         done.append(e)
-    prereq_warn, prereq_hint = installplan.prerequisite_lines(done)
+    lines.extend(_scope_lines(scope, base, [str(e["name"]) for e in done]))
+    prereq_warn, prereq_hint = installplan.prerequisite_lines(done,
+                                                              pbase=base)
     warnings.extend(prereq_warn)
     if prereq_hint:
         warnings.append(prereq_hint)
@@ -2033,9 +2097,14 @@ def _tool_install(args: dict):
 
 def _install_lines(res: store.InstallResult, entry: dict) -> list[str]:
     """One installed item's reply lines, scan warning included."""
+    # A project install copies rather than links — "linked agents" there
+    # described a symlink that does not exist.
     lines = ["installed %s v%s from %s → %s"
              % (res.name, entry.get("version", "?"), entry["tap"], res.dest),
-             "linked agents: %s" % (", ".join(res.linked) or "none")]
+             "%s: %s" % ("copied into this repository for"
+                         if res.scope == scopes.SCOPE_PROJECT
+                         and res.kind == "skill" else "linked agents",
+                         ", ".join(res.linked) or "none")]
     # Without this an agent that reads the canonical store — Gemini CLI — sees
     # only "linked agents: claude-code, windsurf, cursor, antigravity",
     # concludes the skill did not reach *it*, and goes back to reconstructing
@@ -2431,6 +2500,17 @@ _PATH_PROP = {"type": "string",
               "enough)"}
 
 
+# The CLI's `--local`, in this surface's grammar. "project" resolves from the
+# server's working directory and is refused outside a checkout
+# (`_install_scope`), because an agent cannot see where its host started it.
+_SCOPE_PROP = {"type": "string", "enum": list(scopes.SCOPES),
+               "description": "\"user\" (default): installed for the user, "
+               "in every agent they have enabled on this machine. "
+               "\"project\": real files in the repository this server runs "
+               "in, recorded in its .boost/skill-lock.json for the team to "
+               "commit; refused outside a git, hg or svn checkout"}
+
+
 REGISTRY.register(
     "boost_search",
     # A lambda rather than the function itself so `ai.available` is looked up
@@ -2540,14 +2620,19 @@ REGISTRY.register(
     "agent's standing instructions (a managed block in its context file, or a "
     "file in its rules directory), which is the more invasive change because "
     "it applies to every session afterwards, not just when you reach for it. "
-    "Check the marker on the hit you are installing.",
+    "Check the marker on the hit you are installing. By default it installs "
+    "for the user, on this machine; pass scope \"project\" to write real "
+    "files into the repository this server runs in instead, for every agent "
+    "that works there and for the team to commit — the reply names where it "
+    "landed.",
     {"type": "object",
      "properties": {"name": {"type": "string",
                              "description": "the name exactly as boost_search "
                              "or boost_list returned it; qualify with the tap "
                              "(\"owner/repo:name\") when the same name exists "
                              "in more than one"},
-                    "path": _PATH_PROP},
+                    "path": _PATH_PROP,
+                    "scope": _SCOPE_PROP},
      "required": ["name"]},
     _tool_install)
 REGISTRY.register(

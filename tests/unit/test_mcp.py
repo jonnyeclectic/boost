@@ -253,6 +253,7 @@ class TestHandleRequest:
         low = mcp.instructions(ai_available=True).lower()
         assert "for the user, in every agent they have enabled" in low
         assert "`boost install <name> --local`" in low
+        assert 'with scope "project" it writes it into this repository' in low
         assert "say in your reply which you chose and where it landed" in low
 
     def test_the_flow_draws_the_consent_line(self):

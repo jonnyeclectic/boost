@@ -302,9 +302,10 @@ _INSTRUCTIONS_TAIL = (
     "turn: whether this session's host picks up a file installed after it "
     "started depends on the host, so work from what you read. boost_install "
     "installs a skill for the user, in every agent they have enabled on this "
-    "machine (`boost install <name> --local` in a shell writes it into this "
-    "repository instead); say in your reply which you chose and where it "
-    "landed. Ask the user before installing a rule, which becomes standing "
+    "machine; with scope \"project\" it writes it into this repository "
+    "instead, as `boost install <name> --local` does in a shell. Say in your "
+    "reply which you chose and where it landed. Ask the user before "
+    "installing a rule, which becomes standing "
     "text in their context files for every session after this one, and "
     "before registering boost with an agent (`boost mcp register`), which "
     "changes their whole machine. " + SKIP_IT

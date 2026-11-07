@@ -1760,8 +1760,10 @@ class TestMcp:
         # hand, which is the one failure this tool exists to prevent.
         assert "linked agents: claude-code, windsurf, cursor" in text(8)
         assert "available without linking" in text(8)
-        assert text(8).rstrip().endswith(
-            "directly): gemini, codex\nquality score: 95/100")
+        assert ("directly): gemini, codex\nquality score: 95/100\n"
+                in text(8))
+        # ...and then where it landed, so the agent can tell the user.
+        assert "\nscope: user — every project on this machine" in text(8)
         assert "quality score:" in text(8)
         assert "brainstorming v1.4.0 (fixture-tap)" in text(9)
         assert "installed: yes" in text(10)
