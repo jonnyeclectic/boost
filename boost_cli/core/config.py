@@ -270,13 +270,47 @@ def load_registry_catalog() -> list:
     return list(rows)
 
 
+def registry_rows_by_name() -> dict[str, dict]:
+    """Each bundled registry row under its name and under every name it had.
+
+    A tap is named from its URL, so a machine that tapped a row before the
+    repository was renamed upstream holds it under the row's ``formerly``
+    name. Every lookup keyed by the current name alone missed that tap: the
+    category of `leogallego/claude-ansible-skills` read as none where it had
+    been `infra`. Ask here, by tap name, instead of keying the rows yourself.
+
+    Only a GitHub ``owner/repo`` former name aliases — the name such a tap
+    derives — so a local tap, named after its directory, never becomes a
+    catalogued row. A former name never shadows another row's current name:
+    that row is the repository the name points at now. Malformed rows are
+    skipped, so a damaged data file reads as fewer rows, not a crash.
+    """
+    out: dict[str, dict] = {}
+    moved: list[dict] = []
+    for row in load_registry_catalog():
+        if isinstance(row, dict) and row.get("name"):
+            out[str(row["name"])] = row
+            if row.get("formerly"):
+                moved.append(row)
+    # After every current name is in, so `setdefault` cannot let a former
+    # name take one, whichever order the rows come in.
+    for row in moved:
+        for old in row["formerly"]:
+            if str(old).count("/") == 1:
+                out.setdefault(str(old), row)
+    return out
+
+
 def registry_categories() -> dict:
     """tap name ('owner/repo') -> curated category, from the bundled registry
     catalog (`data/registries.json`) — the only place a *tap-level* category
     lives. A catalog entry's own stamped category (`catalog._entry_category`)
-    falls back to this when the item declares none of its own."""
-    return {e["name"]: e["category"] for e in load_registry_catalog()
-            if e.get("category")}
+    falls back to this when the item declares none of its own. A tap held
+    under a row's former name has the row's category
+    (:func:`registry_rows_by_name`)."""
+    return {name: row["category"]
+            for name, row in registry_rows_by_name().items()
+            if row.get("category")}
 
 
 def self_installing_command(tap: str, url: str = "") -> str | None:
@@ -294,14 +328,14 @@ def self_installing_command(tap: str, url: str = "") -> str | None:
     tap's configured ``url`` naming that GitHub repository. Matching the bare
     tail refused every tap whose directory happened to be called ``gstack`` —
     the user's own local repo included — and told them to clone garrytan's.
+    A row's former names (:func:`registry_rows_by_name`) are its identity too.
     """
     if not tap:
         return None
-    for row in load_registry_catalog():
+    for name, row in registry_rows_by_name().items():
         cmd = row.get("self_installing")
         if not cmd:
             continue
-        name = row.get("name") or ""
         if tap == name:
             return cmd
         if url:

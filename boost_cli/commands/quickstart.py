@@ -104,7 +104,9 @@ def _tap_defaults(selection: list[dict], pins: dict[str, dict],
     for res in results:
         name = res["name"]
         if res.get("skipped"):
-            out.info(out.role("%s already tapped" % name, "muted"))
+            out.info(out.role(registry.already_tapped(
+                name, res.get("tapped_as", name),
+                renamed=bool(res.get("renamed"))), "muted"))
             outcome.already.append(name)
             continue
         if not res.get("ok"):

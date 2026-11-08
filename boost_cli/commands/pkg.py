@@ -3104,6 +3104,10 @@ def _bundle_install(file: str | None, dry_run: bool = False) -> int:
     # Taps whose Boostfile URL names another repository than the one
     # configured under that name; skill lines qualified with one are refused.
     conflicted: set[str] = set()
+    # name_key of the name a tap line taps -> the configured tap holding that
+    # repository under another name (renamed upstream, or another case), for
+    # skill lines.
+    held_as: dict[str, str] = {}
     # name -> (kind, lock entry) across every lock section, so a `skill` line
     # naming an already-installed rule/workflow is counted present, not
     # re-installed — and so its tap and version can be held to the line.
@@ -3139,6 +3143,26 @@ def _bundle_install(file: str | None, dry_run: bool = False) -> int:
                     conflicted.add(tname)
                     failed += 1
                 elif verdict == "drift":
+                    drifted += 1
+                continue
+            # Held under another spelling of the name this line taps: the
+            # repository's other name (a row renamed upstream), the name in
+            # another case, or a URL whose name is not this line's NAME.
+            # `registry.add` refuses to clone it twice, and that refusal
+            # failed the line. Asked of the plan `boost tap` reads, and before
+            # the dry-run branch, so a preview agrees.
+            [plan] = registry.plan_specs([turl or tname])
+            held = plan.get("tapped_as")
+            if held:
+                # Under the name the real run taps — the URL's, not NAME (see
+                # the dry-run branch) — so a skill line resolves here exactly
+                # when it would on a machine that clones it. Case-blind, as
+                # `catalog.find`'s own tap filter is.
+                held_as[registry.name_key(plan["name"])] = held
+                out.info(out.role(registry.already_tapped(
+                    tname, held, renamed=bool(plan.get("renamed"))), "muted"))
+                # One repository, so only the --at half of `_held_tap` applies.
+                if _held_tap(held, "", tat, where) == "drift":
                     drifted += 1
                 continue
             at_label = " @ %s" % tat[:7] if tat else ""
@@ -3188,6 +3212,10 @@ def _bundle_install(file: str | None, dry_run: bool = False) -> int:
                 failed += 1
                 continue
             tapq, sname, sver, local = spec.tap, spec.name, spec.version, spec.local
+            # A tap line above found it under another name: that is the tap
+            # the catalogue and the lock know it by.
+            if tapq:
+                tapq = held_as.get(registry.name_key(tapq), tapq)
             if local and pbase is None:
                 out.warn("%s: %s is a project-scope skill and there is no "
                          "project directory here — skipped" % (where, sname))

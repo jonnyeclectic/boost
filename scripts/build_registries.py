@@ -41,10 +41,10 @@ LIST_ONLY = {
     "JayZeeDesign/awesome-claude-skills", "VoltAgent/awesome-agent-skills",
     "VoltAgent/awesome-openclaw-skills", "majiayu000/claude-skill-registry",
     "gmh5225/awesome-skills", "heilcheng/awesome-agent-skills",
-    "sickn33/antigravity-awesome-skills", "yusufkaraaslan/Skill_Seekers",
+    "sickn33/agentic-awesome-skills", "yusufkaraaslan/Skill_Seekers",
     "hesreallyhim/awesome-claude-code", "hesreallyhim/a-list-of-claude-code-agents",
     "subinium/awesome-claude-code", "jqueryscript/awesome-claude-code",
-    "rahulvrane/awesome-claude-agents", "ichoosetoaccept/awesome-windsurf",
+    "rahulvrane/awesome-claude-agents", "detailobsessed/awesome-devin",
     "hao-ji-xing/awesome-cursor", "johnlindquist/get-rules",
     "langgptai/awesome-claude-prompts",
     # READMEs of links: measure_registry.py finds 0 items in either (2026-10-16)
@@ -73,6 +73,20 @@ RETIRED = {
     "GDvega/super-android-kotlin-firebase-skill": "404 on 2026-10-16",
     "klovaaxel/web-a11y-agent-skills": "404 on 2026-10-16",
     "besoeasy/open-skills": "404 on 2026-10-16",
+}
+
+# Rows moved to the name GitHub now redirects to, and the names they had. A
+# machine that tapped a row under its old name holds the same repository, and
+# `boost tap --catalog` deduped by name, so it cloned that repository a second
+# time. Shipped as `formerly` on the row; `core.registry` reads it to treat a
+# tap of a former name as this row. Only renames made after boost shipped a
+# row belong here, and a former name must never be a row of its own.
+FORMERLY = {
+    "sickn33/agentic-awesome-skills": ("sickn33/antigravity-awesome-skills",),
+    "detailobsessed/awesome-devin": ("ichoosetoaccept/awesome-windsurf",),
+    "cheaper-inference/OmniRoute": ("diegosouzapw/OmniRoute",),
+    "leogallego/ai-skills-ansible": ("leogallego/claude-ansible-skills",),
+    "fmind/mlops-coding-skills": ("MLOps-Courses/mlops-coding-skills",),
 }
 
 # Repos that ship their own installer and cannot be installed by copying
@@ -130,6 +144,14 @@ CURATED = frozenset({
     "composio-community/awesome-codex-skills",
     "Orchestra-Research/AI-Research-SKILLs", "jeffallan/claude-skills",
     "zubair-trabzada/geo-seo-claude",
+    # 2026-11 sweep, stars measured 2026-11-07. Not googleworkspace/cli: its
+    # 32k stars belong to the `gws` binary, not the skills. Not
+    # Imbad0202/academic-research-skills (55k): 13 of its 26 items are /ars-*
+    # commands that stop when ${CLAUDE_PLUGIN_ROOT} does not resolve, and a
+    # command boost installs is a loose file, so it never does.
+    "emilkowalski/skills",
+    "kepano/obsidian-skills", "SuperClaude-Org/SuperClaude_Framework",
+    "cursor/plugins", "jakubkrehel/skills", "android/skills",
 })
 
 # --- skills (SKILL.md registries) -------------------------------------------
@@ -148,7 +170,7 @@ SKILLS = [
     ("heilcheng/awesome-agent-skills", "meta", "Tutorials, guides, and agent skills directories", 40, "med"),
     ("abubakarsiddik31/claude-skills-collection", "general", "Curated collection of official and community-built Claude skills", 40, "med"),
     ("obviousworks/Claude-AI-skills-collection-2026", "general", "Curated collection of official and community Claude skills", 30, "low"),
-    ("sickn33/antigravity-awesome-skills", "meta", "Aggregated 1300+ agent skills for Antigravity/Claude Code", 1300, "low"),
+    ("sickn33/agentic-awesome-skills", "meta", "Aggregated agent skills for Claude Code, Codex, Cursor and Gemini CLI, some adapted from upstream repos; formerly sickn33/antigravity-awesome-skills (2947 skills)", 2947, "low"),
     ("alirezarezvani/claude-skills", "general", "362 skills across 18 domains (engineering, marketing, C-level, compliance)", 313, "high"),
     ("jeffallan/claude-skills", "web-dev", "66 full-stack developer skills across 12 categories", 66, "high"),
     ("oaustegard/claude-skills", "general", "Personal collection of Claude skills (codebases, data, media, GitHub)", 50, "high"),
@@ -229,7 +251,7 @@ SKILLS = [
     ("doggy8088/litellm-skills", "ai", "LiteLLM Agent Skills SDK Proxy GatewayRoutingCost... (7 skills)", 7, "med"),
     ("langchain-ai/deepagentsjs", "ai", "The batteries included agent harness (7 skills)", 7, "high"),
     ("lhbsaa/embedded-dev-skill", "ai", "Embedded Development Skill for Pi Coding Agent & OpenCode - ESP32... (7 skills)", 7, "low"),
-    ("MLOps-Courses/mlops-coding-skills", "ai", "Agent skills based on the MLOps Coding Course (7 skills)", 7, "med"),
+    ("fmind/mlops-coding-skills", "ai", "Agent skills based on the MLOps Coding Course (7 skills)", 7, "med"),
     ("redis/agent-filesystem", "ai", "7 skills", 7, "high"),
     ("replicate/skills", "ai", "A collection of Agent Skills for building AI-powered apps with Replicate (7 skills)", 7, "high"),
     ("cohere-ai/vllm-skills", "ai", "5 skills, 1 rules", 6, "high"),
@@ -383,7 +405,7 @@ SKILLS = [
     ("NotHarshhaa/devops-skills", "infra", "A collection of reusable DevOps Agent Skills for incident response... (10 skills)", 10, "low"),
     ("thomast1906/github-copilot-skills-terraform", "infra", "Template repository providing specialized GitHub Copilot agents and... (5 skills, 5 workflows)", 10, "med"),
     ("fluxcd/agent-skills", "infra", "Skills to transform AI Agents into GitOps Engineers (6 skills, 2 workflows)", 8, "high"),
-    ("leogallego/claude-ansible-skills", "infra", "A collection of Claude Code skills for Ansible automation development... (7 skills)", 7, "med"),
+    ("leogallego/ai-skills-ansible", "infra", "A collection of AI skills for Ansible automation development... (8 skills)", 8, "med"),
     ("sysdig/skills", "infra", "Sysdig agentic AI skills and plugins (7 skills)", 7, "high"),
     ("ahmedasmar/devops-claude-skills", "infra", "A Claude Code Skills Marketplace for DevOps workflows (6 skills)", 6, "high"),
     ("antoniodiaz02/opencode-devops-skills", "infra", "DevOps Skills Collection for Claude Code and OpenCode - Terraform... (6 skills)", 6, "low"),
@@ -453,7 +475,7 @@ SKILLS = [
     ("luongnv89/claude-howto", "general", "A visual, example-driven guide to Claude Code - from basic concepts to... (31 skills, 20 workflows)", 51, "high"),
     ("swyxio/skills", "general", "Agent skills for Claude Code and other AI agents (46 skills)", 46, "high"),
     ("AgriciDaniel/claude-seo", "marketing", "Technical and content SEO: audits, backlinks, schema, clustering, local, international and ecommerce", 51, "high"),
-    ("diegosouzapw/OmniRoute", "ai", "Never stop coding. Free MIT AI gateway: one endpoint, 290+ providers... (45 skills)", 45, "high"),
+    ("cheaper-inference/OmniRoute", "ai", "Free MIT AI gateway: one endpoint over many model providers, plus CLI, routing and eval skills (53 skills, 1 workflows)", 54, "high"),
     ("intellectronica/agent-skills", "general", "@intellectronica's agent skills (44 skills)", 44, "high"),
     ("davidondrej/skills", "general", "access to david ondrej's personal agent skills (42 skills)", 42, "high"),
     ("xuzhougeng/wisp-science", "general", "Open-source, local-first desktop AI research workbench for scientific... (42 skills)", 42, "high"),
@@ -635,6 +657,71 @@ SKILLS = [
     ("context-labs/whip", "backend", "Go engineering skills: concurrency, gRPC, databases, error handling, testing, project layout (49 skills)", 49, "high"),
     ("expo/skills", "general", "Expo and EAS skills for React Native apps: router, native UI, builds, updates, app stores (26 skills)", 26, "high"),
     ("latent-spaces/brag", "marketing", "Turn a project you just built into a short shareable launch post (2 skills)", 2, "med"),
+
+# --- 2026-11 sweep: official vendor repos and the most-starred packs ----------
+# Every repo passed GET /repos on 2026-11-07 (not archived, not a fork, name
+# matches) and was pushed after 2026-05-01. Counts are
+# `scripts/measure_registry.py` against a sparse clone taken with
+# gitutil.clone_shallow; categories come from item names. Firecrawl, Tavily,
+# Browserbase and Apify share `ai` with the other API packs agents call
+# (qdrant, elastic, replicate, together): they are how an agent searches,
+# reads and drives the web, not analytics engines (`data`).
+# Left out on purpose, all re-checked on 2026-11-07:
+# convex/agent-skills (get-convex/agent-skills under its new owner, still
+# generated stubs) and its command twin convex/convex-agent-plugins, both of
+# which pipe a script from a *.convex.site deployment into bash;
+# JimLiu/baoyu-skills (fills X, Weibo and WeChat posts in the user's own
+# Chrome over CDP, "which avoids anti-bot detection" per its Weibo skill, and
+# two items call
+# reverse-engineered Gemini and X APIs); and six repos whose items do not run
+# once copied out
+# of their own installer: github/spec-kit (its core commands carry `{SCRIPT}`
+# placeholders that `specify init` fills), gotalab/cc-sdd (253 of 282 item
+# files carry `{{KIRO_DIR}}` for `npx cc-sdd` to fill), openai/codex-plugin-cc
+# (10 of 12 items read ${CLAUDE_PLUGIN_ROOT}, mostly to run its .mjs scripts),
+# google/elephant-goldfish-model (every skill opens by reading
+# ${CLAUDE_PLUGIN_ROOT}/docs/claude.md), gmickel/flow-next (67 of 117 items
+# call the plugin's `flowctl`) and microsoft/power-platform-skills (111 of 162
+# item files at 9d26fde0 name the plugin root, 107 of them as ${PLUGIN_ROOT}).
+# BMAD-METHOD installs through `boost bmad install`; msitarzewski/agency-agents waits for the scanner to see
+# its persona files (17 of ~310 indexed today).
+    ("openai/plugins", "meta", "Official OpenAI Codex plugin marketplace: vendor plugins (Adobe, Airtable, Canva, Figma, Linear, Stripe, Supabase, Vercel, Zoom) plus life-science and data-analysis packs (535 skills, 51 workflows)", 586, "high"),
+    ("cursor/plugins", "meta", "Cursor's official plugins: advisor, pstack, harness and team-kit skills and subagents, plus third-party MCP routing packs (137 skills, 5 rules, 14 workflows)", 156, "high"),
+    ("android/skills", "java", "Official Android: AGP 9 upgrade, Compose migration and performance, CameraX, Media3, ML Kit GenAI, Wear OS, Play Billing (36 skills)", 36, "high"),
+    ("google-gemini/gemini-skills", "ai", "Official Gemini API: API/SDK development, Live API, Gemini CLI, Omni Flash (4 skills)", 4, "high"),
+    ("elevenlabs/skills", "ai", "Official ElevenLabs API: text-to-speech, speech-to-text, voice agents, dubbing, music, sound effects (13 skills)", 13, "high"),
+    ("livekit/agent-skills", "ai", "Official LiveKit voice agents: build, test, debug, operate, simulate (7 skills)", 7, "high"),
+    ("firecrawl/skills", "ai", "Official Firecrawl: scrape, crawl, map, search, parse and interact with pages, plus research and lead-gen recipes (37 skills)", 37, "high"),
+    ("tavily-ai/skills", "ai", "Official Tavily: web search, research, entity lookup, monitoring, SDK, plus an always-on Tavily routing rule (6 skills, 1 rules)", 7, "high"),
+    ("browserbase/skills", "ai", "Official Browserbase: cloud browser automation, browser-to-API, traces, Stagehand, WebMCP; cookie-sync copies local Chrome cookies to a Browserbase context (18 skills)", 18, "high"),
+    ("apify/agent-skills", "ai", "Official Apify: Actor development and actorization, output schemas, integrations, scraping (5 skills, 2 workflows)", 7, "high"),
+    ("figma/mcp-server-guide", "ui", "Official Figma MCP: design-to-code, Code Connect, generate designs, libraries and diagrams, FigJam, motion, SwiftUI (22 skills)", 22, "high"),
+    ("google-labs-code/stitch-skills", "ui", "Official Google Stitch: generate designs, DESIGN.md, design systems, code-to-design, React and shadcn components (16 skills)", 16, "high"),
+    ("remotion-dev/skills", "ui", "Official Remotion (video in React): create, render, captions, studio, maps, multimedia, upgrades (13 skills)", 13, "high"),
+    ("flutter/agent-plugins", "ui", "Official Flutter and Dart: widget and integration tests, responsive layout, routing, localization, static analysis, FFI (31 skills, 1 rules)", 32, "high"),
+    ("TheQtCompanyRnD/agent-skills", "ui", "Official Qt: QML and C++ review, docs, QML tests and profiling, CMake projects, Figma-to-Qt (13 skills, 2 workflows)", 15, "high"),
+    ("sveltejs/ai-tools", "ui", "Official Svelte: Svelte 5 code writer, core best practices, Svelte MCP tools (5 skills, 1 rules, 1 workflows)", 7, "high"),
+    ("emilkowalski/skills", "ui", "Design engineering: animation, motion choreography, Apple-style design, UI library choice and animation review (17 skills)", 17, "high"),
+    ("jakubkrehel/skills", "ui", "Interface craft: layout, typography, color, accessibility, interface review and teardown (15 skills)", 15, "high"),
+    ("WordPress/agent-skills", "web-dev", "Official WordPress: blocks, block themes, Interactivity and Abilities APIs, plugins, REST API, wp-env, Playground, PHPStan (20 skills)", 20, "high"),
+    ("awslabs/agent-plugins", "infra", "AWS Labs: Lambda, Step Functions, API Gateway, serverless deploys, architecture diagrams, SageMaker HyperPod and fine-tuning (34 skills)", 34, "high"),
+    ("dbt-labs/dbt-agent-skills", "data", "Official dbt: unit tests, semantic layer, upgrades and Core-to-v2 migration, dbt MCP, job troubleshooting (17 skills)", 17, "high"),
+    ("PostHog/skills", "data", "Official PostHog: product signals, integrations, feature flags and experiments, error tracking, logs, session replay, warehouse (276 skills)", 276, "high"),
+    ("data-goblin/power-bi-agentic-development", "data", "Power BI and Fabric: DAX, TMDL, PBIP, Power Query, Deneb and SVG visuals, semantic-model review (35 skills, 10 workflows)", 45, "med"),
+    ("launchdarkly/ai-tooling", "devops", "Official LaunchDarkly: flag create and cleanup, guarded rollouts, experiments, metrics, AI Configs (56 skills, 1 workflows)", 57, "high"),
+    ("sanity-io/agent-toolkit", "backend", "Official Sanity CMS: content modeling, Portable Text, schema deploys, migrations, Studio upgrades, typegen (10 skills, 4 workflows)", 14, "high"),
+    ("HexRaysSA/claude-marketplace", "security", "Official Hex-Rays IDA Pro: IDA Domain API scripting, plugin development and packaging, an IDA expert agent (4 skills, 2 workflows)", 6, "high"),
+    ("fal-ai-community/skills", "general", "fal.ai generative media: image, video and audio models, prompting, character and product shots, ad and reel production (36 skills)", 36, "high"),
+    ("EpicGames/unreal-engine-skills-for-claude-code-plugin", "general", "Official Epic Games: Unreal Engine skill, Unreal MCP, toolset creation (3 skills)", 3, "high"),
+    ("googleworkspace/cli", "general", "Official Google Workspace CLI skills: Gmail, Drive, Calendar, Docs, Sheets, Chat, Admin; they drive the gws binary (95 skills, 1 workflows)", 96, "high"),
+    ("kepano/obsidian-skills", "general", "Obsidian CLI, Obsidian Markdown, Bases, JSON Canvas and Defuddle, from Obsidian's CEO (6 skills)", 6, "high"),
+    ("czlonkowski/n8n-skills", "general", "n8n workflows: node configuration, expressions, Code node JS and Python, error handling, n8n MCP tools (15 skills)", 15, "high"),
+    ("gamedev-skills/awesome-gamedev-agent-skills", "general", "Game development: Godot, Unity, Unreal, Roblox, Phaser, Bevy, three.js, game feel, level design, procedural generation (78 skills)", 78, "high"),
+    ("TheBushidoCollective/han", "general", "Han marketplace: discipline, framework, language and tool plugins (Angular, Django, Ecto, Ansible, BDD, SRE) with role agents (434 skills, 79 workflows)", 513, "med"),
+    ("makenotion/claude-code-notion-plugin", "general", "Official Notion plugin: knowledge capture, meeting notes, research docs, spec-to-implementation, page, database and task commands (12 skills, 10 workflows)", 22, "high"),
+    ("canonical/copilot-collections", "general", "Canonical: Go review and style, Ubuntu SRU and freeze reviews, Terraform migration, Temporal tests, docs review (27 skills, 6 workflows)", 33, "high"),
+    ("feiskyer/claude-code-settings", "general", "Claude Code settings collection: deep research, GitHub issue and PR fixing and review, handoff, reflection agents (12 skills, 6 workflows)", 18, "med"),
+    ("rsmdt/the-startup", "workflow", "The Agentic Startup: specify, plan, build and review workflow with role skills and agents for Claude Code (34 skills, 16 workflows)", 50, "med"),
 ]
 
 # --- rules (Cursor .mdc / .cursorrules / Windsurf) --------------------------
@@ -661,7 +748,7 @@ RULES = [
     ("johnlindquist/get-rules", "meta", "CLI that downloads .mdc rule files for Cursor", 30, "low"),
     ("digitalchild/cursor-best-practices", "general", "Best-practices and example rule files for Cursor AI editor", 10, "low"),
     ("hao-ji-xing/awesome-cursor", "meta", "Curated collection of tools and resources for Cursor", 25, "low"),
-    ("ichoosetoaccept/awesome-windsurf", "meta", "Awesome resources for the Windsurf editor including rules", 30, "low"),
+    ("detailobsessed/awesome-devin", "meta", "Awesome resources for the Windsurf editor including rules (formerly ichoosetoaccept/awesome-windsurf)", 30, "low"),
     # --- 2026-07 batch: AI, architecture, UI, Java, eCommerce, infra ---
     # ai (1 repos, 2 measured items)
     ("wandb/agentic-support-bot-demo", "ai", "A streamlined guide to experience how Weave works in a typical AI... (2 rules)", 2, "med"),
@@ -672,6 +759,10 @@ RULES = [
     # infra (1 repos, 61 measured items)
     ("sparesparrow/cursor-rules", "infra", "A library of rules for the Cursor IDE, providing organized... (61 rules)", 61, "med"),
     # --- end 2026-07 batch ---
+    # --- 2026-11 sweep (see the SKILLS section for how it was measured) ---
+    ("thehimel/cursor-rules-and-prompts", "general", "Cursor .mdc rules for code formatting, documentation, project organization, comments and Mermaid diagrams (32 rules, 1 workflows)", 33, "med"),
+    ("obviousworks/vibe-coding-ai-rules", "general", "Numbered rule set for Cursor, Windsurf and Cline: core principles, code style, security, workflow, React and Python patterns (16 rules)", 16, "low"),
+    ("madebyaris/advance-minimax-m3-cursor-rules", "general", "Cursor rules for clarify-first prompting, verification, design systems and MCP use; part of it is MiniMax-M3 specific (7 skills, 20 rules, 2 workflows)", 29, "low"),
 ]
 
 # --- workflows (Claude Code commands / subagents) ---------------------------
@@ -765,6 +856,14 @@ WORKFLOWS = [
     ("glittercowboy/taches-cc-resources", "meta", "A collection of my favorite custom Claude Code resources to make life... (12 skills, 42 workflows)", 54, "high"),
     ("anthropics/claude-cookbooks", "meta", "A collection of notebooks/recipes showcasing some fun and effective... (4 skills, 11 workflows)", 15, "high"),
     # --- end 2026-07 batch ---
+    # --- 2026-11 sweep (see the SKILLS section for how it was measured) ---
+    ("Imbad0202/academic-research-skills", "general", "Academic research pipeline: deep research, paper writing, peer review, citation checks, systematic-review screening; half its items expect the plugin's own files (5 skills, 21 workflows)", 26, "med"),
+    ("microsoft/hve-core", "general", "Microsoft Hypervelocity Engineering for Copilot: PRD, BRD and ADR builders, backlog grooming, code-review, security and accessibility agents (93 skills, 170 workflows)", 263, "high"),
+    ("SuperClaude-Org/SuperClaude_Framework", "commands", "SuperClaude: /sc commands (brainstorm, build, troubleshoot, spec-panel, research) plus persona agents (6 skills, 65 workflows)", 71, "high"),
+    ("0xSteph/pentest-ai-agents", "security", "Subagents for authorized penetration testing: recon, exploit chaining, AD and cloud attacks, detection engineering, reports (56 workflows)", 56, "med"),
+    ("CloudAI-X/claude-workflow-v2", "general", "Claude Code workflow plugin: plan, review, commit, refactor, test and security-scan commands with role agents (14 skills, 33 workflows)", 47, "med"),
+    ("paypal/AI-Toolkit", "backend", "Official PayPal: integration best practices, routing, sandbox and test accounts, error explanations (2 skills, 5 workflows)", 7, "high"),
+    ("jaktestowac/awesome-copilot-for-testers", "devops", "Copilot agents, prompts and skills for test automation: exploratory testing, page objects, API contract tests, quality metrics (52 skills, 82 workflows)", 134, "low"),
 ]
 
 PRIORITY = {"skill": 3, "workflow": 2, "rule": 1}
@@ -786,6 +885,7 @@ def rows(pairs, typ):
             # whole generated file to say nothing about 460 registries.
             **({"self_installing": SELF_INSTALLING[name]}
                if name in SELF_INSTALLING else {}),
+            **({"formerly": list(FORMERLY[name])} if name in FORMERLY else {}),
         }
 
 
@@ -844,8 +944,32 @@ def _summary(payload: dict) -> None:
         print("  %-9s %3d repos  ~%d items" % (typ, n, est))
 
 
+def _fetch_repo(name: str, token: str | None) -> dict:
+    """GET /repos/<name>. urllib follows GitHub's 301 for a renamed repo."""
+    import urllib.request
+
+    req = urllib.request.Request(  # noqa: S310  the https prefix is a literal
+        "https://api.github.com/repos/%s" % name,
+        headers={"Accept": "application/vnd.github+json",
+                 "User-Agent": "boost-registry-audit"})
+    if token:
+        req.add_header("Authorization", "token %s" % token)
+    with urllib.request.urlopen(req, timeout=30) as fh:  # noqa: S310  same
+        data = json.loads(fh.read().decode("utf-8"))
+    return data if isinstance(data, dict) else {}
+
+
+def _report_renamed(renamed: list[tuple[str, str]], names: list[str]) -> None:
+    listed = {n.lower() for n in names}
+    for old, new in renamed:
+        # A rename onto a name that already has a row is a duplicate to drop,
+        # not a row to move.
+        print("renamed   %s -> %s%s" % (
+            old, new, "  (already listed)" if new.lower() in listed else ""))
+
+
 def verify_live(names: list[str], token: str | None = None) -> int:
-    """Report which of ``names`` no longer resolve on GitHub.
+    """Report which of ``names`` no longer resolve on GitHub, or moved.
 
     Deliberately NOT part of `--check` or any required gate. The lesson
     `tests/eval/taps.txt` already records — pin third-party repos, never let
@@ -854,24 +978,27 @@ def verify_live(names: list[str], token: str | None = None) -> int:
     of them is deleted, which is a fact about GitHub rather than about this
     commit. Run it when curating, and record what it finds in RETIRED.
 
+    A renamed repo answers 301, and urlopen follows it to the new name without
+    a word, so a sweep that only read ``archived`` passed five stale rows as
+    healthy. The body's ``full_name`` is the name the repo has now; when it is
+    not the row's (case aside — GitHub resolves either case), the row is
+    reported as renamed so it can be moved before a later sweep mistakes the
+    new name for a new candidate.
+
     Returns the number of repos that could not be resolved.
     """
     import http.client
     import urllib.error
-    import urllib.request
 
-    missing, archived = [], []
+    missing, archived, renamed = [], [], []
     for i, name in enumerate(names, 1):
-        req = urllib.request.Request(  # noqa: S310  the https prefix is a literal
-            "https://api.github.com/repos/%s" % name,
-            headers={"Accept": "application/vnd.github+json",
-                     "User-Agent": "boost-registry-audit"})
-        if token:
-            req.add_header("Authorization", "token %s" % token)
         try:
-            with urllib.request.urlopen(req, timeout=30) as fh:  # noqa: S310  same
-                if json.loads(fh.read().decode("utf-8")).get("archived"):
-                    archived.append(name)
+            data = _fetch_repo(name, token)
+            if data.get("archived"):
+                archived.append(name)
+            full = str(data.get("full_name") or name)
+            if full.lower() != name.lower():
+                renamed.append((name, full))
         except urllib.error.HTTPError as exc:
             if exc.code in (404, 451):
                 missing.append(name)
@@ -888,10 +1015,12 @@ def verify_live(names: list[str], token: str | None = None) -> int:
 
     for name in archived:
         print("archived  %s" % name)
+    _report_renamed(renamed, names)
     for name in missing:
         print("MISSING   %s" % name)
-    print("%d checked: %d missing, %d archived"
-          % (len(names), len(missing), len(archived)), file=sys.stderr)
+    print("%d checked: %d missing, %d archived, %d renamed"
+          % (len(names), len(missing), len(archived), len(renamed)),
+          file=sys.stderr)
     return len(missing)
 
 
@@ -904,8 +1033,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--verify-live", action="store_true",
-        help="ask GitHub whether every shipped registry still exists and print "
-             "the ones that do not. Needs network; never part of a gate. Set "
+        help="ask GitHub about every shipped registry and print the ones that "
+             "are missing, archived or renamed (exit 1 only for missing). "
+             "Needs network; never part of a gate. Set "
              "GITHUB_TOKEN to lift the 60/hour anonymous rate limit.",
     )
     args = parser.parse_args(argv)

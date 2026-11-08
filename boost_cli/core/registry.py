@@ -536,6 +536,44 @@ def untapped_repos(rows: list[dict]) -> tuple[list[dict], int]:
     return kept, len(dropped)
 
 
+def renames() -> dict[str, str]:
+    """:func:`_source_key` of each name a catalogue row had -> the row's own.
+
+    From the rows' ``formerly``. GitHub answers a renamed repository at its old
+    name too, so a machine that tapped a row before it moved holds that
+    repository under a name the row no longer carries, and `tap --catalog`,
+    which dedupes by name, cloned it a second time under the new one.
+    """
+    keys: dict[str, str] = {}
+    for row in config.load_registry_catalog():
+        for old in row.get("formerly") or ():
+            keys[_source_key("https://github.com/%s" % old)] = \
+                _source_key(str(row.get("url") or ""))
+    return keys
+
+
+def renamed_twin(url: str, taps: list[Tap],
+                 moved: dict[str, str]) -> Tap | None:
+    """The tap in ``taps`` that is ``url``'s repository under its other name.
+
+    Either way round — the old name tapped and the new one asked for, or the
+    reverse. Matched on URLs, so a local or GitLab tap that merely carries a
+    former name is not the catalogued repository. ``moved`` is :func:`renames`.
+
+    A repository that is neither a former name nor a renamed row has no twin,
+    so it returns before the scan: `plan_specs` asks once per spec, and
+    keying every tap for each of 587 rows over 460 taps cost 270 ms, against
+    8 ms with this return.
+    """
+    key = _source_key(url)
+    if key not in moved and key not in moved.values():
+        return None
+    want = moved.get(key, key)
+    return next((t for t in taps if _source_key(t.url) != key
+                 and moved.get(_source_key(t.url), _source_key(t.url)) == want),
+                None)
+
+
 def name_key(name: str) -> str:
     """The form of a tap name that decides whether two taps are one.
 
@@ -548,12 +586,17 @@ def name_key(name: str) -> str:
     return name.casefold()
 
 
-def already_tapped(name: str, held: str) -> str:
+def already_tapped(name: str, held: str, renamed: bool = False) -> str:
     """"x already tapped", naming the configured spelling when ``name``'s differs.
 
     `boost tap leonxlnx/x` over a configured `Leonxlnx/x` is the same tap, and
-    saying so in the spelling the user typed hid which row holds it.
+    saying so in the spelling the user typed hid which row holds it. A tap held
+    under the repository's other name (:func:`renamed_twin`) says why two
+    different names are one tap.
     """
+    if renamed:
+        return "%s already tapped as %s (one repository, renamed upstream)" % (
+            name, held)
     if name == held:
         return "%s already tapped" % name
     return "%s already tapped as %s" % (name, held)
@@ -769,11 +812,15 @@ def add(spec: str, curated: bool = False, at: str | None = None) -> Tap:
     # Before the clone: the config write at the end would refuse anyway, and
     # leave the clone behind as a tap no config lists.
     config.refuse_unreadable()
-    for existing in list_taps():
+    taps = list_taps()
+    for existing in taps:
         if name_key(existing.name) == name_key(name):
             if not same_source(existing.url, url):
                 raise _taken(existing.name, url, existing.url)
             raise _already_configured(existing.name, spec, at)
+    twin = renamed_twin(url, taps, renames())
+    if twin is not None:
+        raise _already_configured(twin.name, spec, at, asked=name)
     # Validated here, before the clone, not only inside `checkout_commit`:
     # that check runs after `clone_shallow` below, so a malformed --at used to
     # cost one full clone (~1.6s) before reporting a typo.
@@ -932,22 +979,26 @@ def pin_missing(tap: Tap, pin: str, url: str = "") -> BoostError:
         hint=pin_missing_remedy(tap.name), wrap=True)
 
 
-def _already_configured(name: str, spec: str, at: str | None) -> BoostError:
+def _already_configured(name: str, spec: str, at: str | None,
+                        asked: str = "") -> BoostError:
     """The error for re-tapping a configured tap, with a hint that works.
 
     With ``at`` the user wants another commit, and `boost update` cannot give
     them one: it skips a pinned tap, and ``--force`` moves to branch HEAD and
-    drops the pin. Only a fresh tap at that commit lands there.
+    drops the pin. Only a fresh tap at that commit lands there. ``asked`` is
+    the name requested when ``name`` holds it under the repository's other
+    name (:func:`renamed_twin`).
     """
+    what = (already_tapped(asked, name, renamed=True) if asked
+            else "tap %s is already configured" % name)
     if at:
         return BoostError(
-            "tap %s is already configured" % name,
+            what,
             hint="`boost untap %s`, then `boost tap %s --at %s` to move it "
                  "to that commit" % (util.shell_arg(name), util.shell_arg(spec),
                                      util.shell_arg(at)))
-    return BoostError("tap %s is already configured" % name,
-                      hint="`boost update %s` to refresh it"
-                           % util.shell_arg(name))
+    return BoostError(what, hint="`boost update %s` to refresh it"
+                      % util.shell_arg(name))
 
 
 #: Marks a ★ the user asked for (`--curated`, the defaults), as opposed to one
@@ -974,9 +1025,11 @@ def overstarred() -> list[str]:
     named, nor is a row whose star the user asked for (``curated_by``). A row
     written before that marker existed cannot say who starred it, so an
     explicit `--curated` on a catalogue repo from back then reads as drift.
+    A tap held under a row's former name is that row: every renamed row is
+    unstarred, and a miss read as "not catalogued", hiding the stale ★.
     """
-    wanted = {str(e.get("name")): bool(e.get("curated"))
-              for e in config.load_registry_catalog()}
+    wanted = {name: bool(row.get("curated"))
+              for name, row in config.registry_rows_by_name().items()}
     rows = config.get("taps", []) or []
     if not isinstance(rows, list):
         return []
@@ -1186,9 +1239,12 @@ def plan_specs(specs: list[str]) -> list[dict]:
     for a registry already tapped or repeated in the batch, ``ok`` False with
     an ``error`` for one it refuses. `boost tap --dry-run` reads the same
     plan, so its preview cannot list as "would tap" a registry the real run
-    skips.
+    skips. A registry held under its other name (:func:`renamed_twin`) is
+    skipped too, with ``renamed`` set.
     """
-    existing = {name_key(t.name): t for t in list_taps()}
+    taps = list_taps()
+    existing = {name_key(t.name): t for t in taps}
+    moved = renames()
     batch: dict[str, str] = {}
     results: list[dict] = []
     for spec in specs:
@@ -1210,10 +1266,13 @@ def plan_specs(specs: list[str]) -> list[dict]:
             results.append({"spec": spec, "name": name, "ok": False,
                             "error": _taken(held.name, url, held.url).message})
             continue
-        if held is not None:
+        twin = None if held is not None else renamed_twin(url, taps, moved)
+        hit = held or twin
+        if hit is not None:
             results.append({"spec": spec, "name": name, "ok": False,
                             "skipped": True, "error": "already tapped",
-                            "tapped_as": held.name})
+                            "tapped_as": hit.name,
+                            **({"renamed": True} if twin else {})})
             continue
         # Two specs of this one run claiming a name is not "already used by":
         # nothing holds the name yet, and `boost untap` would not help.
