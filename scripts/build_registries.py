@@ -152,6 +152,9 @@ CURATED = frozenset({
     "emilkowalski/skills",
     "kepano/obsidian-skills", "SuperClaude-Org/SuperClaude_Framework",
     "cursor/plugins", "jakubkrehel/skills", "android/skills",
+    # 167,121 stars on 2026-11-07, 284 items: catalogued once the scanner
+    # read a persona's `color` (catalog.WORKFLOW_META_KEYS).
+    "msitarzewski/agency-agents",
 })
 
 # --- skills (SKILL.md registries) -------------------------------------------
@@ -181,7 +184,7 @@ SKILLS = [
     ("vercel-labs/agent-skills", "web-dev", "Vercel official skills: React/Next/RN best practices, deploy, design", 9, "high"),
     ("angular/skills", "web-dev", "Official Angular skills (angular-developer, angular-new-app)", 2, "high"),
     ("huggingface/skills", "data", "27+ Hugging Face ecosystem skills (Hub, training, deployment, Gradio)", 26, "high"),
-    ("microsoft/skills", "devops", "175 Azure/Foundry SDK skills across Python, TS, .NET, Java, Rust", 175, "high"),
+    ("microsoft/skills", "devops", "Azure/Foundry SDK skills across Python, TS, .NET, Java, Rust (209 skills, 27 workflows)", 236, "high"),
     ("antfu/skills", "web-dev", "17 skills for the Vue/Vite ecosystem (nuxt, pinia, vitest, unocss)", 17, "high"),
     ("mattpocock/skills", "web-dev", "19 engineering/productivity skills (TDD, code review, spec, research)", 41, "high"),
     ("addyosmani/agent-skills", "devops", "24 lifecycle skills across define/plan/build/verify/review/ship", 24, "high"),
@@ -327,7 +330,7 @@ SKILLS = [
     ("bryntum/skills", "ui", "Official Bryntum AI Skills: structured, agent-ready instructions... (9 skills)", 9, "low"),
     ("hueyexe/frontend-agent-skills", "ui", "Agent skills for frontend UX/UI design that actually looks good (9 skills)", 9, "low"),
     ("majidmanzarpour/threejs-game-skills", "ui", "Agent skills for building playable, polished Three.js browser games... (9 skills)", 9, "high"),
-    ("greensock/gsap-skills", "ui", "Official AI skills for GSAP. These skills teach AI coding agents how... (8 skills)", 8, "high"),
+    ("greensock/gsap-skills", "ui", "Official AI skills for GSAP. These skills teach AI coding agents how... (8 skills, 2 rules)", 10, "high"),
     ("vuejs-ai/skills", "ui", "Agent skills for Vue 3 development (8 skills)", 8, "high"),
     ("spences10/svelte-claude-skills", "ui", "7 skills", 7, "high"),
     ("Gentleman-Programming/Gentleman.Dots", "ui", "My personal configuration for LazyVim ! (6 skills)", 6, "high"),
@@ -418,7 +421,7 @@ SKILLS = [
     ("mukul975/Anthropic-Cybersecurity-Skills", "security", "817 structured cybersecurity skills for AI agents Mapped to 6... (817 skills)", 817, "high"),
     ("superagent-ai/skills", "security", "A collection of security skills (13 skills)", 13, "high"),
     # general (87 repos, 7616 measured items)
-    ("affaan-m/ECC", "general", "The agent harness performance optimization system. Skills, instincts... (281 skills, 243 workflows)", 524, "high"),
+    ("affaan-m/ECC", "general", "The agent harness performance optimization system. Skills, instincts... (857 skills, 1 rules, 733 workflows)", 1591, "high"),
     ("vibeeval/vibecosystem", "general", "AI software team for Claude Code - 138 agents, 295 skills, 73 hooks... (299 skills, 6 rules, 138 workflows)", 443, "high"),
     ("j4flmao/agent-skills", "general", "432 skills, 2 rules, 3 workflows", 437, "med"),
     ("asgard-ai-platform/skills", "general", "301 open-source coding agent skills across 22 domains - methodology... (314 skills)", 314, "high"),
@@ -510,7 +513,7 @@ SKILLS = [
     ("multica-ai/andrej-karpathy-skills", "meta", "A single CLAUDE.md file to improve Claude Code behavior, derived from... (1 skills, 1 rules)", 2, "med"),
     # meta (27 repos, 4564 measured items)
     ("composio-community/awesome-codex-skills", "meta", "A curated list of practical Codex skills for automating workflows... (880 skills)", 880, "high"),
-    ("github/awesome-copilot", "meta", "Community-contributed instructions, agents, skills, and configurations... (395 skills, 239 workflows)", 634, "high"),
+    ("github/awesome-copilot", "meta", "Community-contributed instructions, agents, skills, and configurations... (475 skills, 196 rules, 242 workflows)", 913, "high"),
     ("Microck/ordinary-claude-skills", "meta", "An unappealing collection of Claude Skills and resources (416 skills)", 416, "high"),
     ("PramodDutta/qaskills", "meta", "QA Skills Directory QA Skills is a curated directory of... (416 skills)", 416, "high"),
     # Reads like an index, ships a corpus: 390 single-purpose front-end checks
@@ -556,7 +559,7 @@ SKILLS = [
     # Agents that `playwright init-agents` installs. Tapping it clones the whole
     # framework, so it is worth it for the planner/generator/healer, not as a
     # cheap pull.
-    ("microsoft/playwright", "devops", "Official Playwright repo - the agent skills it ships (CLI, trace, component testing) plus the test planner/generator/healer agents (7 skills, 11 workflows)", 18, "high"),
+    ("microsoft/playwright", "devops", "Official Playwright repo - the agent skills it ships (CLI, trace, component testing) plus the test planner/generator/healer agents (11 skills, 13 workflows)", 24, "high"),
     # --- end 2026-08 batch ---
 
 # --- backend (2026-10 sweep) -------------------------------------------------
@@ -683,8 +686,7 @@ SKILLS = [
 # ${CLAUDE_PLUGIN_ROOT}/docs/claude.md), gmickel/flow-next (67 of 117 items
 # call the plugin's `flowctl`) and microsoft/power-platform-skills (111 of 162
 # item files at 9d26fde0 name the plugin root, 107 of them as ${PLUGIN_ROOT}).
-# BMAD-METHOD installs through `boost bmad install`; msitarzewski/agency-agents waits for the scanner to see
-# its persona files (17 of ~310 indexed today).
+# BMAD-METHOD installs through `boost bmad install`.
     ("openai/plugins", "meta", "Official OpenAI Codex plugin marketplace: vendor plugins (Adobe, Airtable, Canva, Figma, Linear, Stripe, Supabase, Vercel, Zoom) plus life-science and data-analysis packs (535 skills, 51 workflows)", 586, "high"),
     ("cursor/plugins", "meta", "Cursor's official plugins: advisor, pstack, harness and team-kit skills and subagents, plus third-party MCP routing packs (137 skills, 5 rules, 14 workflows)", 156, "high"),
     ("android/skills", "java", "Official Android: AGP 9 upgrade, Compose migration and performance, CameraX, Media3, ML Kit GenAI, Wear OS, Play Billing (36 skills)", 36, "high"),
@@ -704,7 +706,7 @@ SKILLS = [
     ("emilkowalski/skills", "ui", "Design engineering: animation, motion choreography, Apple-style design, UI library choice and animation review (17 skills)", 17, "high"),
     ("jakubkrehel/skills", "ui", "Interface craft: layout, typography, color, accessibility, interface review and teardown (15 skills)", 15, "high"),
     ("WordPress/agent-skills", "web-dev", "Official WordPress: blocks, block themes, Interactivity and Abilities APIs, plugins, REST API, wp-env, Playground, PHPStan (20 skills)", 20, "high"),
-    ("awslabs/agent-plugins", "infra", "AWS Labs: Lambda, Step Functions, API Gateway, serverless deploys, architecture diagrams, SageMaker HyperPod and fine-tuning (34 skills)", 34, "high"),
+    ("awslabs/agent-plugins", "infra", "AWS Labs: Lambda, Step Functions, API Gateway, serverless deploys, architecture diagrams, SageMaker HyperPod and fine-tuning (34 skills, 1 rules)", 35, "high"),
     ("dbt-labs/dbt-agent-skills", "data", "Official dbt: unit tests, semantic layer, upgrades and Core-to-v2 migration, dbt MCP, job troubleshooting (17 skills)", 17, "high"),
     ("PostHog/skills", "data", "Official PostHog: product signals, integrations, feature flags and experiments, error tracking, logs, session replay, warehouse (276 skills)", 276, "high"),
     ("data-goblin/power-bi-agentic-development", "data", "Power BI and Fabric: DAX, TMDL, PBIP, Power Query, Deneb and SVG visuals, semantic-model review (35 skills, 10 workflows)", 45, "med"),
@@ -719,7 +721,7 @@ SKILLS = [
     ("gamedev-skills/awesome-gamedev-agent-skills", "general", "Game development: Godot, Unity, Unreal, Roblox, Phaser, Bevy, three.js, game feel, level design, procedural generation (78 skills)", 78, "high"),
     ("TheBushidoCollective/han", "general", "Han marketplace: discipline, framework, language and tool plugins (Angular, Django, Ecto, Ansible, BDD, SRE) with role agents (434 skills, 79 workflows)", 513, "med"),
     ("makenotion/claude-code-notion-plugin", "general", "Official Notion plugin: knowledge capture, meeting notes, research docs, spec-to-implementation, page, database and task commands (12 skills, 10 workflows)", 22, "high"),
-    ("canonical/copilot-collections", "general", "Canonical: Go review and style, Ubuntu SRU and freeze reviews, Terraform migration, Temporal tests, docs review (27 skills, 6 workflows)", 33, "high"),
+    ("canonical/copilot-collections", "general", "Canonical: Go review and style, Ubuntu SRU and freeze reviews, Terraform migration, Temporal tests, docs review (27 skills, 17 rules, 6 workflows)", 50, "high"),
     ("feiskyer/claude-code-settings", "general", "Claude Code settings collection: deep research, GitHub issue and PR fixing and review, handoff, reflection agents (12 skills, 6 workflows)", 18, "med"),
     ("rsmdt/the-startup", "workflow", "The Agentic Startup: specify, plan, build and review workflow with role skills and agents for Claude Code (34 skills, 16 workflows)", 50, "med"),
 ]
@@ -761,7 +763,7 @@ RULES = [
     # --- end 2026-07 batch ---
     # --- 2026-11 sweep (see the SKILLS section for how it was measured) ---
     ("thehimel/cursor-rules-and-prompts", "general", "Cursor .mdc rules for code formatting, documentation, project organization, comments and Mermaid diagrams (32 rules, 1 workflows)", 33, "med"),
-    ("obviousworks/vibe-coding-ai-rules", "general", "Numbered rule set for Cursor, Windsurf and Cline: core principles, code style, security, workflow, React and Python patterns (16 rules)", 16, "low"),
+    ("obviousworks/vibe-coding-ai-rules", "general", "Numbered rule set for Cursor, Windsurf and Cline: core principles, code style, security, workflow, React and Python patterns (20 rules)", 20, "low"),
     ("madebyaris/advance-minimax-m3-cursor-rules", "general", "Cursor rules for clarify-first prompting, verification, design systems and MCP use; part of it is MiniMax-M3 specific (7 skills, 20 rules, 2 workflows)", 29, "low"),
 ]
 
@@ -858,12 +860,18 @@ WORKFLOWS = [
     # --- end 2026-07 batch ---
     # --- 2026-11 sweep (see the SKILLS section for how it was measured) ---
     ("Imbad0202/academic-research-skills", "general", "Academic research pipeline: deep research, paper writing, peer review, citation checks, systematic-review screening; half its items expect the plugin's own files (5 skills, 21 workflows)", 26, "med"),
-    ("microsoft/hve-core", "general", "Microsoft Hypervelocity Engineering for Copilot: PRD, BRD and ADR builders, backlog grooming, code-review, security and accessibility agents (93 skills, 170 workflows)", 263, "high"),
+    ("microsoft/hve-core", "general", "Microsoft Hypervelocity Engineering for Copilot: PRD, BRD and ADR builders, backlog grooming, code-review, security and accessibility agents, plus language instructions (93 skills, 43 rules, 170 workflows)", 306, "high"),
     ("SuperClaude-Org/SuperClaude_Framework", "commands", "SuperClaude: /sc commands (brainstorm, build, troubleshoot, spec-panel, research) plus persona agents (6 skills, 65 workflows)", 71, "high"),
     ("0xSteph/pentest-ai-agents", "security", "Subagents for authorized penetration testing: recon, exploit chaining, AD and cloud attacks, detection engineering, reports (56 workflows)", 56, "med"),
     ("CloudAI-X/claude-workflow-v2", "general", "Claude Code workflow plugin: plan, review, commit, refactor, test and security-scan commands with role agents (14 skills, 33 workflows)", 47, "med"),
     ("paypal/AI-Toolkit", "backend", "Official PayPal: integration best practices, routing, sandbox and test accounts, error explanations (2 skills, 5 workflows)", 7, "high"),
-    ("jaktestowac/awesome-copilot-for-testers", "devops", "Copilot agents, prompts and skills for test automation: exploratory testing, page objects, API contract tests, quality metrics (52 skills, 82 workflows)", 134, "low"),
+    ("jaktestowac/awesome-copilot-for-testers", "devops", "Copilot agents, prompts, instructions and skills for test automation: exploratory testing, page objects, API contract tests, quality metrics (52 skills, 8 rules, 90 workflows)", 150, "low"),
+    # GET /repos 2026-11-07: not archived, not a fork, pushed that day. Every
+    # item is a subagent persona filed under a department dir (engineering
+    # 66, specialized 59, marketing 37, game-development 21, gis 13, ...)
+    # and named for a role (`software-architect`, `growth-hacker`,
+    # `brand-guardian`), so `agents` like VoltAgent's, not one department.
+    ("msitarzewski/agency-agents", "agents", "Role-play subagent personas filed by department: engineering, marketing, sales, design, game development, security, GIS and more (284 workflows)", 284, "high"),
 ]
 
 PRIORITY = {"skill": 3, "workflow": 2, "rule": 1}

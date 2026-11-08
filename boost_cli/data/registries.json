@@ -1,8 +1,8 @@
 {
   "generated_note": "Curated skill/rule/workflow registries for boost. est_items are research estimates; verify by tapping. list_only repos are index/awesome lists that link out.",
-  "count": 587,
-  "est_items_total": 44643,
-  "est_items_scannable": 38505,
+  "count": 588,
+  "est_items_total": 46423,
+  "est_items_scannable": 40285,
   "registries": [
     {
       "name": "Aaronontheweb/dotnet-cursor-rules",
@@ -221,8 +221,8 @@
       "url": "https://github.com/obviousworks/vibe-coding-ai-rules",
       "type": "rule",
       "category": "general",
-      "focus": "Numbered rule set for Cursor, Windsurf and Cline: core principles, code style, security, workflow, React and Python patterns (16 rules)",
-      "est_items": 16,
+      "focus": "Numbered rule set for Cursor, Windsurf and Cline: core principles, code style, security, workflow, React and Python patterns (20 rules)",
+      "est_items": 20,
       "confidence": "low",
       "list_only": false,
       "curated": false
@@ -408,8 +408,8 @@
       "url": "https://github.com/affaan-m/ECC",
       "type": "skill",
       "category": "general",
-      "focus": "The agent harness performance optimization system. Skills, instincts... (281 skills, 243 workflows)",
-      "est_items": 524,
+      "focus": "The agent harness performance optimization system. Skills, instincts... (857 skills, 1 rules, 733 workflows)",
+      "est_items": 1591,
       "confidence": "high",
       "list_only": false,
       "curated": true
@@ -892,8 +892,8 @@
       "url": "https://github.com/awslabs/agent-plugins",
       "type": "skill",
       "category": "infra",
-      "focus": "AWS Labs: Lambda, Step Functions, API Gateway, serverless deploys, architecture diagrams, SageMaker HyperPod and fine-tuning (34 skills)",
-      "est_items": 34,
+      "focus": "AWS Labs: Lambda, Step Functions, API Gateway, serverless deploys, architecture diagrams, SageMaker HyperPod and fine-tuning (34 skills, 1 rules)",
+      "est_items": 35,
       "confidence": "high",
       "list_only": false,
       "curated": false
@@ -1156,8 +1156,8 @@
       "url": "https://github.com/canonical/copilot-collections",
       "type": "skill",
       "category": "general",
-      "focus": "Canonical: Go review and style, Ubuntu SRU and freeze reviews, Terraform migration, Temporal tests, docs review (27 skills, 6 workflows)",
-      "est_items": 33,
+      "focus": "Canonical: Go review and style, Ubuntu SRU and freeze reviews, Terraform migration, Temporal tests, docs review (27 skills, 17 rules, 6 workflows)",
+      "est_items": 50,
       "confidence": "high",
       "list_only": false,
       "curated": false
@@ -2131,8 +2131,8 @@
       "url": "https://github.com/github/awesome-copilot",
       "type": "skill",
       "category": "meta",
-      "focus": "Community-contributed instructions, agents, skills, and configurations... (395 skills, 239 workflows)",
-      "est_items": 634,
+      "focus": "Community-contributed instructions, agents, skills, and configurations... (475 skills, 196 rules, 242 workflows)",
+      "est_items": 913,
       "confidence": "high",
       "list_only": false,
       "curated": true
@@ -2230,8 +2230,8 @@
       "url": "https://github.com/greensock/gsap-skills",
       "type": "skill",
       "category": "ui",
-      "focus": "Official AI skills for GSAP. These skills teach AI coding agents how... (8 skills)",
-      "est_items": 8,
+      "focus": "Official AI skills for GSAP. These skills teach AI coding agents how... (8 skills, 2 rules)",
+      "est_items": 10,
       "confidence": "high",
       "list_only": false,
       "curated": true
@@ -3267,8 +3267,8 @@
       "url": "https://github.com/microsoft/playwright",
       "type": "skill",
       "category": "devops",
-      "focus": "Official Playwright repo - the agent skills it ships (CLI, trace, component testing) plus the test planner/generator/healer agents (7 skills, 11 workflows)",
-      "est_items": 18,
+      "focus": "Official Playwright repo - the agent skills it ships (CLI, trace, component testing) plus the test planner/generator/healer agents (11 skills, 13 workflows)",
+      "est_items": 24,
       "confidence": "high",
       "list_only": false,
       "curated": true
@@ -3278,8 +3278,8 @@
       "url": "https://github.com/microsoft/skills",
       "type": "skill",
       "category": "devops",
-      "focus": "175 Azure/Foundry SDK skills across Python, TS, .NET, Java, Rust",
-      "est_items": 175,
+      "focus": "Azure/Foundry SDK skills across Python, TS, .NET, Java, Rust (209 skills, 27 workflows)",
+      "est_items": 236,
       "confidence": "high",
       "list_only": false,
       "curated": false
@@ -6119,8 +6119,8 @@
       "url": "https://github.com/jaktestowac/awesome-copilot-for-testers",
       "type": "workflow",
       "category": "devops",
-      "focus": "Copilot agents, prompts and skills for test automation: exploratory testing, page objects, API contract tests, quality metrics (52 skills, 82 workflows)",
-      "est_items": 134,
+      "focus": "Copilot agents, prompts, instructions and skills for test automation: exploratory testing, page objects, API contract tests, quality metrics (52 skills, 8 rules, 90 workflows)",
+      "est_items": 150,
       "confidence": "low",
       "list_only": false,
       "curated": false
@@ -6207,11 +6207,22 @@
       "url": "https://github.com/microsoft/hve-core",
       "type": "workflow",
       "category": "general",
-      "focus": "Microsoft Hypervelocity Engineering for Copilot: PRD, BRD and ADR builders, backlog grooming, code-review, security and accessibility agents (93 skills, 170 workflows)",
-      "est_items": 263,
+      "focus": "Microsoft Hypervelocity Engineering for Copilot: PRD, BRD and ADR builders, backlog grooming, code-review, security and accessibility agents, plus language instructions (93 skills, 43 rules, 170 workflows)",
+      "est_items": 306,
       "confidence": "high",
       "list_only": false,
       "curated": false
+    },
+    {
+      "name": "msitarzewski/agency-agents",
+      "url": "https://github.com/msitarzewski/agency-agents",
+      "type": "workflow",
+      "category": "agents",
+      "focus": "Role-play subagent personas filed by department: engineering, marketing, sales, design, game development, security, GIS and more (284 workflows)",
+      "est_items": 284,
+      "confidence": "high",
+      "list_only": false,
+      "curated": true
     },
     {
       "name": "nth5693/gemini-kit",
