@@ -196,7 +196,7 @@ STARRED_MEASURED = {
     "jeffallan/claude-skills": 77,
     "microsoft/playwright": 24,
     "PatrickJS/awesome-cursorrules": 256,
-    "qdhenry/Claude-Command-Suite": 321,
+    "qdhenry/Claude-Command-Suite": 316,
     "trailofbits/skills": 139,
     "VoltAgent/awesome-claude-code-subagents": 166,
     "wshobson/agents": 428,

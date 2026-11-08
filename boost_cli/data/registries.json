@@ -1,8 +1,8 @@
 {
   "generated_note": "Curated skill/rule/workflow registries for boost. est_items are research estimates; verify by tapping. list_only repos are index/awesome lists that link out.",
   "count": 588,
-  "est_items_total": 48483,
-  "est_items_scannable": 42345,
+  "est_items_total": 48479,
+  "est_items_scannable": 42341,
   "registries": [
     {
       "name": "Aaronontheweb/dotnet-cursor-rules",
@@ -6012,8 +6012,8 @@
       "url": "https://github.com/Galaxy-Dawn/claude-scholar",
       "type": "workflow",
       "category": "general",
-      "focus": "Semi-automated research assistant for academic research and software... (45 skills, 70 workflows)",
-      "est_items": 115,
+      "focus": "Semi-automated research assistant for academic research and software... (45 skills, 71 workflows)",
+      "est_items": 116,
       "confidence": "high",
       "list_only": false,
       "curated": false
@@ -6324,8 +6324,8 @@
       "url": "https://github.com/qdhenry/Claude-Command-Suite",
       "type": "workflow",
       "category": "commands",
-      "focus": "Slash commands, AI agents and skills for dev workflows (12 skills, 309 workflows)",
-      "est_items": 321,
+      "focus": "Slash commands, AI agents and skills for dev workflows (12 skills, 304 workflows)",
+      "est_items": 316,
       "confidence": "high",
       "list_only": false,
       "curated": true
