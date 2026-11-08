@@ -809,7 +809,10 @@ SKILLS = [
 # (43 of 57 items byte-identical to davila7/claude-code-templates) and
 # cline/prompts (its 7 workflows are all written for Cline, it has no licence
 # and was last pushed 2026-02-27, and its 36 rules sit in a `.clinerules/`
-# directory, a form `scan_dir` does not read).
+# directory, a form `scan_dir` does not read). Snowflake-Labs/coco-skills
+# measures 99 items, but 90 carry a per-skill Snowflake Skills License that
+# forbids keeping copies outside Snowflake's service — the copy `boost
+# install` makes — so it is held for the maintainer rather than catalogued.
     ("vercel-labs/agent-browser", "ai", "Vercel Labs agent-browser CLI: browser automation core, Electron apps, Slack, dogfooding, Vercel Sandbox, WebMCP generation; the slack skill attaches to an already-open Chrome on port 9222 (11 skills)", 11, "high"),
     ("google/agents-cli", "ai", "Official Google Agents CLI for ADK: scaffold, ADK code, eval, deploy, observability, publish and workflow skills, plus Claude and LangChain template skills (9 skills)", 9, "high"),
     ("NVIDIA/skills", "ai", "Official NVIDIA: TAO model training and fine-tuning, NeMo and Megatron Bridge performance tuning, BioNeMo NIMs, Nemotron speech, cuDF, cuML, cuOpt, CUDA-Q, Jetson, DOCA and Holoscan (437 skills)", 437, "high"),
@@ -828,7 +831,6 @@ SKILLS = [
     ("databricks/databricks-agent-skills", "data", "Official Databricks: Apps, AI Functions, AI/BI dashboards, Asset Bundles, DBSQL, jobs and Lakeflow pipelines, Lakebase, Unity Catalog, model serving, MLflow tracing and evaluation, vector search, plus setup and doctor commands and a routing rule; licensed only for use within or connecting to Databricks services (36 skills, 1 rules, 6 workflows)", 43, "high"),
     ("GoogleCloudPlatform/data-agent-kit-plugin", "data", "Official Google Cloud data: BigQuery (AI/ML, graph, optimization, troubleshooting), Bigtable, Spark, Dataflow, managed Airflow and Composer, Cloud Storage, Dataform and dbt pipelines (40 skills)", 40, "high"),
     ("motherduckdb/agent-skills", "data", "Official MotherDuck (cloud DuckDB): connect, query, load and model data, DuckLake, pipelines, dashboards and Dives, sharing and governance, REST API (21 skills)", 21, "high"),
-    ("Snowflake-Labs/coco-skills", "data", "Snowflake Labs skills for Cortex Code: Spark/PySpark-to-Snowpark migration and validation, dbt, dynamic tables, notebooks and deploys, semantic views, plus finance and people analytics; 24 are templates its hydrator skills fill in, 5 are engine test fixtures, and about 20 spark-migration sub-skills read files from a parent folder; 90 of the 99 carry the Snowflake Skills License, which bars keeping copies outside use with Snowflake's service (95 skills, 4 workflows)", 99, "med"),
     ("spotify/portal-ai-plugins", "devops", "Official Spotify Portal (Backstage): catalog and docs search, scaffolder actions, services, Fleetshift fleet-wide changes and PRs, setup and doctor through the Portal CLI; bulk-reader and code-writer need the plugin's scripts (13 skills)", 13, "high"),
     ("AvdLee/Xcode-Build-Optimization-Agent-Skill", "devops", "Xcode build optimisation by Antoine van der Lee: build benchmarks, compilation and project analysis, SPM build analysis, a fixer and an orchestrator (6 skills)", 6, "high"),
     ("harness/harness-skills", "devops", "Official Harness: pipelines and deployments, feature flags and experiments, chaos engineering, security scans, SBOM and SLSA, GitOps, cost, DORA and SEI metrics, via Harness MCP; the 16 feature-management (FME) skills and two others read the repo's shared references/ docs, which a single-skill install leaves behind (73 skills, 1 rules, 1 workflows)", 75, "high"),

@@ -258,7 +258,7 @@ setup, what it costs, and how to tell which engine is actually serving.
 
 ## The registry catalog
 
-`boost tap --defaults` gives you seven registries. The full catalog is 651
+`boost tap --defaults` gives you seven registries. The full catalog is 650
 classified GitHub registries of skills, Cursor/Windsurf rules and Claude Code
 workflows, indexing roughly 50,000 items.
 

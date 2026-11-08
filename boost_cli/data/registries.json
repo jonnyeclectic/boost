@@ -1,8 +1,8 @@
 {
   "generated_note": "Curated skill/rule/workflow registries for boost. est_items are research estimates; verify by tapping. list_only repos are index/awesome lists that link out.",
-  "count": 676,
-  "est_items_total": 55850,
-  "est_items_scannable": 49712,
+  "count": 675,
+  "est_items_total": 55751,
+  "est_items_scannable": 49613,
   "registries": [
     {
       "name": "Aaronontheweb/dotnet-cursor-rules",
@@ -5406,17 +5406,6 @@
       "focus": "claude-red is a curated library of offensive security skills designed... (58 skills)",
       "est_items": 58,
       "confidence": "high",
-      "list_only": false,
-      "curated": false
-    },
-    {
-      "name": "Snowflake-Labs/coco-skills",
-      "url": "https://github.com/Snowflake-Labs/coco-skills",
-      "type": "skill",
-      "category": "data",
-      "focus": "Snowflake Labs skills for Cortex Code: Spark/PySpark-to-Snowpark migration and validation, dbt, dynamic tables, notebooks and deploys, semantic views, plus finance and people analytics; 24 are templates its hydrator skills fill in, 5 are engine test fixtures, and about 20 spark-migration sub-skills read files from a parent folder; 90 of the 99 carry the Snowflake Skills License, which bars keeping copies outside use with Snowflake's service (95 skills, 4 workflows)",
-      "est_items": 99,
-      "confidence": "med",
       "list_only": false,
       "curated": false
     },
