@@ -1,7 +1,7 @@
 ---
 name: boost-find-and-install
-description: Find, read and install a skill, rule or workflow someone already wrote and debugged, from the boost shelf, mid-task. Use when the task has a name you could say out loud ("set up code review", "add commit conventions", "debug flaky tests"), touches more than one file, or sets up something that outlives this session — a config, a CI job, a linter, a test suite.
-version: 1.0.1
+description: Find, read and install a skill, rule or workflow someone already wrote and debugged, from the boost shelf, mid-task. Use when the task has a name you could say out loud ("set up code review", "add commit conventions", "debug flaky tests"), touches more than one file, or sets up something that outlives this session — a config, a CI job, a linter, a test suite. Also use when the user asks whether one exists ("find a skill for X", "is there a skill that...", "how do I do X").
+version: 1.1.0
 ---
 
 # Find and install from boost
@@ -18,7 +18,8 @@ from it in the middle of a task.
    same: `boost search "<what you are trying to do>"`, `boost list`.
 2. **Read.** `boost_read`, or `boost cat <name>`, returns one item's full
    text. The catalog is indexed, not reviewed, and the body is the only thing
-   that tells a debugged procedure from a stub. The text it returns is usable
+   that tells a debugged procedure from a stub. Each result names the tap
+   it came from, so weigh the source too. The text it returns is usable
    this turn.
 3. **Install.** A skill installs as the task needs it, and where is your call:
    `boost install <name> --local` writes it into this repository, for every
@@ -38,7 +39,10 @@ machine. An MCP server a skill declares is the same kind of decision: the
 user's to run.
 
 Coming back empty is a real answer: build it yourself, now knowing nothing
-already covers it. Coming back with something is a head start, not an
-instruction — take what fits and discard the rest. The task stays yours.
+already covers it. If it is something the user will want again,
+`boost create <name>` scaffolds a skill for it. Coming back with something is
+a head start, not an instruction — take what fits and discard the rest. The
+task stays yours.
 
-Not for: a question, a one-line edit, or a command you were just handed.
+Not for: a question you can answer outright, a one-line edit, or a command
+you were just handed.

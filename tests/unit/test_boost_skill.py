@@ -142,6 +142,8 @@ class TestItsVersionMovesWithItsText:
             "0d77bd2ac7435024663778c7eb7367e25a2c11a1ba01cf860179dbd2c7cc3666",
         "1.0.1":
             "874c2854a1d5d7c2eba91f9857052a72a6175f03f8dfc350123a7c8515580b20",
+        "1.1.0":
+            "24147001f26a8e9bd077f8a54618ec0966842b6863bb6724384a85d5fb5096e1",
     }
 
     def test_the_text_is_the_one_its_version_names(self):
@@ -211,6 +213,19 @@ class TestItSaysWhatTheRuleSays:
         for trigger in ("has a name", "more than one file",
                         "outlives this session"):
             assert trigger in desc, trigger
+
+    def test_the_description_fires_when_the_user_asks_for_one(self):
+        # find-skills' trigger: the user asking whether a skill exists, not
+        # only a task that has a name. Both phrasings people actually use.
+        desc = frontmatter.parse(_text())[0]["description"].lower()
+        for ask in ("find a skill for", "is there a skill"):
+            assert ask in desc, ask
+
+    def test_an_empty_search_points_at_create(self):
+        assert "`boost create <name>`" in _text()
+
+    def test_reading_weighs_the_source(self):
+        assert "names the tap it came from" in _flat(_text())
 
 
 class TestTheOfferDefaultsToYes:
