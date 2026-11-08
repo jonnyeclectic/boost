@@ -2114,7 +2114,7 @@
       "url": "https://github.com/evanca/flutter-ai-rules",
       "type": "skill",
       "category": "ui",
-      "focus": "Flutter and Dart: effective Dart, Bloc, Riverpod, Provider, app architecture, testing with Mockito, Mocktail and Patrol, plus 14 Firebase service skills (36 skills)",
+      "focus": "Flutter and Dart: effective Dart, flutter_bloc, Riverpod, Provider, app architecture, testing with Mockito, Mocktail and Patrol, plus 14 Firebase service skills (36 skills)",
       "est_items": 36,
       "confidence": "med",
       "list_only": false,
