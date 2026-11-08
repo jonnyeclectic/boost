@@ -179,7 +179,7 @@ boost bmad on
   restart your agent session to pick up the new subagents
   full BMAD workflow skills (needs Node): boost bmad install
 boost bmad install
-  installed BMAD in /Users/cassandragaston/IdeaProjects/boost (46 skills)"""
+  installed BMAD in /Users/you/IdeaProjects/boost (46 skills)"""
 
     def test_the_paste_that_prompted_this_rule_is_silent(self):
         assert len(self.PASTE.split()) > bmad.LONG_PROMPT_WORDS
