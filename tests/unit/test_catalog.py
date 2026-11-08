@@ -197,7 +197,7 @@ class TestScanDir:
         assert catalog.find("", entries=[e3]) == []
 
     def test_cache_format_moved(self):
-        assert catalog.CACHE_FORMAT == 11
+        assert catalog.CACHE_FORMAT == 12
 
     def test_alias_never_indexes_a_safe_name(self, tmp_path):
         # A safe frontmatter name IS the entry name; indexing it as an alias of
@@ -709,6 +709,145 @@ class TestCopilotFiles:
         assert sorted((e["kind"], e["name"])
                       for e in catalog.scan_dir(root)) == [
             ("skill", "planner"), ("workflow", "planner")]
+
+
+class TestDocPages:
+    """A doc page under a workflow dir is not a workflow item.
+
+    Every path and frontmatter key set below is a real one, from a 30-registry
+    sample (6,292 workflow items) scanned on 2026-11-08: the old rule matched
+    38 README.md pages rightly, dropped 4 real commands and let 6 ALL-CAPS
+    pages through; this one gets all 44 pages and keeps all 5 items.
+    """
+
+    # The six ALL-CAPS pages, none carrying frontmatter. QUICKSTART is the one
+    # `boost search "write good git commit messages"` ranked first.
+    DOCS: ClassVar[list[str]] = [
+        ".claude/commands/skills/QUICKSTART.md",
+        ".claude/commands/orchestration/ORCHESTRATION-README.md",
+        ".claude/commands/simulation/SIMULATION_EXAMPLES.md",
+        ".claude/agents/WORKFLOW_EXAMPLES.md",
+        ".claude/agents/external/wshobson/ATTRIBUTION.md",
+        "src/agents/AGENTS.md",
+    ]
+
+    # The real items, each with the frontmatter keys it ships: one ALL-CAPS
+    # subagent, and the four lowercase commands the old DOC_STEMS dropped.
+    ITEMS: ClassVar[list[tuple[str, dict]]] = [
+        (".claude/agents/TASK-STATUS-PROTOCOL.md",
+         {"name": "task-status-protocol", "description": "d",
+          "tools": "Read, Write"}),
+        ("commands/git/changelog.md", {}),
+        ("plugins/smart-commit/commands/changelog.md",
+         {"name": "changelog", "description": "d"}),
+        (".opencode/commands/security.md",
+         {"description": "d", "agent": "security-reviewer", "subtask": True}),
+        ("commands/sc/index.md",
+         {"name": "index", "description": "d", "category": "special",
+          "complexity": "standard", "mcp-servers": ["sequential"],
+          "personas": ["architect"]}),
+    ]
+
+    @pytest.mark.parametrize("rel", DOCS)
+    def test_an_all_caps_page_is_not_a_workflow(self, rel):
+        assert catalog._classify_workflow(Path(rel), {}) is False
+
+    @pytest.mark.parametrize(("rel", "meta"), ITEMS)
+    def test_a_measured_real_item_stays_a_workflow(self, rel, meta):
+        assert catalog._classify_workflow(Path(rel), meta) is True
+
+    @pytest.mark.parametrize("stem", sorted(catalog.DOC_STEMS))
+    def test_a_doc_stem_is_a_doc_page_in_any_case(self, stem):
+        for spelling in (stem, stem.upper(), stem.capitalize()):
+            assert catalog._classify_workflow(
+                Path("commands/%s.md" % spelling), {}) is False, spelling
+
+    @pytest.mark.parametrize("stem", ["changelog", "security", "index"])
+    def test_a_doc_word_written_lowercase_can_be_a_command(self, stem):
+        # The old list dropped these; ALL-CAPS still catches the doc page.
+        assert catalog._classify_workflow(
+            Path("commands/%s.md" % stem), {}) is True
+        assert catalog._classify_workflow(
+            Path("commands/%s.md" % stem.upper()), {}) is False
+
+    def test_the_exception_needs_the_whole_workflow_signature(self):
+        rel = Path(".claude/agents/TASK-STATUS-PROTOCOL.md")
+        assert catalog._classify_workflow(
+            rel, {"name": "t", "description": "d", "tools": "Read"}) is True
+        assert catalog._classify_workflow(
+            rel, {"name": "t", "description": "d"}) is False
+        assert catalog._classify_workflow(
+            rel, {"description": "d", "tools": "Read"}) is False
+        # microsoft/hve-core's docs-site README carries a description and
+        # nothing a workflow does; "has a description" would re-admit all 9.
+        assert catalog._classify_workflow(
+            Path("docs/agents/security/README.md"),
+            {"description": "d", "title": "t", "sidebar_position": 2,
+             "author": "a"}) is False
+
+    def test_the_exception_covers_a_doc_stem_too(self):
+        # A README.md that declares itself a subagent is loaded as one.
+        assert catalog._classify_workflow(
+            Path("agents/README.md"),
+            {"name": "r", "description": "d", "model": "opus"}) is True
+
+    def test_a_doc_word_inside_a_lowercase_stem_is_not_a_doc(self):
+        # 33 lowercase stems in the sample hold readme/changelog/getting...;
+        # 32 are real items, so the word alone proves nothing.
+        for rel in ("agents/readme-generator.md", "commands/update-readme.md",
+                    "commands/add-changelog.md",
+                    "agents/troubleshooting-guide.md"):
+            assert catalog._classify_workflow(Path(rel), {}) is True, rel
+
+    @pytest.mark.parametrize(("stem", "caps"), [
+        ("QUICKSTART", True), ("ORCHESTRATION-README", True),
+        ("SIMULATION_EXAMPLES", True), ("AB", True), ("AZ", True),
+        ("2FA", True),
+        ("A", False),               # one letter says nothing
+        ("A1", False), ("123", False), ("", False),
+        ("Readme", False), ("quickStart", False),
+        ("ΔΣ", False),    # Greek capitals are isupper(), not ASCII
+        ("ÉCOLE", False),      # an accented capital
+        ("安全", False),    # CJK letters are isalpha(), never upper
+    ])
+    def test_all_caps(self, stem, caps):
+        assert catalog._all_caps(stem) is caps
+
+    def test_a_non_ascii_or_one_letter_stem_stays_a_workflow(self):
+        for rel in ("commands/A.md", "commands/安全.md",
+                    "commands/ΔΣ.md"):
+            assert catalog._classify_workflow(Path(rel), {}) is True, rel
+
+    def test_a_suffix_declares_a_workflow_even_all_caps(self):
+        # `X.prompt.md` is a file Copilot loads, whatever its stem.
+        assert catalog._classify_workflow(
+            Path(".github/prompts/QUICKSTART.prompt.md"), {}) is True
+        assert catalog._classify_workflow(
+            Path("commands/README.prompt.md"), {}) is True
+
+    def test_scan_drops_the_pages_and_keeps_the_items(self, tmp_path):
+        root = tmp_path / "tap"
+        files = {
+            ".claude/commands/skills/QUICKSTART.md":
+                "# Skill Builder - Quick Start Guide\n\nBuild skills fast!\n",
+            ".claude/commands/orchestration/ORCHESTRATION-README.md":
+                "# Task Orchestration System Guide\n",
+            ".claude/commands/skills/build-skill.md":
+                "Build a Claude Code skill.\n",
+            ".claude/agents/TASK-STATUS-PROTOCOL.md":
+                "---\nname: task-status-protocol\ndescription: Manages task"
+                " status\ntools: Read, Write\n---\n\n# Protocol\n",
+            "commands/git/changelog.md":
+                "Generate a changelog from git history.\n",
+        }
+        for rel, text in files.items():
+            (root / rel).parent.mkdir(parents=True, exist_ok=True)
+            (root / rel).write_text(text, encoding="utf-8")
+        assert sorted(e["skill_md"] for e in catalog.scan_dir(root)) == [
+            ".claude/agents/TASK-STATUS-PROTOCOL.md",
+            ".claude/commands/skills/build-skill.md",
+            "commands/git/changelog.md",
+        ]
 
 
 class TestTapCaches:
