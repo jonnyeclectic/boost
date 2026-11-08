@@ -2536,7 +2536,7 @@
       "url": "https://github.com/google/mantis",
       "type": "skill",
       "category": "security",
-      "focus": "Google Mantis: staged vulnerability review from threat model and VCS history through research, dedupe, critic and review, crash reproducers, exploit chains, minimal patches and reports (21 skills)",
+      "focus": "Google Mantis: staged vulnerability review from threat model and VCS history through research, dedupe, critic and review, crash reproducers, exploit chains, minimal patches and reports; it generates and runs code autonomously, and its README says to use it only in isolated, restricted environments (21 skills)",
       "est_items": 21,
       "confidence": "high",
       "list_only": false,
