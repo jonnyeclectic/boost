@@ -136,7 +136,7 @@
 
     <div class="stats">
       <div class="stat reveal"><b>3</b><span>RAG phases shipped</span></div>
-      <div class="stat reveal"><b>6</b><span>MCP tools on the registry</span></div>
+      <div class="stat reveal"><b>7</b><span>MCP tools on the registry</span></div>
       <div class="stat reveal"><b>89.6%</b><span>Mutation kill on core/</span></div>
       <div class="stat reveal"><b>0</b><span>Deps in the default install</span></div>
     </div>
@@ -493,7 +493,7 @@
     <div class="wrap">
       <span class="eyebrow">The refactor</span>
       <h2 class="sec-title">From an <span class="tag-was">if/elif</span> ladder to a <span class="tag-now">registry</span></h2>
-      <p class="sec-sub">Same behaviour, same wire protocol — but adding tool #7 no longer means
+      <p class="sec-sub">Same behaviour, same wire protocol — but adding the next tool no longer means
         editing the dispatcher, and an unknown tool resolves in exactly one place.</p>
 
       <div class="split reveal">
@@ -731,7 +731,7 @@ REGISTRY.specs()                <span class="cm"># rendered per call</span></pre
   <section>
     <div class="wrap">
       <span class="eyebrow">Extension contract</span>
-      <h2 class="sec-title">Adding tool #7</h2>
+      <h2 class="sec-title">Adding the next tool</h2>
       <p class="sec-sub">The whole point of the seam: a new capability — a database query, another
         external API — is a handler plus one <code>register()</code>. No server edit, no dispatcher edit.</p>
 
@@ -765,7 +765,7 @@ REGISTRY.register(
 <footer>
   <div class="wrap">
     <p class="foot-brand"><b>boost</b> — a package manager for AI skills</p>
-    <p class="foot-note">Install with <code>pip install boost-skill-cli</code> · requires Python 3.12+ and <code>git</code></p>
+    <p class="foot-note">Install with <code>pipx install boost-skill-cli</code> · requires Python 3.12+ and <code>git</code></p>
     <nav class="foot-links" aria-label="Documentation">
       <a href="index.html">Guide</a>
       <a href="commands.html">Commands</a>

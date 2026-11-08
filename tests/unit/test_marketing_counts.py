@@ -21,7 +21,7 @@ import json
 import re
 import subprocess
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import pytest
 
@@ -32,6 +32,8 @@ from boost_cli.cli import COMMANDS  # noqa: E402  (after the sys.path shim)
 
 README = (ROOT / "README.md").read_text(encoding="utf-8")
 INDEX = (ROOT / "docs" / "index.html").read_text(encoding="utf-8")
+LANGCHAIN_README = (ROOT / "boost_langchain" / "README.md").read_text(
+    encoding="utf-8")
 
 
 def _command_count() -> int:
@@ -380,6 +382,223 @@ class TestReadmeRendersOffGitHub:
         assert targets, "README.md no longer links into this repository"
         missing = [t for t in targets if not (ROOT / t).exists()]
         assert missing == [], "README.md links paths that do not exist: %s" % missing
+
+
+#: The two roadmap boards are logs: a card records what was true the day it
+#: was written ("a narrow-pane audit across all 80 commands"), so the
+#: generated card regions are history rather than claims. The boards' own
+#: chrome around them is not, and stays in the sweep.
+_CARD_REGION = re.compile(r"<!-- ROADMAP:cards\b.*?<!-- /ROADMAP:cards -->", re.S)
+
+_WORDS = {w: n for n, w in enumerate(
+    ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight",
+     "nine", "ten", "eleven", "twelve"])}
+
+
+def _docs_site() -> list[tuple[str, str]]:
+    """Every docs page and architecture note, whitespace collapsed."""
+    docs = [*sorted((ROOT / "docs").glob("*.html")),
+            *sorted((ROOT / "docs" / "architecture").glob("*.md"))]
+    return [(doc.relative_to(ROOT).as_posix(),
+             re.sub(r"\s+", " ", _CARD_REGION.sub(
+                 "", doc.read_text(encoding="utf-8"))))
+            for doc in docs]
+
+
+def _number(token: str) -> int:
+    return int(token) if token.isdigit() else _WORDS[token.lower()]
+
+
+def _mcp_tools() -> list[str]:
+    from boost_cli.commands import configuration
+    return configuration.REGISTRY.names()
+
+
+class TestDocsSiteCounts:
+    """Every count of commands and MCP tools on the docs site is the code's.
+
+    The checks above read README.md and docs/index.html only, and the pages
+    beside them drifted unseen: carousel.html said 78 commands in its heading
+    and lede and 76 in its stat tile while COMMANDS held 81 (and its own
+    per-group lines summed to 81), docs/architecture/c4-containers.md said
+    78, and mcp-hub.html's tile said 6 MCP tools against the 7 a live
+    `tools/list` returns.
+    """
+
+    def test_every_command_total_is_the_registry(self):
+        stated = []
+        for name, text in _docs_site():
+            # "13 commands in this group" is a per-group count, checked below.
+            stated += [(name, int(n)) for n in re.findall(
+                r"(\d+)\s+commands\b(?! in this group)", text, re.I)]
+            # The stat-tile form: a number and its label in separate tags is
+            # how the carousel's 76 got past a `\d+ commands` scan.
+            stated += [(name, int(n)) for n in re.findall(
+                r"<b>(\d+)</b>\s*<span>Commands\b", text)]
+        assert {"docs/carousel.html", "docs/index.html",
+                "docs/architecture/c4-containers.md"} <= {d for d, _ in stated}, stated
+        assert [s for s in stated if s[1] != _command_count()] == [], (
+            "COMMANDS holds %d: %s" % (_command_count(), stated))
+
+    def test_every_group_count_is_the_registry(self):
+        stated = [(name, int(n)) for name, text in _docs_site()
+                  for n in re.findall(r"(\d+)\s+(?:command\s+)?groups\b", text)]
+        assert stated, "no docs page states how many command groups there are"
+        assert [s for s in stated if s[1] != _group_count()] == [], (
+            "COMMANDS spans %d groups: %s" % (_group_count(), stated))
+
+    def test_the_carousel_group_notes_are_the_registry_in_order(self):
+        from collections import Counter
+
+        from boost_cli.cli import GROUPS
+        text = dict(_docs_site())["docs/carousel.html"]
+        sizes = Counter(group for _name, group, _module, _summary in COMMANDS)
+        assert [int(n) for n in re.findall(
+            r"(\d+) commands in this group", text)] == [sizes[g] for g in GROUPS]
+
+    def test_every_mcp_tool_count_is_the_registry(self):
+        n = len(_mcp_tools())
+        number = r"(\d+|%s)" % "|".join(_WORDS)
+        stated = []
+        for name, text in [*_docs_site(), ("README.md", README)]:
+            stated += [(name, _number(t)) for t in re.findall(
+                number + r"\s*(?:</b>\s*<span>)?\s*MCP\s+tools\b", text, re.I)]
+            stated += [(name, _number(t)) for t in re.findall(
+                number + r"\s+tools\s+are\s+exposed\b", text, re.I)]
+        assert {"docs/mcp-hub.html", "README.md"} <= {d for d, _ in stated}, stated
+        assert [s for s in stated if s[1] != n] == [], (
+            "the MCP registry holds %d tools: %s" % (n, stated))
+
+    def test_the_readme_names_every_mcp_tool(self):
+        m = re.search(r"tools are exposed: (.+?)\.\s", README, re.S)
+        assert m, "README no longer lists the MCP tools it exposes"
+        assert re.findall(r"`(boost_\w+)`", m.group(1)) == _mcp_tools()
+
+
+def _agent_sets() -> tuple[set[str], set[str], set[str]]:
+    """(every agent, the ones boost symlinks into, the ones reading the store)."""
+    from boost_cli.core import agents
+    every = set(agents.DISPLAY.values())
+    linking = {agents.DISPLAY[a] for a in agents.DISPLAY
+               if agents.flag_default(a, "links_skills")}
+    return every, linking, every - linking
+
+
+def _agent_homes() -> tuple[set[str], set[str]]:
+    """(the dirs boost symlinks into, the store-reading agents' dirs), `~/…`.
+
+    Each is the parent of the agent's default skills dir, so
+    `~/.gemini/antigravity-cli/skills` is `~/.gemini/antigravity-cli`. Codex's
+    `${CODEX_HOME:-~/.codex}/skills` is read at its default, `~/.codex`.
+    """
+    from boost_cli.core import agents, config
+    rows: dict[str, dict] = config.DEFAULTS["agents"]  # type: ignore[assignment]
+
+    def home(agent: str) -> str:
+        raw = re.sub(r"\$\{\w+:-([^}]*)\}", r"\1", rows[agent]["dir"])
+        return PurePosixPath(raw).parent.as_posix()
+
+    linking = {home(a) for a in agents.DISPLAY
+               if agents.flag_default(a, "links_skills")}
+    return linking, {home(a) for a in agents.DISPLAY} - linking
+
+
+def _agent_runs(text: str) -> list[list[str]]:
+    """Each run of agent names joined by commas, `·` or "and", tags removed."""
+    from boost_cli.core import agents
+    names = sorted(agents.DISPLAY.values(), key=len, reverse=True)
+    one = r"(?:%s)(?: CLI)?" % "|".join(map(re.escape, names))
+    sep = r"(?:\s*,\s*(?:and\s+|or\s+)?|\s+and\s+|\s+or\s+|\s*·\s*)"
+    text = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", text))
+    canon = {n.removesuffix(" CLI"): n for n in names}
+    return [[canon[n.removesuffix(" CLI")] for n in re.findall(one, m.group(0))]
+            for m in re.finditer(r"(?<![\w-])%s(?:%s%s)+" % (one, sep, one), text)]
+
+
+class TestAgentListsAgree:
+    """Docs that list the agents boost installs into list all of them.
+
+    boost targets six agents: it symlinks skills into four (Claude Code,
+    Windsurf, Cursor, Antigravity CLI), and two (Gemini CLI, Codex) read
+    the canonical store directly. Both C4 diagrams listed Claude Code,
+    Cursor, Windsurf and Gemini CLI; c4-containers.md said "Three linking
+    agents" and that only Gemini CLI reads the store; adapters.html and
+    langchain.html named the same four, and carousel.html three.
+    """
+
+    def test_an_install_target_list_is_every_agent_or_the_linking_ones(self):
+        # A list naming Cursor and Windsurf is a list of install targets:
+        # neither is an MCP or hooks host, which is what the shorter
+        # "Claude Code, Gemini CLI, …" lists elsewhere describe. Order is not
+        # part of the test: requiring the list to open with Claude Code let
+        # the stale four through as "Cursor, Windsurf, Claude Code or Gemini
+        # CLI".
+        every, linking, _native = _agent_sets()
+        # boost_langchain/README.md carries the same "skills in your editor"
+        # sentence as docs/langchain.html, and kept the stale four after the
+        # page was fixed.
+        surfaces = [*_docs_site(), ("README.md", README),
+                    ("boost_langchain/README.md", LANGCHAIN_README)]
+        lists = [(name, run) for name, text in surfaces
+                 for run in _agent_runs(text)
+                 if {"Claude Code", "Cursor", "Windsurf"} <= set(run)]
+        assert {"README.md", "docs/index.html", "boost_langchain/README.md"} <= {
+            d for d, _ in lists}, lists
+        wrong = [(d, run) for d, run in lists if set(run) not in (every, linking)]
+        assert wrong == [], (
+            "boost targets %s and links into %s: %s"
+            % (sorted(every), sorted(linking), wrong))
+
+    def test_the_c4_diagrams_name_every_agent(self):
+        every, _linking, _native = _agent_sets()
+        for doc in ("c4-context.md", "c4-containers.md"):
+            text = (ROOT / "docs" / "architecture" / doc).read_text(encoding="utf-8")
+            m = re.search(r'System_Ext\(agents, "[^"]*", "([^"]*)"\)', text)
+            assert m, "%s lost its agents box" % doc
+            assert {a for run in _agent_runs(m.group(1)) for a in run} == every, (
+                doc, m.group(1))
+
+    def test_the_container_diagram_splits_them_as_the_code_does(self):
+        _every, linking, native = _agent_sets()
+        text = (ROOT / "docs" / "architecture" / "c4-containers.md").read_text(
+            encoding="utf-8")
+        said = re.findall(r"\b(\w+) linking agents\b", text, re.I)
+        assert said and {_number(n) for n in said} == {len(linking)}, said
+        m = re.search(r'Rel\(agents, store, "Reads directly", "([^"]*)"\)', text)
+        assert m, "the container diagram no longer says who reads the store"
+        assert {a for run in _agent_runs(m.group(1)) for a in run} == native, \
+            m.group(1)
+
+    @pytest.mark.parametrize("doc", ["c4-containers.md", "c4-dynamic-install.md"])
+    def test_the_link_box_is_every_linking_agents_dir(self, doc):
+        # The agent names above are checked, but the directories beside them
+        # were not: either diagram could drop ~/.gemini/antigravity-cli from
+        # its symlink box and every name test still passed.
+        linking, _native = _agent_homes()
+        text = (ROOT / "docs" / "architecture" / doc).read_text(encoding="utf-8")
+        m = re.search(r'ContainerDb\(links, "([^"]*)"', text)
+        assert m, "%s lost its symlink box" % doc
+        assert {d.strip() for d in m.group(1).split(",")} == linking, m.group(1)
+
+    def test_the_native_box_is_every_store_reading_agents_dir(self):
+        _linking, native = _agent_homes()
+        text = (ROOT / "docs" / "architecture" / "c4-containers.md").read_text(
+            encoding="utf-8")
+        m = re.search(r'ContainerDb\(native, "([^"]*)"', text)
+        assert m, "the container diagram lost its native-store agents' box"
+        assert {d.strip() for d in m.group(1).split(",")} == native, m.group(1)
+
+    def test_the_security_model_names_every_agent_dir_boost_writes(self):
+        # The threat model's step 3 is "the consequential one", and its list
+        # of the directories boost writes into stopped at ~/.gemini/: it left
+        # out ~/.codex/, where a rule is written into Codex's AGENTS.md.
+        linking, native = _agent_homes()
+        dotdirs = {"/".join(PurePosixPath(d).parts[:2]) for d in linking | native}
+        text = (ROOT / "docs" / "security-design.md").read_text(encoding="utf-8")
+        m = re.search(r"each agent's directory \(([^)]*)\)", text)
+        assert m, "docs/security-design.md no longer lists the agent dirs"
+        assert set(re.findall(r"`(~/\.[\w-]+)/?`", m.group(1))) == dotdirs, (
+            m.group(1))
 
 
 class TestNoStaleCountsElsewhere:
