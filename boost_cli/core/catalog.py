@@ -1194,7 +1194,14 @@ def find(name: str, tap: str | None = None,
         # where no MCP host settles and no offer is ever made, nothing could
         # install it at all. The tap is package data: copying it out is
         # offline and costs two small files, so a lookup can afford to.
+        #
+        # Rescanned, not just copied out: a tap registered by an older wheel
+        # has a format-current cache that predates the shipped skill, and
+        # `load_tap` serves such a cache as it is, so the copy alone left
+        # `boost install boost-find-and-install` missing after an upgrade.
+        # Only a miss gets here, so the rescan runs once per upgrade.
         builtin.ensure_tap()
+        rebuild_tap(registry.get(builtin.BUILTIN_TAP))
         matches = list(_name_index(all_entries()).get(name, ()))
     if tap:
         # Same tiering as registry.get: a qualified owner/repo beats a bare

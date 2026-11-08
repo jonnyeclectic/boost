@@ -91,6 +91,45 @@ class TestAShippedNameResolvesWithoutAnOffer:
         assert lockfile.get_skill(SKILL) is not None
 
 
+class TestATapRegisteredByAnOlderWheel:
+    """The builtin tap predates the skill on every machine that took the rule.
+
+    The rule shipped in August and the skill in November. A machine that
+    accepted the rule in between has the tap registered and a cache scanned
+    without the skill, and ``load_tap`` serves a cache written at the current
+    ``CACHE_FORMAT`` as it is. So copying the skill out of the new wheel was
+    not enough: the lookup re-read the old cache and missed.
+    """
+
+    @pytest.fixture()
+    def old_tap(self, sandbox):
+        import shutil
+        tap = builtin.ensure_tap()
+        shutil.rmtree(tap.path / "skills")
+        catalog.rebuild_tap(registry.get(builtin.BUILTIN_TAP))
+        assert [e["name"] for e in catalog.all_entries()] == [RULE]
+        return tap
+
+    def test_the_new_skill_resolves(self, old_tap):
+        hits = catalog.find(SKILL)
+        assert [(e["tap"], e["kind"]) for e in hits] == \
+            [(builtin.BUILTIN_TAP, "skill")]
+
+    def test_the_cli_installs_it(self, old_tap, boost):
+        boost("install", SKILL)
+        assert lockfile.get_skill(SKILL) is not None
+
+    def test_after_a_declined_offer_too(self, old_tap, boost, monkeypatch):
+        # The offer copies the skill out before it asks, and only its yes
+        # branch rescanned: a no left the copy on disk and the cache stale.
+        monkeypatch.delenv(configuration.NO_SKILL_ENV, raising=False)
+        monkeypatch.setattr(configuration.out, "confirm",
+                            lambda *a, **kw: False)
+        configuration._offer_boost_skill()
+        boost("install", SKILL)
+        assert lockfile.get_skill(SKILL) is not None
+
+
 class TestShips:
     @pytest.mark.parametrize("name", [RULE, SKILL])
     def test_each_shipped_item(self, name):
