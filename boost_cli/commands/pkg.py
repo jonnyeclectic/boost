@@ -5,6 +5,7 @@ reinstall, bundle, import, pin, unpin, snapshot, export."""
 from __future__ import annotations
 
 import io
+import itertools
 import json
 import os
 import shutil
@@ -2100,8 +2101,14 @@ def _update_materialized(kind: str, installed: dict[str, dict], results,
         matches = [e for e in catalog.find(name, entries=pool)
                    if e["tap"] == tapname and e.get("kind", "skill") == kind]
         if not matches:
-            out.warn("%s %s is no longer in tap %s — leaving as-is"
-                     % (kind, name, tapname))
+            moved = catalog.renamed_row(
+                lk, kind, itertools.chain.from_iterable(index.values()))
+            if moved is not None:
+                out.warn(staleness.renamed_message(kind, name, tapname,
+                                                   moved["name"]), wrap=True)
+            else:
+                out.warn("%s %s is no longer in tap %s — leaving as-is"
+                         % (kind, name, tapname))
             continue
         # The lock's `source_file`, not scan order: one tap can ship a name
         # twice, and `matches[0]` refreshed the copy the user did not pick.

@@ -10,6 +10,7 @@ import shlex
 import sys
 import threading
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 
@@ -2319,6 +2320,50 @@ class TestInstalledRow:
         assert row["description"] == "other tap"
         assert catalog.installed_row(self._matches(), "workflow",
                                      {"tap": "gone"}) is None
+
+
+class TestRenamedRow:
+    """An installed rule or workflow whose name no row carries any more is
+    found again by the file the lock recorded, when that file is still
+    catalogued (under another name)."""
+
+    ROWS: ClassVar[list[dict]] = [
+        {"name": "qa", "tap": "t", "kind": "workflow",
+         "skill_md": "agents/qa.agent.md"},
+        {"name": "qa", "tap": "t", "kind": "rule",
+         "skill_md": "rules/qa.mdc"},
+        {"name": "qa", "tap": "other", "kind": "workflow",
+         "skill_md": "agents/x.agent.md"},
+        {"name": "x", "tap": "other", "kind": "workflow",
+         "skill_md": "agents/qa.agent.md"}]
+
+    def test_the_recorded_file_names_the_row(self):
+        row = catalog.renamed_row(
+            {"tap": "t", "source_file": "agents/qa.agent.md"}, "workflow",
+            iter(self.ROWS))
+        assert row is self.ROWS[0]
+
+    def test_only_this_taps_row_and_this_kind(self):
+        assert catalog.renamed_row(
+            {"tap": "t", "source_file": "rules/qa.mdc"}, "workflow",
+            self.ROWS) is None
+        assert catalog.renamed_row(
+            {"tap": "gone", "source_file": "agents/qa.agent.md"},
+            "workflow", self.ROWS) is None
+        assert catalog.renamed_row(
+            {"tap": "other", "source_file": "agents/qa.agent.md"},
+            "workflow", self.ROWS) is self.ROWS[3]
+
+    def test_a_kindless_row_counts_as_a_skill(self):
+        rows = [{"name": "s", "tap": "t", "skill_md": "s/SKILL.md"}]
+        assert catalog.renamed_row({"tap": "t", "source_file": "s/SKILL.md"},
+                                   "skill", rows) is rows[0]
+
+    def test_no_recorded_file_finds_nothing(self):
+        rows = [{"name": "x", "tap": "t", "kind": "workflow", "skill_md": ""}]
+        assert catalog.renamed_row({"tap": "t"}, "workflow", rows) is None
+        assert catalog.renamed_row({"tap": "t", "source_file": ""},
+                                   "workflow", rows) is None
 
 
 class TestSelectLockSource:

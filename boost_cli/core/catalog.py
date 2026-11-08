@@ -1369,6 +1369,26 @@ def select_lock_source(matches: list[dict], lk: dict) -> tuple[dict | None, str 
                       % (fallback.get("name", "?"), wanted, fallback.get(field, "?")))
 
 
+def renamed_row(lk: dict, kind: str, entries: Iterable[dict]) -> dict | None:
+    """The row of ``lk``'s tap and ``kind`` that catalogues the file an
+    installed rule or workflow came from, or None.
+
+    For a lock entry whose name no row carries any more. The lock records
+    the file (``source_file``) beside the name, and a scanner change can
+    rename a row whose file did not move: `CACHE_FORMAT` 11 named
+    `agents/qa.agent.md` `qa` instead of `qa.agent`, and a subagent outside
+    `agents/` by its frontmatter `name` instead of its file. ``entries`` is
+    the catalogue to look in. None when the lock recorded no file.
+    """
+    src = lk.get("source_file")
+    if not src:
+        return None
+    return next((e for e in entries
+                 if e.get("tap") == lk.get("tap")
+                 and (e.get("kind") or "skill") == kind
+                 and e.get("skill_md") == src), None)
+
+
 def installed_row(matches: list[dict], kind: str, lk: dict) -> dict | None:
     """The catalog row an installed item came from, or None.
 

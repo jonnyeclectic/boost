@@ -3275,6 +3275,29 @@ class TestUpdateEdges:
         assert ("brainstorming not found in tap gone-tap — skipped "
                 "(try `boost update`)") in r.err
 
+    def test_a_renamed_workflow_is_named_not_called_removed(
+            self, boost, fixture_tap_src, tmp_path):
+        # Installed as `qa.agent`, before the scanner dropped the second
+        # extension: the tap still ships the file, catalogued as `qa`.
+        tap_dir = _copy_tap(fixture_tap_src, tmp_path / "ren-tap")
+        (tap_dir / "agents").mkdir(exist_ok=True)
+        (tap_dir / "agents" / "qa.agent.md").write_text(
+            "---\ndescription: Plans QA\n---\nPlan QA.\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(tap_dir), "add", "-A"],
+                       check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(tap_dir), "commit", "-qm", "qa"],
+                       check=True, capture_output=True)
+        boost("tap", tap_dir)
+        boost("install", "qa")
+        lock = json.loads(paths.lockfile_path().read_text(encoding="utf-8"))
+        lock["workflows"]["qa.agent"] = lock["workflows"].pop("qa")
+        paths.lockfile_path().write_text(json.dumps(lock), encoding="utf-8")
+        said = " ".join(boost("update").out.split())
+        assert ("workflow qa.agent is catalogued as qa by tap ren-tap now — "
+                "leaving as-is; `boost uninstall qa.agent`, then `boost "
+                "install ren-tap:qa`, switches to it") in said
+        assert "no longer in tap" not in said
+
     def test_reinstall_after_untap_names_the_missing_tap(
             self, boost, fixture_tap_src, tmp_path):
         # "try `boost update`" looped: update answers "everything up to
