@@ -113,7 +113,7 @@ measured on, and the `# --- scale` divider below them no longer separates
 it and `golden-natural.jsonl` into five, so no proper subset of the file can
 score either set. The rest exist so the corpus is a realistic size. That matters more than it sounds — over the six
 alone (921 entries at the current pins) BM25 scored 0.989 / 0.769 / 0.848 /
-0.880, and over the twenty (10,736) it scores **0.846 / 0.484 / 0.607 / 0.660**
+0.880, and over the twenty (10,737) it scores **0.846 / 0.484 / 0.607 / 0.660**
 (what `tests/eval/baseline.json` records), so three of the four old floors fail
 once the corpus stops being tiny. The six-repo row is **historical**: it was
 measured name-graded, before the set was pinned, and cannot be re-run against
