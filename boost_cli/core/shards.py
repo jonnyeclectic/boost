@@ -71,6 +71,25 @@ MAX_SHARD_BYTES = 2 * 1024 * 1024 * 1024
 
 _CHUNK = 1024 * 256
 
+#: How many times :func:`fetch_manifest` asks for the manifest before it
+#: reports a short read. Behind a filtering proxy one read in three came back
+#: whole while curl fetched the same file every time; one attempt and the
+#: advice "retry" left the user doing by hand what this does.
+MANIFEST_ATTEMPTS = 3
+
+#: Seconds before the first retry, doubled for each one after it.
+_RETRY_BACKOFF = 0.5
+
+#: The wait between attempts. A module attribute so a test records it rather
+#: than sleeping through it.
+_sleep = time.sleep
+
+
+class ShortRead(BoostError):
+    """A body that ended early: cut before its Content-Length, or an
+    ``IncompleteRead``. The one failure a second request can cure — a stalled
+    server already cost a full timeout, and asking again triples the hang."""
+
 
 def manifest_url() -> str:
     """The manifest URL in force, honouring the env override."""
@@ -150,9 +169,11 @@ def _read(resp, n: int, url: str) -> bytes:
     try:
         return resp.read(n)
     except (OSError, http.client.HTTPException) as exc:
-        raise BoostError("cannot read %s: %s"
-                         % (url, str(exc) or type(exc).__name__),
-                         hint=transport_hint()) from exc
+        kind = (ShortRead if isinstance(exc, http.client.IncompleteRead)
+                else BoostError)
+        raise kind("cannot read %s: %s"
+                   % (url, str(exc) or type(exc).__name__),
+                   hint=transport_hint()) from exc
 
 
 def _read_capped(resp, cap: int, url: str) -> bytes:
@@ -210,7 +231,7 @@ def _verify_complete(resp, raw: bytes, url: str) -> None:
     except (TypeError, ValueError):
         return
     if len(raw) < want:
-        raise BoostError(
+        raise ShortRead(
             "shard manifest download from %s was truncated (%d of %d bytes)"
             % (url, len(raw), want),
             hint="a proxy or a dropped connection cut the stream — retry")
@@ -225,14 +246,7 @@ def fetch_manifest(url: str | None = None, timeout: float = 30.0) -> dict:
     after the download, in the worst case.
     """
     url = url or manifest_url()
-    with _open(url, timeout) as resp:
-        raw = _read_capped(resp, MAX_MANIFEST_BYTES, url)
-        # Size ceiling first, completeness second: a manifest larger than the
-        # cap is also "shorter than declared", and reporting that one as a
-        # truncated download would name the wrong problem.
-        if len(raw) > MAX_MANIFEST_BYTES:
-            raise BoostError("shard manifest at %s is implausibly large" % url)
-        _verify_complete(resp, raw, url)
+    raw = _manifest_bytes(url, timeout)
     try:
         data = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -253,6 +267,35 @@ def fetch_manifest(url: str | None = None, timeout: float = 30.0) -> dict:
         raise BoostError("shard manifest has no shards list")
     data["_url"] = url
     return data
+
+
+def _manifest_bytes(url: str, timeout: float) -> bytes:
+    """The manifest body, asked for again when it arrives short.
+
+    Up to :data:`MANIFEST_ATTEMPTS` requests, backing off between them; only
+    a :class:`ShortRead` is retried, and the last one is raised as it stands,
+    with its byte counts and its hint. A connect failure, a stalled read or an
+    oversized body is one answer the next request would repeat.
+    """
+    attempt = 1
+    while True:
+        try:
+            with _open(url, timeout) as resp:
+                raw = _read_capped(resp, MAX_MANIFEST_BYTES, url)
+                # Size ceiling first, completeness second: a manifest larger
+                # than the cap is also "shorter than declared", and reporting
+                # that one as a truncated download would name the wrong
+                # problem.
+                if len(raw) > MAX_MANIFEST_BYTES:
+                    raise BoostError("shard manifest at %s is implausibly "
+                                     "large" % url)
+                _verify_complete(resp, raw, url)
+            return raw
+        except ShortRead:
+            if attempt >= MANIFEST_ATTEMPTS:
+                raise
+        _sleep(_RETRY_BACKOFF * 2 ** (attempt - 1))
+        attempt += 1
 
 
 def incompatible(manifest: dict) -> str | None:
