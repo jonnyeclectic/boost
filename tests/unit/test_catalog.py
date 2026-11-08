@@ -540,6 +540,61 @@ class TestCopilotFiles:
                     "---\ndescription: d\n---\nX\n")
         assert [e["kind"] for e in catalog.scan_dir(root)] == ["skill"]
 
+    def test_a_short_name_a_skill_holds_keeps_its_suffix(self, tmp_path):
+        """canonical/copilot-collections ships `skills/secret-guard/` and
+        `assets/instructions/common/secret-guard.instructions.md`. Named
+        `secret-guard`, the rule made `boost install secret-guard`, which
+        installed the skill, a same-tap ambiguity."""
+        root = tmp_path / "tap"
+        write_skill(root / "skills" / "secret-guard",
+                    "---\nname: secret-guard\ndescription: Guard\n---")
+        self._write(root, "instructions/secret-guard.instructions.md",
+                    "---\ndescription: Scan\n---\nX\n")
+        entries = catalog.scan_dir(root)
+        assert sorted((e["kind"], e["name"]) for e in entries) == [
+            ("rule", "secret-guard.instructions"), ("skill", "secret-guard")]
+        assert [e["kind"] for e in catalog.find("secret-guard",
+                                                 entries=entries)] == ["skill"]
+
+    def test_short_names_that_collide_with_each_other_all_go_back(
+            self, tmp_path):
+        # The counts are taken before any row is renamed: renaming the first
+        # must not leave the second looking free.
+        root = tmp_path / "tap"
+        self._write(root, "agents/qa.agent.md",
+                    "---\ndescription: a\n---\nX\n")
+        self._write(root, "chatmodes/qa.chatmode.md",
+                    "---\ndescription: c\n---\nY\n")
+        self._write(root, "prompts/qa.prompt.md",
+                    "---\ndescription: p\n---\nZ\n")
+        assert sorted(e["name"] for e in catalog.scan_dir(root)) == [
+            "qa.agent", "qa.chatmode", "qa.prompt"]
+
+    def test_a_command_beside_its_namesake_keeps_namespace_and_suffix(
+            self, tmp_path):
+        root = tmp_path / "tap"
+        self._write(root, "commands/ns/run.md",
+                    "---\ndescription: a\n---\nX\n")
+        self._write(root, "commands/ns/run.prompt.md",
+                    "---\ndescription: b\n---\nY\n")
+        by_file = {e["skill_md"]: e for e in catalog.scan_dir(root)}
+        long = by_file["commands/ns/run.prompt.md"]
+        assert long["name"] == "ns/run.prompt"
+        # Typed as named: no alias pointing back at the short name.
+        assert "original_name" not in long
+        assert by_file["commands/ns/run.md"]["name"] == "ns/run"
+
+    def test_a_frontmatter_name_is_not_given_a_suffix(self, tmp_path):
+        # Only a name read off the file goes back; a `name:` is the tap's own.
+        root = tmp_path / "tap"
+        write_skill(root / "skills" / "planner",
+                    "---\nname: planner\ndescription: d\n---")
+        self._write(root, "x/Planner.agent.md",
+                    "---\nname: planner\ndescription: a\n---\nX\n")
+        assert sorted((e["kind"], e["name"])
+                      for e in catalog.scan_dir(root)) == [
+            ("skill", "planner"), ("workflow", "planner")]
+
     def test_workflow_under_claude_agents_dir(self, tmp_path):
         root = tmp_path / "tap"
         (root / ".claude" / "agents").mkdir(parents=True)

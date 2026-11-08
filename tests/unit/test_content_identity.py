@@ -133,6 +133,21 @@ def test_a_copilot_items_digest_matches_rag_under_its_short_name(
         assert e["content"] == _digest(rag.read_body(e))
 
 
+def test_a_copilot_item_that_keeps_its_suffix_keeps_parity_too(
+        tmp_path, monkeypatch):
+    """A short name another row holds goes back to the full stem, and the
+    digest is taken over that name, not the one it replaced."""
+    _write_skill(tmp_path, "skills/go", "go", "Go skill", "Body\n")
+    (tmp_path / "instructions").mkdir()
+    (tmp_path / "instructions" / "go.instructions.md").write_text(
+        "---\ndescription: Go style\n---\nGofmt.\n", encoding="utf-8")
+    entries = catalog.scan_dir(tmp_path, "t/one")
+    monkeypatch.setattr(rag, "_tap_paths", lambda: {"t/one": tmp_path})
+    assert sorted(e["name"] for e in entries) == ["go", "go.instructions"]
+    for e in entries:
+        assert e["content"] == _digest(rag.read_body(e))
+
+
 # ------------------------------------------------------------- cache format
 
 def _cloned_tap(name="t/one"):

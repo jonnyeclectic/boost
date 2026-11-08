@@ -76,8 +76,9 @@ from . import (
 #  10 -- a description longer than `DESCRIPTION_MAX` is clamped, and a file
 #        that is binary (see `is_binary`) is no longer an item
 #  11 -- Copilot's files are items: `*.instructions.md` is a rule, and
-#        `*.prompt.md`, `*.agent.md` and `*.chatmode.md` are workflows named
-#        without the second extension; a loose file carrying `color` is a
+#        `*.prompt.md`, `*.agent.md` and `*.chatmode.md` are workflows, each
+#        named without the second extension while that name is free in its
+#        tap (`_keep_short_names_free`); a loose file carrying `color` is a
 #        workflow (`WORKFLOW_META_KEYS`), and a loose subagent is named as
 #        one rather than as a slash command (`workflows.detect_slot`)
 CACHE_FORMAT = 11
@@ -113,7 +114,8 @@ WORKFLOW_META_KEYS = {"tools", "model", "argument-hint", "allowed-tools",
                       "color"}
 # Every second extension that names a file's kind, stripped from the name it
 # is catalogued under: `a11y-audit.prompt.md` is `/a11y-audit` to Copilot, and
-# was `a11y-audit.prompt` here.
+# was `a11y-audit.prompt` here. Only while the short name is free in its tap
+# (`_keep_short_names_free`).
 KIND_SUFFIXES = (*RULE_MD_SUFFIXES, *workflows.SUFFIX_SLOTS)
 # Markdown filenames that are documentation, never workflow items.
 DOC_STEMS = {"readme", "contributing", "license", "changelog", "security",
@@ -365,15 +367,17 @@ def _suffixed(filename: str, suffixes: Iterable[str]) -> str | None:
                  if low.endswith(s) and len(low) > len(s)), None)
 
 
-def item_stem(filename: str) -> str:
+def item_stem(filename: str, short: bool = True) -> str:
     """``filename`` without its extension, or without its
     :data:`KIND_SUFFIXES` second extension when it carries one
-    (``a11y-audit.prompt.md`` -> ``a11y-audit``)."""
-    suffix = _suffixed(filename, KIND_SUFFIXES)
+    (``a11y-audit.prompt.md`` -> ``a11y-audit``). ``short=False`` keeps the
+    second extension (``a11y-audit.prompt``)."""
+    suffix = _suffixed(filename, KIND_SUFFIXES) if short else None
     return filename[:-len(suffix)] if suffix else Path(filename).stem
 
 
-def command_name(rel: str, meta: dict | None = None) -> str | None:
+def command_name(rel: str, meta: dict | None = None,
+                 short: bool = True) -> str | None:
     """The catalog name of the slash command at ``rel`` whose frontmatter is
     ``meta``, or None if it is not one (a subagent, :func:`workflows.
     detect_slot`).
@@ -384,18 +388,21 @@ def command_name(rel: str, meta: dict | None = None) -> str | None:
     carrying ``name: Code Review Helper`` is ``/review`` — and installing it
     as ``code-review-helper`` made the command the tap documents not exist.
     Its namespace dirs are kept (:func:`workflows.command_namespace`), each
-    part slugged on its own so the ``/`` survives.
+    part slugged on its own so the ``/`` survives. ``short`` is
+    :func:`item_stem`'s.
     """
     if workflows.detect_slot(rel, meta) != workflows.SLOT_COMMANDS:
         return None
-    parts = (*workflows.command_namespace(rel), item_stem(Path(rel).name))
+    parts = (*workflows.command_namespace(rel),
+             item_stem(Path(rel).name, short))
     return workflows.NAMESPACE_SEP.join(_entry_slug(p, p) for p in parts)
 
 
-def _typed_command_name(rel: str) -> str:
+def _typed_command_name(rel: str, short: bool = True) -> str:
     """The unslugged name of the command at ``rel`` (``commands/déploy.md``
     -> ``déploy``) — what a user reading the tap types to install it."""
-    parts = (*workflows.command_namespace(rel), item_stem(Path(rel).name))
+    parts = (*workflows.command_namespace(rel),
+             item_stem(Path(rel).name, short))
     return workflows.NAMESPACE_SEP.join(parts)
 
 
@@ -512,6 +519,7 @@ def scan_dir(root: Path, tap_name: str = "local", curated: bool = False,
     root = Path(root)
     entries: list[dict] = []
     skill_dirs: set[Path] = set()
+    shortened: list[tuple[int, tuple]] = []
     # Looked up once per scan (one JSON read of the bundled registry catalog),
     # not once per item — the whole point of threading it through rather than
     # having `_entry_category` call `config.registry_categories()` itself.
@@ -560,20 +568,64 @@ def scan_dir(root: Path, tap_name: str = "local", curated: bool = False,
                 kind = KIND_WORKFLOW
             else:
                 continue
-            if path.name in RULE_FILENAMES:
-                default = path.parent.name if path.parent != root else root.name
-            else:
-                default = item_stem(path.name)
-            rel = path.relative_to(root).as_posix()
-            fixed = command_name(rel, meta) if kind == KIND_WORKFLOW else None
-            entries.append(_make_entry(root, path, kind, default,
-                                       tap_name, curated, meta, body, tap_category,
-                                       fixed_name=fixed,
-                                       typed_name=(_typed_command_name(rel)
-                                                   if fixed else None)))
+            item = (path, kind, meta, body)
+            entries.append(_loose_entry(root, item, tap_name, curated,
+                                        tap_category))
+            if _suffixed(path.name, KIND_SUFFIXES) is not None:
+                shortened.append((len(entries) - 1, item))
 
+    _keep_short_names_free(entries, shortened, root, tap_name, curated,
+                           tap_category)
     entries.sort(key=operator.itemgetter("skill_md", "name"))
     return entries
+
+
+def _loose_entry(root: Path, item: tuple[Path, str, dict, str], tap_name: str,
+                 curated: bool, tap_category: str, short: bool = True) -> dict:
+    """The entry for a rule or workflow file, ``item`` being ``(path, kind,
+    meta, body)``; ``short`` is :func:`item_stem`'s."""
+    path, kind, meta, body = item
+    if path.name in RULE_FILENAMES:
+        default = path.parent.name if path.parent != root else root.name
+    else:
+        default = item_stem(path.name, short)
+    rel = path.relative_to(root).as_posix()
+    fixed = command_name(rel, meta, short) if kind == KIND_WORKFLOW else None
+    return _make_entry(root, path, kind, default, tap_name, curated, meta,
+                       body, tap_category, fixed_name=fixed,
+                       typed_name=(_typed_command_name(rel, short)
+                                   if fixed else None))
+
+
+def _keep_short_names_free(entries: list[dict],
+                           shortened: list[tuple[int, tuple]], root: Path,
+                           tap_name: str, curated: bool,
+                           tap_category: str) -> None:
+    """Give a :data:`KIND_SUFFIXES` file its second extension back when its
+    short name is not free in the tap.
+
+    ``shortened`` holds ``(index into entries, item)`` for each file that
+    carries one. A short name another row of the same scan also holds turns
+    a name that resolved into a same-tap ambiguity: canonical/copilot-
+    collections ships ``skills/secret-guard/`` and
+    ``assets/instructions/common/secret-guard.instructions.md``, and
+    ``boost install secret-guard`` installed the skill until the rule was
+    indexed as ``secret-guard`` beside it. Such a row is named by its full
+    stem, ``secret-guard.instructions``, which is also what it was called
+    before the suffix was dropped. A row named by its frontmatter keeps that
+    name: the rebuild only differs when the name came from the file.
+
+    The counts are taken once, before any row is renamed, so the outcome
+    does not depend on walk order, and two short names that collide only
+    with each other (``qa.agent.md`` beside ``qa.chatmode.md``) both go back.
+    """
+    taken: dict[str, int] = {}
+    for entry in entries:
+        taken[entry["name"]] = taken.get(entry["name"], 0) + 1
+    for at, item in shortened:
+        if taken[entries[at]["name"]] > 1:
+            entries[at] = _loose_entry(root, item, tap_name, curated,
+                                       tap_category, short=False)
 
 
 #: Taps whose cache could not be saved this process — warned about once.
