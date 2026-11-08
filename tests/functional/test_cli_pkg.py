@@ -2041,12 +2041,20 @@ class TestBundle:
         r = boost("bundle", "dump", vf)
         assert "no URL" not in r.out + r.err
         lines = vf.read_text(encoding="utf-8").splitlines()
-        assert lines[1] == "tap fixture-tap %s --at %s" % (
-            fixture_tap_src.resolve(), commit)
+        assert lines[1] == "tap fixture-tap %s" % fixture_tap_src.resolve()
+        # The commit is a note, not a pin: the dump of the configured,
+        # unpinned tap had no `--at`, and a pin on replay would leave the
+        # new machine's `boost update` skipping the tap.
+        assert lines[2] == (
+            "# fixture-tap's skills were installed at %s; add `--at %s` to "
+            "the line above to hold the tap at that commit" % (commit, commit))
         boost("uninstall", "brainstorming")
         r = boost("bundle", "install", vf)
         assert "tapped fixture-tap" in r.out
         assert "installed brainstorming v1.4.0 (fixture-tap)" in r.out
+        [row] = [t for t in json.loads(paths.config_path().read_text(
+            encoding="utf-8"))["taps"] if t["name"] == "fixture-tap"]
+        assert not row.get("pin")
 
     def test_dump_says_when_a_tap_line_cannot_be_replayed(self, boost,
                                                           installed):
@@ -2058,8 +2066,9 @@ class TestBundle:
         del data["skills"]["brainstorming"]["tap_url"]
         path.write_text(json.dumps(data), encoding="utf-8")
         r = boost("bundle", "dump")
-        # No `--at` either: with no URL the line names no tree.
+        # No `--at` and no note: with no URL the line names no tree.
         assert r.out.splitlines()[1] == "tap fixture-tap"
+        assert not r.out.splitlines()[2].startswith("#")
         err = " ".join(r.err.split())
         assert ("! tap fixture-tap is written without a URL: it is no longer "
                 "tapped and the lock does not record where it came from, so "
@@ -3644,8 +3653,9 @@ class TestBundleEdges:
         lines = boost("bundle", "dump").out.splitlines()
         # Untapped, but the lock row still says where it came from: a bare
         # `tap fixture-tap` line cannot be replayed.
-        assert "tap fixture-tap %s --at %s" % (row["tap_url"],
-                                              row["commit"]) in lines
+        assert "tap fixture-tap %s" % row["tap_url"] in lines
+        assert any(line.startswith("# fixture-tap's skills were installed "
+                                   "at %s;" % row["commit"]) for line in lines)
         assert "# local skill (no tap source): local-thing" in lines
         assert "skill fixture-tap:brainstorming@1.4.0" in lines
 

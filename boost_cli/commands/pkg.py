@@ -660,19 +660,28 @@ def _boostfile_text(skills: dict[str, dict], via: str = "boost bundle dump",
     taps = sorted({e.get("tap") or "" for section in (skills, project)
                    for e in section.values()} - {"", "local"})
     for tname in taps:
+        note = ""
         try:
             tap = registry.get(tname)
             url, pin = tap.url, tap.pin
         except BoostError:
-            # Untapped since: the lock rows remember where it came from.
-            url, pin = boostfile.recorded_source(
+            # Untapped since: the lock rows remember where it came from. The
+            # commit they were installed at goes in a note, not an `--at`: a
+            # configured tap is dumped pinned only when it is, and the config
+            # row that said whether this one was is gone.
+            url, note = boostfile.recorded_source(
                 e for section in (skills, project) for e in section.values()
                 if e.get("tap") == tname)
+            pin = ""
         if not url and unsourced is not None:
             unsourced.append(tname)
         # The tap's `--at` pin goes with it: without it a fresh machine taps
         # HEAD, and every `@version` below names a tree it no longer has.
         lines.append(boostfile.render_tap(tname, url, pin))
+        if note:
+            lines.append("# %s's skills were installed at %s; add `--at %s` "
+                         "to the line above to hold the tap at that commit"
+                         % (tname, note, note))
     for name in sorted(skills):
         e = skills[name]
         if (e.get("tap") or "local") == "local":

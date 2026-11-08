@@ -132,19 +132,19 @@ def render_tap(name: str, url: str, pin: str = "") -> str:
 
 
 def recorded_source(rows: Iterable[Mapping]) -> tuple[str, str]:
-    """``(url, at)`` for the ``tap`` line of a tap that is no longer configured.
+    """``(url, commit)`` for the ``tap`` line of a tap that is no longer
+    configured.
 
     The lock rows installed from it remember where it came from: each one
     recorded the tap's ``tap_url`` at install, which ``boost drift`` already
     re-taps from. ``url`` is the first one recorded, skipping boost's own
-    wheel tap (``builtin:``), which no Boostfile line can re-tap. ``at`` is
-    the commit the rows were installed at when every row records the same
-    full SHA, so the ``@version`` on each skill line names the tree the tap
-    lands on. Rows installed at different commits name no one tree, and the
-    line is left unpinned rather than held where some of them never came
-    from. ``("", "")`` means nothing recorded a URL and the line cannot be
-    replayed, so it takes no ``--at`` either: ``tap NAME --at SHA`` taps
-    whatever directory under the cwd is called NAME and checks SHA out in it.
+    wheel tap (``builtin:``), which no Boostfile line can re-tap. ``commit``
+    is the full SHA every row was installed at, or ``""`` when they differ.
+    It is for a note beside the line, not an ``--at`` on it: the config row
+    that said whether the tap was pinned is gone, and a pin written on replay
+    makes ``boost update`` skip that tap for good. ``("", "")`` means nothing
+    recorded a URL and the line cannot be replayed, so there is nothing to
+    note a commit on either.
     """
     url = ""
     commits: set[str] = set()
