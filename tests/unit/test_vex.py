@@ -87,8 +87,8 @@ def test_check_flag_fails_when_output_is_stale(tmp_path, monkeypatch):
 # --------------------------------------------------------------------------- #
 @_skip
 class TestOpenVexSchema:
-    @staticmethod
     @pytest.fixture(scope="class")
+    @staticmethod
     def doc():
         return json.loads(_load_builder().build())
 
