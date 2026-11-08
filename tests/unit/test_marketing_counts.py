@@ -382,6 +382,97 @@ class TestReadmeRendersOffGitHub:
         assert missing == [], "README.md links paths that do not exist: %s" % missing
 
 
+#: The two roadmap boards are logs: a card records what was true the day it
+#: was written ("a narrow-pane audit across all 80 commands"), so the
+#: generated card regions are history rather than claims. The boards' own
+#: chrome around them is not, and stays in the sweep.
+_CARD_REGION = re.compile(r"<!-- ROADMAP:cards\b.*?<!-- /ROADMAP:cards -->", re.S)
+
+_WORDS = {w: n for n, w in enumerate(
+    ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight",
+     "nine", "ten", "eleven", "twelve"])}
+
+
+def _docs_site() -> list[tuple[str, str]]:
+    """Every docs page and architecture note, whitespace collapsed."""
+    docs = [*sorted((ROOT / "docs").glob("*.html")),
+            *sorted((ROOT / "docs" / "architecture").glob("*.md"))]
+    return [(doc.relative_to(ROOT).as_posix(),
+             re.sub(r"\s+", " ", _CARD_REGION.sub(
+                 "", doc.read_text(encoding="utf-8"))))
+            for doc in docs]
+
+
+def _number(token: str) -> int:
+    return int(token) if token.isdigit() else _WORDS[token.lower()]
+
+
+def _mcp_tools() -> list[str]:
+    from boost_cli.commands import configuration
+    return configuration.REGISTRY.names()
+
+
+class TestDocsSiteCounts:
+    """Every count of commands and MCP tools on the docs site is the code's.
+
+    The checks above read README.md and docs/index.html only, and the pages
+    beside them drifted unseen: carousel.html said 78 commands in its heading
+    and lede and 76 in its stat tile while COMMANDS held 81 (and its own
+    per-group lines summed to 81), docs/architecture/c4-containers.md said
+    78, and mcp-hub.html's tile said 6 MCP tools against the 7 a live
+    `tools/list` returns.
+    """
+
+    def test_every_command_total_is_the_registry(self):
+        stated = []
+        for name, text in _docs_site():
+            # "13 commands in this group" is a per-group count, checked below.
+            stated += [(name, int(n)) for n in re.findall(
+                r"(\d+)\s+commands\b(?! in this group)", text, re.I)]
+            # The stat-tile form: a number and its label in separate tags is
+            # how the carousel's 76 got past a `\d+ commands` scan.
+            stated += [(name, int(n)) for n in re.findall(
+                r"<b>(\d+)</b>\s*<span>Commands\b", text)]
+        assert {"docs/carousel.html", "docs/index.html",
+                "docs/architecture/c4-containers.md"} <= {d for d, _ in stated}, stated
+        assert [s for s in stated if s[1] != _command_count()] == [], (
+            "COMMANDS holds %d: %s" % (_command_count(), stated))
+
+    def test_every_group_count_is_the_registry(self):
+        stated = [(name, int(n)) for name, text in _docs_site()
+                  for n in re.findall(r"(\d+)\s+(?:command\s+)?groups\b", text)]
+        assert stated, "no docs page states how many command groups there are"
+        assert [s for s in stated if s[1] != _group_count()] == [], (
+            "COMMANDS spans %d groups: %s" % (_group_count(), stated))
+
+    def test_the_carousel_group_notes_are_the_registry_in_order(self):
+        from collections import Counter
+
+        from boost_cli.cli import GROUPS
+        text = dict(_docs_site())["docs/carousel.html"]
+        sizes = Counter(group for _name, group, _module, _summary in COMMANDS)
+        assert [int(n) for n in re.findall(
+            r"(\d+) commands in this group", text)] == [sizes[g] for g in GROUPS]
+
+    def test_every_mcp_tool_count_is_the_registry(self):
+        n = len(_mcp_tools())
+        number = r"(\d+|%s)" % "|".join(_WORDS)
+        stated = []
+        for name, text in [*_docs_site(), ("README.md", README)]:
+            stated += [(name, _number(t)) for t in re.findall(
+                number + r"\s*(?:</b>\s*<span>)?\s*MCP\s+tools\b", text, re.I)]
+            stated += [(name, _number(t)) for t in re.findall(
+                number + r"\s+tools\s+are\s+exposed\b", text, re.I)]
+        assert {"docs/mcp-hub.html", "README.md"} <= {d for d, _ in stated}, stated
+        assert [s for s in stated if s[1] != n] == [], (
+            "the MCP registry holds %d tools: %s" % (n, stated))
+
+    def test_the_readme_names_every_mcp_tool(self):
+        m = re.search(r"tools are exposed: (.+?)\.\s", README, re.S)
+        assert m, "README no longer lists the MCP tools it exposes"
+        assert re.findall(r"`(boost_\w+)`", m.group(1)) == _mcp_tools()
+
+
 class TestNoStaleCountsElsewhere:
     @pytest.mark.parametrize("doc", ["README.md", "docs/index.html"])
     def test_no_command_count_is_a_stale_literal(self, doc):
