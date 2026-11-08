@@ -9,7 +9,7 @@ C4Container
   title Container Diagram — boost
 
   Person(dev, "Developer", "Runs boost commands")
-  System_Ext(agents, "AI coding agents", "Claude Code, Cursor, Windsurf, Gemini CLI")
+  System_Ext(agents, "AI coding agents", "Claude Code, Windsurf, Cursor, Gemini CLI, Antigravity CLI, Codex")
   System_Ext(github, "GitHub", "Registry repos and skill sources")
 
   Container_Boundary(boost, "boost") {
@@ -27,8 +27,8 @@ C4Container
 
   Boundary(installed, "installed skills") {
     ContainerDb(store, "~/.agents/skills", "files + .skill-lock.json v3", "Canonical store — single source of truth")
-    ContainerDb(links, "~/.claude, ~/.cursor, ~/.windsurf", "symlinks into the store", "Three linking agents")
-    ContainerDb(gemini, "~/.gemini", "GEMINI.md + TOML commands", "Rules and workflows only")
+    ContainerDb(links, "~/.claude, ~/.windsurf, ~/.cursor, ~/.gemini/antigravity-cli", "symlinks into the store", "Four linking agents")
+    ContainerDb(native, "~/.gemini, ~/.codex", "GEMINI.md + TOML commands, AGENTS.md", "Gemini CLI and Codex: rules and Gemini CLI workflows, no skill links")
   }
 
   Rel(dev, cli, "Invokes")
@@ -42,27 +42,36 @@ C4Container
   Rel(engine, statedir, "Persists policy and pins")
   Rel(engine, store, "Copies skills into")
   Rel(engine, links, "Symlinks out to")
-  Rel(engine, gemini, "Materialises rules and commands")
-  Rel(agents, store, "Reads directly", "Gemini CLI only")
+  Rel(engine, native, "Materialises rules and commands")
+  Rel(agents, store, "Reads directly", "Gemini CLI and Codex")
   Rel(agents, links, "Reads")
 
   UpdateLayoutConfig($c4ShapeInRow="2", $c4BoundaryInRow="2")
 ```
 
-## Four agent targets, but only three get symlinks
+## Six agent targets, but only four get symlinks
 
-Gemini CLI implements the Agent Skills standard and discovers `~/.agents/skills` — the canonical
-store — *directly*, so it is configured with `links_skills: false`. Linking into `~/.gemini/skills`
-as well would put one skill in two of its discovery tiers, where the `.agents` alias out-ranks
-whatever was linked, costing a "Skill conflict detected" line per skill per session and buying
-nothing.
+Claude Code, Windsurf, Cursor and Antigravity CLI each get a symlink into the canonical store.
+Gemini CLI and Codex do not: both discover `~/.agents/skills`, the canonical store itself, so both
+are configured with `links_skills: false` (`core/config.py` records how each was verified).
+
+- **Gemini CLI** implements the Agent Skills standard. Linking into `~/.gemini/skills` as well
+  would put one skill in two of its discovery tiers, where the `.agents` alias out-ranks whatever
+  was linked, costing a "Skill conflict detected" line per skill per session and buying nothing.
+- **Codex** lists `$HOME/.agents/skills` among its skill roots and de-duplicates by resolved path,
+  so a link would cost nothing and add nothing. Not linking also keeps skills visible to a user who
+  moves `CODEX_HOME`, because the store root follows `HOME`.
+- **Antigravity CLI** shares the `~/.gemini` tree but reads neither the store nor the shared
+  `~/.gemini/skills`, so it is a linking agent, and its links go into
+  `~/.gemini/antigravity-cli/skills`, where Gemini CLI does not look.
 
 That distinction is load-bearing for anything you write:
 
 - Iterate `agents.linking_agents()` for anything symlink-shaped — linking, unlinking, stale-link
   sweeps, coverage counts.
-- Use `agents.enabled_agents()` for rules and workflows, which materialise into `~/.gemini/` like
-  any other agent's dotdir. `agents.native_store_agents()` is the complement, for reporting.
+- Use `agents.enabled_agents()` for rules and workflows, which materialise into each agent's dotdir
+  that takes them, `~/.gemini/` and `~/.codex/` included. `agents.native_store_agents()` is the
+  complement, for reporting.
 
 ## Why the canonical store exists
 

@@ -21,7 +21,7 @@ C4Dynamic
   }
 
   ContainerDb(canon, "~/.agents/skills", "files", "Canonical store")
-  ContainerDb(links, "~/.claude, ~/.cursor, ~/.windsurf", "symlinks", "Linking agents")
+  ContainerDb(links, "~/.claude, ~/.windsurf, ~/.cursor, ~/.gemini/antigravity-cli", "symlinks", "Linking agents")
 
   Rel(dev, cmd, "1. boost install <name>")
   Rel(cmd, cat, "2. Look up the entry in the cached catalog")
@@ -44,11 +44,13 @@ C4Dynamic
 capabilities exceed policy, or that trips the secret / prompt-injection / typosquat scanners, is
 not installed at all — there is no "installed but quarantined" state to reason about later.
 
-**Step 7 is not "symlink into every agent".** Only `agents.linking_agents()` get symlinks. Gemini
-CLI reads `~/.agents/skills` natively and is deliberately excluded, because linking into
-`~/.gemini/skills` too would put one skill in two of its discovery tiers and produce a "Skill
-conflict detected" line per skill per session. Rules and workflows *do* materialise into
-`~/.gemini/`, so the right helper depends on what you are writing —
+**Step 7 is not "symlink into every agent".** Only `agents.linking_agents()` get symlinks: Claude
+Code, Windsurf, Cursor and Antigravity CLI. Gemini CLI and Codex read `~/.agents/skills` natively
+and are deliberately excluded. For Gemini CLI, linking into `~/.gemini/skills` too would put one
+skill in two of its discovery tiers and produce a "Skill conflict detected" line per skill per
+session; Codex would collapse the link into the store entry it already sees. Rules *do*
+materialise for both, into `~/.gemini/GEMINI.md` and Codex's `AGENTS.md`, and Gemini CLI's
+workflows into `~/.gemini/`, so the right helper depends on what you are writing —
 see [c4-containers.md](c4-containers.md).
 
 **Step 9 is binding, not advisory.** `core/integrity` makes the recorded digest enforceable, which

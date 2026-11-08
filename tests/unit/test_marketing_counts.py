@@ -473,6 +473,74 @@ class TestDocsSiteCounts:
         assert re.findall(r"`(boost_\w+)`", m.group(1)) == _mcp_tools()
 
 
+def _agent_sets() -> tuple[set[str], set[str], set[str]]:
+    """(every agent, the ones boost symlinks into, the ones reading the store)."""
+    from boost_cli.core import agents
+    every = set(agents.DISPLAY.values())
+    linking = {agents.DISPLAY[a] for a in agents.DISPLAY
+               if agents.flag_default(a, "links_skills")}
+    return every, linking, every - linking
+
+
+def _agent_runs(text: str) -> list[list[str]]:
+    """Each run of agent names joined by commas, `·` or "and", tags removed."""
+    from boost_cli.core import agents
+    names = sorted(agents.DISPLAY.values(), key=len, reverse=True)
+    one = r"(?:%s)(?: CLI)?" % "|".join(map(re.escape, names))
+    sep = r"(?:\s*,\s*(?:and\s+|or\s+)?|\s+and\s+|\s+or\s+|\s*·\s*)"
+    text = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", text))
+    canon = {n.removesuffix(" CLI"): n for n in names}
+    return [[canon[n.removesuffix(" CLI")] for n in re.findall(one, m.group(0))]
+            for m in re.finditer(r"(?<![\w-])%s(?:%s%s)+" % (one, sep, one), text)]
+
+
+class TestAgentListsAgree:
+    """Docs that list the agents boost installs into list all of them.
+
+    boost targets six agents: it symlinks skills into four (Claude Code,
+    Windsurf, Cursor, Antigravity CLI), and two (Gemini CLI, Codex) read
+    the canonical store directly. Both C4 diagrams listed Claude Code,
+    Cursor, Windsurf and Gemini CLI; c4-containers.md said "Three linking
+    agents" and that only Gemini CLI reads the store; adapters.html and
+    langchain.html named the same four, and carousel.html three.
+    """
+
+    def test_an_install_target_list_is_every_agent_or_the_linking_ones(self):
+        # A list naming Cursor and Windsurf is a list of install targets:
+        # neither is an MCP or hooks host, which is what the shorter
+        # "Claude Code, Gemini CLI, …" lists elsewhere describe.
+        every, linking, _native = _agent_sets()
+        surfaces = [*_docs_site(), ("README.md", README)]
+        lists = [(name, run) for name, text in surfaces
+                 for run in _agent_runs(text)
+                 if run[0] == "Claude Code" and {"Cursor", "Windsurf"} <= set(run)]
+        assert {"README.md", "docs/index.html"} <= {d for d, _ in lists}, lists
+        wrong = [(d, run) for d, run in lists if set(run) not in (every, linking)]
+        assert wrong == [], (
+            "boost targets %s and links into %s: %s"
+            % (sorted(every), sorted(linking), wrong))
+
+    def test_the_c4_diagrams_name_every_agent(self):
+        every, _linking, _native = _agent_sets()
+        for doc in ("c4-context.md", "c4-containers.md"):
+            text = (ROOT / "docs" / "architecture" / doc).read_text(encoding="utf-8")
+            m = re.search(r'System_Ext\(agents, "[^"]*", "([^"]*)"\)', text)
+            assert m, "%s lost its agents box" % doc
+            assert {a for run in _agent_runs(m.group(1)) for a in run} == every, (
+                doc, m.group(1))
+
+    def test_the_container_diagram_splits_them_as_the_code_does(self):
+        _every, linking, native = _agent_sets()
+        text = (ROOT / "docs" / "architecture" / "c4-containers.md").read_text(
+            encoding="utf-8")
+        said = re.findall(r"\b(\w+) linking agents\b", text, re.I)
+        assert said and {_number(n) for n in said} == {len(linking)}, said
+        m = re.search(r'Rel\(agents, store, "Reads directly", "([^"]*)"\)', text)
+        assert m, "the container diagram no longer says who reads the store"
+        assert {a for run in _agent_runs(m.group(1)) for a in run} == native, \
+            m.group(1)
+
+
 class TestNoStaleCountsElsewhere:
     @pytest.mark.parametrize("doc", ["README.md", "docs/index.html"])
     def test_no_command_count_is_a_stale_literal(self, doc):

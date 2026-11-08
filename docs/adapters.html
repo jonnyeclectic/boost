@@ -93,7 +93,7 @@
     <p class="crumbs"><a href="index.html">boost</a> / docs / adapters · <span class="mono">boost adapt</span></p>
     <span class="badge">New command · <span class="mono">boost adapt &lt;skill&gt; --to &lt;framework&gt;</span></span>
     <h1>One authored skill, <span class="grad-text">every agent framework</span>.</h1>
-    <p class="lede">boost installs skills as files for editor-style agents — Claude Code, Cursor, Windsurf, Gemini CLI.
+    <p class="lede">boost installs skills as files for editor-style agents — Claude Code, Windsurf, Cursor, Gemini CLI, Antigravity CLI and Codex.
       But frameworks like <b>CrewAI</b> and the <b>OpenAI Agents SDK</b> aren't editors watching a folder;
       an agent there is a value constructed in a Python source file. <code>boost adapt</code> bridges that
       gap: it renders one <code>SKILL.md</code> into each framework's native idiom — a deterministic,
@@ -137,7 +137,7 @@
         Same input, two consumers — files for editors, code for frameworks.</p>
 
       <div class="diagram reveal">
-        <svg viewBox="0 0 940 340" role="img" aria-label="One SKILL.md feeds two lanes: the install lane symlinks it verbatim into Claude Code, Cursor and Windsurf directories; the adapt lane runs it through per-framework renderers to emit native CrewAI and OpenAI Agents SDK source.">
+        <svg viewBox="0 0 940 340" role="img" aria-label="One SKILL.md feeds two lanes: the install lane copies it verbatim into the canonical store, which Gemini CLI and Codex read directly, and symlinks it into the Claude Code, Windsurf, Cursor and Antigravity CLI skill directories; the adapt lane runs it through per-framework renderers to emit native CrewAI and OpenAI Agents SDK source.">
           <defs>
             <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
               <path d="M0 0L10 5L0 10z" fill="#7dd3fc"/>
@@ -158,7 +158,7 @@
 
           <rect x="600" y="30" width="300" height="82" rx="10" fill="rgba(64,203,227,.05)" stroke="#40cbe3" stroke-width="1.1"/>
           <text x="616" y="52" class="head">Editor agents <tspan class="lbl-t">(file consumers)</tspan></text>
-          <text x="616" y="74" class="lbl-s mono">~/.claude/skills/ · Cursor · Windsurf</text>
+          <text x="616" y="74" class="lbl-s mono">~/.agents/skills + agent symlinks</text>
           <text x="616" y="94" class="lbl-t">copied verbatim — no transform</text>
           <line x1="560" y1="70" x2="600" y2="70" stroke="#3a4363" stroke-width="1.4" marker-end="url(#a)"/>
 
