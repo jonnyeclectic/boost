@@ -1152,6 +1152,15 @@ def cmd_doctor(argv):
                 "run `%s` %s" % (name, *integrity.modified_remedy(
                     name, scope=scopes.SCOPE_PROJECT)), wrap=True)
             proj_issues += 1
+            # An edit outranks a missing copy in `project_status`, so a
+            # deleted sibling never reached the branch above. Named apart,
+            # because its remedy is not the one that discards the edit:
+            # `boost heal` restores the copy and leaves the edit alone.
+            gone = integrity.project_missing_rows(entry, pbase)
+            if gone:
+                bad("project-skill", "project skill %s is missing %s — run "
+                    "`boost heal`" % (name, ", ".join(gone)), wrap=True)
+                proj_issues += 1
         # An agent enabled after the install has no row, so the status above
         # cannot see it; `boost sync` copies into it, as it does for a rule.
         for agent in store.unmaterialized_project_agents(pbase, name, entry):
