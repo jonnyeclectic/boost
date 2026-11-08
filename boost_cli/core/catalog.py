@@ -1185,7 +1185,11 @@ def find(name: str, tap: str | None = None,
         tap, name = qualifier, bare
     pool = all_entries() if entries is None else entries
     matches = list(_name_index(pool).get(unicodedata.normalize("NFC", name), ()))
-    if not matches and entries is None and _ships_builtin(name, tap):
+    hits = _in_tap(matches, tap)
+    # On no *hits*, not no matches: `boost/builtin:boost-first` with another
+    # tap that ships a `boost-first` matched that tap's row, the qualifier
+    # then filtered it out, and the fallback had already been skipped.
+    if not hits and entries is None and _ships_builtin(name, tap):
         # One of the two items boost ships itself, on a machine whose
         # builtin tap was never registered. Registration used to happen only
         # when the user said yes to `boost mcp register`'s offer, so the
@@ -1202,20 +1206,26 @@ def find(name: str, tap: str | None = None,
         # Only a miss gets here, so the rescan runs once per upgrade.
         builtin.ensure_tap()
         rebuild_tap(registry.get(builtin.BUILTIN_TAP))
-        matches = list(_name_index(all_entries()).get(name, ()))
-    if tap:
-        # Same tiering as registry.get: a qualified owner/repo beats a bare
-        # repo tail, so `angular/skills:x` never picks up `microsoft/skills:x`.
-        # Without this the two resolvers disagreed — `boost untap skills`
-        # errored on the ambiguity while `boost bundle apply` with
-        # `skills:brainstorming` silently took matches[0] from whichever tap
-        # sorted first.
-        for tier in _tap_tiers(tap):
-            hits = [e for e in matches if tier(e["tap"])]
-            if hits:
-                return hits
-        return []
-    return matches
+        hits = _in_tap(list(_name_index(all_entries()).get(name, ())), tap)
+    return hits
+
+
+def _in_tap(matches: list[dict], tap: str | None) -> list[dict]:
+    """``matches`` narrowed to the tap ``tap`` names; all of them for None.
+
+    Same tiering as registry.get: a qualified owner/repo beats a bare repo
+    tail, so `angular/skills:x` never picks up `microsoft/skills:x`. Without
+    this the two resolvers disagreed — `boost untap skills` errored on the
+    ambiguity while `boost bundle apply` with `skills:brainstorming` silently
+    took matches[0] from whichever tap sorted first.
+    """
+    if not tap:
+        return matches
+    for tier in _tap_tiers(tap):
+        hits = [e for e in matches if tier(e["tap"])]
+        if hits:
+            return hits
+    return []
 
 
 def _ships_builtin(name: str, qualifier: str | None) -> bool:

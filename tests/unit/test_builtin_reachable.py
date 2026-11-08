@@ -60,6 +60,30 @@ class TestAShippedNameResolvesWithoutAnOffer:
         hits = catalog.find("%s:%s" % (builtin.BUILTIN_TAP, SKILL))
         assert [e["tap"] for e in hits] == [builtin.BUILTIN_TAP]
 
+    def test_the_qualified_spelling_with_a_namesake_in_another_tap(
+            self, boost, tmp_path):
+        # Another tap ships a `boost-first` of its own. Its row matched the
+        # name, so the fallback was skipped, and the qualifier then filtered
+        # that row out: `boost/builtin:boost-first` resolved to nothing.
+        other = tmp_path / "namesake"
+        (other / "skills" / RULE).mkdir(parents=True)
+        (other / "skills" / RULE / "SKILL.md").write_text(
+            "---\nname: %s\ndescription: a namesake\n---\n\nbody\n" % RULE,
+            encoding="utf-8")
+        for argv in (("init", "-q"), ("add", "-A"),
+                     ("-c", "user.name=t", "-c", "user.email=t@t",
+                      "commit", "-qm", "tap")):
+            subprocess.run(["git", "-C", str(other), *argv], check=True,
+                           capture_output=True)
+        boost("tap", other)
+        # The bare name means the tap the user configured, and registers
+        # nothing: it had a hit.
+        assert {e["tap"] for e in catalog.find(RULE)} == {"namesake"}
+        assert builtin.BUILTIN_TAP not in _tap_names()
+        hits = catalog.find("%s:%s" % (builtin.BUILTIN_TAP, RULE))
+        assert [(e["tap"], e["kind"]) for e in hits] == \
+            [(builtin.BUILTIN_TAP, "rule")]
+
     def test_a_qualifier_naming_another_tap_registers_nothing(self, sandbox):
         assert catalog.find("someone/else:%s" % RULE) == []
         assert _tap_names() == []
