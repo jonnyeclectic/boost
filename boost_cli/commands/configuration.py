@@ -1967,7 +1967,8 @@ def _tool_read(args: dict):
         # when the other one is installed, or there would be no way to read
         # the copy an agent is deciding whether to switch to.
         cat = catalog.resolve_one(name, path=path)
-        text = info._read(store.source_file_for(cat))
+        source = store.source_file_for(cat)
+        text = info._read(source)
         # "installed" must describe *this* copy: with a/twin installed, a read
         # of b/twin said "installed: yes" over text that is not on disk. An
         # older record without `source_dir` falls back to the tap alone.
@@ -1976,14 +1977,52 @@ def _tool_read(args: dict):
         here = (rec is not None and rec.get("tap") == cat.get("tap")
                 and rec.get("source_dir", cat.get("rel_dir"))
                 == cat.get("rel_dir"))
-        return mcp.read_reply(name, text, kind=cat.get("kind") or "skill",
+        kind = cat.get("kind") or "skill"
+        sdir = (_installed_skill_dir(name) if here else source.parent) \
+            if kind == "skill" else None
+        return mcp.read_reply(name, text, kind=kind,
                               installed=here, where=_installed_where(found),
-                              held=mcp.held_line(name, rec)), False
-    text, kind, lock, _cat = info._resolve_text(name)
+                              held=mcp.held_line(name, rec),
+                              **_companions(sdir)), False
+    text, kind, lock, cat = info._resolve_text(name)
+    sdir = None
+    if kind == "skill":
+        sdir = (_installed_skill_dir(name) if lock is not None
+                else _tap_skill_dir(cat))
     return mcp.read_reply(name, text, kind=kind, installed=lock is not None,
                           where=(_installed_where(integrity.find_installed(name))
                                  if lock is not None else None),
-                          held=mcp.held_line(name, lock)), False
+                          held=mcp.held_line(name, lock),
+                          **_companions(sdir)), False
+
+
+def _installed_skill_dir(name: str) -> Path | None:
+    """The installed copy of skill ``name`` a reader opens, or None."""
+    row = integrity.resolve_skill(name)
+    return row.dir if row is not None else None
+
+
+def _tap_skill_dir(cat: dict | None) -> Path | None:
+    """A not-installed skill's directory in its tap, or None.
+
+    The read just went through :func:`store.source_file_for`, which
+    materialized it, so the companions are on disk; this asks again rather
+    than widening ``info._resolve_text``'s contract for one caller.
+    """
+    if not cat:
+        return None
+    try:
+        return store.source_file_for(cat).parent
+    except (BoostError, OSError):
+        return None
+
+
+def _companions(sdir: Path | None) -> dict:
+    """``read_reply``'s companion arguments for a skill directory."""
+    if sdir is None:
+        return {}
+    return {"companions": store.companion_files(sdir),
+            "skill_dir": _tilde(sdir)}
 
 
 def _installed_where(found) -> str | None:
@@ -2186,10 +2225,13 @@ def _use_now_lines(res: store.InstallResult) -> list[str]:
     the line points at the text, which is usable now on every host.
     """
     if res.kind == "skill":
+        # The directory too: a skill's text names `scripts/…` and `forms.md`
+        # relative to itself, and the line used to give only SKILL.md's path.
         return ["to use it now: follow the text boost_read returns for %s, "
-                "or read %s — whether this session's host loads a skill "
-                "installed after it started depends on the host"
-                % (res.name, _tilde(res.dest / "SKILL.md"))]
+                "or read %s; the files it names by relative path are in %s "
+                "— whether this session's host loads a skill installed after "
+                "it started depends on the host"
+                % (res.name, _tilde(res.dest / "SKILL.md"), _tilde(res.dest))]
     what = "command" if res.kind == "workflow" else "rule"
     return ["to use it now: boost_read %s returns its text — whether this "
             "session's host picks up a %s written after it started depends "
@@ -2757,7 +2799,8 @@ REGISTRY.register(
     "installs nothing, changes nothing, and never reranks, so it is fast. "
     "Long items are truncated at a stated character "
     "count and the reply says so and names the command that returns the rest; "
-    "a body that arrives whole is whole.",
+    "a body that arrives whole is whole. A skill is more than its body when "
+    "it ships files beside SKILL.md, and the reply's header names them.",
     {"type": "object",
      "properties": {"name": {"type": "string",
                              "description": "the item's name, as boost_search "

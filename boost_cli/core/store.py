@@ -589,6 +589,43 @@ def refuse_escape(tap: registry.Tap, path: Path, name: str) -> None:
                  % util.shell_arg(tap.name))
 
 
+def companion_files(skill_dir: Path) -> list[str]:
+    """What a skill ships beside its ``SKILL.md``, top level, by name.
+
+    A file is its name; a directory is ``name/ (N files)``, counted
+    recursively. Dotfiles are left out, as is ``SKILL.md`` itself. ``[]``
+    for a directory that cannot be read.
+
+    `boost_read` returns SKILL.md alone, and a skill that says "read
+    FORMS.md" or "run scripts/fill_form.py" reads as complete there:
+    anthropics/skills' `pdf` ships forms.md, reference.md and eight scripts
+    its SKILL.md names, and 14 of that repo's 19 skills ship files besides
+    SKILL.md and LICENSE.txt. Nothing in the reply said they existed.
+    """
+    try:
+        children = sorted(skill_dir.iterdir(), key=lambda p: p.name)
+    except OSError:
+        return []
+    found = []
+    for child in children:
+        if child.name.startswith(".") or child.name == "SKILL.md":
+            continue
+        if child.is_dir() and not child.is_symlink():
+            n = sum(1 for _ in _visible_files(child))
+            found.append("%s/ (%d file%s)" % (child.name, n,
+                                              "" if n == 1 else "s"))
+        else:
+            found.append(child.name)
+    return found
+
+
+def _visible_files(root: Path) -> Iterator[str]:
+    """Every non-dot file under ``root``, through non-dot directories."""
+    for _dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if not d.startswith(".")]
+        yield from (f for f in filenames if not f.startswith("."))
+
+
 def source_file_for(entry: dict) -> Path:
     """The tap file a catalog entry indexes, on disk and inside its clone.
 
