@@ -757,7 +757,13 @@ def no_results(query: str, *, tapped: int,
                 "ignores, so nothing was searched. Retry with a plain-word "
                 "description of the task." % echo(query))
     if tapped > 0:
-        return "no skills match %r" % echo(query)
+        # All three kinds, because the index holds all three, and the move
+        # that follows: boost_discover_github is this server's own tool for
+        # exactly this reply. "no skills match" alone left the agent nowhere
+        # to go, where the CLI's miss already points at `boost discover`.
+        return ("no skills, rules or workflows match %r — call "
+                "boost_discover_github with the same query to search GitHub "
+                "for registries nobody here has tapped" % echo(query))
     # Addressed to the user via the agent, and naming ONE command. Telling an
     # agent to run `boost mcp --seed` itself would have it re-register the
     # server with every CLI on PATH as a side effect, and would step straight
