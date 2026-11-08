@@ -350,10 +350,13 @@ def cmd_search(argv):
         # how to read and install the top hit. On stderr, so the rows stay
         # the only stdout lines naming a hit (`boost search x | grep
         # owner/repo`); a command is data, so it is whole and unwrapped.
+        # Through out.info, which flushes stdout first: a bare print to stderr
+        # reached `boost search x 2>&1` -- how an agent's shell reads -- above
+        # the rows still sitting in stdout's pipe buffer.
         top = shown[0][0]
-        print(out.role("  " + out.search_next_step(
+        out.info(out.role(out.search_next_step(
             top["name"], top.get("tap") or ""), "muted", stream=sys.stderr),
-            file=sys.stderr)
+            stream=sys.stderr)
     if use_rag:
         _note_stem_expansions(query)
         _note_dropped_terms(dropped)

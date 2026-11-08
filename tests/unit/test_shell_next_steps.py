@@ -12,6 +12,8 @@ Windsurf, and on any host where boost's MCP server is not registered.
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -65,6 +67,21 @@ class TestThePipedSearch:
         assert NOTE in r.err.splitlines()
         # stdout stays rows and chrome: a grep for the tap matches rows only.
         assert "read one" not in r.out
+
+    def test_a_merged_stream_reads_it_after_the_rows(self, tapped):
+        # How an agent's shell reads: both streams into one pipe. stdout is
+        # block-buffered there and stderr is not, so a note printed straight
+        # to stderr arrived above the rows it describes.
+        repo = Path(__file__).resolve().parents[2]
+        env = dict(os.environ, PYTHONPATH=str(repo), PYTHONIOENCODING="utf-8")
+        env.pop("COLUMNS", None)
+        proc = subprocess.run(
+            [sys.executable, "-m", "boost_cli", "search", "commit"],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL, env=env, timeout=120, check=False)
+        text = proc.stdout.decode("utf-8")
+        assert proc.returncode == 0, text
+        assert text.index("ranked by") < text.index(NOTE), text
 
     def test_the_commands_it_names_run(self, boost, tapped):
         assert "name: commit-messages" in boost(
