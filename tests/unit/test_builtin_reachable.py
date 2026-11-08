@@ -114,6 +114,18 @@ class TestAShippedNameResolvesWithoutAnOffer:
         boost("install", SKILL)
         assert lockfile.get_skill(SKILL) is not None
 
+    def test_a_tap_that_cannot_be_written_is_an_error_not_a_crash(
+            self, boost, monkeypatch):
+        def refuse():
+            raise PermissionError("read-only home")
+        monkeypatch.setattr(builtin, "ensure_tap", refuse)
+        with pytest.raises(BoostError, match="read-only home"):
+            catalog.find(RULE)
+        # Exit 1 with the reason, where it was 70 and a crash report.
+        r = boost("info", RULE, expect=1)
+        assert ("could not set up boost's own tap to find %r: read-only home"
+                % RULE) in r.err
+
 
 class TestATapRegisteredByAnOlderWheel:
     """The builtin tap predates the skill on every machine that took the rule.

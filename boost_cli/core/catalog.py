@@ -1204,8 +1204,15 @@ def find(name: str, tap: str | None = None,
         # `load_tap` serves such a cache as it is, so the copy alone left
         # `boost install boost-find-and-install` missing after an upgrade.
         # Only a miss gets here, so the rescan runs once per upgrade.
-        builtin.ensure_tap()
-        rebuild_tap(registry.get(builtin.BUILTIN_TAP))
+        try:
+            builtin.ensure_tap()
+            rebuild_tap(registry.get(builtin.BUILTIN_TAP))
+        except OSError as exc:
+            # A lookup is not where a user expects a write to fail, so it says
+            # which write: unhandled, an unwritable ~/.boost turned
+            # `boost info boost-first` into "boost hit an unexpected error".
+            raise BoostError("could not set up boost's own tap to find %r: %s"
+                             % (name, exc)) from exc
         hits = _in_tap(list(_name_index(all_entries()).get(name, ())), tap)
     return hits
 
