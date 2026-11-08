@@ -376,7 +376,7 @@ line coverage. Target `boost_cli/core` behavior with assertions, not just import
   (SKILL.md), `rule` (.mdc/.cursorrules/.windsurfrules/.clinerules and
   Copilot's `*.instructions.md`), and `workflow` (commands/agents/workflows
   Markdown, Copilot's `*.prompt.md`/`*.agent.md`/`*.chatmode.md`, or a loose
-  file whose frontmatter is a subagent's or a command's). A workflow's slot
+  file whose frontmatter marks a subagent or a command). A workflow's slot
   is `workflows.detect_slot(path, meta)`: Copilot suffix, then directory,
   then frontmatter — `tools` or `color` without `allowed-tools`/`argument-hint`
   is a subagent. Pass the frontmatter: by path alone, all 166 of
