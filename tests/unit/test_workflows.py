@@ -11,6 +11,7 @@ or land in a format its agent will silently never discover.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 
@@ -46,6 +47,96 @@ class TestDetectSlot:
 
     def test_nested_agents_dir_detected(self):
         assert workflows.detect_slot("a/b/agents/c.md") == workflows.SLOT_AGENTS
+
+
+class TestSlotFromFrontmatter:
+    """A file under no workflow dir is decided by what its frontmatter is.
+
+    VoltAgent/awesome-claude-code-subagents files every subagent under
+    ``categories/<n>-<topic>/``, and msitarzewski/agency-agents under a
+    department dir; both installed into ``commands/`` until the frontmatter
+    was asked."""
+
+    SUBAGENT: ClassVar[dict] = {
+        "name": "api-designer", "description": "Use this agent when",
+        "tools": "Read, Write, Edit, Bash", "model": "sonnet"}
+    PERSONA: ClassVar[dict] = {
+        "name": "Software Architect", "description": "d",
+        "color": "indigo", "emoji": "x", "vibe": "y"}
+
+    def test_a_loose_file_with_tools_is_a_subagent(self):
+        assert workflows.detect_slot(
+            "categories/01-core-development/api-designer.md",
+            self.SUBAGENT) == workflows.SLOT_AGENTS
+
+    def test_a_loose_file_with_color_alone_is_a_subagent(self):
+        assert workflows.detect_slot(
+            "engineering/engineering-software-architect.md",
+            self.PERSONA) == workflows.SLOT_AGENTS
+
+    @pytest.mark.parametrize("key", ["allowed-tools", "argument-hint"])
+    def test_a_command_key_keeps_it_a_command(self, key):
+        assert workflows.detect_slot(
+            "loose.md", self.SUBAGENT | {key: "x"}) == workflows.SLOT_COMMANDS
+
+    def test_model_alone_does_not_make_a_subagent(self):
+        # A slash command takes `model:` too, so it decides nothing.
+        assert workflows.detect_slot(
+            "loose.md", {"name": "a", "description": "d", "model": "opus"}
+        ) == workflows.SLOT_COMMANDS
+
+    def test_a_command_dir_outranks_the_frontmatter(self):
+        # qdhenry/Claude-Command-Suite's .claude/commands/boundary/*.md list
+        # `tools` and are slash commands.
+        for rel in (".claude/commands/boundary/x.md", "workflows/x.md"):
+            assert workflows.detect_slot(rel, self.SUBAGENT) == \
+                workflows.SLOT_COMMANDS
+
+    def test_an_agents_dir_outranks_a_command_key(self):
+        assert workflows.detect_slot(
+            "agents/x.md", {"allowed-tools": "Bash"}) == workflows.SLOT_AGENTS
+
+    def test_no_frontmatter_is_still_a_command(self):
+        assert workflows.detect_slot("loose.md", {}) == workflows.SLOT_COMMANDS
+        assert workflows.detect_slot("loose.md", None) == \
+            workflows.SLOT_COMMANDS
+
+    def test_a_dir_named_like_the_file_is_not_a_dir(self):
+        # Only directories are read for the slot, never the file's own name.
+        assert workflows.detect_slot("agents.md", {}) == \
+            workflows.SLOT_COMMANDS
+
+    def test_slot_of_parses_the_text(self):
+        raw = "---\nname: a\ndescription: d\ncolor: blue\n---\nbody\n"
+        assert workflows.slot_of("team/a.md", raw) == workflows.SLOT_AGENTS
+        assert workflows.slot_of("team/a.md", "no frontmatter") == \
+            workflows.SLOT_COMMANDS
+
+
+class TestSlotFromCopilotSuffix:
+    @pytest.mark.parametrize("rel,want", [
+        ("prompts/a11y.prompt.md", "commands"),
+        ("x/agents/plan.prompt.md", "commands"),
+        ("loose/Analyst-subagent.agent.md", "agents"),
+        ("commands/x.agent.md", "agents"),
+        ("chatmodes/qa.chatmode.md", "agents"),
+        ("chatmodes/QA.ChatMode.md", "agents"),
+    ])
+    def test_the_suffix_outranks_dir_and_frontmatter(self, rel, want):
+        meta = {"name": "a", "description": "d", "tools": ["x"]}
+        assert workflows.detect_slot(rel, meta) == want
+
+    def test_the_suffix_is_matched_case_blind(self):
+        # Under commands/ and with no frontmatter, only the suffix says agent.
+        assert workflows.detect_slot("commands/QA.Agent.MD", {}) == \
+            workflows.SLOT_AGENTS
+        assert workflows.suffix_slot("Plan.Prompt.md") == \
+            workflows.SLOT_COMMANDS
+
+    def test_a_bare_suffix_names_nothing(self):
+        assert workflows.suffix_slot(".agent.md") is None
+        assert workflows.suffix_slot("agent.md") is None
+        assert workflows.suffix_slot("x.agent.md") == workflows.SLOT_AGENTS
 
 
 class TestTargetExt:

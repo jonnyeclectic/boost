@@ -8,7 +8,7 @@
 # rows, which are copied here verbatim — pins and counts included.
 #
 # Scheduled, never required. It exists because the required gate measures
-# 10,731 entries and a real install carries ~71,655, where all four floors
+# 10,736 entries and a real install carries ~71,655, where all four floors
 # fail. It is A scale, not THE scale: hit@1 decays continuously with corpus
 # size and never plateaus, so no size here can be canonical.
 #
@@ -36,7 +36,7 @@ Aaronontheweb/dotnet-cursor-rules       9be2d201482bdafca8c687359f0ef0a71895d7af
 ChrisWiles/claude-code-showcase         a95518f0cb67e86230119da40429169bc4c35a6f    14    14
 LessUp/awesome-cursorrules-zh           ce39351450c4720a11c7edeadaef26d60c5c02e7   470   470
 aliarghyani/vue-cursor-rules            92609798e192312ce16edb78aa5424a8caaa415b    14    14
-affaan-m/ECC                            ca185ef5f7667078a1e70a763bd3a9c71c48acf0  1621  1588
+affaan-m/ECC                            ca185ef5f7667078a1e70a763bd3a9c71c48acf0  1626  1593
 BagelHole/DevOps-Security-Agent-Skills  0365f57a079b1332f95cf26e31dd2d5332a8399f   163   163
 composio-community/awesome-codex-skills 0930e1373789d2eda449039f7ac154b33031de89   880   880
 first-fluke/oh-my-agent                 75b3fbce93258f37843d6db8a7e32ab52a6d9aa3   205   139

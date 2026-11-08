@@ -113,7 +113,7 @@ measured on, and the `# --- scale` divider below them no longer separates
 it and `golden-natural.jsonl` into five, so no proper subset of the file can
 score either set. The rest exist so the corpus is a realistic size. That matters more than it sounds — over the six
 alone (921 entries at the current pins) BM25 scored 0.989 / 0.769 / 0.848 /
-0.880, and over the twenty (10,731) it scores **0.846 / 0.484 / 0.607 / 0.659**
+0.880, and over the twenty (10,736) it scores **0.846 / 0.484 / 0.607 / 0.660**
 (what `tests/eval/baseline.json` records), so three of the four old floors fail
 once the corpus stops being tiny. The six-repo row is **historical**: it was
 measured name-graded, before the set was pinned, and cannot be re-run against
@@ -373,8 +373,15 @@ line coverage. Target `boost_cli/core` behavior with assertions, not just import
   the stale entries as-is when it is not. Never make a stale cache an error —
   that trades a missing field for a missing catalogue.
 - **Three item kinds, one scanner.** `core/catalog.scan_dir` indexes `skill`
-  (SKILL.md), `rule` (.mdc/.cursorrules/.windsurfrules/.clinerules), and
-  `workflow` (commands/agents/workflows Markdown). **All three install**, and
+  (SKILL.md), `rule` (.mdc/.cursorrules/.windsurfrules/.clinerules and
+  Copilot's `*.instructions.md`), and `workflow` (commands/agents/workflows
+  Markdown, Copilot's `*.prompt.md`/`*.agent.md`/`*.chatmode.md`, or a loose
+  file whose frontmatter is a subagent's or a command's). A workflow's slot
+  is `workflows.detect_slot(path, meta)`: Copilot suffix, then directory,
+  then frontmatter — `tools` or `color` without `allowed-tools`/`argument-hint`
+  is a subagent. Pass the frontmatter: by path alone, all 166 of
+  VoltAgent/awesome-claude-code-subagents installed as slash commands.
+  **All three install**, and
   each honors `scope`: `store.install` dispatches to `_install_rule` /
   `_install_workflow` and only raises for a kind outside those three. They land
   in different places, which is the part to get right — a skill is copied into

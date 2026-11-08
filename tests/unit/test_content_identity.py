@@ -115,6 +115,24 @@ def test_rules_and_workflows_carry_a_digest_too(tmp_path):
         assert e["content"], "%s entries carry a digest" % e["kind"]
 
 
+def test_a_copilot_items_digest_matches_rag_under_its_short_name(
+        tmp_path, monkeypatch):
+    """The name in the digest is the one with `.instructions` / `.prompt`
+    stripped, and `rag.read_body` reads that same name off the entry."""
+    (tmp_path / "instructions").mkdir()
+    (tmp_path / "instructions" / "go.instructions.md").write_text(
+        "---\ndescription: Go style\napplyTo: '**/*.go'\n---\nGofmt.\n",
+        encoding="utf-8")
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / "prompts" / "plan.prompt.md").write_text(
+        "---\ndescription: Make a plan\n---\nPlan it.\n", encoding="utf-8")
+    entries = catalog.scan_dir(tmp_path, "t/one")
+    monkeypatch.setattr(rag, "_tap_paths", lambda: {"t/one": tmp_path})
+    assert sorted(e["name"] for e in entries) == ["go", "plan"]
+    for e in entries:
+        assert e["content"] == _digest(rag.read_body(e))
+
+
 # ------------------------------------------------------------- cache format
 
 def _cloned_tap(name="t/one"):

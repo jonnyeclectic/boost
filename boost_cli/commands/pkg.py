@@ -772,8 +772,9 @@ def _preview_skill_copy(e: dict, seen: dict | None, as_skill: bool | None,
             encoding="utf-8", errors="replace")
     except (OSError, BoostError):
         return
-    slot = workflows.detect_slot(e.get("skill_md", ""))
-    desc = workflows.skill_description(slot, frontmatter.parse(raw)[0])
+    meta = frontmatter.parse(raw)[0]
+    slot = workflows.detect_slot(e.get("skill_md", ""), meta)
+    desc = workflows.skill_description(slot, meta)
     if desc is None:
         return
     blocker = store.skill_copy_blocker(

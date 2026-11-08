@@ -75,7 +75,12 @@ from . import (
 #        file (`rules/naïve.mdc`, `commands/déploy.md`) installs by that name
 #  10 -- a description longer than `DESCRIPTION_MAX` is clamped, and a file
 #        that is binary (see `is_binary`) is no longer an item
-CACHE_FORMAT = 10
+#  11 -- Copilot's files are items: `*.instructions.md` is a rule, and
+#        `*.prompt.md`, `*.agent.md` and `*.chatmode.md` are workflows named
+#        without the second extension; a loose file carrying `color` is a
+#        workflow (`WORKFLOW_META_KEYS`), and a loose subagent is named as
+#        one rather than as a slash command (`workflows.detect_slot`)
+CACHE_FORMAT = 11
 # A cache is also stale when the tap's curated category has moved since it was
 # written: `category` falls back to that value at scan time, so recategorising
 # a registry in `registries.json` reached no machine that had already tapped it
@@ -90,11 +95,26 @@ KIND_WORKFLOW = "workflow"
 # Rule files: Cursor MDC + the legacy single-file rule dotfiles.
 RULE_SUFFIXES = {".mdc"}
 RULE_FILENAMES = {".cursorrules", ".windsurfrules", ".clinerules"}
+# GitHub Copilot's path-scoped instruction files, `x.instructions.md` with an
+# `applyTo:` glob: a rule, as an `.mdc` is. Markdown, so the `*.md` in
+# `gitutil.SPARSE_PATTERNS` already checks them out. Not
+# `.github/copilot-instructions.md`: that is the repo's own always-on context
+# file, which is not an item for the reason its CLAUDE.md is not one, and its
+# `-instructions` keeps it out of this suffix.
+RULE_MD_SUFFIXES = (".instructions.md",)
 # Directory names that mark a Markdown file as a command/agent workflow.
 WORKFLOW_DIRS = {"commands", "agents", "subagents", "workflows"}
 # Frontmatter keys that betray a Claude Code subagent / slash command even
-# when the file sits at a repo root rather than under a workflow dir.
-WORKFLOW_META_KEYS = {"tools", "model", "argument-hint", "allowed-tools"}
+# when the file sits at a repo root rather than under a workflow dir. `color`
+# is the subagent label `/agents` writes, and the only one of these that
+# msitarzewski/agency-agents' personas carry: 267 of its 284 files have
+# name, description and color and no `tools`, and were not items.
+WORKFLOW_META_KEYS = {"tools", "model", "argument-hint", "allowed-tools",
+                      "color"}
+# Every second extension that names a file's kind, stripped from the name it
+# is catalogued under: `a11y-audit.prompt.md` is `/a11y-audit` to Copilot, and
+# was `a11y-audit.prompt` here.
+KIND_SUFFIXES = (*RULE_MD_SUFFIXES, *workflows.SUFFIX_SLOTS)
 # Markdown filenames that are documentation, never workflow items.
 DOC_STEMS = {"readme", "contributing", "license", "changelog", "security",
              "code_of_conduct", "index", "_index", "authors", "notice"}
@@ -336,9 +356,27 @@ def _entry_slug(name: str, default_name: str) -> str:
     return "skill-" + digest
 
 
-def command_name(rel: str) -> str | None:
-    """The catalog name of the slash command at ``rel``, or None if ``rel``
-    is not one (a subagent).
+def _suffixed(filename: str, suffixes: Iterable[str]) -> str | None:
+    """The one of ``suffixes`` that ``filename`` ends in, case-blind, with a
+    stem in front of it; None otherwise. A file named ``.prompt.md`` is a
+    dotfile, not a prompt."""
+    low = filename.lower()
+    return next((s for s in suffixes
+                 if low.endswith(s) and len(low) > len(s)), None)
+
+
+def item_stem(filename: str) -> str:
+    """``filename`` without its extension, or without its
+    :data:`KIND_SUFFIXES` second extension when it carries one
+    (``a11y-audit.prompt.md`` -> ``a11y-audit``)."""
+    suffix = _suffixed(filename, KIND_SUFFIXES)
+    return filename[:-len(suffix)] if suffix else Path(filename).stem
+
+
+def command_name(rel: str, meta: dict | None = None) -> str | None:
+    """The catalog name of the slash command at ``rel`` whose frontmatter is
+    ``meta``, or None if it is not one (a subagent, :func:`workflows.
+    detect_slot`).
 
     The file name, never the frontmatter ``name``: Claude Code names a command
     after its "File name without extension" and supports a skill's
@@ -348,16 +386,16 @@ def command_name(rel: str) -> str | None:
     Its namespace dirs are kept (:func:`workflows.command_namespace`), each
     part slugged on its own so the ``/`` survives.
     """
-    if workflows.detect_slot(rel) != workflows.SLOT_COMMANDS:
+    if workflows.detect_slot(rel, meta) != workflows.SLOT_COMMANDS:
         return None
-    parts = (*workflows.command_namespace(rel), Path(rel).stem)
+    parts = (*workflows.command_namespace(rel), item_stem(Path(rel).name))
     return workflows.NAMESPACE_SEP.join(_entry_slug(p, p) for p in parts)
 
 
 def _typed_command_name(rel: str) -> str:
     """The unslugged name of the command at ``rel`` (``commands/déploy.md``
     -> ``déploy``) — what a user reading the tap types to install it."""
-    parts = (*workflows.command_namespace(rel), Path(rel).stem)
+    parts = (*workflows.command_namespace(rel), item_stem(Path(rel).name))
     return workflows.NAMESPACE_SEP.join(parts)
 
 
@@ -408,16 +446,21 @@ def _make_entry(root: Path, defining_file: Path, kind: str, default_name: str,
 
 
 def _classify_rule(path: Path) -> bool:
-    return path.name in RULE_FILENAMES or path.suffix.lower() in RULE_SUFFIXES
+    return (path.name in RULE_FILENAMES
+            or path.suffix.lower() in RULE_SUFFIXES
+            or _suffixed(path.name, RULE_MD_SUFFIXES) is not None)
 
 
 def _classify_workflow(path: Path, meta: dict) -> bool:
     """A Markdown file is a workflow if it lives under a commands/agents/
-    workflows directory, or carries subagent/slash-command frontmatter."""
+    workflows directory, carries subagent/slash-command frontmatter, or names
+    itself one by a Copilot suffix (:data:`workflows.SUFFIX_SLOTS`)."""
     if path.suffix.lower() != ".md" or path.name == "SKILL.md":
         return False
     if path.stem.lower() in DOC_STEMS:
         return False
+    if workflows.suffix_slot(path.name) is not None:
+        return True
     parent_parts = {p.lower() for p in path.parent.parts}
     if parent_parts & WORKFLOW_DIRS:
         return True
@@ -520,9 +563,9 @@ def scan_dir(root: Path, tap_name: str = "local", curated: bool = False,
             if path.name in RULE_FILENAMES:
                 default = path.parent.name if path.parent != root else root.name
             else:
-                default = path.stem
+                default = item_stem(path.name)
             rel = path.relative_to(root).as_posix()
-            fixed = command_name(rel) if kind == KIND_WORKFLOW else None
+            fixed = command_name(rel, meta) if kind == KIND_WORKFLOW else None
             entries.append(_make_entry(root, path, kind, default,
                                        tap_name, curated, meta, body, tap_category,
                                        fixed_name=fixed,
