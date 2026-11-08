@@ -449,6 +449,120 @@ class TestScanRulesAndWorkflows:
             Path("team/x.md"),
             {"name": "x", "description": "d", "color": "red"}) is True
 
+    def test_workflow_under_claude_agents_dir(self, tmp_path):
+        root = tmp_path / "tap"
+        (root / ".claude" / "agents").mkdir(parents=True)
+        (root / ".claude" / "agents" / "backend.md").write_text(
+            "---\nname: backend-architect\ndescription: Designs APIs\n---\n\nBody.\n", encoding="utf-8")
+        (e,) = catalog.scan_dir(root)
+        assert e["kind"] == "workflow"
+        assert e["name"] == "backend-architect"
+
+    def test_root_subagent_signature_detected(self, tmp_path):
+        root = tmp_path / "tap"
+        root.mkdir(parents=True)
+        (root / "code-reviewer.md").write_text(
+            "---\nname: code-reviewer\ndescription: Reviews code\ntools: Read, Grep\n---\n\nX.\n", encoding="utf-8")
+        (e,) = catalog.scan_dir(root)
+        assert e["kind"] == "workflow"
+        assert e["name"] == "code-reviewer"
+
+    def test_plain_markdown_and_docs_not_indexed(self, tmp_path):
+        root = tmp_path / "tap"
+        root.mkdir(parents=True)
+        (root / "README.md").write_text("# Readme\n\nHello.\n", encoding="utf-8")
+        (root / "notes.md").write_text("# Notes\n\nJust prose, no frontmatter.\n", encoding="utf-8")
+        (root / "commands").mkdir()
+        (root / "commands" / "README.md").write_text("# Commands index\n", encoding="utf-8")
+        assert catalog.scan_dir(root) == []
+
+    def test_reference_files_inside_skill_dir_not_double_counted(self, tmp_path):
+        root = tmp_path / "tap"
+        write_skill(root / "skills" / "s", "---\nname: s\n---")
+        # a skill that ships a bundled rule/command as reference material
+        (root / "skills" / "s" / "extra.mdc").write_text("bundled rule\n", encoding="utf-8")
+        (root / "skills" / "s" / "commands").mkdir()
+        (root / "skills" / "s" / "commands" / "helper.md").write_text(
+            "---\ndescription: helper\n---\nx\n", encoding="utf-8")
+        entries = catalog.scan_dir(root)
+        assert [e["name"] for e in entries] == ["s"]
+        assert entries[0]["kind"] == "skill"
+
+    def test_rule_entry_carries_tap_and_curated(self, tmp_path):
+        root = tmp_path / "tap"
+        (root / "nextjs").mkdir(parents=True)
+        (root / "nextjs" / ".cursorrules").write_text("Next.js expert.\n", encoding="utf-8")
+        (e,) = catalog.scan_dir(root, "mytap", curated=True)
+        assert e["kind"] == "rule"
+        assert e["tap"] == "mytap"
+        assert e["curated"] is True
+
+    def test_ignored_dirs_pruned_for_loose_rules_and_workflows(self, tmp_path):
+        root = tmp_path / "tap"
+        (root / ".git").mkdir(parents=True)
+        (root / "sub" / "__pycache__").mkdir(parents=True)
+        (root / ".git" / "hook.mdc").write_text("---\ndescription: x\n---\n", encoding="utf-8")
+        (root / "sub" / "__pycache__" / "commands").mkdir()
+        (root / "sub" / "__pycache__" / "commands" / "c.md").write_text(
+            "---\ndescription: y\n---\nx\n", encoding="utf-8")
+        (root / "real").mkdir()
+        (root / "real" / ".cursorrules").write_text("real rule\n", encoding="utf-8")
+        assert [e["name"] for e in catalog.scan_dir(root)] == ["real"]
+
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="chmod can't remove the owner's own read access on Windows")
+    def test_unreadable_rule_file_skipped(self, tmp_path):
+        root = tmp_path / "tap"
+        (root / "a").mkdir(parents=True)
+        (root / "b").mkdir(parents=True)
+        (root / "a" / "locked.mdc").write_text("---\ndescription: x\n---\n", encoding="utf-8")
+        (root / "b" / "open.mdc").write_text("---\ndescription: y\n---\n", encoding="utf-8")
+        (root / "a" / "locked.mdc").chmod(0o000)
+        try:
+            entries = catalog.scan_dir(root)
+        finally:
+            (root / "a" / "locked.mdc").chmod(0o644)
+        assert [e["name"] for e in entries] == ["open"]
+
+    def test_classify_workflow_guards(self, tmp_path):
+        # non-markdown and SKILL.md never classify as workflow
+        assert catalog._classify_workflow(Path("commands/x.txt"), {}) is False
+        assert catalog._classify_workflow(Path("agents/SKILL.md"), {}) is False
+        # documentation stems are excluded even under a workflow dir
+        assert catalog._classify_workflow(Path("commands/README.md"), {}) is False
+        # a bare prompt .md with no dir marker and no subagent frontmatter
+        assert catalog._classify_workflow(Path("prompts/idea.md"), {}) is False
+
+    def test_classify_workflow_signature_needs_name_and_description(self):
+        # Outside a workflow dir, the frontmatter signature requires BOTH a name
+        # AND a description AND a workflow meta key. (Pins the `and` between
+        # name/description — an `or` would classify a name-only file.)
+        loose = Path("prompts/agent.md")
+        full = {"name": "a", "description": "d", "tools": ["x"]}
+        assert catalog._classify_workflow(loose, full) is True
+        assert catalog._classify_workflow(loose, {"name": "a", "tools": ["x"]}) is False
+        assert catalog._classify_workflow(
+            loose, {"description": "d", "tools": ["x"]}) is False
+
+    def test_classify_workflow_signature_needs_a_workflow_meta_key(self):
+        # name+description alone do NOT make a loose .md a workflow — it needs one
+        # of the subagent/slash-command keys. (Pins `WORKFLOW_META_KEYS & set` —
+        # a `|` would make the set truthy for any frontmatter.)
+        loose = Path("prompts/agent.md")
+        assert catalog._classify_workflow(loose, {"name": "a", "description": "d"}) is False
+        assert catalog._classify_workflow(
+            loose, {"name": "a", "description": "d", "model": "opus"}) is True
+
+    def test_mixed_kinds_all_present(self, tmp_path):
+        root = tmp_path / "tap"
+        write_skill(root / "skills" / "s", "---\nname: s\n---")
+        (root / "rules").mkdir()
+        (root / "rules" / "py.mdc").write_text("---\ndescription: python\n---\nx\n", encoding="utf-8")
+        (root / "commands").mkdir()
+        (root / "commands" / "ship.md").write_text("---\ndescription: ship it\n---\nx\n", encoding="utf-8")
+        kinds = sorted(e["kind"] for e in catalog.scan_dir(root))
+        assert kinds == ["rule", "skill", "workflow"]
+
 
 class TestCopilotFiles:
     """GitHub Copilot's file kinds, which name themselves by a second
@@ -594,120 +708,6 @@ class TestCopilotFiles:
         assert sorted((e["kind"], e["name"])
                       for e in catalog.scan_dir(root)) == [
             ("skill", "planner"), ("workflow", "planner")]
-
-    def test_workflow_under_claude_agents_dir(self, tmp_path):
-        root = tmp_path / "tap"
-        (root / ".claude" / "agents").mkdir(parents=True)
-        (root / ".claude" / "agents" / "backend.md").write_text(
-            "---\nname: backend-architect\ndescription: Designs APIs\n---\n\nBody.\n", encoding="utf-8")
-        (e,) = catalog.scan_dir(root)
-        assert e["kind"] == "workflow"
-        assert e["name"] == "backend-architect"
-
-    def test_root_subagent_signature_detected(self, tmp_path):
-        root = tmp_path / "tap"
-        root.mkdir(parents=True)
-        (root / "code-reviewer.md").write_text(
-            "---\nname: code-reviewer\ndescription: Reviews code\ntools: Read, Grep\n---\n\nX.\n", encoding="utf-8")
-        (e,) = catalog.scan_dir(root)
-        assert e["kind"] == "workflow"
-        assert e["name"] == "code-reviewer"
-
-    def test_plain_markdown_and_docs_not_indexed(self, tmp_path):
-        root = tmp_path / "tap"
-        root.mkdir(parents=True)
-        (root / "README.md").write_text("# Readme\n\nHello.\n", encoding="utf-8")
-        (root / "notes.md").write_text("# Notes\n\nJust prose, no frontmatter.\n", encoding="utf-8")
-        (root / "commands").mkdir()
-        (root / "commands" / "README.md").write_text("# Commands index\n", encoding="utf-8")
-        assert catalog.scan_dir(root) == []
-
-    def test_reference_files_inside_skill_dir_not_double_counted(self, tmp_path):
-        root = tmp_path / "tap"
-        write_skill(root / "skills" / "s", "---\nname: s\n---")
-        # a skill that ships a bundled rule/command as reference material
-        (root / "skills" / "s" / "extra.mdc").write_text("bundled rule\n", encoding="utf-8")
-        (root / "skills" / "s" / "commands").mkdir()
-        (root / "skills" / "s" / "commands" / "helper.md").write_text(
-            "---\ndescription: helper\n---\nx\n", encoding="utf-8")
-        entries = catalog.scan_dir(root)
-        assert [e["name"] for e in entries] == ["s"]
-        assert entries[0]["kind"] == "skill"
-
-    def test_rule_entry_carries_tap_and_curated(self, tmp_path):
-        root = tmp_path / "tap"
-        (root / "nextjs").mkdir(parents=True)
-        (root / "nextjs" / ".cursorrules").write_text("Next.js expert.\n", encoding="utf-8")
-        (e,) = catalog.scan_dir(root, "mytap", curated=True)
-        assert e["kind"] == "rule"
-        assert e["tap"] == "mytap"
-        assert e["curated"] is True
-
-    def test_ignored_dirs_pruned_for_loose_rules_and_workflows(self, tmp_path):
-        root = tmp_path / "tap"
-        (root / ".git").mkdir(parents=True)
-        (root / "sub" / "__pycache__").mkdir(parents=True)
-        (root / ".git" / "hook.mdc").write_text("---\ndescription: x\n---\n", encoding="utf-8")
-        (root / "sub" / "__pycache__" / "commands").mkdir()
-        (root / "sub" / "__pycache__" / "commands" / "c.md").write_text(
-            "---\ndescription: y\n---\nx\n", encoding="utf-8")
-        (root / "real").mkdir()
-        (root / "real" / ".cursorrules").write_text("real rule\n", encoding="utf-8")
-        assert [e["name"] for e in catalog.scan_dir(root)] == ["real"]
-
-    @pytest.mark.skipif(sys.platform == "win32",
-                        reason="chmod can't remove the owner's own read access on Windows")
-    def test_unreadable_rule_file_skipped(self, tmp_path):
-        root = tmp_path / "tap"
-        (root / "a").mkdir(parents=True)
-        (root / "b").mkdir(parents=True)
-        (root / "a" / "locked.mdc").write_text("---\ndescription: x\n---\n", encoding="utf-8")
-        (root / "b" / "open.mdc").write_text("---\ndescription: y\n---\n", encoding="utf-8")
-        (root / "a" / "locked.mdc").chmod(0o000)
-        try:
-            entries = catalog.scan_dir(root)
-        finally:
-            (root / "a" / "locked.mdc").chmod(0o644)
-        assert [e["name"] for e in entries] == ["open"]
-
-    def test_classify_workflow_guards(self, tmp_path):
-        # non-markdown and SKILL.md never classify as workflow
-        assert catalog._classify_workflow(Path("commands/x.txt"), {}) is False
-        assert catalog._classify_workflow(Path("agents/SKILL.md"), {}) is False
-        # documentation stems are excluded even under a workflow dir
-        assert catalog._classify_workflow(Path("commands/README.md"), {}) is False
-        # a bare prompt .md with no dir marker and no subagent frontmatter
-        assert catalog._classify_workflow(Path("prompts/idea.md"), {}) is False
-
-    def test_classify_workflow_signature_needs_name_and_description(self):
-        # Outside a workflow dir, the frontmatter signature requires BOTH a name
-        # AND a description AND a workflow meta key. (Pins the `and` between
-        # name/description — an `or` would classify a name-only file.)
-        loose = Path("prompts/agent.md")
-        full = {"name": "a", "description": "d", "tools": ["x"]}
-        assert catalog._classify_workflow(loose, full) is True
-        assert catalog._classify_workflow(loose, {"name": "a", "tools": ["x"]}) is False
-        assert catalog._classify_workflow(
-            loose, {"description": "d", "tools": ["x"]}) is False
-
-    def test_classify_workflow_signature_needs_a_workflow_meta_key(self):
-        # name+description alone do NOT make a loose .md a workflow — it needs one
-        # of the subagent/slash-command keys. (Pins `WORKFLOW_META_KEYS & set` —
-        # a `|` would make the set truthy for any frontmatter.)
-        loose = Path("prompts/agent.md")
-        assert catalog._classify_workflow(loose, {"name": "a", "description": "d"}) is False
-        assert catalog._classify_workflow(
-            loose, {"name": "a", "description": "d", "model": "opus"}) is True
-
-    def test_mixed_kinds_all_present(self, tmp_path):
-        root = tmp_path / "tap"
-        write_skill(root / "skills" / "s", "---\nname: s\n---")
-        (root / "rules").mkdir()
-        (root / "rules" / "py.mdc").write_text("---\ndescription: python\n---\nx\n", encoding="utf-8")
-        (root / "commands").mkdir()
-        (root / "commands" / "ship.md").write_text("---\ndescription: ship it\n---\nx\n", encoding="utf-8")
-        kinds = sorted(e["kind"] for e in catalog.scan_dir(root))
-        assert kinds == ["rule", "skill", "workflow"]
 
 
 class TestTapCaches:
