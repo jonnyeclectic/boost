@@ -208,8 +208,8 @@ and importing the same rows takes 0.12 s, so the difference between the two is
 the difference between semantic search being available and being reachable.
 
 Want everything? `boost quickstart --catalog` taps every catalogued
-registry — measured at 2 min 10 s for 463 of them, now that clones run in
-parallel — and fetches vectors
+registry, now that clones run in parallel (the 463 the catalog held in
+August 2026 measured 2 min 10 s), and fetches vectors
 for every one that has a published shard.
 
 Already tapped? `boost reindex --fetch-shards` does the download half alone,
@@ -273,7 +273,8 @@ boost tap --catalog --category security       # filter by category
 Taps clone in parallel — eight at once by default, `--jobs N` (or
 `BOOST_TAP_JOBS`) to change it, capped at 16 because it is someone else's
 server. A clone is network latency rather than bandwidth, so the whole catalog
-measures **2 min 10 s for 463 registries** where one-at-a-time took 13 minutes.
+measured **2 min 10 s for 463 registries** where one-at-a-time took 13 minutes.
+That was August 2026; the catalog has grown since and has not been re-timed.
 
 `est_items` is measured from the repository's file tree for every registry
 added since 2026-07, and for older ones wherever a re-measure disagreed with
@@ -296,9 +297,9 @@ real but much smaller than the marketing figure.
 ### Share the catalogue instead of re-tapping it
 
 Tapping is the slowest thing a new install does, and the expensive artifact is
-not the valuable one. On a machine with 458 registries tapped the shallow clones
-are 12 GB, while the catalogue they produce is 10.9 MB gzipped. So hand someone
-the catalogue:
+not the valuable one. Measured in August 2026 on a machine with 458 registries
+tapped, the shallow clones were 12 GB, while the catalogue they produced was
+10.9 MB gzipped. So hand someone the catalogue:
 
 ```bash
 boost catalog --export catalogue.tgz    # 458 taps · 59,972 entries · 10.9 MB
@@ -306,10 +307,15 @@ boost catalog --show catalogue.tgz      # what is in it, without importing
 boost catalog --import catalogue.tgz    # on the other machine
 ```
 
-Measured on a fresh `HOME`: import takes 0.3 s, `boost reindex` a further 3.8 s,
-and `boost search` then returns real hits over all 59,972 items with zero
-repositories cloned. `install` still clones, but only the one registry your
-chosen skill lives in.
+An entry is one catalogue row, and a registry that renders a skill into
+`.claude/`, `.cursor/` and other agents' dotdirs contributes one row per copy.
+The item estimate under "The registry catalog" counts each item once, which is
+how 458 taps can hold more entries than the full catalog holds items.
+
+Measured on a fresh `HOME` at the same time: import took 0.3 s, `boost reindex`
+a further 3.8 s, and `boost search` then returned real hits over all 59,972
+entries with zero repositories cloned. `install` still clones, but only the one
+registry your chosen skill lives in.
 
 Bundles carry catalogue JSON and nothing else. Derived indexes are excluded
 because they rebuild in seconds, and vectors because they are only valid inside
@@ -499,10 +505,11 @@ browse --categories` lists every category with its count, A–Z
 
 Duplicates are collapsed. Registries render one skill into `.claude/`,
 `.cursor/`, `.gemini/` and a plugin root, so on a real 60,047-entry catalogue
-22,535 rows (37%) are duplicates. Rows whose name and description match, or are
-at least 95% alike, fold into one badged `×5`, with `^D` to show them again.
-Identity is the description and never the name: `code-reviewer` appears 75 times
-with 42 different descriptions, and those are 42 real skills.
+measured in August 2026, 22,535 rows (37%) were duplicates. Rows whose name and
+description match, or are at least 95% alike, fold into one badged `×5`, with
+`^D` to show them again. Identity is the description and never the name: in
+that catalogue `code-reviewer` appeared 75 times with 42 different
+descriptions, and those were 42 real skills.
 
 Without a real TTY (a pipe, an IDE run console, a terminal curses can't drive)
 `browse` falls back to a plain, deduped table — name, version, tap, kind — with
