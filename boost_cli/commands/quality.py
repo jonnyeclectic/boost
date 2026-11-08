@@ -591,8 +591,13 @@ def _drifted(kind: str, name: str, entry: dict, bad) -> int:
     return 1
 
 
-def _project_moved_line(name: str, gone: list[str], base) -> str:
-    """Doctor's line for a missing project skill whose tap has moved."""
+def _project_moved_line(name: str, gone: list[str], base,
+                        edited: bool = False) -> str:
+    """Doctor's line for a missing project skill whose tap has moved.
+
+    ``edited`` says another copy holds a local edit, which the reinstall it
+    names would discard.
+    """
     tracked = bool(gone) and all(gitutil.tracks(Path(base), g) for g in gone)
     restore = ("`git -C %s checkout -- %s` restores the committed cop%s, or "
                % (util.shell_arg(str(base)),
@@ -602,8 +607,9 @@ def _project_moved_line(name: str, gone: list[str], base) -> str:
             "project lock was written, so `boost heal` restores it only if "
             "this skill's files did not change — `boost heal --dry-run` says "
             "which; otherwise %s`boost install --local %s --force` moves every "
-            "copy and the lock to the tap's new version"
-            % (name, ", ".join(gone), restore, name))
+            "copy and the lock to the tap's new version%s"
+            % (name, ", ".join(gone), restore, name,
+               " and discards the local edit" if edited else ""))
 
 
 def cmd_doctor(argv):
@@ -1157,7 +1163,15 @@ def cmd_doctor(argv):
             # because its remedy is not the one that discards the edit:
             # `boost heal` restores the copy and leaves the edit alone.
             gone = integrity.project_missing_rows(entry, pbase)
-            if gone:
+            if gone and (store.project_intact_copy(entry, pbase) is None
+                         and store.project_source_moved(name, entry)):
+                # The edited copy is no source to restore from, so heal goes
+                # to the tap, and past a moved tap it may decline — the
+                # doctor -> heal -> doctor loop the missing branch avoids.
+                bad("project-skill", _project_moved_line(
+                    name, gone, pbase, edited=True), wrap=True)
+                proj_issues += 1
+            elif gone:
                 bad("project-skill", "project skill %s is missing %s — run "
                     "`boost heal`" % (name, ", ".join(gone)), wrap=True)
                 proj_issues += 1
