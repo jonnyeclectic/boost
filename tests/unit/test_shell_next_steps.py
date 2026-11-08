@@ -75,10 +75,15 @@ class TestThePipedSearch:
         repo = Path(__file__).resolve().parents[2]
         env = dict(os.environ, PYTHONPATH=str(repo), PYTHONIOENCODING="utf-8")
         env.pop("COLUMNS", None)
+        # cwd: under the mutation gate the child imports mutated code, whose
+        # trampoline reads mutmut's config relative to the cwd, and `sandbox`
+        # has chdir'd into a tempdir with no setup.cfg (as in
+        # test_first_run_pointer).
         proc = subprocess.run(
             [sys.executable, "-m", "boost_cli", "search", "commit"],
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            stdin=subprocess.DEVNULL, env=env, timeout=120, check=False)
+            stdin=subprocess.DEVNULL, env=env, timeout=120, check=False,
+            cwd=repo)
         text = proc.stdout.decode("utf-8")
         assert proc.returncode == 0, text
         assert text.index("ranked by") < text.index(NOTE), text
