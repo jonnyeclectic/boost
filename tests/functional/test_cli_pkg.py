@@ -2058,7 +2058,8 @@ class TestBundle:
         del data["skills"]["brainstorming"]["tap_url"]
         path.write_text(json.dumps(data), encoding="utf-8")
         r = boost("bundle", "dump")
-        assert r.out.splitlines()[1].startswith("tap fixture-tap")
+        # No `--at` either: with no URL the line names no tree.
+        assert r.out.splitlines()[1] == "tap fixture-tap"
         err = " ".join(r.err.split())
         assert ("! tap fixture-tap is written without a URL: it is no longer "
                 "tapped and the lock does not record where it came from, so "

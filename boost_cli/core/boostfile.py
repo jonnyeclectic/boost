@@ -142,8 +142,9 @@ def recorded_source(rows: Iterable[Mapping]) -> tuple[str, str]:
     full SHA, so the ``@version`` on each skill line names the tree the tap
     lands on. Rows installed at different commits name no one tree, and the
     line is left unpinned rather than held where some of them never came
-    from. ``("", ...)`` means nothing recorded a URL and the line cannot be
-    replayed.
+    from. ``("", "")`` means nothing recorded a URL and the line cannot be
+    replayed, so it takes no ``--at`` either: ``tap NAME --at SHA`` taps
+    whatever directory under the cwd is called NAME and checks SHA out in it.
     """
     url = ""
     commits: set[str] = set()
@@ -153,6 +154,8 @@ def recorded_source(rows: Iterable[Mapping]) -> tuple[str, str]:
                 registry.WHEEL_SCHEME):
             url = recorded
         commits.add(str(row.get("commit") or ""))
+    if not url:
+        return "", ""
     at = commits.pop() if len(commits) == 1 else ""
     return url, at if gitutil._is_sha(at) else ""
 

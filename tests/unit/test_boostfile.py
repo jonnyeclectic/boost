@@ -171,7 +171,14 @@ class TestRecordedSource:
 
     def test_the_wheel_tap_is_not_a_url_a_boostfile_can_tap(self):
         rows = [{"tap_url": "builtin:boost", "commit": SHA}]
-        assert boostfile.recorded_source(rows) == ("", SHA)
+        assert boostfile.recorded_source(rows) == ("", "")
+
+    def test_no_url_means_no_commit_either(self):
+        # Rows from before `tap_url` was recorded: the line cannot be
+        # replayed, and `tap NAME --at SHA` would check SHA out in whatever
+        # directory under the cwd is called NAME.
+        rows = [{"commit": SHA}, {"commit": SHA}]
+        assert boostfile.recorded_source(rows) == ("", "")
 
     def test_a_short_commit_is_not_a_pin(self):
         # `--at` refuses anything but a full SHA on the way back in.
