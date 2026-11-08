@@ -93,6 +93,21 @@ def is_builtin(tap_name: str) -> bool:
     return tap_name == BUILTIN_TAP
 
 
+def ships(name: str) -> bool:
+    """Whether ``name`` (bare) is an item boost's own tap carries.
+
+    What :func:`catalog.find` asks before registering the tap on a miss, so
+    ``boost install boost-first`` resolves on a machine that never accepted
+    an offer. Only names that are actually in this wheel answer True: a
+    rule or skill missing from package data has nothing to register.
+    """
+    if name in BUILTIN_RULES:
+        return (source_dir() / (name + ".mdc")).is_file()
+    if name in BUILTIN_SKILLS:
+        return (skills_source_dir() / name / "SKILL.md").is_file()
+    return False
+
+
 def configured_tap_count() -> int:
     """Taps the USER configured — the builtin does not count.
 

@@ -3011,7 +3011,7 @@ def _offer_boost_first(hosts: list[str], yes: bool = False) -> None:
     from ..core import builtin
 
     targets = _boost_first_targets(hosts)
-    if not targets:
+    if not targets or not _ready_builtin_tap():
         return
     body = (builtin.source_dir() / (builtin.BUILTIN_RULES[0] + ".mdc"))
     scoped_agents = {builtin.AGENT_FOR_HOST.get(h) for h in hosts}
@@ -3029,7 +3029,6 @@ def _offer_boost_first(hosts: list[str], yes: bool = False) -> None:
                  % builtin.BUILTIN_RULES[0])
         return
     try:
-        builtin.ensure_tap()
         catalog.rebuild_tap(registry.get(builtin.BUILTIN_TAP))
         res = store.install(catalog.resolve_one(builtin.BUILTIN_RULES[0]),
                             only_agents=[a for a in scoped_agents if a])
@@ -3051,6 +3050,46 @@ def _offer_boost_first(hosts: list[str], yes: bool = False) -> None:
         out.ok("installed %s — remove it with `boost uninstall %s`"
                % (builtin.BUILTIN_RULES[0], builtin.BUILTIN_RULES[0]))
     _warn_unwritable(res)
+
+
+def _ready_builtin_tap() -> bool:
+    """Register boost's own tap before an offer asks its question.
+
+    Both offers end a decline with "`boost install <name>` any time", and
+    registration used to happen only inside the yes branch, so the advice on
+    the no branch failed with "no skill named". Package data, so this is
+    offline and cheap. A failure here would fail the install too, so it ends
+    the offer with the reason rather than asking a question a yes cannot
+    honor.
+    """
+    from ..core import builtin
+    try:
+        builtin.ensure_tap()
+    except OSError as exc:
+        out.warn("could not set up boost's own tap: %s" % exc)
+        return False
+    return True
+
+
+def _offer_skill_without_host(yes: bool = False) -> None:
+    """The skill offer for a machine where no agent CLI took boost's server.
+
+    boost registers its MCP server with four CLIs, and Cursor and Windsurf are
+    not among them, so a machine with only those settled no host, and both
+    offers ran only after one did. That user got no boost surface at all. The
+    skill needs no server: it is a directory linked into each agent's skills
+    dir, and its text falls back to the shell (`boost search`, `boost cat`,
+    `boost install`). The rule stays unoffered here, because it names MCP
+    tools these agents were never given.
+    """
+    linking = agents.linking_agents()
+    if not linking or _boost_skill_offered() is None:
+        return
+    out.info("so no agent here has boost's MCP tools — but its skill needs "
+             "no server: it works through the shell (`boost search`, `boost "
+             "install`) for %s" % ", ".join(
+                 agents.display_name(a) for a in linking), wrap=True)
+    _offer_boost_skill(yes=yes)
 
 
 #: Escape hatch for the skill offer, the shape of NO_RULE_ENV and checked
@@ -3083,7 +3122,7 @@ def _offer_boost_skill(yes: bool = False) -> None:
     from ..core import builtin
 
     name = _boost_skill_offered()
-    if name is None:
+    if name is None or not _ready_builtin_tap():
         return
     out.info("")
     # The install also symlinks the directory into every agent that does not
@@ -3098,14 +3137,17 @@ def _offer_boost_skill(yes: bool = False) -> None:
         out.info("Not installed. `boost install %s` any time." % name)
         return
     try:
-        builtin.ensure_tap()
         catalog.rebuild_tap(registry.get(builtin.BUILTIN_TAP))
         res = store.install(catalog.resolve_one(
             "%s:%s" % (builtin.BUILTIN_TAP, name)))
     except (BoostError, OSError) as exc:
         out.warn("could not install %s: %s" % (name, exc))
         return
-    out.ok("installed %s — remove it with `boost uninstall %s`" % (name, name))
+    # Which agents it reached, not only that it installed: on a machine with
+    # no MCP host this is the one boost surface its agents get, and the line
+    # is where the user sees Cursor or Windsurf named.
+    out.ok("installed %s for %s — remove it with `boost uninstall %s`"
+           % (name, agents.reach_phrase(res.linked, res.native), name))
     from .pkg import _warn_unwritable
     _warn_unwritable(res)
 
@@ -3197,7 +3239,12 @@ def cmd_mcp(argv) -> int:
             out.info("would then offer to add the `%s` rule to %s (asks first)"
                      % (builtin.BUILTIN_RULES[0], ", ".join(rule_targets)),
                      wrap=True)
-        if (args.action == "register" and would_settle
+        # With no host to settle, the real run still offers the skill to
+        # the agents that read skills dirs (`_offer_skill_without_host`),
+        # unless one named host was asked for, which fails instead.
+        if (args.action == "register"
+                and (would_settle or (not mcphost.is_named(args.host)
+                                      and agents.linking_agents()))
                 and (skill := _boost_skill_offered())):
             out.info("would then offer to install the `%s` skill (default yes)"
                      % skill, wrap=True)
@@ -3287,6 +3334,8 @@ def cmd_mcp(argv) -> int:
                      % ", ".join(mcphost.cli(h) for h in missing))
             for host in missing:
                 out.info(mcphost.shell_line(mcphost.argv(host, args.action, shim)))
+        if args.action == "register" and not named:
+            _offer_skill_without_host(yes=args.yes)
         journal.log("mcp", args.action, hosts="")
         # A single named host whose CLI is missing is a no-op, not a success:
         # `--host all` and `auto` both tolerate an absent CLI by design (see

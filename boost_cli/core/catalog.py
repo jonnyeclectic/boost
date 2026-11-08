@@ -1185,6 +1185,17 @@ def find(name: str, tap: str | None = None,
         tap, name = qualifier, bare
     pool = all_entries() if entries is None else entries
     matches = list(_name_index(pool).get(unicodedata.normalize("NFC", name), ()))
+    if not matches and entries is None and _ships_builtin(name, tap):
+        # One of the two items boost ships itself, on a machine whose
+        # builtin tap was never registered. Registration used to happen only
+        # when the user said yes to `boost mcp register`'s offer, so the
+        # decline line's own advice -- `boost install boost-first` -- failed
+        # with "no skill named", and on a Cursor- or Windsurf-only machine,
+        # where no MCP host settles and no offer is ever made, nothing could
+        # install it at all. The tap is package data: copying it out is
+        # offline and costs two small files, so a lookup can afford to.
+        builtin.ensure_tap()
+        matches = list(_name_index(all_entries()).get(name, ()))
     if tap:
         # Same tiering as registry.get: a qualified owner/repo beats a bare
         # repo tail, so `angular/skills:x` never picks up `microsoft/skills:x`.
@@ -1198,6 +1209,13 @@ def find(name: str, tap: str | None = None,
                 return hits
         return []
     return matches
+
+
+def _ships_builtin(name: str, qualifier: str | None) -> bool:
+    """Whether ``name`` is an item boost's own tap ships, under a qualifier
+    that would select that tap (or none)."""
+    return builtin.ships(name) and (
+        qualifier is None or tap_matches(builtin.BUILTIN_TAP, qualifier))
 
 
 def addressable_name(name: str) -> str:

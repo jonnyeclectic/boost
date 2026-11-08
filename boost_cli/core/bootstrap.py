@@ -16,7 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from ..errors import BoostError
-from . import catalog, config, journal, registry, typedvalue
+from . import builtin, catalog, config, journal, registry, typedvalue
 
 #: Escape hatch, same shape as ``BOOST_NO_MCP_OFFER``: suppress the implicit
 #: seed for anyone who wants `boost mcp` to stay a local, offline operation —
@@ -79,6 +79,22 @@ def will_seed(*, force: bool = False) -> bool:
     return bool(seed_plan(force=force))
 
 
+def _user_taps() -> set[str]:
+    """The taps the USER configured -- boost's own tap left out.
+
+    Both seed functions read "any tap here" as "somebody's configured setup"
+    and stop. boost's own tap is registered by ``boost mcp register`` and by
+    any lookup of an item it ships (:func:`catalog.find`), so counting it
+    meant a first `boost mcp register --no-seed`, or one
+    `boost install boost-first`, left the machine unseedable: every later
+    `boost mcp register` read the builtin as a configured catalog and tapped
+    nothing. Same question, and same answer, as
+    :func:`builtin.configured_tap_count`.
+    """
+    return {t.name for t in registry.list_taps()
+            if not builtin.is_builtin(t.name)}
+
+
 def seed_plan(*, force: bool = False) -> list[str]:
     """The names :func:`seed_catalog` would tap, in order; [] when it would not.
 
@@ -89,7 +105,7 @@ def seed_plan(*, force: bool = False) -> list[str]:
     """
     if not force and typedvalue.env_flag(NO_SEED_ENV, unknown=True):
         return []
-    existing = {t.name for t in registry.list_taps()}
+    existing = _user_taps()
     if not force and existing:
         return []
     return [str(d["name"]) for d in config.DEFAULT_TAPS
@@ -116,7 +132,7 @@ def seed_catalog(*, force: bool = False) -> SeedResult:
     """
     if not force and typedvalue.env_flag(NO_SEED_ENV, unknown=True):
         return SeedResult(skipped=True)
-    existing = {t.name for t in registry.list_taps()}
+    existing = _user_taps()
     # `force` re-checks the DEFAULTS rather than re-adding them: a machine
     # missing two of seven is topped up, and one missing none is left alone.
     missing = [d for d in config.DEFAULT_TAPS if str(d["name"]) not in existing]
