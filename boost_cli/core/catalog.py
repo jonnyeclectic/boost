@@ -524,8 +524,9 @@ def _is_doc_page(stem: str, meta: dict) -> bool:
     messages". Over 470 taps (10,687 workflow items) the ALL-CAPS stems
     indexed as workflows were 90: 30 such pages, not one with frontmatter,
     and 60 real items that all carry it -- 48 nowork-studio ``WORKFLOW.md``
-    commands, qdhenry's ``agents/TASK-STATUS-PROTOCOL.md``, and 8 subagents
-    whose keys are not Claude's -- hence the exception, and hence its second
+    commands, 4 with the whole :func:`_declares_workflow` signature
+    (qdhenry's ``agents/TASK-STATUS-PROTOCOL.md`` among them), and 8
+    subagents whose keys are not Claude's -- hence the exception, and its second
     half: 9 microsoft/hve-core ``README.md`` files carry a docs-site
     ``description`` and nothing else.
     """
