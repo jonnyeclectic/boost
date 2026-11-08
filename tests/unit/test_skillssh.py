@@ -49,6 +49,13 @@ class TestEnabled:
                           True if key == "skills_sh.enabled" else default)
         assert skillssh.enabled() is True
 
+    @pytest.mark.parametrize("value", ["no", "false", "true", 1, "1"])
+    def test_only_a_real_true_in_config_turns_it_on(self, quiet_env, value):
+        # A hand-edited string is not a boolean; this switch sends data.
+        quiet_env.setattr(config, "get", lambda key, default=None:
+                          value if key == "skills_sh.enabled" else default)
+        assert skillssh.enabled() is False
+
     def test_no_net_beats_the_flag(self, quiet_env):
         quiet_env.setenv("BOOST_NO_NET", "1")
         assert skillssh.enabled(force=True) is False
@@ -127,7 +134,7 @@ class TestSearch:
         assert hits[0]["source"] == "warpdotdev/common-skills"
         assert seen["url"] == ("https://skills.sh/api/search?"
                                "q=pr+review&owner=warpdotdev")
-        assert seen["timeout"] == skillssh.TIMEOUT
+        assert seen["timeout"] == 5.0
         assert seen["accept"] == "application/json"
 
     def test_no_owner_sends_no_owner(self, monkeypatch):
@@ -172,36 +179,56 @@ class TestRendering:
     HIT: ClassVar[dict] = {"source": "warpdotdev/common-skills", "name": "review-pr",
            "installs": 29090}
 
-    def test_split_ignores_case(self):
-        here, away = skillssh.split_by_tapped(
-            [self.HIT, dict(self.HIT, source="a/b")],
-            {"WarpDotDev/Common-Skills"})
-        assert [h["source"] for h in here] == ["warpdotdev/common-skills"]
-        assert [h["source"] for h in away] == ["a/b"]
+    LOCAL: ClassVar[dict] = {"warpdotdev/common-skills": {"review-pr"}}
+
+    def test_state_tapped(self):
+        assert skillssh.state(self.HIT, self.LOCAL) == "tapped"
+
+    def test_state_ignores_repo_case(self):
+        hit = dict(self.HIT, source="WarpDotDev/Common-Skills")
+        assert skillssh.state(hit, self.LOCAL) == "tapped"
+
+    def test_state_untapped(self):
+        assert skillssh.state(dict(self.HIT, source="a/b"), self.LOCAL) == \
+            "untapped"
+
+    def test_state_tapped_but_not_in_the_local_copy(self):
+        hit = dict(self.HIT, name="brand-new")
+        assert skillssh.state(hit, self.LOCAL) == "not-in-copy"
+
+    def test_state_an_empty_tap_is_still_tapped(self):
+        assert skillssh.state(self.HIT, {"warpdotdev/common-skills": set()}) \
+            == "not-in-copy"
 
     def test_tapped_hint_reads_then_installs(self):
-        assert skillssh.install_hint(self.HIT, True) == (
+        assert skillssh.install_hint(self.HIT, "tapped") == (
             "boost cat warpdotdev/common-skills:review-pr, then "
             "boost install warpdotdev/common-skills:review-pr")
 
     def test_untapped_hint_taps_then_reads(self):
-        assert skillssh.install_hint(self.HIT, False) == (
+        assert skillssh.install_hint(self.HIT, "untapped") == (
             "boost tap warpdotdev/common-skills, then "
             "boost cat warpdotdev/common-skills:review-pr")
 
+    def test_stale_copy_hint_updates_then_reads(self):
+        assert skillssh.install_hint(self.HIT, "not-in-copy") == (
+            "boost update warpdotdev/common-skills, then "
+            "boost cat warpdotdev/common-skills:review-pr — your copy of "
+            "the tap predates it")
+
     def test_hit_line(self):
-        assert skillssh.hit_line(self.HIT, False) == (
+        assert skillssh.hit_line(self.HIT, "untapped") == (
             "review-pr  warpdotdev/common-skills  (29,090 installs) — "
             "`boost tap warpdotdev/common-skills, then "
             "boost cat warpdotdev/common-skills:review-pr`")
 
     def test_hit_line_unknown_count(self):
         assert "(installs unknown)" in skillssh.hit_line(
-            dict(self.HIT, installs=None), True)
+            dict(self.HIT, installs=None), "tapped")
 
     def test_hit_line_zero_is_a_count(self):
         assert "(0 installs)" in skillssh.hit_line(
-            dict(self.HIT, installs=0), True)
+            dict(self.HIT, installs=0), "tapped")
 
 
 class TestSection:
@@ -213,23 +240,26 @@ class TestSection:
         assert skillssh.section("x", fetch=fetch) == []
 
     def test_on_lists_hits_marking_what_is_tapped(self, quiet_env):
-        quiet_env.setattr(skillssh, "tapped_names",
-                          lambda: {"warpdotdev/common-skills"})
+        asked = []
+        quiet_env.setattr(skillssh, "local_names", lambda sources: (
+            asked.append(sources) or
+            {"warpdotdev/common-skills": {"review-pr"}}))
         hits = [self.HIT, dict(self.HIT, source="a/b", name="z")]
         lines = skillssh.section("pr review", force=True,
                                  fetch=lambda q, o: (hits, None))
         assert lines[0].startswith("On skills.sh (")
         assert "read one before installing it" in lines[0]
-        assert lines[1] == "  " + skillssh.hit_line(self.HIT, True)
-        assert lines[2] == "  " + skillssh.hit_line(hits[1], False)
+        assert lines[1] == "  " + skillssh.hit_line(self.HIT, "tapped")
+        assert lines[2] == "  " + skillssh.hit_line(hits[1], "untapped")
         assert len(lines) == 3
+        assert asked == [{"warpdotdev/common-skills", "a/b"}]
 
     def test_it_shows_at_most_show(self, quiet_env):
-        quiet_env.setattr(skillssh, "tapped_names", set)
+        quiet_env.setattr(skillssh, "local_names", lambda sources: {})
         hits = [dict(self.HIT, name="s%d" % i) for i in range(9)]
         lines = skillssh.section("x", force=True,
                                  fetch=lambda q, o: (hits, None))
-        assert len(lines) == 1 + skillssh.SHOW
+        assert len(lines) == 1 + 5
         lines = skillssh.section("x", force=True, show=2,
                                  fetch=lambda q, o: (hits, None))
         assert len(lines) == 3
@@ -250,22 +280,27 @@ class TestSection:
                                 fetch=lambda q, o: ([], None)) == [
             "skills.sh: no matches for 'x y'"]
 
-    def test_tapped_names_survives_a_broken_registry(self, monkeypatch):
+    def test_local_names_survives_a_broken_registry(self, monkeypatch):
         from boost_cli.core import registry
 
         def boom():
             raise RuntimeError("config unreadable")
         monkeypatch.setattr(registry, "list_taps", boom)
-        assert skillssh.tapped_names() == set()
+        assert skillssh.local_names({"a/b"}) == {}
 
-    def test_tapped_names_reads_the_taps(self, monkeypatch):
-        from boost_cli.core import registry
+    def test_local_names_loads_only_the_named_taps(self, monkeypatch):
+        from boost_cli.core import catalog, registry
 
         class T:
-            name = "owner/repo"
-        monkeypatch.setattr(registry, "list_taps", lambda: [T()])
-        assert skillssh.tapped_names() == {"owner/repo"}
-
+            def __init__(self, name):
+                self.name = name
+        loaded = []
+        monkeypatch.setattr(registry, "list_taps",
+                            lambda: [T("Owner/Repo"), T("other/repo")])
+        monkeypatch.setattr(catalog, "load_tap", lambda tap: (
+            loaded.append(tap.name) or [{"name": "x"}, {"name": None}]))
+        assert skillssh.local_names({"owner/REPO"}) == {"owner/repo": {"x", ""}}
+        assert loaded == ["Owner/Repo"]
 
 
 class TestWiredIn:
@@ -325,3 +360,21 @@ class TestWiredIn:
         text, err = configuration._tool_search({"query": "zzqx"})
         assert not err and "On skills.sh" in text
         assert "review-pr  warpdotdev/common-skills" in text
+
+    def test_cli_json_says_the_flag_was_ignored(self, asked, capsys):
+        from boost_cli.commands import discovery
+        assert discovery.cmd_search(["jira", "--skills-sh", "--json"]) == 0
+        assert "--skills-sh is ignored with --json" in capsys.readouterr().err
+
+    def test_a_tapped_hit_reads_from_the_real_catalogue(self, asked,
+                                                         monkeypatch):
+        # The fixture tap is real: its name and its items come from disk.
+        from boost_cli.core import registry
+        tap = registry.list_taps()[0]
+        monkeypatch.setattr(skillssh, "search", lambda q, o=None: ([
+            {"source": tap.name, "name": "jira-integration", "installs": 3},
+            {"source": tap.name, "name": "not-there", "installs": 1}], None))
+        lines = skillssh.section("jira", force=True)
+        assert ("boost cat %s:jira-integration, then boost install"
+                % tap.name) in lines[1]
+        assert "boost update %s" % tap.name in lines[2]

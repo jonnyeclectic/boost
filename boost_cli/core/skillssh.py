@@ -52,7 +52,9 @@ def enabled(force: bool = False) -> bool:
         return False
     if force or typedvalue.env_flag("BOOST_SKILLS_SH"):
         return True
-    return bool(config.get("skills_sh.enabled", False))
+    # `is True`, not truthiness: `config set` coerces "no" to False, but a
+    # hand-edited "no" string would read as on, and this switch sends data.
+    return config.get("skills_sh.enabled", False) is True
 
 
 def _clean(value) -> str:
@@ -98,48 +100,71 @@ def search(query: str, owner: str | None = None,
             type(e).__name__ if not str(e) else str(e)[:120])
 
 
-def split_by_tapped(hits: list[dict],
-                    tapped: set[str]) -> tuple[list[dict], list[dict]]:
-    """Hits whose repo is already tapped here, and hits that would need a tap.
+#: Where a hit stands against this machine's taps.
+UNTAPPED, TAPPED, NOT_IN_COPY = "untapped", "tapped", "not-in-copy"
 
-    Compared without case: GitHub names are case-insensitive, and a tap's
-    configured name keeps whatever case the user typed.
+
+def state(hit: dict, local: dict[str, set[str]]) -> str:
+    """:data:`TAPPED`, :data:`UNTAPPED`, or :data:`NOT_IN_COPY`.
+
+    ``local`` maps a lower-cased tap name to the item names its catalogue
+    holds. skills.sh's ``skillId`` is boost's item name for 201 of the 206
+    hits measured in locally tapped repos (5 queries, 500 hits, 2026-11-08);
+    the five that differ are skills newer than the local clone. So a tapped
+    repo that lacks the name gets "update the tap", not a `boost cat` that
+    would answer "no skill named ...". Repo names compare without case:
+    GitHub's are case-insensitive and a tap keeps whatever case was typed.
     """
-    low = {t.lower() for t in tapped}
-    here = [h for h in hits if h["source"].lower() in low]
-    away = [h for h in hits if h["source"].lower() not in low]
-    return here, away
+    names = local.get(hit["source"].lower())
+    if names is None:
+        return UNTAPPED
+    return TAPPED if hit["name"] in names else NOT_IN_COPY
 
 
-def install_hint(hit: dict, tapped: bool) -> str:
-    """How to get ``hit``: read then install if tapped, else tap and read.
+def install_hint(hit: dict, where: str) -> str:
+    """The next step for ``hit``, which is never an unread install.
 
-    Untapped, the next step is the tap and a read, not an install: the body
-    is what tells a debugged procedure from a stub, and it cannot be read
-    until the repo is tapped. `boost cat` then names the install command.
+    Untapped, it is the tap and a read: the body is what tells a debugged
+    procedure from a stub, and it cannot be read until the repo is tapped.
+    `boost cat` then names the install command.
     """
     qualified = "%s:%s" % (hit["source"], hit["name"])
-    if tapped:
+    if where == TAPPED:
         return "boost cat %s, then boost install %s" % (qualified, qualified)
+    if where == NOT_IN_COPY:
+        return ("boost update %s, then boost cat %s — your copy of the tap "
+                "predates it" % (hit["source"], qualified))
     return "boost tap %s, then boost cat %s" % (hit["source"], qualified)
 
 
-def hit_line(hit: dict, tapped: bool) -> str:
-    """One hit as plain text: name, repo, installs, and how to get it."""
+def hit_line(hit: dict, where: str) -> str:
+    """One hit as plain text: name, repo, installs, and the next step."""
     n = hit.get("installs")
     count = ("%s installs" % format(n, ",")) if isinstance(n, int) else \
         "installs unknown"
     return "%s  %s  (%s) — `%s`" % (hit["name"], hit["source"], count,
-                                   install_hint(hit, tapped))
+                                   install_hint(hit, where))
 
 
-def tapped_names() -> set[str]:
-    """The ``owner/repo`` names configured as taps here; empty on any error."""
+def local_names(sources: set[str]) -> dict[str, set[str]]:
+    """Item names per tapped repo, for the repos in ``sources`` only.
+
+    Lower-cased keys. Loads just the taps a reply names, from their cached
+    catalogues. Any failure reads as "nothing tapped": the hint then says
+    to tap, which is still a command that works.
+    """
     try:
-        from boost_cli.core import registry
-        return {t.name for t in registry.list_taps()}
+        from boost_cli.core import catalog, registry
+        want = {s.lower() for s in sources}
+        out: dict[str, set[str]] = {}
+        for tap in registry.list_taps():
+            key = tap.name.lower()
+            if key in want:
+                out[key] = {str(e.get("name") or "")
+                            for e in catalog.load_tap(tap)}
+        return out
     except Exception:
-        return set()
+        return {}
 
 
 def section(query: str, *, force: bool = False, owner: str | None = None,
@@ -156,10 +181,9 @@ def section(query: str, *, force: bool = False, owner: str | None = None,
         return ["skills.sh: " + err]
     if not hits:
         return ["skills.sh: no matches for %r" % query]
-    here = {h["source"].lower() for h in split_by_tapped(
-        hits, tapped_names())[0]}
+    hits = hits[:show]
+    local = local_names({h["source"] for h in hits})
     lines = ["On skills.sh (installs are its users' counts; nothing there is "
              "reviewed, so read one before installing it):"]
-    lines.extend("  " + hit_line(h, h["source"].lower() in here)
-                 for h in hits[:show])
+    lines.extend("  " + hit_line(h, state(h, local)) for h in hits)
     return lines

@@ -226,6 +226,11 @@ def cmd_search(argv):
     collapse_note = _collapse_ignored(args)
     if collapse_note and args.as_json:
         out.warn(collapse_note, wrap=True, stream=sys.stderr)
+    if args.as_json and args.skills_sh:
+        # --json stays a bare list, so the skills.sh block has nowhere to go;
+        # say so rather than let the flag do nothing silently.
+        out.warn("--skills-sh is ignored with --json (its output is a list "
+                 "of local hits)", wrap=True, stream=sys.stderr)
     if not scored:
         if args.as_json:
             print(json.dumps([]))
