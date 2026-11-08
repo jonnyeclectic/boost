@@ -201,9 +201,14 @@ CURATED = frozenset({
     # heygen-com/hyperframes (80,666), ruvnet/ruflo (81,198),
     # vercel-labs/agent-browser (46,984) or larksuite/cli (18,012): they
     # belong to the framework, platform or CLI the skills drive, as
-    # googleworkspace/cli's do. Not anthropics/claude-for-legal: 9,931, under
-    # the bar. Yeachan-Heo/oh-my-codex is starred on the same terms as its
-    # sibling oh-my-claudecode, whose skills drive its runtime the same way.
+    # googleworkspace/cli's do: each is a tool people run without its skills,
+    # which are one surface among several. Not anthropics/claude-for-legal:
+    # 9,931, under the bar. Yeachan-Heo/oh-my-codex (33,737) is starred
+    # although 18 of its 29 skills call its `omx` CLI, because that CLI is
+    # the other way round: its README sells OMX as "better prompts,
+    # workflows, and runtime help", and the team, hud, state and question
+    # subcommands are that help for the repo's own workflows. So the stars
+    # are for the pack, as they are for its starred sibling oh-my-claudecode.
     "Yuan1z0825/nature-skills", "MiniMax-AI/skills", "Yeachan-Heo/oh-my-codex",
     "tanweai/pua", "AgriciDaniel/claude-obsidian", "ibelick/ui-skills",
 })
