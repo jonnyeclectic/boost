@@ -659,6 +659,192 @@ class TestForInstalled:
         assert prereq.for_installed()[0].kind == "rule"
 
 
+class TestRequiredBy:
+    """What `boost uninstall` names before removing something an installed
+    item's `requires:` lists — the key `boost install` itself acts on."""
+
+    _wire = staticmethod(TestForInstalled._wire)
+
+    ENTRIES: ClassVar[list[dict]] = [
+        {"name": "jira", "tap": "t1", "kind": "skill",
+         "meta": {"requires": ["commits"]}},
+        {"name": "board", "tap": "t1", "kind": "workflow",
+         "meta": {"requires": "commits, other"}},
+        {"name": "wide", "tap": "t1", "kind": "skill",
+         "meta": {"skills": ["commits"], "dependencies": ["commits"]}},
+        {"name": "commits", "tap": "t1", "kind": "skill", "meta": {}},
+        {"name": "other", "tap": "t1", "kind": "skill", "meta": {}}]
+
+    def _lock(self, *names, tap="t1"):
+        lock: dict = {"skill": {}, "workflow": {}}
+        for n in names:
+            kind = "workflow" if n == "board" else "skill"
+            lock[kind][n] = {"tap": tap}
+        return lock
+
+    def test_it_names_each_dependent_sorted(self, monkeypatch):
+        self._wire(monkeypatch, self._lock("jira", "board", "commits",
+                                           "other"), self.ENTRIES)
+        assert prereq.required_by(["commits"]) == {
+            "commits": ["board", "jira"]}
+
+    def test_only_targets_something_needs_are_keys(self, monkeypatch):
+        self._wire(monkeypatch, self._lock("jira", "board", "commits",
+                                           "other"), self.ENTRIES)
+        assert prereq.required_by(["commits", "other", "jira"]) == {
+            "commits": ["board"], "other": ["board"]}
+
+    def test_a_dependent_removed_in_the_same_batch_is_left_out(
+            self, monkeypatch):
+        self._wire(monkeypatch, self._lock("jira", "commits"), self.ENTRIES)
+        assert prereq.required_by(["commits", "jira"]) == {}
+
+    def test_the_widened_keys_are_not_requirements(self, monkeypatch):
+        # `skills:`/`dependencies:` are reported, never installed, so their
+        # absence is not something removing an item newly breaks.
+        self._wire(monkeypatch, self._lock("wide", "commits"), self.ENTRIES)
+        assert prereq.required_by(["commits"]) == {}
+
+    def test_a_qualified_requirement_counts_only_for_its_tap(self,
+                                                             monkeypatch):
+        entries = [{"name": "q", "tap": "t1", "kind": "skill",
+                    "meta": {"requires": ["t1:commits"]}},
+                   {"name": "commits", "tap": "t1", "kind": "skill",
+                    "meta": {}}]
+        self._wire(monkeypatch, {"skill": {"q": {"tap": "t1"},
+                                           "commits": {"tap": "t1"}}},
+                   entries)
+        assert prereq.required_by(["commits"]) == {"commits": ["q"]}
+        self._wire(monkeypatch, {"skill": {"q": {"tap": "t1"},
+                                           "commits": {"tap": "t2"}}},
+                   entries)
+        assert prereq.required_by(["commits"]) == {}
+
+    def test_one_name_in_two_sections_is_named_once(self, monkeypatch):
+        entries = [{"name": "same", "tap": "t1", "kind": "skill",
+                    "rel_dir": "skills/same", "meta": {"requires": ["c"]}},
+                   {"name": "same", "tap": "t1", "kind": "rule",
+                    "skill_md": "rules/same.mdc",
+                    "meta": {"requires": ["c"]}},
+                   {"name": "c", "tap": "t1", "kind": "skill", "meta": {}}]
+        self._wire(monkeypatch, {
+            "skill": {"same": {"tap": "t1", "source_dir": "skills/same"},
+                      "c": {"tap": "t1"}},
+            "rule": {"same": {"tap": "t1",
+                              "source_file": "rules/same.mdc"}}}, entries)
+        assert prereq.required_by(["c"]) == {"c": ["same"]}
+
+    def test_nothing_named_reads_nothing(self, monkeypatch):
+        def boom():
+            raise AssertionError("read the lock for an empty batch")
+        monkeypatch.setattr(prereq.lockfile, "all_installed", boom)
+        assert prereq.required_by([]) == {}
+
+
+class TestRequiredByScopeAndKind:
+    """`required_by` reads the row the uninstall takes out, and nothing else.
+
+    It read the user lock alone, so `uninstall --local` of a project skill a
+    project skill required printed nothing, and `uninstall x --kind rule`
+    warned while a skill named x stayed installed and met the requirement.
+    """
+
+    _wire = staticmethod(TestForInstalled._wire)
+    ENTRIES = TestRequiredBy.ENTRIES
+    BASE = "/repo"
+
+    def _project(self, monkeypatch, *names):
+        rows = {n: {"tap": "t1"} for n in names}
+        monkeypatch.setattr(prereq.projectlock, "installed",
+                            lambda base: rows)
+
+    def _ask(self, scope=None, kind=None, names=("commits",)):
+        return prereq.required_by(list(names), scope=scope, kind=kind,
+                                  pbase=self.BASE)
+
+    def test_a_project_dependent_of_a_project_copy_is_named(self,
+                                                             monkeypatch):
+        self._wire(monkeypatch, {"skill": {}}, self.ENTRIES)
+        self._project(monkeypatch, "jira", "commits")
+        assert self._ask("project") == {"commits": ["jira"]}
+        # A bare uninstall falls back to the repo for a name only it has.
+        assert self._ask() == {"commits": ["jira"]}
+        # `--global` leaves the repo alone, so nothing goes.
+        assert self._ask("user") == {}
+
+    def test_no_project_base_reads_no_project_lock(self, monkeypatch):
+        self._wire(monkeypatch, {"skill": {}}, self.ENTRIES)
+        self._project(monkeypatch, "jira", "commits")
+        assert prereq.required_by(["commits"], scope="project") == {}
+
+    def test_a_user_copy_that_stays_meets_a_project_requirement(
+            self, monkeypatch):
+        self._wire(monkeypatch, {"skill": {"commits": {"tap": "t1"}}},
+                   self.ENTRIES)
+        self._project(monkeypatch, "jira", "commits")
+        assert self._ask("project") == {}
+
+    def test_a_project_copy_does_not_meet_a_user_requirement(self,
+                                                              monkeypatch):
+        # Doctor reads the user lock alone, so a user-scope jira is left
+        # waiting whatever this one repo holds.
+        self._wire(monkeypatch, {"skill": {"jira": {"tap": "t1"},
+                                           "commits": {"tap": "t1"}}},
+                   self.ENTRIES)
+        self._project(monkeypatch, "commits")
+        assert self._ask("user") == {"commits": ["jira"]}
+        assert self._ask() == {"commits": ["jira"]}
+
+    def test_a_project_dependent_of_a_user_copy_is_named(self, monkeypatch):
+        self._wire(monkeypatch, {"skill": {"commits": {"tap": "t1"}}},
+                   self.ENTRIES)
+        self._project(monkeypatch, "jira")
+        assert self._ask("user") == {"commits": ["jira"]}
+        assert self._ask("project") == {}
+
+    def _two_kinds(self, monkeypatch):
+        self._wire(monkeypatch, {"skill": {"jira": {"tap": "t1"},
+                                           "commits": {"tap": "t1"}},
+                                 "rule": {"commits": {"tap": "t1"}}},
+                   self.ENTRIES)
+        self._project(monkeypatch)
+
+    def test_the_kind_that_stays_meets_the_requirement(self, monkeypatch):
+        self._two_kinds(monkeypatch)
+        assert self._ask(kind="rule") == {}
+        assert self._ask(kind="skill") == {}
+
+    def test_a_name_held_as_two_kinds_is_refused_without_kind(self,
+                                                             monkeypatch):
+        self._two_kinds(monkeypatch)
+        assert self._ask() == {}
+
+    def test_a_kind_the_name_is_not_held_as_removes_nothing(self,
+                                                           monkeypatch):
+        self._wire(monkeypatch, {"skill": {"jira": {"tap": "t1"},
+                                           "commits": {"tap": "t1"}}},
+                   self.ENTRIES)
+        self._project(monkeypatch)
+        assert self._ask(kind="rule") == {}
+        assert self._ask(kind="skill") == {"commits": ["jira"]}
+
+    def test_kind_skill_falls_back_to_the_repo_beside_a_user_rule(
+            self, monkeypatch):
+        # `store.uninstall --kind skill` takes the repo's skill when the user
+        # lock holds only a rule of that name; the rule stays for a user jira.
+        self._wire(monkeypatch, {"skill": {"jira": {"tap": "t1"}},
+                                 "rule": {"commits": {"tap": "t1"}}},
+                   self.ENTRIES)
+        self._project(monkeypatch, "commits")
+        assert self._ask(kind="skill") == {}
+        self._project(monkeypatch, "commits", "jira")
+        assert self._ask(kind="skill") == {}
+        self._wire(monkeypatch, {"skill": {}, "rule": {}}, self.ENTRIES)
+        self._project(monkeypatch, "commits", "jira")
+        assert self._ask(kind="skill") == {"commits": ["jira"]}
+        assert self._ask("user", kind="skill") == {}
+
+
 class TestForEntriesDefaults:
     def test_it_builds_its_own_index_and_lock_read(self, monkeypatch):
         entries = [{"name": "needy", "tap": "t1", "kind": "skill",

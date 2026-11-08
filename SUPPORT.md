@@ -27,7 +27,7 @@ next release; there are no backport branches and no long-term-support line.
 If you are on an older version, the supported answer is to upgrade:
 
 ```bash
-pipx upgrade boost-skill-cli     # or: pip install -U boost-skill-cli
+pipx upgrade boost-skill-cli     # or: python3.13 -m pip install --user --upgrade boost-skill-cli
 ```
 
 **Supported environments** — CI gates every one of these, so a regression on

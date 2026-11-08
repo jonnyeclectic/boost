@@ -1504,6 +1504,31 @@ def test_doctor_verify_and_heal_agree_on_a_deleted_agent_copy(boost, tapped,
     assert "intact" in boost("doctor").out
 
 
+def test_doctor_names_a_deleted_copy_beside_an_edited_one(boost, tapped,
+                                                         repo):
+    """An edit outranks a missing copy in `project_status`, and doctor
+    branched on that one status, so it named only the edit and its
+    discarding remedy. `boost heal` restores the copy and keeps the edit;
+    doctor has to say both."""
+    boost("install", "brainstorming", "--local")
+    rows = _copies(repo, "brainstorming")
+    with (repo / rows[-1] / "SKILL.md").open("a", encoding="utf-8") as fh:
+        fh.write("Local edit.\n")
+    shutil.rmtree(repo / rows[0])
+    res = boost("doctor", expect=1)
+    text = " ".join(res.out.split())
+    assert "project skill brainstorming modified since install" in text
+    assert ("project skill brainstorming is missing %s — run `boost heal`"
+            % rows[0]) in text
+    res = boost("heal")
+    assert (repo / rows[0] / "SKILL.md").is_file()
+    assert "Local edit." in (repo / rows[-1] / "SKILL.md").read_text(
+        encoding="utf-8")
+    text = " ".join(boost("doctor", expect=1).out.split())
+    assert "is missing" not in text
+    assert "project skill brainstorming modified since install" in text
+
+
 def test_heal_restores_only_the_missing_copy(boost, tapped, repo):
     # A teammate's edit to another agent's copy is a committed file; the
     # repair must not re-copy over it (it is reported, not reverted).

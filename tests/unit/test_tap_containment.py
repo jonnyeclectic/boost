@@ -133,7 +133,7 @@ class TestTheScanStaysInsideTheClone:
 
     def test_the_secret_is_not_searchable(self, tapped_evil):
         text, _ = _tool("boost_search", query=MARKER)
-        assert text.startswith("no skills match")
+        assert text.startswith("no skills, rules or workflows match")
         assert "leak" not in text
 
     def test_an_old_format_cache_is_rescanned_and_loses_the_leak(self,

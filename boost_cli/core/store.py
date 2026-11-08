@@ -22,6 +22,7 @@ from pathlib import Path, PurePosixPath
 from ..errors import BoostError, NotUTF8Error
 from . import (
     agents,
+    builtin,
     catalog,
     config,
     foreign,
@@ -589,6 +590,43 @@ def refuse_escape(tap: registry.Tap, path: Path, name: str) -> None:
                  % util.shell_arg(tap.name))
 
 
+def companion_files(skill_dir: Path) -> list[str]:
+    """What a skill ships beside its ``SKILL.md``, top level, by name.
+
+    A file is its name; a directory is ``name/ (N files)``, counted
+    recursively. Dotfiles are left out, as is ``SKILL.md`` itself. ``[]``
+    for a directory that cannot be read.
+
+    `boost_read` returns SKILL.md alone, and a skill that says "read
+    FORMS.md" or "run scripts/fill_form.py" reads as complete there:
+    anthropics/skills' `pdf` ships forms.md, reference.md and eight scripts
+    its SKILL.md names, and 14 of that repo's 19 skills ship files besides
+    SKILL.md and LICENSE.txt. Nothing in the reply said they existed.
+    """
+    try:
+        children = sorted(skill_dir.iterdir(), key=lambda p: p.name)
+    except OSError:
+        return []
+    found = []
+    for child in children:
+        if child.name.startswith(".") or child.name == "SKILL.md":
+            continue
+        if child.is_dir() and not child.is_symlink():
+            n = sum(1 for _ in _visible_files(child))
+            found.append("%s/ (%d file%s)" % (child.name, n,
+                                              "" if n == 1 else "s"))
+        else:
+            found.append(child.name)
+    return found
+
+
+def _visible_files(root: Path) -> Iterator[str]:
+    """Every non-dot file under ``root``, through non-dot directories."""
+    for _dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if not d.startswith(".")]
+        yield from (f for f in filenames if not f.startswith("."))
+
+
 def source_file_for(entry: dict) -> Path:
     """The tap file a catalog entry indexes, on disk and inside its clone.
 
@@ -601,6 +639,10 @@ def source_file_for(entry: dict) -> Path:
     kind = entry.get("kind") or catalog.KIND_SKILL
     if kind == catalog.KIND_SKILL:
         return source_dir_for(entry) / "SKILL.md"
+    wheel = builtin.wheel_source(str(entry.get("tap") or ""),
+                                 entry.get("skill_md", ""))
+    if wheel is not None:
+        return _shipped(entry, wheel)
     tap = registry.get(entry["tap"])
     registry.ensure_cloned(tap)
     path = tap.path / entry.get("skill_md", "")
@@ -643,6 +685,9 @@ def source_dir_for(entry: dict) -> Path:
     if kind != catalog.KIND_SKILL:
         raise BoostError("%s is a %s, not a skill: it has no source directory"
                          % (entry["name"], kind))
+    wheel = builtin.wheel_source(str(entry.get("tap") or ""), entry["rel_dir"])
+    if wheel is not None:
+        return _shipped(entry, wheel / "SKILL.md").parent
     tap = registry.get(entry["tap"])
     # At its pin, never HEAD: see registry.ensure_cloned.
     registry.ensure_cloned(tap)
@@ -654,6 +699,60 @@ def source_dir_for(entry: dict) -> Path:
     refuse_escape(tap, src / "SKILL.md", entry["name"])
     _materialize_link_targets(tap.path, src)
     return src
+
+
+def _shipped(entry: dict, path: Path) -> Path:
+    """``path``, the wheel's copy of a builtin item, once it is a file.
+
+    :func:`builtin.wheel_source` sends a read here when boost's own tap is
+    not registered. Package data needs no clone, sparse widening or escape
+    check, and nothing is ever written to it. A missing file is a wheel
+    built without its package data, which `boost update` cannot fix.
+    """
+    if not path.is_file():
+        raise BoostError("source for %s is missing from this boost install"
+                         % entry["name"],
+                         hint="reinstall boost (`boost self-update`)")
+    return path
+
+
+def _register_builtin_tap(entry: dict, doing: str = "install") -> dict:
+    """Put boost's own tap on disk and in config before installing from it.
+
+    Where a builtin item's tap gets registered on demand.
+    :func:`catalog.find` answers a lookup from the wheel and writes nothing,
+    so an install is the first command that needs the copy under
+    ``~/.boost/repos/``: every install path (`boost install`,
+    `boost_install`, a reinstall from a record) comes through here, and so
+    does `boost sync` recording a lost lock's copy from this tap. Rescanned
+    as well, because a tap an older wheel registered has a cache without the
+    newer item, and ``load_tap`` serves a format-current cache as it is.
+
+    A failed write says which write. Unhandled, an unwritable ``~/.boost``
+    surfaced as "boost hit an unexpected error".
+
+    Returns ``entry``, brought up to the row the rescan just produced for
+    the same file when it is boost's own. ``ensure_tap`` rewrites the tap's
+    files from this wheel, so a row the caller resolved from a cache an
+    older wheel wrote describes bytes that are no longer there: installing
+    from it recorded the old ``version`` beside the new files, and the next
+    ``boost outdated`` offered to upgrade what the install had just
+    upgraded. Updated in place, so the caller's own success line
+    ("installed ... v1.0.1") names the version that was installed too.
+    """
+    if not builtin.is_builtin(str(entry.get("tap") or "")):
+        return entry
+    try:
+        builtin.ensure_tap()
+        fresh = catalog.rebuild_tap(registry.get(builtin.BUILTIN_TAP))
+    except OSError as exc:
+        raise BoostError("could not set up boost's own tap to %s %r: %s"
+                         % (doing, entry.get("name", "?"), exc)) from exc
+    row = next((e for e in fresh
+                if e.get("skill_md") == entry.get("skill_md")), None)
+    if row is not None:
+        entry.update(row)
+    return entry
 
 
 def unfetched_submodules(entry: dict) -> list[str]:
@@ -748,9 +847,17 @@ def skill_source_sha(entry: dict) -> str:
     """:func:`copy_view_sha` of a catalog entry's tap source.
 
     Raises ``BoostError`` as :func:`source_dir_for` does. Bounded by the tap
-    clone, as a tap install's copy is.
+    clone, as a tap install's copy is, or by the wheel's skills directory
+    when :func:`source_dir_for` read boost's own skill from there. Bounding
+    that one by the registry raised "no such tap" on a machine that never
+    registered it, so `boost sync` could not match a lost lock's copy of
+    ``boost-find-and-install`` to its source and re-recorded it as a local
+    skill, cut off from every later update.
     """
     src = source_dir_for(entry)
+    if builtin.wheel_source(str(entry.get("tap") or ""),
+                            entry["rel_dir"]) is not None:
+        return copy_view_sha(src, builtin.skills_source_dir())
     return copy_view_sha(src, registry.get(entry["tap"]).path)
 
 
@@ -3656,6 +3763,7 @@ def install(entry: dict, force: bool = False,
     """
     scopes.check_scope(scope)
     _refuse_self_installing(entry)
+    entry = _register_builtin_tap(entry)
     if scope != scopes.SCOPE_PROJECT:
         # Before anything is copied or linked: lockfile.write refuses a
         # corrupt lock too, but by then the files would be on disk unrecorded.
@@ -5998,7 +6106,8 @@ def _install_workflow(entry: dict, force: bool = False,
     """Materialize a workflow (slash command / subagent) into each enabled agent.
 
     A verbatim Markdown drop into the agent's ``commands/`` or ``agents/`` dir —
-    the slot derived from the source path — with no transformation. With
+    the slot :func:`workflows.slot_of` reads off the source's Copilot suffix,
+    directory and frontmatter — with no transformation. With
     ``scope="project"`` the drop lands under the repo (``<repo>/.claude/…``).
     Every drop is recorded so ``uninstall`` removes exactly the files it wrote.
     """
@@ -6024,7 +6133,7 @@ def _install_workflow(entry: dict, force: bool = False,
     refuse_escape(tap, src, name)
     _enforce_capability_policy(name, src)
     raw = src.read_text(encoding="utf-8", errors="replace")
-    slot = workflows.detect_slot(source_rel)
+    slot = workflows.slot_of(source_rel, raw)
 
     # As for rules: the store refuses the whole install, a target dir only
     # its own agent.
@@ -6963,8 +7072,8 @@ def _expected_row_text(kind: str, name: str, entry: dict, m: dict,
             return want, (rules.read_block(on_disk, name)
                           if on_disk is not None else None)
         return raw, on_disk
-    slot = m.get("slot") or entry.get("slot") or workflows.detect_slot(
-        entry.get("source_file", ""))
+    slot = m.get("slot") or entry.get("slot") or workflows.slot_of(
+        entry.get("source_file", ""), raw)
     return workflows.render(m.get("agent"), slot, name, raw), on_disk
 
 
@@ -7203,8 +7312,8 @@ def _backfill_candidates() -> list[tuple[str, dict, str]]:
         raw = _installed_raw(entry)
         if raw is None:
             continue
-        slot = entry.get("slot") or workflows.detect_slot(
-            entry.get("source_file", ""))
+        slot = entry.get("slot") or workflows.slot_of(
+            entry.get("source_file", ""), raw)
         if workflows.skill_description(slot, frontmatter.parse(raw)[0]):
             out.append((name, entry, raw))
     return out
@@ -7239,8 +7348,8 @@ def backfill_skill_copies(dry: bool = False) -> list[str]:
                             " and link it → %s" % " · ".join(will)
                             if will else ""))
             continue
-        slot = entry.get("slot") or workflows.detect_slot(
-            entry.get("source_file", ""))
+        slot = entry.get("slot") or workflows.slot_of(
+            entry.get("source_file", ""), raw)
         row, note = _skill_copy(name, slot, raw, entry, None,
                                 scopes.SCOPE_USER)
         if row is None:
@@ -9586,7 +9695,9 @@ def _record_unrecorded(name: str, why: str) -> str | None:
     now = util.now_iso()
     record: dict[str, object]
     if len(matches) == 1:
-        cat = matches[0]
+        # A record naming boost's own tap needs that tap registered, as an
+        # install's does: the match may have come from the wheel.
+        cat = _register_builtin_tap(matches[0], doing="record")
         tap = registry.get(cat["tap"])
         record = {"version": cat.get("version", "0.0.0"), "tap": cat["tap"],
                   "tap_url": tap.url,

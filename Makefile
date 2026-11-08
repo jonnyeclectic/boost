@@ -123,7 +123,7 @@ dist-check:
 #
 # The floors are calibrated against a TWENTY-tap corpus, not the six it used to
 # be. Over the six (921 entries) BM25 scored 0.989 / 0.769 / 0.848 / 0.880;
-# over twenty it scores 0.846 / 0.484 / 0.607 / 0.659, which is what
+# over twenty it scores 0.846 / 0.484 / 0.607 / 0.660, which is what
 # tests/eval/baseline.json records at the current pins. Not the same golden
 # set: the six-repo row is name-graded and HISTORICAL, measured before every
 # row pinned an exemplar, and today's golden.jsonl cannot be scored over six

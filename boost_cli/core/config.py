@@ -270,6 +270,30 @@ def load_registry_catalog() -> list:
     return list(rows)
 
 
+def catalog_category_miss(category: str,
+                          rows: list | None = None) -> str | None:
+    """Why ``tap --catalog --category`` selected nothing, when the name is why.
+
+    None when some catalog row carries ``category`` (another filter emptied
+    the selection) or there is no catalog to compare against. Otherwise a
+    line naming the closest category and every category the catalog has:
+    `--category Testing` used to get only "no catalog registries match that
+    filter", and no command lists these — `boost browse --categories` lists
+    the categories of tapped items, a different set.
+    """
+    rows = load_registry_catalog() if rows is None else rows
+    known = sorted({str(r["category"]) for r in rows if r.get("category")})
+    if not known or category in known:
+        return None
+    line = "no catalog category is named %r — " % category
+    close = difflib.get_close_matches(category.lower(), known, n=1)
+    if close:
+        line += "did you mean %r? The catalog's" % close[0]
+    else:
+        line += "the catalog's"
+    return line + " categories are " + ", ".join(known)
+
+
 def registry_rows_by_name() -> dict[str, dict]:
     """Each bundled registry row under its name and under every name it had.
 
@@ -311,6 +335,28 @@ def registry_categories() -> dict:
     return {name: row["category"]
             for name, row in registry_rows_by_name().items()
             if row.get("category")}
+
+
+#: What every surface prints beside a catalogue row whose repository GitHub
+#: has archived. One phrase, so `tap --catalog --dry-run`, quickstart, `info`
+#: and `discover` cannot word the same fact four ways.
+ARCHIVED_NOTE = "archived upstream"
+
+
+def archived_registries() -> frozenset[str]:
+    """Every name of a bundled row whose repository GitHub has archived.
+
+    An archived repository still clones and still ships its items, so the
+    catalogue keeps the row; what the user is owed is being told that nothing
+    upstream will change it again. Names, not rows, because the callers hold
+    a tap name or a GitHub ``owner/repo``, and a tap made under a row's former
+    name is that row (:func:`registry_rows_by_name`). Only a literal ``true``
+    counts: a row without the key is live, and a damaged value is not a
+    verdict about GitHub. Ask once per command and test membership, rather
+    than re-keying 587 rows for every line printed.
+    """
+    return frozenset(name for name, row in registry_rows_by_name().items()
+                     if row.get("archived") is True)
 
 
 def self_installing_command(tap: str, url: str = "") -> str | None:

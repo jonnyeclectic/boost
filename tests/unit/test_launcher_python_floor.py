@@ -73,6 +73,20 @@ class TestDocsPythonFloor:
                  if "requires Python %d.%d+" % (major, minor) not in f[0]}
         assert not stale, stale
 
+    def test_every_footer_installs_with_pipx(self):
+        # Naming the floor is not enough when the command beside it ignores
+        # it. Ten of the eleven footers said `pip install boost-skill-cli`;
+        # on stock macOS that pip belongs to python3 3.9.6, and because 390
+        # of the 677 releases on PyPI declare `>=3.9` it resolves
+        # boost_skill_cli-1.0.392 — 287 releases behind — and exits 0.
+        # pipx is the install the landing page and the README prescribe.
+        pages = sorted((ROOT / "docs").glob("*.html"))
+        wrong = {page.name: ln.strip() for page in pages
+                 for ln in page.read_text(encoding="utf-8").splitlines()
+                 if 'class="foot-note"' in ln
+                 and "<code>pipx install boost-skill-cli</code>" not in ln}
+        assert not wrong, wrong
+
     def test_design_board_targets_the_same_floor(self):
         major, minor = _requires_python_floor()
         text = (ROOT / "docs" / "design-roadmap.html").read_text(encoding="utf-8")

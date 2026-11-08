@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Render a boost skill into another agent framework's native source.
 
-boost installs skills as files for editor-style agents (Claude Code, Cursor,
-Windsurf). Frameworks like CrewAI or the OpenAI Agents SDK are *application
+boost installs skills as files for editor-style agents (Claude Code, Windsurf,
+Cursor, Gemini CLI, Antigravity CLI and Codex). Frameworks like CrewAI or the OpenAI Agents SDK are *application
 code* — they have no skills directory to install into; an agent is a value
 constructed in a Python source file. `boost adapt <name> --to <framework>`
 bridges that gap by emitting the framework's own idiom.

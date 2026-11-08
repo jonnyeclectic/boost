@@ -80,6 +80,15 @@ class TestConeMatchesWhatTheScannerReads:
             assert "*" + suffix in gitutil.SPARSE_PATTERNS, (
                 "rule suffix %s is scanned but never checked out" % suffix)
 
+    def test_cone_covers_every_second_extension_the_scanner_reads(self):
+        """`x.instructions.md` is a rule and `x.prompt.md` a workflow, but
+        the cone has no pattern of their own: `*.md` is what checks them
+        out, so each must stay Markdown."""
+        assert catalog.KIND_SUFFIXES
+        for suffix in catalog.KIND_SUFFIXES:
+            assert suffix.endswith(".md"), (
+                "%s is scanned but `*.md` does not check it out" % suffix)
+
     def test_cone_covers_every_rule_filename(self):
         for name in catalog.RULE_FILENAMES:
             assert name in gitutil.SPARSE_PATTERNS, (

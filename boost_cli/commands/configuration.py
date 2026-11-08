@@ -1654,9 +1654,9 @@ def _ranking_note(ranker: str) -> str:
     """
     if ranker == rag.LLM_RANKER:
         return "\n(ranked by %s)" % ranker
-    return ("\n(ranked by %s — the LLM rerank did NOT run, so this is a "
-            "shortlist to read rather than a verdict to act on. Configure "
-            "ANTHROPIC_API_KEY or the `claude` CLI to enable it.)" % ranker)
+    # Why it did not run decides the remedy (`mcp.unreranked_note`).
+    return mcp.unreranked_note(ranker, ai.unavailable_cause(),
+                               ai.unavailable_reason())
 
 
 # The label for the pre-RAG fallback below. `_ranking_note` needs a name for
@@ -1898,8 +1898,9 @@ def _tool_info(args: dict):
     if entry:
         # Only the agents boost still writes for: a recorded row whose agent
         # was disabled is kept for uninstall, not reached (same as `info`).
-        agents_s = ", ".join(
-            integrity.written_agent_names(kind, entry)) or "none"
+        # Plus the ones reading the store, in boost_install's words.
+        agents_s = integrity.reach_line(kind, entry,
+                                        catalog.split_name(name)[1])
         lines.extend(("installed: yes (%s)" % entry.get("installed_at", "?"),
                       "agents: %s" % agents_s))
         where = (_tilde(pbase) if pbase is not None
@@ -1966,7 +1967,8 @@ def _tool_read(args: dict):
         # when the other one is installed, or there would be no way to read
         # the copy an agent is deciding whether to switch to.
         cat = catalog.resolve_one(name, path=path)
-        text = info._read(store.source_file_for(cat))
+        source = store.source_file_for(cat)
+        text = info._read(source)
         # "installed" must describe *this* copy: with a/twin installed, a read
         # of b/twin said "installed: yes" over text that is not on disk. An
         # older record without `source_dir` falls back to the tap alone.
@@ -1975,14 +1977,52 @@ def _tool_read(args: dict):
         here = (rec is not None and rec.get("tap") == cat.get("tap")
                 and rec.get("source_dir", cat.get("rel_dir"))
                 == cat.get("rel_dir"))
-        return mcp.read_reply(name, text, kind=cat.get("kind") or "skill",
+        kind = cat.get("kind") or "skill"
+        sdir = (_installed_skill_dir(name) if here else source.parent) \
+            if kind == "skill" else None
+        return mcp.read_reply(name, text, kind=kind,
                               installed=here, where=_installed_where(found),
-                              held=mcp.held_line(name, rec)), False
-    text, kind, lock, _cat = info._resolve_text(name)
+                              held=mcp.held_line(name, rec),
+                              **_companions(sdir)), False
+    text, kind, lock, cat = info._resolve_text(name)
+    sdir = None
+    if kind == "skill":
+        sdir = (_installed_skill_dir(name) if lock is not None
+                else _tap_skill_dir(cat))
     return mcp.read_reply(name, text, kind=kind, installed=lock is not None,
                           where=(_installed_where(integrity.find_installed(name))
                                  if lock is not None else None),
-                          held=mcp.held_line(name, lock)), False
+                          held=mcp.held_line(name, lock),
+                          **_companions(sdir)), False
+
+
+def _installed_skill_dir(name: str) -> Path | None:
+    """The installed copy of skill ``name`` a reader opens, or None."""
+    row = integrity.resolve_skill(name)
+    return row.dir if row is not None else None
+
+
+def _tap_skill_dir(cat: dict | None) -> Path | None:
+    """A not-installed skill's directory in its tap, or None.
+
+    The read just went through :func:`store.source_file_for`, which
+    materialized it, so the companions are on disk; this asks again rather
+    than widening ``info._resolve_text``'s contract for one caller.
+    """
+    if not cat:
+        return None
+    try:
+        return store.source_file_for(cat).parent
+    except (BoostError, OSError):
+        return None
+
+
+def _companions(sdir: Path | None) -> dict:
+    """``read_reply``'s companion arguments for a skill directory."""
+    if sdir is None:
+        return {}
+    return {"companions": store.companion_files(sdir),
+            "skill_dir": _tilde(sdir)}
 
 
 def _installed_where(found) -> str | None:
@@ -2185,10 +2225,13 @@ def _use_now_lines(res: store.InstallResult) -> list[str]:
     the line points at the text, which is usable now on every host.
     """
     if res.kind == "skill":
+        # The directory too: a skill's text names `scripts/…` and `forms.md`
+        # relative to itself, and the line used to give only SKILL.md's path.
         return ["to use it now: follow the text boost_read returns for %s, "
-                "or read %s — whether this session's host loads a skill "
-                "installed after it started depends on the host"
-                % (res.name, _tilde(res.dest / "SKILL.md"))]
+                "or read %s; the files it names by relative path are in %s "
+                "— whether this session's host loads a skill installed after "
+                "it started depends on the host"
+                % (res.name, _tilde(res.dest / "SKILL.md"), _tilde(res.dest))]
     what = "command" if res.kind == "workflow" else "rule"
     return ["to use it now: boost_read %s returns its text — whether this "
             "session's host picks up a %s written after it started depends "
@@ -2756,7 +2799,8 @@ REGISTRY.register(
     "installs nothing, changes nothing, and never reranks, so it is fast. "
     "Long items are truncated at a stated character "
     "count and the reply says so and names the command that returns the rest; "
-    "a body that arrives whole is whole.",
+    "a body that arrives whole is whole. A skill is more than its body when "
+    "it ships files beside SKILL.md, and the reply's header names them.",
     {"type": "object",
      "properties": {"name": {"type": "string",
                              "description": "the item's name, as boost_search "
@@ -2961,9 +3005,9 @@ def _boost_first_targets(hosts: list[str]) -> list[str]:
     # `boost_search` to an agent that does not have it.
     if not hosts or not builtin.rule_is_available():
         return []
-    if lockfile.get_rule(builtin.BUILTIN_RULES[0]):
-        return []                   # already installed; do not re-ask
-    scoped_agents = {builtin.AGENT_FOR_HOST.get(h) for h in hosts}
+    # Less the agents an installed copy already covers: "installed" used to
+    # end the offer, so a host registered after the first one never got it.
+    scoped_agents = set(builtin.rule_offer_agents(hosts))
     # materializing_agents, not enabled_agents: this is a *rule*, so the
     # preview has to be built from the set the rule install actually writes to,
     # or it names a path nothing ever creates. AGENT_FOR_HOST maps every host
@@ -2971,8 +3015,8 @@ def _boost_first_targets(hosts: list[str]) -> list[str]:
     # maps to gemini rather than to its skills-only agent), so the two sets
     # coincide and this is a guard rather than a fix.
     #
-    # Note what it does and does not cover. `only_agents` below is
-    # `scoped_agents`, not this filtered list, so a skills-only agent added to
+    # Note what it does and does not cover. `only_agents` in the offer is
+    # built from `rule_offer_agents`, not this filtered list, so a skills-only agent added to
     # AGENT_FOR_HOST would be dropped from the preview and still passed to the
     # install, where `narrow_materializing` drops it again — silently, since
     # the intersection is non-empty as long as one real agent remains. If it
@@ -3011,13 +3055,23 @@ def _offer_boost_first(hosts: list[str], yes: bool = False) -> None:
     from ..core import builtin
 
     targets = _boost_first_targets(hosts)
-    if not targets:
+    if not targets or not _ready_builtin_tap():
         return
     body = (builtin.source_dir() / (builtin.BUILTIN_RULES[0] + ".mdc"))
-    scoped_agents = {builtin.AGENT_FOR_HOST.get(h) for h in hosts}
+    # An installed copy is widened, never narrowed: its own agents stay in
+    # the scope, so the lock records every agent the rule now reaches.
+    rec = lockfile.get_rule(builtin.BUILTIN_RULES[0])
+    have = sorted(store.effective_scope(rec) or ()) if rec else []
+    only = sorted(set(have) | set(builtin.rule_offer_agents(hosts)))
     out.info("")
-    out.info("boost can also add its own rule, `%s`, to your agents' standing "
-             "instructions:" % builtin.BUILTIN_RULES[0])
+    if have:
+        out.info("boost's own rule, `%s`, is installed for %s; it can also go "
+                 "into the standing instructions of the agents just "
+                 "registered:" % (builtin.BUILTIN_RULES[0], ", ".join(have)),
+                 wrap=True)
+    else:
+        out.info("boost can also add its own rule, `%s`, to your agents' "
+                 "standing instructions:" % builtin.BUILTIN_RULES[0])
     for target in targets:
         out.info("  %s" % target)
     out.info("")
@@ -3029,10 +3083,12 @@ def _offer_boost_first(hosts: list[str], yes: bool = False) -> None:
                  % builtin.BUILTIN_RULES[0])
         return
     try:
-        builtin.ensure_tap()
         catalog.rebuild_tap(registry.get(builtin.BUILTIN_TAP))
+        # `force` only when widening: an installed rule is otherwise refused
+        # as "already installed", and its existing files are rewritten with
+        # the same block they hold.
         res = store.install(catalog.resolve_one(builtin.BUILTIN_RULES[0]),
-                            only_agents=[a for a in scoped_agents if a])
+                            force=bool(have), only_agents=only)
     except (BoostError, OSError) as exc:
         out.warn("could not install %s: %s" % (builtin.BUILTIN_RULES[0], exc))
         return
@@ -3051,6 +3107,46 @@ def _offer_boost_first(hosts: list[str], yes: bool = False) -> None:
         out.ok("installed %s — remove it with `boost uninstall %s`"
                % (builtin.BUILTIN_RULES[0], builtin.BUILTIN_RULES[0]))
     _warn_unwritable(res)
+
+
+def _ready_builtin_tap() -> bool:
+    """Register boost's own tap before an offer asks its question.
+
+    Both offers end a decline with "`boost install <name>` any time", and
+    registration used to happen only inside the yes branch, so the advice on
+    the no branch failed with "no skill named". Package data, so this is
+    offline and cheap. A failure here would fail the install too, so it ends
+    the offer with the reason rather than asking a question a yes cannot
+    honor.
+    """
+    from ..core import builtin
+    try:
+        builtin.ensure_tap()
+    except OSError as exc:
+        out.warn("could not set up boost's own tap: %s" % exc)
+        return False
+    return True
+
+
+def _offer_skill_without_host(yes: bool = False) -> None:
+    """The skill offer for a machine where no agent CLI took boost's server.
+
+    boost registers its MCP server with four CLIs, and Cursor and Windsurf are
+    not among them, so a machine with only those settled no host, and both
+    offers ran only after one did. That user got no boost surface at all. The
+    skill needs no server: it is a directory linked into each agent's skills
+    dir, and its text falls back to the shell (`boost search`, `boost cat`,
+    `boost install`). The rule stays unoffered here, because it names MCP
+    tools these agents were never given.
+    """
+    linking = agents.linking_agents()
+    if not linking or _boost_skill_offered() is None:
+        return
+    out.info("so no agent here has boost's MCP tools — but its skill needs "
+             "no server: it works through the shell (`boost search`, `boost "
+             "install`) for %s" % ", ".join(
+                 agents.display_name(a) for a in linking), wrap=True)
+    _offer_boost_skill(yes=yes)
 
 
 #: Escape hatch for the skill offer, the shape of NO_RULE_ENV and checked
@@ -3083,7 +3179,7 @@ def _offer_boost_skill(yes: bool = False) -> None:
     from ..core import builtin
 
     name = _boost_skill_offered()
-    if name is None:
+    if name is None or not _ready_builtin_tap():
         return
     out.info("")
     # The install also symlinks the directory into every agent that does not
@@ -3098,14 +3194,17 @@ def _offer_boost_skill(yes: bool = False) -> None:
         out.info("Not installed. `boost install %s` any time." % name)
         return
     try:
-        builtin.ensure_tap()
         catalog.rebuild_tap(registry.get(builtin.BUILTIN_TAP))
         res = store.install(catalog.resolve_one(
             "%s:%s" % (builtin.BUILTIN_TAP, name)))
     except (BoostError, OSError) as exc:
         out.warn("could not install %s: %s" % (name, exc))
         return
-    out.ok("installed %s — remove it with `boost uninstall %s`" % (name, name))
+    # Which agents it reached, not only that it installed: on a machine with
+    # no MCP host this is the one boost surface its agents get, and the line
+    # is where the user sees Cursor or Windsurf named.
+    out.ok("installed %s for %s — remove it with `boost uninstall %s`"
+           % (name, agents.reach_phrase(res.linked, res.native), name))
     from .pkg import _warn_unwritable
     _warn_unwritable(res)
 
@@ -3197,7 +3296,12 @@ def cmd_mcp(argv) -> int:
             out.info("would then offer to add the `%s` rule to %s (asks first)"
                      % (builtin.BUILTIN_RULES[0], ", ".join(rule_targets)),
                      wrap=True)
-        if (args.action == "register" and would_settle
+        # With no host to settle, the real run still offers the skill to
+        # the agents that read skills dirs (`_offer_skill_without_host`),
+        # unless one named host was asked for, which fails instead.
+        if (args.action == "register"
+                and (would_settle or (not mcphost.is_named(args.host)
+                                      and agents.linking_agents()))
                 and (skill := _boost_skill_offered())):
             out.info("would then offer to install the `%s` skill (default yes)"
                      % skill, wrap=True)
@@ -3287,6 +3391,8 @@ def cmd_mcp(argv) -> int:
                      % ", ".join(mcphost.cli(h) for h in missing))
             for host in missing:
                 out.info(mcphost.shell_line(mcphost.argv(host, args.action, shim)))
+        if args.action == "register" and not named:
+            _offer_skill_without_host(yes=args.yes)
         journal.log("mcp", args.action, hosts="")
         # A single named host whose CLI is missing is a no-op, not a success:
         # `--host all` and `auto` both tolerate an absent CLI by design (see

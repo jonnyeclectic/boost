@@ -10,10 +10,11 @@ import shlex
 import sys
 import threading
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 
-from boost_cli.core import catalog, config, paths, rag, registry
+from boost_cli.core import catalog, config, paths, rag, registry, workflows
 from boost_cli.errors import BoostError
 
 FIXTURE_NAMES = ["brainstorming", "commit-messages", "cowboy-coding",
@@ -196,7 +197,7 @@ class TestScanDir:
         assert catalog.find("", entries=[e3]) == []
 
     def test_cache_format_moved(self):
-        assert catalog.CACHE_FORMAT == 10
+        assert catalog.CACHE_FORMAT == 11
 
     def test_alias_never_indexes_a_safe_name(self, tmp_path):
         # A safe frontmatter name IS the entry name; indexing it as an alias of
@@ -401,6 +402,54 @@ class TestScanRulesAndWorkflows:
     def test_the_cache_format_moved_so_old_caches_rescan(self):
         assert catalog.CACHE_FORMAT >= 8
 
+    @pytest.mark.parametrize("rel, meta, want", [
+        ("marketing/marketing-growth-hacker.md",
+         {"name": "growth-hacker", "description": "d", "tools": "Read"}, None),
+        ("engineering/x.md", {"name": "x", "description": "d",
+                              "color": "blue"}, None),
+        ("loose.md", {"name": "a", "description": "d", "tools": "Read",
+                      "argument-hint": "[file]"}, "loose"),
+        ("prompts/a11y-audit.prompt.md", {"tools": ["x"]}, "a11y-audit"),
+        ("commands/ns/run.prompt.md", {}, "ns/run"),
+        ("loose/Analyst-subagent.agent.md", {}, None),
+    ])
+    def test_command_name_reads_the_frontmatter(self, rel, meta, want):
+        assert catalog.command_name(rel, meta) == want
+
+    def test_a_loose_subagent_is_named_by_its_frontmatter(self, tmp_path):
+        # Named by file it was `marketing-growth-hacker`, a slash command; a
+        # subagent is addressed by its `name`.
+        root = tmp_path / "tap"
+        (root / "marketing").mkdir(parents=True)
+        (root / "marketing" / "marketing-growth-hacker.md").write_text(
+            "---\nname: growth-hacker\ndescription: Grows things\n"
+            "tools: Read, WebSearch\n---\nX\n", encoding="utf-8")
+        (e,) = catalog.scan_dir(root)
+        assert (e["kind"], e["name"]) == ("workflow", "growth-hacker")
+        assert "original_name" not in e
+
+    def test_a_persona_with_only_color_is_a_workflow(self, tmp_path):
+        """msitarzewski/agency-agents: name, description, color, emoji and
+        vibe, no `tools`, under a department dir. 267 of its 284 personas
+        look like this and none was an item."""
+        root = tmp_path / "tap"
+        (root / "engineering").mkdir(parents=True)
+        (root / "engineering" / "engineering-software-architect.md").write_text(
+            "---\nname: Software Architect\ndescription: Designs systems\n"
+            "color: indigo\nemoji: x\nvibe: y\n---\nX\n", encoding="utf-8")
+        (e,) = catalog.scan_dir(root)
+        assert (e["kind"], e["name"]) == ("workflow", "software-architect")
+        assert e["original_name"] == "Software Architect"
+
+    def test_color_without_name_and_description_is_not_a_workflow(self):
+        assert catalog._classify_workflow(
+            Path("team/x.md"), {"name": "x", "color": "red"}) is False
+        assert catalog._classify_workflow(
+            Path("team/x.md"), {"description": "d", "color": "red"}) is False
+        assert catalog._classify_workflow(
+            Path("team/x.md"),
+            {"name": "x", "description": "d", "color": "red"}) is True
+
     def test_workflow_under_claude_agents_dir(self, tmp_path):
         root = tmp_path / "tap"
         (root / ".claude" / "agents").mkdir(parents=True)
@@ -514,6 +563,152 @@ class TestScanRulesAndWorkflows:
         (root / "commands" / "ship.md").write_text("---\ndescription: ship it\n---\nx\n", encoding="utf-8")
         kinds = sorted(e["kind"] for e in catalog.scan_dir(root))
         assert kinds == ["rule", "skill", "workflow"]
+
+
+class TestCopilotFiles:
+    """GitHub Copilot's file kinds, which name themselves by a second
+    extension. github/awesome-copilot ships 196 `*.instructions.md` and the
+    scanner indexed none of them."""
+
+    def _write(self, root, rel, text):
+        path = root / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+
+    def test_an_instructions_file_is_a_rule_named_without_its_suffix(
+            self, tmp_path):
+        root = tmp_path / "tap"
+        self._write(root, "instructions/python.instructions.md",
+                    "---\ndescription: Python conventions\n"
+                    "applyTo: '**/*.py'\n---\nUse type hints.\n")
+        (e,) = catalog.scan_dir(root)
+        assert (e["kind"], e["name"]) == ("rule", "python")
+        assert e["description"] == "Python conventions"
+        assert e["meta"]["applyTo"] == "**/*.py"
+
+    def test_the_repos_own_copilot_instructions_is_not_an_item(self, tmp_path):
+        # The repo's always-on context file, as CLAUDE.md is: not an item.
+        root = tmp_path / "tap"
+        self._write(root, ".github/copilot-instructions.md",
+                    "---\ndescription: d\n---\nAlways.\n")
+        assert catalog.scan_dir(root) == []
+
+    def test_a_prompt_file_is_a_command_named_without_its_suffix(
+            self, tmp_path):
+        root = tmp_path / "tap"
+        self._write(root, ".github/prompts/a11y-audit.prompt.md",
+                    "---\nagent: agent\ndescription: Audit a11y\n---\nGo.\n")
+        (e,) = catalog.scan_dir(root)
+        assert (e["kind"], e["name"]) == ("workflow", "a11y-audit")
+        # What a reader of the tap types is the short name too, not
+        # `a11y-audit.prompt`, so there is no alias to record.
+        assert "original_name" not in e
+        assert workflows.detect_slot(e["skill_md"], e["meta"]) == "commands"
+
+    def test_a_chatmode_with_no_name_is_a_subagent(self, tmp_path):
+        root = tmp_path / "tap"
+        self._write(root, "chatmodes/qa-strategist.chatmode.md",
+                    "---\ntitle: QA Strategist\ndescription: Plans QA\n---\n"
+                    "Plan.\n")
+        (e,) = catalog.scan_dir(root)
+        assert (e["kind"], e["name"]) == ("workflow", "qa-strategist")
+        assert workflows.detect_slot(e["skill_md"], e["meta"]) == "agents"
+
+    def test_an_agent_file_takes_its_frontmatter_name(self, tmp_path):
+        root = tmp_path / "tap"
+        self._write(root, "sets/x/Analyst-subagent.agent.md",
+                    "---\nname: analyst\ndescription: d\n---\nX\n")
+        self._write(root, "sets/x/Planner.agent.md",
+                    "---\ndescription: d\n---\nX\n")
+        names = sorted(e["name"] for e in catalog.scan_dir(root))
+        assert names == ["Planner", "analyst"]
+
+    def test_a_suffix_alone_is_not_a_name(self, tmp_path):
+        root = tmp_path / "tap"
+        self._write(root, "x/.prompt.md", "---\ndescription: d\n---\nX\n")
+        self._write(root, "x/.instructions.md",
+                    "---\ndescription: d\n---\nX\n")
+        assert catalog.scan_dir(root) == []
+
+    def test_the_suffix_is_matched_case_blind(self, tmp_path):
+        root = tmp_path / "tap"
+        self._write(root, "i/Go.Instructions.md",
+                    "---\ndescription: d\n---\nX\n")
+        (e,) = catalog.scan_dir(root)
+        assert (e["kind"], e["name"]) == ("rule", "Go")
+
+    @pytest.mark.parametrize("name, stem", [
+        ("a.instructions.md", "a"), ("a.prompt.md", "a"), ("a.agent.md", "a"),
+        ("a.chatmode.md", "a"), ("a.md", "a"), ("a.b.md", "a.b"),
+        (".prompt.md", ".prompt"), ("copilot-instructions.md",
+                                    "copilot-instructions"),
+    ])
+    def test_item_stem(self, name, stem):
+        assert catalog.item_stem(name) == stem
+
+    def test_a_prompt_file_inside_a_skill_stays_the_skills(self, tmp_path):
+        root = tmp_path / "tap"
+        write_skill(root / "skills" / "s", "---\nname: s\n---")
+        self._write(root, "skills/s/resources/example.prompt.md",
+                    "---\ndescription: d\n---\nX\n")
+        self._write(root, "skills/s/resources/x.instructions.md",
+                    "---\ndescription: d\n---\nX\n")
+        assert [e["kind"] for e in catalog.scan_dir(root)] == ["skill"]
+
+    def test_a_short_name_a_skill_holds_keeps_its_suffix(self, tmp_path):
+        """canonical/copilot-collections ships `skills/secret-guard/` and
+        `assets/instructions/common/secret-guard.instructions.md`. Named
+        `secret-guard`, the rule made `boost install secret-guard`, which
+        installed the skill, a same-tap ambiguity."""
+        root = tmp_path / "tap"
+        write_skill(root / "skills" / "secret-guard",
+                    "---\nname: secret-guard\ndescription: Guard\n---")
+        self._write(root, "instructions/secret-guard.instructions.md",
+                    "---\ndescription: Scan\n---\nX\n")
+        entries = catalog.scan_dir(root)
+        assert sorted((e["kind"], e["name"]) for e in entries) == [
+            ("rule", "secret-guard.instructions"), ("skill", "secret-guard")]
+        assert [e["kind"] for e in catalog.find("secret-guard",
+                                                 entries=entries)] == ["skill"]
+
+    def test_short_names_that_collide_with_each_other_all_go_back(
+            self, tmp_path):
+        # The counts are taken before any row is renamed: renaming the first
+        # must not leave the second looking free.
+        root = tmp_path / "tap"
+        self._write(root, "agents/qa.agent.md",
+                    "---\ndescription: a\n---\nX\n")
+        self._write(root, "chatmodes/qa.chatmode.md",
+                    "---\ndescription: c\n---\nY\n")
+        self._write(root, "prompts/qa.prompt.md",
+                    "---\ndescription: p\n---\nZ\n")
+        assert sorted(e["name"] for e in catalog.scan_dir(root)) == [
+            "qa.agent", "qa.chatmode", "qa.prompt"]
+
+    def test_a_command_beside_its_namesake_keeps_namespace_and_suffix(
+            self, tmp_path):
+        root = tmp_path / "tap"
+        self._write(root, "commands/ns/run.md",
+                    "---\ndescription: a\n---\nX\n")
+        self._write(root, "commands/ns/run.prompt.md",
+                    "---\ndescription: b\n---\nY\n")
+        by_file = {e["skill_md"]: e for e in catalog.scan_dir(root)}
+        long = by_file["commands/ns/run.prompt.md"]
+        assert long["name"] == "ns/run.prompt"
+        # Typed as named: no alias pointing back at the short name.
+        assert "original_name" not in long
+        assert by_file["commands/ns/run.md"]["name"] == "ns/run"
+
+    def test_a_frontmatter_name_is_not_given_a_suffix(self, tmp_path):
+        # Only a name read off the file goes back; a `name:` is the tap's own.
+        root = tmp_path / "tap"
+        write_skill(root / "skills" / "planner",
+                    "---\nname: planner\ndescription: d\n---")
+        self._write(root, "x/Planner.agent.md",
+                    "---\nname: planner\ndescription: a\n---\nX\n")
+        assert sorted((e["kind"], e["name"])
+                      for e in catalog.scan_dir(root)) == [
+            ("skill", "planner"), ("workflow", "planner")]
 
 
 class TestTapCaches:
@@ -2125,6 +2320,50 @@ class TestInstalledRow:
         assert row["description"] == "other tap"
         assert catalog.installed_row(self._matches(), "workflow",
                                      {"tap": "gone"}) is None
+
+
+class TestRenamedRow:
+    """An installed rule or workflow whose name no row carries any more is
+    found again by the file the lock recorded, when that file is still
+    catalogued (under another name)."""
+
+    ROWS: ClassVar[list[dict]] = [
+        {"name": "qa", "tap": "t", "kind": "workflow",
+         "skill_md": "agents/qa.agent.md"},
+        {"name": "qa", "tap": "t", "kind": "rule",
+         "skill_md": "rules/qa.mdc"},
+        {"name": "qa", "tap": "other", "kind": "workflow",
+         "skill_md": "agents/x.agent.md"},
+        {"name": "x", "tap": "other", "kind": "workflow",
+         "skill_md": "agents/qa.agent.md"}]
+
+    def test_the_recorded_file_names_the_row(self):
+        row = catalog.renamed_row(
+            {"tap": "t", "source_file": "agents/qa.agent.md"}, "workflow",
+            iter(self.ROWS))
+        assert row is self.ROWS[0]
+
+    def test_only_this_taps_row_and_this_kind(self):
+        assert catalog.renamed_row(
+            {"tap": "t", "source_file": "rules/qa.mdc"}, "workflow",
+            self.ROWS) is None
+        assert catalog.renamed_row(
+            {"tap": "gone", "source_file": "agents/qa.agent.md"},
+            "workflow", self.ROWS) is None
+        assert catalog.renamed_row(
+            {"tap": "other", "source_file": "agents/qa.agent.md"},
+            "workflow", self.ROWS) is self.ROWS[3]
+
+    def test_a_kindless_row_counts_as_a_skill(self):
+        rows = [{"name": "s", "tap": "t", "skill_md": "s/SKILL.md"}]
+        assert catalog.renamed_row({"tap": "t", "source_file": "s/SKILL.md"},
+                                   "skill", rows) is rows[0]
+
+    def test_no_recorded_file_finds_nothing(self):
+        rows = [{"name": "x", "tap": "t", "kind": "workflow", "skill_md": ""}]
+        assert catalog.renamed_row({"tap": "t"}, "workflow", rows) is None
+        assert catalog.renamed_row({"tap": "t", "source_file": ""},
+                                   "workflow", rows) is None
 
 
 class TestSelectLockSource:

@@ -236,6 +236,16 @@ class TestKindChangedMessage:
         assert "(it is now a rule or workflow)" in msg
 
 
+class TestRenamedMessage:
+    """An installed item whose file its tap still ships, under a new name."""
+
+    def test_names_the_new_name_and_both_steps(self):
+        assert (staleness.renamed_message("workflow", "qa.agent", "t", "qa")
+                == "workflow qa.agent is catalogued as qa by tap t now — "
+                   "leaving as-is; `boost uninstall qa.agent`, then `boost "
+                   "install t:qa`, switches to it")
+
+
 class TestCatalogRelation:
     """`boost info`'s installed-vs-catalog decision, compared as versions."""
 

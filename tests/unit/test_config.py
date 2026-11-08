@@ -10,6 +10,7 @@ import re
 import shutil
 import sys
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 
@@ -798,3 +799,43 @@ class TestTapsThatIsNotAList:
         assert config.unset("custom") is False
         assert (paths.config_path().read_text(encoding="utf-8")
                 == '{"taps": "x", "custom": 1}')
+
+
+class TestCatalogCategoryMiss:
+    """`tap --catalog --category X` with no such category said only "no
+    catalog registries match that filter", and no command lists the
+    catalog's categories (`browse --categories` lists tapped items')."""
+
+    ROWS: ClassVar[list[dict]] = [
+        {"name": "a/b", "category": "security"},
+        {"name": "c/d", "category": "infra"},
+        {"name": "e/f", "category": "security"},
+        {"name": "g/h"},
+    ]
+
+    def test_a_known_category_is_not_a_miss(self):
+        # The other filters emptied the selection; the name is fine.
+        assert config.catalog_category_miss("infra", self.ROWS) is None
+
+    def test_an_unknown_one_names_every_category_once_and_sorted(self):
+        assert config.catalog_category_miss("testing", self.ROWS) == (
+            "no catalog category is named 'testing' — the catalog's "
+            "categories are infra, security")
+
+    def test_a_near_miss_names_the_closest_first(self):
+        assert config.catalog_category_miss("securty", self.ROWS) == (
+            "no catalog category is named 'securty' — did you mean "
+            "'security'? The catalog's categories are infra, security")
+
+    def test_case_is_not_what_hides_the_match(self):
+        line = config.catalog_category_miss("Infra", self.ROWS)
+        assert line is not None
+        assert "did you mean 'infra'?" in line
+
+    def test_no_catalog_has_nothing_to_list(self):
+        assert config.catalog_category_miss("x", []) is None
+
+    def test_it_reads_the_shipped_catalog_by_default(self):
+        line = config.catalog_category_miss("no-such-category")
+        assert line is not None
+        assert "security" in line

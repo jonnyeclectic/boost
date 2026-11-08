@@ -345,6 +345,18 @@ def cmd_search(argv):
     # pane-width gate only passed because its fixture returned one match.
     for line in out.wrap(footer, max(out.term_width() - 2, 20)):
         out.info(out.role(line, "muted"))
+    if shown and not (sys.stdout.isatty() or sys.stderr.isatty()):
+        # No terminal on either stream: an agent's shell is reading, so say
+        # how to read and install the top hit. On stderr, so the rows stay
+        # the only stdout lines naming a hit (`boost search x | grep
+        # owner/repo`); a command is data, so it is whole and unwrapped.
+        # Through out.info, which flushes stdout first: a bare print to stderr
+        # reached `boost search x 2>&1` -- how an agent's shell reads -- above
+        # the rows still sitting in stdout's pipe buffer.
+        top = shown[0][0]
+        out.info(out.role(out.search_next_step(
+            top["name"], top.get("tap") or ""), "muted", stream=sys.stderr),
+            stream=sys.stderr)
     if use_rag:
         _note_stem_expansions(query)
         _note_dropped_terms(dropped)
@@ -1134,6 +1146,21 @@ def _fall_back(why: str, hint: str) -> None:
     return None
 
 
+def _repo_cell(it: dict, archived: frozenset[str]) -> str:
+    """The repo cell: the name, its "(N)" file count, and the archived marker.
+
+    out.plain because the name is a GitHub string. The marker follows the
+    count, so the name `boost tap` takes still leads the cell. It is the
+    catalogue's verdict, so a repository the catalogue does not carry gets
+    none whatever GitHub says.
+    """
+    cell = out.plain(it.get("repo", "?")) + (
+        " (%d)" % it["files"] if it.get("files", 1) > 1 else "")
+    if isinstance(it.get("repo"), str) and it["repo"] in archived:
+        cell += out.role(" (%s)" % config.ARCHIVED_NOTE, "warn")
+    return cell
+
+
 def _note_tapped(n: int) -> None:
     """Say how many matching repos were left out for being tapped already."""
     if n:
@@ -1179,8 +1206,8 @@ def _discover_live(args, tokens):
     # was the first thing a narrow terminal truncated away. out.plain because
     # every field here is a GitHub string — a repo name or path carrying a
     # cursor-movement escape would rewrite the rows printed above it.
-    out.table([(out.plain(it.get("repo", "?"))
-                + (" (%d)" % it["files"] if it.get("files", 1) > 1 else ""),
+    archived = config.archived_registries()
+    out.table([(_repo_cell(it, archived),
                 out.plain(it.get("path", "")),
                 out.role(out.plain(it.get("url", "")), "muted")) for it in rows],
               headers=("repo", "path", "url"), whole=("repo",))  # `boost tap`
@@ -1292,8 +1319,8 @@ def cmd_discover(argv):
         return 0
     # out.plain: these rows came from GitHub too, by way of `boost index`. The
     # "(N)" cell mirrors the live table for the same reason it exists there.
-    out.table([(out.plain(it.get("repo", "?"))
-                + (" (%d)" % it["files"] if it.get("files", 1) > 1 else ""),
+    archived = config.archived_registries()
+    out.table([(_repo_cell(it, archived),
                 out.plain(it.get("path", "")),
                 out.role(out.plain(it.get("url", "")), "muted")) for it in repo_rows],
               headers=("repo", "path", "url"), whole=("repo",))  # `boost tap`
@@ -1836,12 +1863,6 @@ def _browse_tui(curses, entries, install=None, category=""):
     copies = {id(e): n for e, n in deduped}
     unique_entries = [e for e, _n in deduped]
     hidden = len(entries) - len(unique_entries)
-    # Everything allocated so far lives as long as the browser does, and the
-    # collector would otherwise walk all of it — every catalogue dict — on
-    # each gen-2 pass, which the ranking's per-keystroke tuples trigger.
-    # Measured over a 61,801-entry catalogue: a one-letter query 122 ms
-    # unfrozen, 52 ms frozen. Undone on the way out (see the finally below).
-    gc.freeze()
     # (tap, name) -> (state, message). Item 1: an install runs without leaving
     # the browser, and the detail pane reports it. Threaded so the draw loop
     # keeps answering keys while files are written — an install that freezes
@@ -2194,6 +2215,18 @@ def _browse_tui(curses, entries, install=None, category=""):
                 filt, sel, dscroll = filt + chr(key), 0, 0
                 focus = "search" if focus == "search" else focus
 
+    # Everything allocated so far lives as long as the browser does, and the
+    # collector would otherwise walk all of it — every catalogue dict — on
+    # each gen-2 pass, which the ranking's per-keystroke tuples trigger.
+    # Measured over a 61,801-entry catalogue: a one-letter query 122 ms
+    # unfrozen, 52 ms frozen. Frozen here, right before the try whose finally
+    # undoes it: freezing ~350 lines earlier meant anything raising in the
+    # setup between (``_install_targets``, say) left the collector frozen for
+    # the rest of the process. And only when nothing else froze it, because
+    # ``gc.unfreeze()`` releases every frozen object, not just this call's.
+    froze = gc.get_freeze_count() == 0
+    if froze:
+        gc.freeze()
     try:
         curses.wrapper(ui)  # wrapper guards drawing with try/finally endwin()
     except KeyboardInterrupt as exc:
@@ -2208,7 +2241,8 @@ def _browse_tui(curses, entries, install=None, category=""):
                 session.cancelled.extend(req)
             queue.clear()
     finally:
-        gc.unfreeze()
+        if froze:
+            gc.unfreeze()
         # Join on every way out. Quitting right after Enter must not leave an
         # install half-written, nor its result unreported.
         for t in workers:
@@ -2843,8 +2877,7 @@ def cmd_stats(argv):
         # command describing two kinds of item.
         # Written agents only: a row boost no longer writes is kept so an
         # uninstall can reverse it, not because the item reaches that agent.
-        out.kv("agents",
-               ", ".join(integrity.written_agent_names(kind, lock)) or "none")
+        out.kv("agents", integrity.reach_line(kind, lock, name), wrap=True)
         out.kv("pinned", "yes" if lock.get("pinned") else "no")
         if lock.get("quarantined"):
             out.kv("quarantined", "yes")

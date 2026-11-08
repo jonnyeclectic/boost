@@ -31,6 +31,7 @@ from boost_cli.core import (
     scopes,
     store,
     util,
+    workflows,
 )
 from boost_cli.errors import BoostError
 
@@ -2402,6 +2403,48 @@ class TestWorkflowInstall:
         assert {m["agent"]: m["path"] for m in rec["materializations"]}["gemini"] \
             == str(gem)
         assert lockfile.get_skill("ship-it") is None
+
+    def test_a_loose_subagent_drops_into_agents_not_commands(self, tap):
+        """VoltAgent/awesome-claude-code-subagents files its subagents under
+        ``categories/<n>-<topic>/``: no ``agents/`` dir, so each was written to
+        ``~/.claude/commands/`` — a subagent turned into a slash command.
+        Its frontmatter says which it is."""
+        entry = _workflow_entry(
+            tap, name="api-designer",
+            rel="categories/01-core-development/api-designer.md",
+            body="---\nname: api-designer\ndescription: Use this agent when\n"
+                 "tools: Read, Write, Edit, Bash\nmodel: sonnet\n---\n\nDesign.\n")
+        store.install(entry)
+        home = paths.home()
+        assert (home / ".claude" / "agents" / "api-designer.md").is_file()
+        assert not (home / ".claude" / "commands" / "api-designer.md").exists()
+        # Gemini takes subagents as Markdown, not as a TOML command.
+        assert (home / ".gemini" / "agents" / "api-designer.md").is_file()
+        assert not (home / ".gemini" / "commands" / "api-designer.toml").exists()
+        assert lockfile.get_workflow("api-designer")["slot"] == "agents"
+
+    def test_a_reinstall_moves_a_subagent_out_of_commands(self, tap,
+                                                         monkeypatch):
+        """A copy an earlier boost wrote into ``commands/`` goes when the
+        subagent is installed again, rather than staying a live command."""
+        rel = "engineering/engineering-software-architect.md"
+        entry = _workflow_entry(
+            tap, name="software-architect", rel=rel,
+            body="---\nname: Software Architect\ndescription: Designs systems\n"
+                 "color: indigo\nemoji: x\n---\n\nArchitect.\n")
+        old = paths.home() / ".claude" / "commands" / "software-architect.md"
+        # What every boost before this one decided for a file under no
+        # agents/ dir.
+        with monkeypatch.context() as m:
+            m.setattr(workflows, "slot_of",
+                      lambda _rel, _raw: workflows.SLOT_COMMANDS)
+            store.install(entry)
+        assert old.is_file()
+        store.install(entry, force=True)
+        assert not old.exists()
+        assert (paths.home() / ".claude" / "agents"
+                / "software-architect.md").is_file()
+        assert lockfile.get_workflow("software-architect")["slot"] == "agents"
 
     def test_narrowing_to_an_agent_with_no_workflow_surface_is_refused(self, tap):
         """An empty ``--agent`` intersection must raise, not install nothing.

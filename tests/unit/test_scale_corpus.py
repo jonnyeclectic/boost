@@ -103,6 +103,23 @@ class TestSelection:
         pools = m.candidates([_reg("dup/repo", "skill", 100)], ["dup/repo"])
         assert m.select(pools, 100) == []
 
+    def test_a_required_repo_held_under_its_former_name_is_not_repeated(self):
+        # taps.txt pins LessUp/awesome-cursorrules-zh, whose catalogue row is
+        # holtwood/awesome-cursorrules-zh now. One repository: drawn again as
+        # a distractor, `registry.add` refused its second name and the list
+        # could not be materialised.
+        m = _load()
+        row = {**_reg("new/name", "rule", 100), "formerly": ["old/name"]}
+        pools = m.candidates([row], ["old/name"])
+        assert m.select(pools, 100) == []
+
+    def test_a_required_repo_is_matched_case_folded(self):
+        # A tap's identity is case-folded (`registry.name_key`), so
+        # `Dup/Repo` and `dup/repo` are one tap and one repository.
+        m = _load()
+        pools = m.candidates([_reg("dup/repo", "skill", 100)], ["Dup/Repo"])
+        assert m.select(pools, 100) == []
+
     def test_a_registry_over_the_cap_is_skipped_for_the_next_largest(self):
         # One giant must not become most of the corpus on its own.
         m = _load()
@@ -195,6 +212,25 @@ class TestTheShippedList:
     def test_no_repository_appears_twice(self):
         rows = _rows(_OUT.read_text(encoding="utf-8"))
         assert len(rows) == len(set(rows))
+
+    @pytest.mark.skipif(
+        not (_OUT.exists() and (_ROOT / "boost_cli/data/registries.json").exists()),
+        reason="registries not reachable")
+    def test_no_repository_appears_under_two_names(self):
+        """A row's former name is the same repository, so it counts once.
+
+        The list held LessUp/awesome-cursorrules-zh (a required row) and
+        holtwood/awesome-cursorrules-zh (a distractor) once the catalogue
+        recorded the rename: one repository, tapped twice.
+        """
+        current = {}
+        for r in json.loads((_ROOT / "boost_cli/data/registries.json")
+                            .read_text(encoding="utf-8"))["registries"]:
+            for old in r.get("formerly") or ():
+                current[old.casefold()] = r["name"].casefold()
+        repos = [current.get(r.casefold(), r.casefold())
+                 for r in _rows(_OUT.read_text(encoding="utf-8"))]
+        assert sorted({r for r in repos if repos.count(r) > 1}) == []
 
     @pytest.mark.skipif(
         not (_OUT.exists() and (_ROOT / "boost_cli/data/registries.json").exists()),

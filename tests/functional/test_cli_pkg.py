@@ -159,6 +159,35 @@ class TestInstall:
         assert (repo / ".cursor" / "rules" / "team-rules.mdc").is_file()
         assert not (paths.home() / ".claude" / "CLAUDE.md").exists()  # not global
 
+    def test_project_rule_and_workflow_say_where_they_are_recorded(
+            self, boost, fixture_tap_src, tmp_path, monkeypatch):
+        # A project skill goes into .boost/, which teammates get by cloning.
+        # A project rule or workflow is written into the repo and recorded in
+        # the user lock, and the install said only "lock updated" — the MCP
+        # reply already named the difference, the CLI did not.
+        tap_dir = _copy_tap(fixture_tap_src, tmp_path / "sp-tap")
+        _add_and_commit(tap_dir, "rules/team.mdc",
+                        "---\nname: team-rules\n---\n\nAlways TDD.\n",
+                        "add rule")
+        _add_and_commit(tap_dir, "commands/review-pr.md",
+                        "---\ndescription: review a PR\n---\n\nReview it.\n",
+                        "add workflow")
+        boost("tap", tap_dir)
+        repo = tmp_path / "proj"
+        repo.mkdir()
+        monkeypatch.chdir(repo)
+        said = ("recorded in ~/.agents/skills/.skill-lock.json rather than "
+                "in .boost/ — teammates who clone this repo get the files "
+                "but not boost's record of them")
+        for name in ("team-rules", "review-pr"):
+            r = boost("install", name, "--local")
+            assert "lock updated (.skill-lock.json)" in r.out
+            assert said in " ".join(r.out.split())
+        assert not (repo / ".boost").exists()
+        # User scope has no repo to clone, so nothing to say.
+        r = boost("install", "brainstorming")
+        assert "rather than in .boost/" not in r.out
+
     def test_next_hint_is_whole_on_a_narrow_pane(self, boost, tapped,
                                                  monkeypatch):
         # panel() clips its lines to the pane; inside it the hint became
@@ -184,8 +213,12 @@ class TestInstall:
         # D13: framed success card with a next-step hint
         assert "╭─ installed" in r.out
         assert "next: boost info brainstorming" in r.out
-        # the hint is printed after the box, not clipped inside it
-        assert r.out.rstrip("\n").endswith("╯\n  next: boost info brainstorming")
+        # the hints are printed after the box, not clipped inside it: where
+        # the text is, for this session, then where to look next
+        assert r.out.rstrip("\n").endswith(
+            "╯\n  use it now: read ~/.agents/skills/brainstorming/SKILL.md — "
+            "the files it names by relative path sit beside it"
+            "\n  next: boost info brainstorming")
         entry = _lock()["brainstorming"]
         assert entry["version"] == "1.4.0"
         assert entry["tap"] == "fixture-tap"
@@ -381,6 +414,60 @@ class TestUninstall:
         assert _lock() == {}
         assert not (paths.store_dir() / "brainstorming").exists()
         assert not (paths.store_dir() / "commit-messages").exists()
+
+    def test_removing_a_requirement_names_what_needs_it(self, boost, tapped):
+        # `install jira-integration` pulls in commit-messages for its
+        # `requires:`; removing that said nothing, and doctor stayed green.
+        boost("install", "jira-integration")
+        assert sorted(_lock()) == ["commit-messages", "jira-integration"]
+        r = boost("uninstall", "commit-messages")
+        assert ("! commit-messages is required by jira-integration, which "
+                "stays installed without it"
+                in " ".join((r.out + r.err).split()))
+        assert "Uninstalled 1 skill" in r.out     # a warning, not a refusal
+        assert sorted(_lock()) == ["jira-integration"]
+
+    def test_removing_both_together_says_nothing(self, boost, tapped):
+        boost("install", "jira-integration")
+        r = boost("uninstall", "commit-messages", "jira-integration")
+        assert "is required by" not in r.out + r.err
+        assert _lock() == {}
+
+    def test_the_warning_comes_before_the_prompt(self, boost, tapped,
+                                                 monkeypatch):
+        boost("install", "jira-integration")
+        monkeypatch.delenv("BOOST_ASSUME_YES")
+        monkeypatch.setattr("sys.stdin", _FakeTtyStdin("n\n"))
+        r = boost("uninstall", "commit-messages", expect=1)
+        # Before the question, so the person answering it has read it.
+        assert (0 <= r.out.find("is required by jira-integration")
+                < r.out.find("uninstall commit-messages? [y/N]"))
+        assert "cancelled" in r.out
+        assert "commit-messages" in _lock()
+
+    def test_removing_a_project_requirement_names_what_needs_it(
+            self, boost, tapped, tmp_path, monkeypatch):
+        # Both are in .boost/, not the user lock, which is all the check read.
+        repo = tmp_path / "proj"
+        (repo / ".git").mkdir(parents=True)
+        monkeypatch.chdir(repo)
+        boost("install", "--local", "jira-integration")
+        assert not paths.lockfile_path().exists()
+        r = boost("uninstall", "--local", "commit-messages")
+        assert ("! commit-messages is required by jira-integration, which "
+                "stays installed without it"
+                in " ".join((r.out + r.err).split()))
+
+    def test_a_user_copy_that_stays_is_not_a_missing_requirement(
+            self, boost, tapped, tmp_path, monkeypatch):
+        repo = tmp_path / "proj"
+        (repo / ".git").mkdir(parents=True)
+        monkeypatch.chdir(repo)
+        boost("install", "--local", "jira-integration")
+        boost("install", "commit-messages")
+        r = boost("uninstall", "--local", "commit-messages")
+        assert "is required by" not in r.out + r.err
+        assert "commit-messages" in _lock()
 
     def test_single_unknown_rc1(self, boost, sandbox):
         r = boost("uninstall", "ghost", expect=1)
@@ -1947,6 +2034,51 @@ class TestBundle:
         assert lines[1] == "tap fixture-tap %s" % fixture_tap_src.resolve()
         assert lines[2] == "skill fixture-tap:brainstorming@1.4.0"
 
+    def test_dump_after_untap_keeps_the_url_the_lock_recorded(
+            self, boost, installed, fixture_tap_src, tmp_path):
+        # `untap` drops the config row, and the tap line came out as a bare
+        # `tap fixture-tap`: `cannot parse tap spec` on replay, or a
+        # same-named directory under the cwd tapped in its place.
+        commit = _lock()["brainstorming"]["commit"]
+        boost("untap", "fixture-tap", "-y")
+        vf = tmp_path / "Boostfile"
+        r = boost("bundle", "dump", vf)
+        assert "no URL" not in r.out + r.err
+        lines = vf.read_text(encoding="utf-8").splitlines()
+        assert lines[1] == "tap fixture-tap %s" % fixture_tap_src.resolve()
+        # The commit is a note, not a pin: the dump of the configured,
+        # unpinned tap had no `--at`, and a pin on replay would leave the
+        # new machine's `boost update` skipping the tap.
+        assert lines[2] == (
+            "# fixture-tap's skills were installed at %s; add `--at %s` to "
+            "the line above to hold the tap at that commit" % (commit, commit))
+        boost("uninstall", "brainstorming")
+        r = boost("bundle", "install", vf)
+        assert "tapped fixture-tap" in r.out
+        assert "installed brainstorming v1.4.0 (fixture-tap)" in r.out
+        [row] = [t for t in json.loads(paths.config_path().read_text(
+            encoding="utf-8"))["taps"] if t["name"] == "fixture-tap"]
+        assert not row.get("pin")
+
+    def test_dump_says_when_a_tap_line_cannot_be_replayed(self, boost,
+                                                          installed):
+        # A row written before `tap_url` existed, its tap untapped since:
+        # nothing says where it came from, and the dump has to say so.
+        boost("untap", "fixture-tap", "-y")
+        path = paths.lockfile_path()
+        data = json.loads(path.read_text(encoding="utf-8"))
+        del data["skills"]["brainstorming"]["tap_url"]
+        path.write_text(json.dumps(data), encoding="utf-8")
+        r = boost("bundle", "dump")
+        # No `--at` and no note: with no URL the line names no tree.
+        assert r.out.splitlines()[1] == "tap fixture-tap"
+        assert not r.out.splitlines()[2].startswith("#")
+        err = " ".join(r.err.split())
+        assert ("! tap fixture-tap is written without a URL: it is no longer "
+                "tapped and the lock does not record where it came from, so "
+                "`boost bundle install` cannot re-tap it — add its URL to "
+                "that line") in err
+
     def test_dump_to_file_and_reinstall_roundtrip(self, boost, installed,
                                                   tmp_path):
         vf = tmp_path / "Boostfile"
@@ -3275,6 +3407,29 @@ class TestUpdateEdges:
         assert ("brainstorming not found in tap gone-tap — skipped "
                 "(try `boost update`)") in r.err
 
+    def test_a_renamed_workflow_is_named_not_called_removed(
+            self, boost, fixture_tap_src, tmp_path):
+        # Installed as `qa.agent`, before the scanner dropped the second
+        # extension: the tap still ships the file, catalogued as `qa`.
+        tap_dir = _copy_tap(fixture_tap_src, tmp_path / "ren-tap")
+        (tap_dir / "agents").mkdir(exist_ok=True)
+        (tap_dir / "agents" / "qa.agent.md").write_text(
+            "---\ndescription: Plans QA\n---\nPlan QA.\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(tap_dir), "add", "-A"],
+                       check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(tap_dir), "commit", "-qm", "qa"],
+                       check=True, capture_output=True)
+        boost("tap", tap_dir)
+        boost("install", "qa")
+        lock = json.loads(paths.lockfile_path().read_text(encoding="utf-8"))
+        lock["workflows"]["qa.agent"] = lock["workflows"].pop("qa")
+        paths.lockfile_path().write_text(json.dumps(lock), encoding="utf-8")
+        said = " ".join(boost("update").out.split())
+        assert ("workflow qa.agent is catalogued as qa by tap ren-tap now — "
+                "leaving as-is; `boost uninstall qa.agent`, then `boost "
+                "install ren-tap:qa`, switches to it") in said
+        assert "no longer in tap" not in said
+
     def test_reinstall_after_untap_names_the_missing_tap(
             self, boost, fixture_tap_src, tmp_path):
         # "try `boost update`" looped: update answers "everything up to
@@ -3517,12 +3672,17 @@ class TestBundleEdges:
         boost("bundle", "install", bf)
         assert "brainstorming" in complete._cached_names()
 
-    def test_dump_local_comment_and_lost_tap_url(self, boost, installed,
-                                                 tmp_path):
+    def test_dump_local_comment_and_untapped_tap_url(self, boost, installed,
+                                                     tmp_path):
         boost("import", _skill_dir(tmp_path, "local-thing"))
+        row = _lock()["brainstorming"]
         boost("untap", "fixture-tap", "--force")
         lines = boost("bundle", "dump").out.splitlines()
-        assert "tap fixture-tap" in lines         # URL lost → bare tap line
+        # Untapped, but the lock row still says where it came from: a bare
+        # `tap fixture-tap` line cannot be replayed.
+        assert "tap fixture-tap %s" % row["tap_url"] in lines
+        assert any(line.startswith("# fixture-tap's skills were installed "
+                                   "at %s;" % row["commit"]) for line in lines)
         assert "# local skill (no tap source): local-thing" in lines
         assert "skill fixture-tap:brainstorming@1.4.0" in lines
 
@@ -4605,7 +4765,7 @@ class TestMcpAwareSkills:
             sidecar={"mcpServers": {"github": {"command": "npx"}}})
         r = boost("import", d)
         # non-TTY stdin makes confirm() return its default, which is False here
-        assert "skipped — run these yourself when you're ready:" in r.out
+        assert "skipped — registering is machine-wide; ask the user before running these:" in r.out
         assert "claude mcp add github --scope user -- npx" in r.out
         # agy and codex are not on PATH, so neither is in `targets` and
         # neither must be printed: the decline path prints what a yes would
@@ -4633,7 +4793,7 @@ class TestMcpAwareSkills:
         r = boost("import", d, "-y")
         assert calls == []
         assert "registered MCP server" not in r.out
-        assert "skipped — run these yourself when you're ready:" in r.out
+        assert "skipped — registering is machine-wide; ask the user before running these:" in r.out
         # No bypass hint: the -y they passed changes nothing here, and the
         # printed command is the consent, not a blanket env var.
         assert "pass -y" not in r.out
@@ -4655,7 +4815,7 @@ class TestMcpAwareSkills:
         calls = self._record_registrations(monkeypatch)
         r = boost("install", "needs-mcp", *extra)
         assert calls == []
-        assert "skipped — run these yourself when you're ready:" in r.out
+        assert "skipped — registering is machine-wide; ask the user before running these:" in r.out
         assert "pass -y" not in r.out
         assert "BOOST_ASSUME_YES" not in r.out
         assert "mcp add github" in r.out
@@ -4686,7 +4846,7 @@ class TestMcpAwareSkills:
             sidecar={"mcpServers": {"github": {"command": "npx",
                                                "args": ["-y", "srv"]}}})
         r = boost("import", d)
-        assert "skipped — run these yourself when you're ready:" in r.out
+        assert "skipped — registering is machine-wide; ask the user before running these:" in r.out
         assert "claude mcp add github --scope user -- npx -y srv" in r.out
         assert "gemini mcp add --scope user github npx -- -y srv" in r.out
         assert "agy mcp add github -- npx -y srv" in r.out
@@ -4879,6 +5039,48 @@ class TestLocalInstallGates:
         skills = json.loads(boost("list", "--json").out)["skills"]
         assert skills["pinned-local"]["pinned"] is True
 
+
+
+class TestDeclaredConflicts:
+    """tdd-workflow declares `conflicts: [cowboy-coding]` (make_fixture.py).
+    Installing tdd-workflow beside cowboy-coding warned; installing
+    cowboy-coding beside tdd-workflow said nothing, although `boost deps`
+    and `boost conflict` both knew the pair."""
+
+    LINE = "! tdd-workflow declares a conflict with cowboy-coding (also present)"
+
+    @pytest.mark.parametrize("first, second", [
+        ("cowboy-coding", "tdd-workflow"),
+        ("tdd-workflow", "cowboy-coding")])
+    def test_either_install_order_warns(self, boost, tapped, first, second):
+        r = boost("install", first)
+        assert "declares a conflict" not in r.out + r.err
+        r = boost("install", second)
+        assert self.LINE in r.out + r.err
+        assert sorted(_lock()) == ["cowboy-coding", "tdd-workflow"]
+
+    def test_the_mcp_install_reply_warns_in_the_quiet_order_too(self, boost,
+                                                                tapped):
+        from boost_cli.commands import configuration
+        boost("install", "tdd-workflow")
+        text, is_err = configuration._mcp_tool("boost_install",
+                                               {"name": "cowboy-coding"})
+        assert is_err is False
+        assert ("tdd-workflow declares a conflict with cowboy-coding (also "
+                "present)") in text
+
+    def test_a_bundle_dry_run_warns_as_the_real_run_does(self, boost, tapped,
+                                                         tmp_path):
+        # The dry run's earlier "would install" tdd-workflow has no lock row,
+        # so its `conflicts:` read as empty and the dry run said nothing.
+        bf = tmp_path / "Boostfile"
+        bf.write_text("skill tdd-workflow\nskill cowboy-coding\n",
+                      encoding="utf-8")
+        r = boost("bundle", "install", "--dry-run", bf)
+        assert self.LINE in r.out + r.err
+        assert not paths.lockfile_path().exists()
+        r = boost("bundle", "install", bf)
+        assert self.LINE in r.out + r.err
 
 
 # ── prerequisites declared under the wider spellings ─────────────────────

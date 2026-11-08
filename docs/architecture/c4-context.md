@@ -11,7 +11,7 @@ C4Context
 
   System(boost, "boost", "CLI + MCP server that finds, installs and governs the skill, rule and workflow files AI coding agents run on")
 
-  System_Ext(agents, "AI coding agents", "Claude Code, Cursor, Windsurf, Gemini CLI")
+  System_Ext(agents, "AI coding agents", "Claude Code, Windsurf, Cursor, Gemini CLI, Antigravity CLI, Codex")
   System_Ext(github, "GitHub", "Hosts registry repos (taps) and skill sources")
   System_Ext(llm, "Anthropic API / claude CLI", "Optional LLM-assisted ranking and authoring")
   System_Ext(embed, "Voyage / OpenAI embeddings", "Optional vectors for dense retrieval")

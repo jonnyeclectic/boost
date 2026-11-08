@@ -220,6 +220,12 @@ def _skill_meta(name: str, project: dict | None = None, pbase=None,
                  or next(iter(catalog.find(name)), None))
         if entry is None:
             return None
+        # boost's own items are described from the wheel until something is
+        # installed from them, so their frontmatter is there too.
+        wheel = builtin.wheel_source(entry["tap"], entry["skill_md"])
+        if wheel is not None:
+            return frontmatter.parse(_read(wheel))[0] if wheel.is_file() \
+                else None
         try:
             root = registry.get(entry["tap"]).path
         except BoostError:
@@ -296,11 +302,16 @@ def _print_wrapped(text: str) -> None:
 
 # ---------------------------------------------------------------- commands
 
-def _materialized_agents(kind, entry):
+def _materialized_agents(kind, entry, name=None):
     """Abbreviated agent column for any kind: the agents boost still writes
-    for it, not every recorded row or link (`integrity.written_agent_names`)."""
-    return "·".join(a.split("-")[0]
-                    for a in integrity.written_agent_names(kind, entry))
+    for it, not every recorded row or link (`integrity.written_agent_names`),
+    then ``+`` and the agents that read a user-scope skill from the store
+    without one (`integrity.store_reader_names`)."""
+    written = "·".join(a.split("-")[0]
+                       for a in integrity.written_agent_names(kind, entry))
+    native = "·".join(integrity.store_reader_names(kind, entry, name))
+    return "%s +%s" % (written, native) if native and written else (
+        written or ("+" + native if native else ""))
 
 
 def _scope_flag(entry: dict) -> list[str]:
@@ -335,7 +346,7 @@ def _kind_table(heading, kind, items, extra=None):
         e = items[name]
         quarantined = bool(e.get("quarantined"))
         agents_cell = ("—" if quarantined
-                       else _materialized_agents(noun, e) or "none")
+                       else _materialized_agents(noun, e, name) or "none")
         flags = ([out.aurora("pinned", "yellow")] if e.get("pinned") else []) + \
                 ([out.aurora("quarantined", "pink")] if quarantined else []) + \
                 _scope_flag(e)
@@ -469,7 +480,8 @@ def cmd_list(argv):
                      if e.get("sidelined_by") else []) + \
                     [out.role("#" + t, "muted") for t in e.get("tags") or []]
             rows.append((name, e.get("version", "?"), e.get("tap", "?"),
-                         _materialized_agents("skill", e), " ".join(flags)))
+                         _materialized_agents("skill", e, name),
+                         " ".join(flags)))
         # NAME is what `uninstall`/`update`/`cat` take: `brainstorm…` is not
         # a name any of them accepts, so it is shown whole or dropped.
         out.table(rows, headers=("NAME", "VERSION", "TAP", "AGENTS", "FLAGS"),
@@ -478,6 +490,12 @@ def cmd_list(argv):
                                 % (len(rows), "" if len(rows) == 1 else "s",
                                    " with tag #%s" % args.tag.lstrip("#")
                                    if args.tag else ""), "cyan"))
+        # The `+` half of AGENTS (`_materialized_agents`) says something no
+        # other column does, so it is said once, under the table.
+        if any(integrity.store_reader_names("skill", e, n)
+               for n, e in skills.items()):
+            out.dim("  +agents read %s directly, with no link"
+                    % _tilde(paths.store_dir()))
         if gone:
             out.warn("%s missing from the store, so no agent can load %s "
                      "(%s) — `boost heal` restores %s"
@@ -509,6 +527,21 @@ def cmd_list(argv):
         _kind_table("installed workflows", "workflow", workflows,
                     extra=("SLOT", "slot"))
     return 0
+
+
+def _tap_row(entry: dict) -> None:
+    """The ``tap`` row, marked when GitHub has archived the tap's repository.
+
+    The tap still clones and its items still install; the marker says that
+    nothing upstream will change them again. A tap held under a row's former
+    name is that row (`config.archived_registries`).
+    """
+    tap = entry.get("tap", "?")
+    if tap not in config.archived_registries():
+        out.kv("tap", tap)
+        return
+    out.kv("tap", "%s%s" % (tap, out.role("  (%s)" % config.ARCHIVED_NOTE,
+                                           "warn")))
 
 
 def _tap_url_row(entry: dict) -> None:
@@ -577,7 +610,7 @@ def _info_materialized(name: str, kind: str, entry: dict, as_json: bool) -> int:
     elif reason == staleness.CONTENT:
         out.kv("latest", (latest or "?")
                + out.role("  (content changed)", "muted"))
-    out.kv("tap", entry.get("tap", "?"))
+    _tap_row(entry)
     _tap_url_row(entry)
     if kind == "workflow" and entry.get("slot"):
         out.kv("slot", str(entry["slot"]))
@@ -838,7 +871,7 @@ def cmd_info(argv):
                                                "muted"))
     else:
         out.kv("latest", str((cat or {}).get("version", "?")))
-    out.kv("tap", (entry or cat or {}).get("tap", "?"))
+    _tap_row(entry or cat or {})
     _tap_url_row(entry or cat or {})
     category = (cat or {}).get("category")
     if category:
@@ -883,8 +916,11 @@ def cmd_info(argv):
             out.kv("updated", "%s (%s)" % (ua, util.rel_time(ua)))
         # Written agents only, as for a rule: a link left in a disabled
         # agent's dir is kept for uninstall, not one boost still writes.
-        out.kv("agents", ", ".join(
-            integrity.written_agent_names("skill", entry)) or "(none)")
+        # And the agents that read the store without a link, which
+        # boost_install names: leaving them out told Gemini and Codex users
+        # the skill had not reached them.
+        out.kv("agents", integrity.reach_line("skill", entry, name,
+                                              none="(none)"), wrap=True)
     if plock and not lock:
         # Which copy the rows above describe. Only worth saying when there is
         # no user-scope record to confuse it with.
@@ -1352,6 +1388,17 @@ def cmd_log(argv):
                 return 0
             out.info("no upstream history (imported locally)")
             return 0
+        if builtin.is_builtin(tap_name):
+            # boost's own tap is package data, not a clone: it has no git
+            # history, and until something is installed from it it is not
+            # registered at all, which the branch below would report as
+            # "no longer tapped".
+            if args.as_json:
+                print(json.dumps({"kind": "history", "name": bare,
+                                  "tap": tap_name, "commits": []}, indent=2))
+                return 0
+            out.info(builtin.no_history_note(bare))
+            return 0
         # Only `local` is an import. Any other failure here is a recorded tap
         # that has since been untapped, and calling that a local import hid
         # the one fact the user needs (`changelog` already says it).
@@ -1417,6 +1464,14 @@ def cmd_home(argv):
     # Lock first: the catalog guesses by name, the lock knows the copy that
     # was installed. A rule or workflow is linked to its own file.
     _bare, kind, tap_name, rel = store.upstream_source(args.name)
+    if builtin.is_builtin(tap_name):
+        # No web page of its own: it ships in boost's package data, so that
+        # file is its home. The registry lookup below printed the bare
+        # relative path (unregistered, read as a local import) or the
+        # sentinel URL glued to it (`builtin:boost/boost-first.mdc`).
+        shipped = builtin.shipped_path(rel)
+        out.info(_tilde(shipped) if shipped is not None else rel)
+        return 0
     try:
         tap = registry.get(tap_name)
     except BoostError:

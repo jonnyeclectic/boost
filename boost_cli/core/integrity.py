@@ -248,6 +248,42 @@ def skill_base(entry: dict) -> str | None:
     return None
 
 
+def store_reader_names(kind: str | None, entry: dict | None,
+                       name: str | None = None) -> list[str]:
+    """The enabled agents that read an installed user-scope skill from the
+    canonical store itself, sorted: Gemini CLI and Codex on a default config.
+
+    :func:`written_agent_names` answers which agents boost *wrote* for, and
+    for a user-scope skill that is its links -- so `boost_info`, `boost info`
+    and `boost list` named every agent but the two that need no link, while
+    `boost_install` had just said those two had it. A Codex or Gemini session
+    asking whether a skill reached it was told no. Empty for anything else:
+    a rule or workflow is materialized per agent, and a ``--local`` copy is
+    written into each agent's project dir, so both are already named there.
+
+    A reader needs the copy in the store: a quarantined skill has none, and
+    with ``name`` given, neither does one whose store dir is gone or held
+    aside -- `boost info` says so on its own line, and naming readers over a
+    missing directory would contradict it.
+    """
+    if not entry or str(kind or entry.get("kind") or "skill") != "skill":
+        return []
+    if skill_base(entry) is not None or entry.get("quarantined"):
+        return []
+    if name is not None and not (paths.store_dir() / name).is_dir():
+        return []
+    return sorted(agents.native_store_agents())
+
+
+def reach_line(kind: str | None, entry: dict | None,
+               name: str | None = None, none: str = "none") -> str:
+    """Every agent an installed item reaches, as one phrase: the ones boost
+    wrote for, then the ones reading the store (:func:`store_reader_names`),
+    marked as such; ``none`` when there are neither."""
+    return agents.reach_phrase(written_agent_names(kind, entry),
+                               store_reader_names(kind, entry, name), none)
+
+
 def written_agent_names(kind: str | None, entry: dict | None) -> list[str]:
     """The agents an installed item actually reaches, sorted and deduplicated.
 
