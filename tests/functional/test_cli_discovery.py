@@ -404,9 +404,12 @@ class TestSearch:
         monkeypatch.setattr("boost_cli.core.ai.ask",
                             lambda *a, **k: "{not json [[ garbage")
         r = boost("search", "workflow", "--smart")
-        assert (" ".join(r.err.split())
+        # Then the piped search's read-one note, also on stderr.
+        warning, _, note = r.err.partition("  read one: ")
+        assert (" ".join(warning.split())
                 == "! AI reply was not usable (no JSON array of names) — see "
                 "~/.boost/logs/boost.log — using the heuristic fallback")
+        assert note.startswith("boost cat fixture-tap:")
 
     def test_smart_label_names_the_route_that_answered(self, boost, tapped,
                                                        monkeypatch):

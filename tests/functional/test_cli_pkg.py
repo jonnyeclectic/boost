@@ -184,8 +184,12 @@ class TestInstall:
         # D13: framed success card with a next-step hint
         assert "╭─ installed" in r.out
         assert "next: boost info brainstorming" in r.out
-        # the hint is printed after the box, not clipped inside it
-        assert r.out.rstrip("\n").endswith("╯\n  next: boost info brainstorming")
+        # the hints are printed after the box, not clipped inside it: where
+        # the text is, for this session, then where to look next
+        assert r.out.rstrip("\n").endswith(
+            "╯\n  use it now: read ~/.agents/skills/brainstorming/SKILL.md — "
+            "the files it names by relative path sit beside it"
+            "\n  next: boost info brainstorming")
         entry = _lock()["brainstorming"]
         assert entry["version"] == "1.4.0"
         assert entry["tap"] == "fixture-tap"

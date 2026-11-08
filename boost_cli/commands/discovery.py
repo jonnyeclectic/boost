@@ -345,6 +345,15 @@ def cmd_search(argv):
     # pane-width gate only passed because its fixture returned one match.
     for line in out.wrap(footer, max(out.term_width() - 2, 20)):
         out.info(out.role(line, "muted"))
+    if shown and not (sys.stdout.isatty() or sys.stderr.isatty()):
+        # No terminal on either stream: an agent's shell is reading, so say
+        # how to read and install the top hit. On stderr, so the rows stay
+        # the only stdout lines naming a hit (`boost search x | grep
+        # owner/repo`); a command is data, so it is whole and unwrapped.
+        top = shown[0][0]
+        print(out.role("  " + out.search_next_step(
+            top["name"], top.get("tap") or ""), "muted", stream=sys.stderr),
+            file=sys.stderr)
     if use_rag:
         _note_stem_expansions(query)
         _note_dropped_terms(dropped)

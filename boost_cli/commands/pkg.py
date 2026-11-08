@@ -1224,19 +1224,22 @@ def cmd_install(argv: list[str]) -> int:
         else:
             summary = "; ".join(parts)
         lines = [summary]
-        nxt = None
+        nxt: list[str] = []
         if len(results) == 1:
             r0 = results[0]
             if r0.linked:
                 lines.append(out.role("%s → %s" % (r0.name, " · ".join(r0.linked)), "muted"))
-            nxt = "next: boost info %s" % r0.name
+            # Where the text is first: the step that works in this session.
+            nxt = [out.install_use_now(r0.kind, r0.name,
+                                       _tilde(r0.dest / "SKILL.md")),
+                   "next: boost info %s" % r0.name]
         print(out.panel(lines, title="installed", hue="green"))
         # Below the box, not in it: panel() clips each line to the pane, and a
         # clipped command (`boost info typescript-react-…`) is one that does
         # not run. A command is data, so it is printed whole and unwrapped —
         # overflowing a narrow pane rather than breaking.
-        if nxt:
-            out.dim("  " + nxt)
+        for line in nxt:
+            out.dim("  " + line)
     return 1 if failed else 0
 
 
