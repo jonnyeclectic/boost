@@ -12,10 +12,12 @@ A catalog entry (plain dict) has:
 
 Beyond `SKILL.md` skills, boost also indexes two lighter-weight item kinds
 that ship in the same GitHub registries:
-  * rules     -- Cursor `.mdc` / `.cursorrules` and Windsurf `.windsurfrules`
+  * rules     -- Cursor `.mdc` / `.cursorrules`, Windsurf `.windsurfrules`
+                 and GitHub Copilot `*.instructions.md`
   * workflows -- Claude Code slash commands / subagents (Markdown + YAML),
                  recognised by living under a commands/agents/workflows dir
-                 or by carrying a subagent-style frontmatter signature.
+                 or by carrying a subagent-style frontmatter signature, and
+                 Copilot's `*.prompt.md` / `*.agent.md` / `*.chatmode.md`.
 """
 from __future__ import annotations
 

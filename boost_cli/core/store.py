@@ -5998,7 +5998,8 @@ def _install_workflow(entry: dict, force: bool = False,
     """Materialize a workflow (slash command / subagent) into each enabled agent.
 
     A verbatim Markdown drop into the agent's ``commands/`` or ``agents/`` dir —
-    the slot derived from the source path — with no transformation. With
+    the slot :func:`workflows.slot_of` reads off the source's Copilot suffix,
+    directory and frontmatter — with no transformation. With
     ``scope="project"`` the drop lands under the repo (``<repo>/.claude/…``).
     Every drop is recorded so ``uninstall`` removes exactly the files it wrote.
     """
