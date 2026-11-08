@@ -7,8 +7,8 @@ loader contracts, so a LangChain program can search it, stuff it into context,
 or route on it.
 
 **Scope check first:** if you are a LangChain developer who just wants skills
-in your *editor* (Claude Code, Cursor, Windsurf, Gemini CLI), you do not need
-this package — install the [boost CLI](https://pypi.org/project/boost-skill-cli/)
+in your *coding agent* (Claude Code, Windsurf, Cursor, Gemini CLI, Antigravity
+CLI or Codex), you do not need this package — install the [boost CLI](https://pypi.org/project/boost-skill-cli/)
 and run `boost install <skill>`. This package exists for the other direction:
 putting the skill catalog *inside* a LangChain application.
 

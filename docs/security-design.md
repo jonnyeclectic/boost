@@ -20,7 +20,7 @@ and no network listener except the explicitly-invoked `boost serve`. It:
 2. **parses** Markdown out of them into a catalogue,
 3. **copies** selected items into `~/.agents/skills/` and symlinks or renders
    them into each agent's directory (`~/.claude/`, `~/.cursor/`,
-   `~/.windsurf/`, `~/.gemini/`).
+   `~/.windsurf/`, `~/.gemini/`, `~/.codex/`).
 
 Step 3 is the consequential one. A **skill** is a file the agent may load; a
 **rule** is materialised *into the agent's standing context file* — the text the

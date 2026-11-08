@@ -32,6 +32,8 @@ from boost_cli.cli import COMMANDS  # noqa: E402  (after the sys.path shim)
 
 README = (ROOT / "README.md").read_text(encoding="utf-8")
 INDEX = (ROOT / "docs" / "index.html").read_text(encoding="utf-8")
+LANGCHAIN_README = (ROOT / "boost_langchain" / "README.md").read_text(
+    encoding="utf-8")
 
 
 def _command_count() -> int:
@@ -532,11 +534,16 @@ class TestAgentListsAgree:
         # the stale four through as "Cursor, Windsurf, Claude Code or Gemini
         # CLI".
         every, linking, _native = _agent_sets()
-        surfaces = [*_docs_site(), ("README.md", README)]
+        # boost_langchain/README.md carries the same "skills in your editor"
+        # sentence as docs/langchain.html, and kept the stale four after the
+        # page was fixed.
+        surfaces = [*_docs_site(), ("README.md", README),
+                    ("boost_langchain/README.md", LANGCHAIN_README)]
         lists = [(name, run) for name, text in surfaces
                  for run in _agent_runs(text)
                  if {"Claude Code", "Cursor", "Windsurf"} <= set(run)]
-        assert {"README.md", "docs/index.html"} <= {d for d, _ in lists}, lists
+        assert {"README.md", "docs/index.html", "boost_langchain/README.md"} <= {
+            d for d, _ in lists}, lists
         wrong = [(d, run) for d, run in lists if set(run) not in (every, linking)]
         assert wrong == [], (
             "boost targets %s and links into %s: %s"
@@ -580,6 +587,18 @@ class TestAgentListsAgree:
         m = re.search(r'ContainerDb\(native, "([^"]*)"', text)
         assert m, "the container diagram lost its native-store agents' box"
         assert {d.strip() for d in m.group(1).split(",")} == native, m.group(1)
+
+    def test_the_security_model_names_every_agent_dir_boost_writes(self):
+        # The threat model's step 3 is "the consequential one", and its list
+        # of the directories boost writes into stopped at ~/.gemini/: it left
+        # out ~/.codex/, where a rule is written into Codex's AGENTS.md.
+        linking, native = _agent_homes()
+        dotdirs = {"/".join(PurePosixPath(d).parts[:2]) for d in linking | native}
+        text = (ROOT / "docs" / "security-design.md").read_text(encoding="utf-8")
+        m = re.search(r"each agent's directory \(([^)]*)\)", text)
+        assert m, "docs/security-design.md no longer lists the agent dirs"
+        assert set(re.findall(r"`(~/\.[\w-]+)/?`", m.group(1))) == dotdirs, (
+            m.group(1))
 
 
 class TestNoStaleCountsElsewhere:
