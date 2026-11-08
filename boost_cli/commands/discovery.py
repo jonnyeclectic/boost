@@ -1836,12 +1836,6 @@ def _browse_tui(curses, entries, install=None, category=""):
     copies = {id(e): n for e, n in deduped}
     unique_entries = [e for e, _n in deduped]
     hidden = len(entries) - len(unique_entries)
-    # Everything allocated so far lives as long as the browser does, and the
-    # collector would otherwise walk all of it — every catalogue dict — on
-    # each gen-2 pass, which the ranking's per-keystroke tuples trigger.
-    # Measured over a 61,801-entry catalogue: a one-letter query 122 ms
-    # unfrozen, 52 ms frozen. Undone on the way out (see the finally below).
-    gc.freeze()
     # (tap, name) -> (state, message). Item 1: an install runs without leaving
     # the browser, and the detail pane reports it. Threaded so the draw loop
     # keeps answering keys while files are written — an install that freezes
@@ -2194,6 +2188,18 @@ def _browse_tui(curses, entries, install=None, category=""):
                 filt, sel, dscroll = filt + chr(key), 0, 0
                 focus = "search" if focus == "search" else focus
 
+    # Everything allocated so far lives as long as the browser does, and the
+    # collector would otherwise walk all of it — every catalogue dict — on
+    # each gen-2 pass, which the ranking's per-keystroke tuples trigger.
+    # Measured over a 61,801-entry catalogue: a one-letter query 122 ms
+    # unfrozen, 52 ms frozen. Frozen here, right before the try whose finally
+    # undoes it: freezing ~350 lines earlier meant anything raising in the
+    # setup between (``_install_targets``, say) left the collector frozen for
+    # the rest of the process. And only when nothing else froze it, because
+    # ``gc.unfreeze()`` releases every frozen object, not just this call's.
+    froze = gc.get_freeze_count() == 0
+    if froze:
+        gc.freeze()
     try:
         curses.wrapper(ui)  # wrapper guards drawing with try/finally endwin()
     except KeyboardInterrupt as exc:
@@ -2208,7 +2214,8 @@ def _browse_tui(curses, entries, install=None, category=""):
                 session.cancelled.extend(req)
             queue.clear()
     finally:
-        gc.unfreeze()
+        if froze:
+            gc.unfreeze()
         # Join on every way out. Quitting right after Enter must not leave an
         # install half-written, nor its result unreported.
         for t in workers:

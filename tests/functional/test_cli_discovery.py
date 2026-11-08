@@ -3565,6 +3565,53 @@ class TestBrowseCategories:
             discovery._browse_tui(Boom([]), self._entries())
         assert gc.get_freeze_count() == before
 
+    def test_a_freeze_it_did_not_make_survives_the_browser(self, boost, tapped):
+        # gc.unfreeze() releases every frozen object. The browser called it
+        # unconditionally, so a freeze made before it ran was wiped too: on
+        # macOS CI a worker arrived here with 375 objects frozen and left
+        # with 0, failing the test above.
+        import gc
+
+        from boost_cli.commands import discovery
+
+        class Boom(_FakeCurses):
+            def wrapper(self, fn):
+                raise self.error("mid-draw")
+
+        gc.freeze()
+        try:
+            assert gc.get_freeze_count() > 0
+            with pytest.raises(Boom.error):
+                discovery._browse_tui(Boom([]), self._entries())
+            # Still frozen. Not an exact count: a frozen object freed in
+            # between leaves the permanent generation (measured 49,407 ->
+            # 49,401), while an unfreeze empties it.
+            assert gc.get_freeze_count() > 0
+        finally:
+            gc.unfreeze()
+
+    def test_a_failure_before_drawing_leaves_the_collector_unfrozen(
+            self, boost, tapped, monkeypatch):
+        # The freeze sat ~350 lines above the try whose finally undoes it, so
+        # anything raising in between left the collector frozen for the rest
+        # of the process.
+        import gc
+
+        from boost_cli.commands import discovery
+
+        def boom():
+            raise RuntimeError("no targets")
+
+        monkeypatch.setattr(discovery, "_install_targets", boom)
+        before = gc.get_freeze_count()
+        try:
+            with pytest.raises(RuntimeError):
+                discovery._browse_tui(_FakeCurses([]), self._entries())
+            assert gc.get_freeze_count() == before
+        finally:
+            if gc.get_freeze_count() != before:
+                gc.unfreeze()
+
     def test_the_categories_flag_lists_counts(self, boost, tapped, monkeypatch):
         from boost_cli.core import catalog
         rows = self._entries()
