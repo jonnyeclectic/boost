@@ -260,7 +260,7 @@ setup, what it costs, and how to tell which engine is actually serving.
 
 `boost tap --defaults` gives you seven registries. The full catalog is 562
 classified GitHub registries of skills, Cursor/Windsurf rules and Claude Code
-workflows, indexing roughly 38,000 items.
+workflows, indexing roughly 42,000 items.
 
 ```bash
 boost tap --catalog --dry-run                 # browse the classified catalog

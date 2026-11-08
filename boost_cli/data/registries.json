@@ -1,8 +1,8 @@
 {
   "generated_note": "Curated skill/rule/workflow registries for boost. est_items are research estimates; verify by tapping. list_only repos are index/awesome lists that link out.",
   "count": 587,
-  "est_items_total": 44587,
-  "est_items_scannable": 38449,
+  "est_items_total": 47942,
+  "est_items_scannable": 41804,
   "registries": [
     {
       "name": "Aaronontheweb/dotnet-cursor-rules",
@@ -241,8 +241,8 @@
       "url": "https://github.com/PatrickJS/awesome-cursorrules",
       "type": "rule",
       "category": "meta",
-      "focus": "Canonical curated collection of .cursorrules/.mdc by framework/language/domain",
-      "est_items": 170,
+      "focus": "Canonical curated collection of .cursorrules/.mdc by framework/language/domain (256 rules)",
+      "est_items": 256,
       "confidence": "high",
       "list_only": false,
       "curated": true
@@ -417,8 +417,8 @@
       "url": "https://github.com/affaan-m/ECC",
       "type": "skill",
       "category": "general",
-      "focus": "The agent harness performance optimization system. Skills, instincts... (281 skills, 243 workflows)",
-      "est_items": 524,
+      "focus": "The agent harness performance optimization system. Skills, instincts... (1 rule, 857 skills, 728 workflows)",
+      "est_items": 1586,
       "confidence": "high",
       "list_only": false,
       "curated": true
@@ -541,8 +541,8 @@
       "url": "https://github.com/alirezarezvani/claude-skills",
       "type": "skill",
       "category": "general",
-      "focus": "362 skills across 18 domains (engineering, marketing, C-level, compliance)",
-      "est_items": 313,
+      "focus": "Skills and agents across engineering, marketing, C-level and compliance domains (457 skills, 297 workflows)",
+      "est_items": 754,
       "confidence": "high",
       "list_only": false,
       "curated": true
@@ -1354,7 +1354,7 @@
       "est_items": 880,
       "confidence": "high",
       "list_only": false,
-      "curated": true
+      "curated": false
     },
     {
       "name": "ComposioHQ/awesome-claude-skills",
@@ -1848,8 +1848,8 @@
       "url": "https://github.com/EveryInc/compound-engineering-plugin",
       "type": "skill",
       "category": "meta",
-      "focus": "Official Compound Engineering plugin for Claude Code, Codex, Cursor... (32 skills, 1 workflows)",
-      "est_items": 33,
+      "focus": "Official Compound Engineering plugin for Claude Code, Codex, Cursor... (44 skills, 12 workflows)",
+      "est_items": 56,
       "confidence": "high",
       "list_only": false,
       "curated": true
@@ -2149,8 +2149,8 @@
       "url": "https://github.com/github/awesome-copilot",
       "type": "skill",
       "category": "meta",
-      "focus": "Community-contributed instructions, agents, skills, and configurations... (395 skills, 239 workflows)",
-      "est_items": 634,
+      "focus": "Community-contributed instructions, agents, skills, and configurations... (475 skills, 242 workflows)",
+      "est_items": 717,
       "confidence": "high",
       "list_only": false,
       "curated": true
@@ -2215,8 +2215,8 @@
       "url": "https://github.com/google/skills",
       "type": "skill",
       "category": "infra",
-      "focus": "Agent Skills for Google products and technologies (96 skills)",
-      "est_items": 96,
+      "focus": "Agent Skills for Google products and technologies (187 skills)",
+      "est_items": 187,
       "confidence": "high",
       "list_only": false,
       "curated": true
@@ -2589,8 +2589,8 @@
       "url": "https://github.com/jeffallan/claude-skills",
       "type": "skill",
       "category": "web-dev",
-      "focus": "66 full-stack developer skills across 12 categories",
-      "est_items": 66,
+      "focus": "Full-stack developer skills and workflow commands (67 skills, 10 workflows)",
+      "est_items": 77,
       "confidence": "high",
       "list_only": false,
       "curated": true
@@ -2644,8 +2644,8 @@
       "url": "https://github.com/JuliusBrussee/caveman",
       "type": "skill",
       "category": "efficiency",
-      "focus": "Output-compression skill with intensity levels, plus commit/review/compress commands (7 skills, 14 workflows)",
-      "est_items": 21,
+      "focus": "Output-compression skill with intensity levels, commit/review/compress commands, and lean-build, safe-refactor and verify-and-stop skills (23 skills, 12 workflows)",
+      "est_items": 35,
       "confidence": "high",
       "list_only": false,
       "curated": true
@@ -2944,11 +2944,11 @@
       "url": "https://github.com/Leonxlnx/taste-skill",
       "type": "skill",
       "category": "ui",
-      "focus": "Anti-slop design taste: high-end visual direction, brutalist and minimalist UI kits, image-to-code, brand kits (13 skills)",
-      "est_items": 13,
+      "focus": "Anti-slop frontend design taste: one skill for company websites with one design system, real photographs and real product UI (1 skill)",
+      "est_items": 1,
       "confidence": "high",
       "list_only": false,
-      "curated": true
+      "curated": false
     },
     {
       "name": "Leooooooow/Awesome-eCommerce-Skills",
@@ -3285,8 +3285,8 @@
       "url": "https://github.com/microsoft/playwright",
       "type": "skill",
       "category": "devops",
-      "focus": "Official Playwright repo - the agent skills it ships (CLI, trace, component testing) plus the test planner/generator/healer agents (7 skills, 11 workflows)",
-      "est_items": 18,
+      "focus": "Official Playwright repo - the agent skills it ships (CLI, trace, component testing) plus the test planner/generator/healer agents (11 skills, 10 workflows)",
+      "est_items": 21,
       "confidence": "high",
       "list_only": false,
       "curated": true
@@ -5641,12 +5641,12 @@
       "name": "anthropics/claude-code",
       "url": "https://github.com/anthropics/claude-code",
       "type": "workflow",
-      "category": "ai",
-      "focus": "Claude Code is an agentic coding tool that lives in your terminal... (33 workflows)",
-      "est_items": 33,
+      "category": "general",
+      "focus": "Claude Code's own repo: commit-push-pr, plus dedupe and triage-issue, which triage its issue tracker through the repo's scripts/gh.sh (3 workflows)",
+      "est_items": 3,
       "confidence": "high",
       "list_only": false,
-      "curated": true
+      "curated": false
     },
     {
       "name": "anthropics/claude-code-action",
@@ -5686,8 +5686,8 @@
       "url": "https://github.com/anthropics/claude-plugins-official",
       "type": "workflow",
       "category": "meta",
-      "focus": "Official, Anthropic-managed directory of high quality Claude Code Plugins (60 workflows)",
-      "est_items": 60,
+      "focus": "Official, Anthropic-managed directory of high quality Claude Code Plugins (40 skills, 68 workflows)",
+      "est_items": 108,
       "confidence": "high",
       "list_only": false,
       "curated": true
@@ -5708,8 +5708,8 @@
       "url": "https://github.com/anthropics/financial-services",
       "type": "workflow",
       "category": "general",
-      "focus": "8 workflows",
-      "est_items": 8,
+      "focus": "Financial-services skills and commands: DCF, LBO and merger models, comps, earnings analysis, pitch decks, KYC, fixed income (64 skills, 60 workflows)",
+      "est_items": 124,
       "confidence": "high",
       "list_only": false,
       "curated": true
@@ -5909,8 +5909,8 @@
       "url": "https://github.com/davila7/claude-code-templates",
       "type": "workflow",
       "category": "general",
-      "focus": "CLI + registry with 600+ agents, 200+ commands, MCPs, hooks",
-      "est_items": 800,
+      "focus": "CLI + registry of agents, commands, skills, MCPs and hooks (901 skills, 824 workflows)",
+      "est_items": 1725,
       "confidence": "high",
       "list_only": false,
       "curated": true
@@ -5942,8 +5942,8 @@
       "url": "https://github.com/Donchitos/Claude-Code-Game-Studios",
       "type": "workflow",
       "category": "general",
-      "focus": "Turn Claude Code into a full game dev studio - 49 AI agents, 72... (73 skills, 83 workflows)",
-      "est_items": 156,
+      "focus": "Turn Claude Code into a full game dev studio: studio-role agents and production skills (74 skills, 98 workflows)",
+      "est_items": 172,
       "confidence": "high",
       "list_only": false,
       "curated": true
@@ -6297,8 +6297,8 @@
       "url": "https://github.com/qdhenry/Claude-Command-Suite",
       "type": "workflow",
       "category": "commands",
-      "focus": "216+ slash commands, 54 AI agents, 12 skills for dev workflows",
-      "est_items": 216,
+      "focus": "Slash commands, AI agents and skills for dev workflows (12 skills, 309 workflows)",
+      "est_items": 321,
       "confidence": "high",
       "list_only": false,
       "curated": true
@@ -6407,8 +6407,8 @@
       "url": "https://github.com/trailofbits/skills",
       "type": "workflow",
       "category": "security",
-      "focus": "Trail of Bits Claude Code skills for security research, vulnerability... (44 workflows)",
-      "est_items": 44,
+      "focus": "Trail of Bits Claude Code skills for security research, vulnerability... (98 skills, 41 workflows)",
+      "est_items": 139,
       "confidence": "high",
       "list_only": false,
       "curated": true
@@ -6429,8 +6429,8 @@
       "url": "https://github.com/VoltAgent/awesome-claude-code-subagents",
       "type": "workflow",
       "category": "agents",
-      "focus": "100+ specialized subagents across dev, infra, quality, data, meta",
-      "est_items": 116,
+      "focus": "Specialized subagents across dev, infra, quality, data, meta (166 workflows)",
+      "est_items": 166,
       "confidence": "high",
       "list_only": false,
       "curated": true
@@ -6440,8 +6440,8 @@
       "url": "https://github.com/wshobson/agents",
       "type": "workflow",
       "category": "agents",
-      "focus": "203 subagents, 175 skills, 109 commands from one Markdown source",
-      "est_items": 200,
+      "focus": "Subagents, skills and commands from one Markdown source (3 rules, 185 skills, 240 workflows)",
+      "est_items": 428,
       "confidence": "high",
       "list_only": false,
       "curated": true

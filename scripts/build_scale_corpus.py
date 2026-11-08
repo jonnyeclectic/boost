@@ -95,9 +95,10 @@ EST_TO_ACTUAL = 71_655 / 28_225
 DEFAULT_TARGET = 20_000
 
 #: The most of the target one distractor may carry. 5% of 20,000 is 1,000:
-#: above every registry the selection already took (the largest is 880), so the
-#: cap moves nothing that was measured, and below the 4,253 that would otherwise
-#: be a fifth of the corpus on its own.
+#: below the 4,253 that would otherwise be a fifth of the corpus on its own,
+#: and since the 2026-11-07 re-measure below davila7/claude-code-templates at
+#: 1,725, which the selection used to take when its row said 800. Those two
+#: are the only candidates over it.
 MAX_SHARE = 0.05
 
 #: Round-robin order. Rules are scarcest in the curated set and score worst when

@@ -88,10 +88,11 @@ EFFICIENCY_PINNED = {
 }
 
 # Measured with `scripts/measure_registry.py`, not walked: both repos render a
-# copy of each item per agent they support. Raw `scan_dir` walks find 13 and 28.
+# copy of each item per agent they support. Raw `scan_dir` walks find 13 and 43.
+# caveman was (21, 28) until it shipped 16 more skills; re-measured 2026-11-07.
 EFFICIENCY_MEASURED = {
     "DietrichGebert/ponytail": (7, 13),
-    "JuliusBrussee/caveman": (21, 28),
+    "JuliusBrussee/caveman": (35, 43),
 }
 
 # `pbakaus/impeccable` vendors one copy of each item into every agent dir it
@@ -173,6 +174,38 @@ RECATEGORISED = {
     "rsmdt/the-startup": ("meta", 50),
     "shinpr/claude-code-workflows": ("meta", 66),
     "garrytan/gstack": ("meta", 72),
+}
+
+# Starred rows whose est_items was off by more than 10% on 2026-11-07, each
+# re-measured with `scripts/measure_registry.py` on a sparse clone that day.
+# The undercounts ran up to 15x (anthropics/financial-services said 8 and
+# ships 124), the overcounts up to 13x (taste-skill said 13 and ships 1).
+# JuliusBrussee/caveman (21 -> 35) is pinned in EFFICIENCY_MEASURED.
+STARRED_MEASURED = {
+    "affaan-m/ECC": 1586,
+    "alirezarezvani/claude-skills": 754,
+    "anthropics/claude-plugins-official": 108,
+    "anthropics/financial-services": 124,
+    "davila7/claude-code-templates": 1725,
+    "Donchitos/Claude-Code-Game-Studios": 172,
+    "EveryInc/compound-engineering-plugin": 56,
+    "github/awesome-copilot": 717,
+    "google/skills": 187,
+    "jeffallan/claude-skills": 77,
+    "microsoft/playwright": 21,
+    "PatrickJS/awesome-cursorrules": 256,
+    "qdhenry/Claude-Command-Suite": 321,
+    "trailofbits/skills": 139,
+    "VoltAgent/awesome-claude-code-subagents": 166,
+    "wshobson/agents": 428,
+}
+
+# Rows that failed the ★ rule beside CURATED when re-measured on 2026-11-07,
+# with the count measured then. The reasons are recorded in CURATED itself.
+UNSTARRED = {
+    "anthropics/claude-code": 3,        # its stars are the product's
+    "Leonxlnx/taste-skill": 1,          # 1 item, under the rule's 5
+    "composio-community/awesome-codex-skills": 880,  # a vendor MCP funnel
 }
 
 _SLUG = re.compile(r"^[a-z][a-z0-9-]*$")
@@ -319,6 +352,34 @@ class TestFiledByItemNames:
         kinds = {"skill", "rule", "workflow"}
         assert sorted(e["name"] for e in catalog
                       if e.get("category") in kinds) == []
+
+
+class TestStarRule:
+    """The ★ is what a newcomer reads as "most popular and most capable"."""
+
+    @pytest.mark.parametrize("name", sorted(STARRED_MEASURED))
+    def test_starred_row_carries_its_measured_count(self, catalog, name):
+        row = next((e for e in catalog if e["name"] == name), None)
+        assert row is not None, "%s dropped out of the catalog" % name
+        assert row["curated"], "%s lost its star" % name
+        assert row["est_items"] == STARRED_MEASURED[name], (
+            "%s est_items %d != the measured %d — re-run "
+            "scripts/measure_registry.py against a fresh clone"
+            % (name, row["est_items"], STARRED_MEASURED[name]))
+
+    @pytest.mark.parametrize("name", sorted(UNSTARRED))
+    def test_a_row_that_fails_the_rule_is_not_starred(self, catalog, name):
+        row = next((e for e in catalog if e["name"] == name), None)
+        assert row is not None, "%s dropped out of the catalog" % name
+        assert not row["curated"], "%s fails the ★ rule" % name
+        assert row["est_items"] == UNSTARRED[name]
+
+    def test_no_starred_row_ships_fewer_than_five_items(self, catalog):
+        """The rule's own floor, checked against the count the row ships."""
+        defaults = {str(d["name"]) for d in config.DEFAULT_TAPS}
+        assert sorted(e["name"] for e in catalog
+                      if e["curated"] and e["name"] not in defaults
+                      and e["est_items"] < 5) == []
 
 
 class TestEfficiencyDomain:
