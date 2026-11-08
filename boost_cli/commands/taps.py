@@ -39,6 +39,9 @@ def _tap_catalog(args, tapped: list[tuple[str, int]] | None = None) -> int:
     selection = _catalog_selection(args)
     if not selection:
         out.warn("no catalog registries match that filter")
+        miss = args.category and config.catalog_category_miss(args.category)
+        if miss:
+            out.info(miss, wrap=True)
         return 1
     if args.dry_run:
         plan = registry.plan_specs([str(e["url"]) for e in selection])
