@@ -1,8 +1,8 @@
 {
   "generated_note": "Curated skill/rule/workflow registries for boost. est_items are research estimates; verify by tapping. list_only repos are index/awesome lists that link out.",
   "count": 587,
-  "est_items_total": 47942,
-  "est_items_scannable": 41804,
+  "est_items_total": 47907,
+  "est_items_scannable": 41769,
   "registries": [
     {
       "name": "Aaronontheweb/dotnet-cursor-rules",
@@ -110,7 +110,8 @@
       "curated": false,
       "formerly": [
         "DVC2/cursor_prompts"
-      ]
+      ],
+      "archived": true
     },
     {
       "name": "flyeric0212/cursor-rules",
@@ -301,6 +302,18 @@
       "confidence": "med",
       "list_only": false,
       "curated": false
+    },
+    {
+      "name": "steipete/agent-rules",
+      "url": "https://github.com/steipete/agent-rules",
+      "type": "rule",
+      "category": "general",
+      "focus": "Rule files for agents: commit, PR review, docs and changelog, Swift 6 and Swift Testing, MCP setup (32 rules)",
+      "est_items": 32,
+      "confidence": "med",
+      "list_only": false,
+      "curated": false,
+      "archived": true
     },
     {
       "name": "survivorforge/cursor-rules",
@@ -3681,11 +3694,12 @@
       "url": "https://github.com/obra/superpowers-skills",
       "type": "skill",
       "category": "meta",
-      "focus": "Community-editable companion skills repo to Superpowers",
-      "est_items": 30,
+      "focus": "Community-editable companion skills repo to Superpowers (31 skills)",
+      "est_items": 31,
       "confidence": "med",
       "list_only": false,
-      "curated": false
+      "curated": false,
+      "archived": true
     },
     {
       "name": "obviousworks/Claude-AI-skills-collection-2026",
@@ -5730,11 +5744,12 @@
       "url": "https://github.com/brennercruvinel/CCPlugins",
       "type": "workflow",
       "category": "commands",
-      "focus": "24 slash commands for dev workflow, code quality, analysis",
-      "est_items": 24,
+      "focus": "23 slash commands for dev workflow, code quality, analysis",
+      "est_items": 23,
       "confidence": "high",
       "list_only": false,
-      "curated": false
+      "curated": false,
+      "archived": true
     },
     {
       "name": "centminmod/my-claude-code-setup",
@@ -6118,11 +6133,12 @@
       "url": "https://github.com/iannuttall/claude-agents",
       "type": "workflow",
       "category": "agents",
-      "focus": "Custom subagents to copy into project .claude/agents/ directory",
-      "est_items": 12,
+      "focus": "Custom subagents to copy into a project's .claude/agents/ directory (7 workflows)",
+      "est_items": 7,
       "confidence": "med",
       "list_only": false,
-      "curated": false
+      "curated": false,
+      "archived": true
     },
     {
       "name": "Imbad0202/academic-research-skills",
@@ -6348,17 +6364,6 @@
       "curated": false
     },
     {
-      "name": "steipete/agent-rules",
-      "url": "https://github.com/steipete/agent-rules",
-      "type": "workflow",
-      "category": "general",
-      "focus": "20+ rule/command files for Claude Code and Cursor agents",
-      "est_items": 20,
-      "confidence": "med",
-      "list_only": false,
-      "curated": false
-    },
-    {
       "name": "subinium/awesome-claude-code",
       "url": "https://github.com/subinium/awesome-claude-code",
       "type": "workflow",
@@ -6451,11 +6456,12 @@
       "url": "https://github.com/wshobson/commands",
       "type": "workflow",
       "category": "commands",
-      "focus": "57 production-ready slash commands (15 workflows, 42 tools)",
-      "est_items": 57,
+      "focus": "Multi-step workflow commands: feature development, full review, TDD cycle, incident response, legacy modernization (15 workflows)",
+      "est_items": 15,
       "confidence": "high",
       "list_only": false,
-      "curated": false
+      "curated": false,
+      "archived": true
     },
     {
       "name": "xu-xiang/everything-claude-code-zh",

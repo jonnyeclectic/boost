@@ -208,6 +208,19 @@ UNSTARRED = {
     "composio-community/awesome-codex-skills": 880,  # a vendor MCP funnel
 }
 
+# The archived rows, re-measured on a sparse clone on 2026-11-07 as type and
+# count. steipete/agent-rules sat under WORKFLOWS at est 20 and ships 32
+# rules; wshobson/commands said 57 and indexes 15, because its 42 tools/
+# prompts are not in a directory the scanner reads.
+ARCHIVED_MEASURED = {
+    "wshobson/commands": ("workflow", 15),
+    "steipete/agent-rules": ("rule", 32),
+    "iannuttall/claude-agents": ("workflow", 7),
+    "brennercruvinel/CCPlugins": ("workflow", 23),
+    "obra/superpowers-skills": ("skill", 31),
+    "DVC2/cursor-agent-configs": ("rule", 11),
+}
+
 _SLUG = re.compile(r"^[a-z][a-z0-9-]*$")
 
 
@@ -551,6 +564,35 @@ class TestSourceTuples:
         shipped = {e["name"]: e["formerly"] for e in catalog
                    if "formerly" in e}
         assert shipped == {n: list(o) for n, o in builder.FORMERLY.items()}
+
+    def test_the_shipped_catalog_carries_archived(self, catalog, builder):
+        """Emitted only where set, and only ever as a literal true."""
+        shipped = {e["name"]: e["archived"] for e in catalog
+                   if "archived" in e}
+        assert shipped == dict.fromkeys(builder.ARCHIVED, True)
+
+    def test_every_archived_row_is_a_row_and_none_is_retired(self, builder):
+        """Archived still clones; RETIRED is for the repos that do not."""
+        known = {r[0] for tup in (builder.SKILLS, builder.RULES,
+                                  builder.WORKFLOWS) for r in tup}
+        assert sorted(set(builder.ARCHIVED) - known) == []
+        assert sorted(set(builder.ARCHIVED) & set(builder.RETIRED)) == []
+
+    def test_no_archived_row_is_starred(self, builder):
+        """The rule beside CURATED says "not archived"."""
+        assert sorted(set(builder.ARCHIVED) & builder.CURATED) == []
+
+    def test_every_archived_repo_records_why(self, builder):
+        for name, note in builder.ARCHIVED.items():
+            assert name.count("/") == 1, "%r is not owner/repo" % name
+            assert note.strip(), "%s is archived with no note" % name
+
+    @pytest.mark.parametrize("name", sorted(ARCHIVED_MEASURED))
+    def test_archived_row_is_marked_and_measured(self, catalog, name):
+        row = next((e for e in catalog if e["name"] == name), None)
+        assert row is not None, "%s dropped out of the catalog" % name
+        assert row.get("archived") is True
+        assert (row["type"], row["est_items"]) == ARCHIVED_MEASURED[name]
 
     def test_every_retired_repo_records_why(self, builder):
         """A bare name is unfalsifiable later; the reason is what makes it

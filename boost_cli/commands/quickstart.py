@@ -79,19 +79,26 @@ def _tap_defaults(selection: list[dict], pins: dict[str, dict],
     if dry_run:
         existing = {t.name for t in registry.list_taps()}
         pending = [n for n in names if n not in existing]
+        archived = config.archived_registries()
         # Over the whole catalogue a line each is a wall of text, so past a handful
         # the dry run reports the shape instead of the list.
         if len(pending) > bootstrap.MAX_NAMED_REGISTRIES:
+            frozen = sum(1 for n in pending if n in archived)
             out.info("would tap %d registries (%d pinned to a published "
-                     "shard's commit)"
-                     % (len(pending), sum(1 for n in pending if n in commits)))
+                     "shard's commit%s)"
+                     % (len(pending), sum(1 for n in pending if n in commits),
+                        ", %d %s" % (frozen, config.ARCHIVED_NOTE)
+                        if frozen else ""))
             return names, outcome
         for name in names:
             if name in existing:
                 out.info(out.role("%s already tapped" % name, "muted"))
                 continue
             at = commits.get(name)
-            out.info("would tap %s%s" % (name, " @ %s" % at[:7] if at else ""))
+            out.info("would tap %s%s%s" % (
+                name, " @ %s" % at[:7] if at else "",
+                out.role(" (%s)" % config.ARCHIVED_NOTE, "warn")
+                if name in archived else ""))
         return names, outcome
     # One pool, one config write: seven sequential clones is ~11 s of waiting
     # for work that takes ~2 s done together, and the first thing a new user

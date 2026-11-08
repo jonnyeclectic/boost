@@ -102,6 +102,26 @@ FORMERLY = {
     "davepoon/buildwithclaude": ("davepoon/claude-code-subagents-collection",),
 }
 
+# Rows whose repository GitHub reports `archived: true`. They still clone and
+# still ship their items, so they stay rows (RETIRED is for the gone), but
+# nothing upstream will fix them again. Shipped as `archived: true` on the row,
+# only where set, so `boost tap --catalog --dry-run`, quickstart, `info` and
+# `discover` can say so beside the name. The value is the note a re-check
+# needs; every one was archived on GitHub on 2026-11-07.
+ARCHIVED = {
+    "wshobson/commands":
+        "README: archived, new work happens in wshobson/agents, which "
+        "already ships all 15 of its command names",
+    "obra/superpowers-skills":
+        "the superpowers plugin clones it; 10 of its 31 names are also "
+        "skills obra/superpowers ships",
+    "steipete/agent-rules":
+        "README: old rules from mid 2025, new work is steipete/agent-scripts",
+    "brennercruvinel/CCPlugins": "README: v1 remains stable and functional",
+    "iannuttall/claude-agents": "no successor named",
+    "DVC2/cursor-agent-configs": "README: the configs still work",
+}
+
 # Repos that ship their own installer and cannot be installed by copying
 # Markdown. boost's install is "copy the item's directory into the canonical
 # store and symlink it out"; for these the item is a thin entry point over a
@@ -219,7 +239,7 @@ SKILLS = [
     # catalog a megaphone for a number its own source contradicts.
     ("DietrichGebert/ponytail", "efficiency", "Lazy-senior-dev rule + audit/debt/gain/review skills that cut code written (6 skills, 1 rule)", 7, "high"),
     ("JuliusBrussee/caveman", "efficiency", "Output-compression skill with intensity levels, commit/review/compress commands, and lean-build, safe-refactor and verify-and-stop skills (23 skills, 12 workflows)", 35, "high"),
-    ("obra/superpowers-skills", "meta", "Community-editable companion skills repo to Superpowers", 30, "med"),
+    ("obra/superpowers-skills", "meta", "Community-editable companion skills repo to Superpowers (31 skills)", 31, "med"),
     ("obra/superpowers-lab", "general", "Experimental/evolving Superpowers skills", 15, "med"),
     ("conorluddy/ios-simulator-skill", "web-dev", "Single skill for driving the iOS Simulator", 1, "med"),
     ("lackeyjb/playwright-skill", "devops", "Single model-invoked Playwright browser-automation skill", 1, "med"),
@@ -765,6 +785,9 @@ RULES = [
     ("pekral/cursor-rules", "framework", "PHP and Laravel Cursor rules for standards, testing, conventions", 12, "med"),
     ("Qwertic/cursorrules", "general", "A collection of .cursorrules files", 20, "low"),
     ("DVC2/cursor-agent-configs", "general", "Curated advanced .mdc rules for agent behavior, memory, workflows", 11, "low"),
+    # Filed under WORKFLOWS at est 20 until 2026-11-07; measure_registry.py
+    # finds 32 items there and every one is a rule.
+    ("steipete/agent-rules", "general", "Rule files for agents: commit, PR review, docs and changelog, Swift 6 and Swift Testing, MCP setup (32 rules)", 32, "med"),
     ("johnlindquist/get-rules", "meta", "CLI that downloads .mdc rule files for Cursor", 30, "low"),
     ("digitalchild/cursor-best-practices", "general", "Best-practices and example rule files for Cursor AI editor", 10, "low"),
     ("hao-ji-xing/awesome-cursor", "meta", "Curated collection of tools and resources for Cursor", 25, "low"),
@@ -790,7 +813,7 @@ WORKFLOWS = [
     ("gtmagents/gtm-agents", "marketing", "GTM agents and commands for sales, marketing, customer success and revenue operations", 653, "high"),
     ("aitytech/agentkits-marketing", "marketing", "Marketing-automation commands and agents: campaigns, ads, analytics, content ops", 399, "high"),
     ("wshobson/agents", "agents", "Subagents, skills and commands from one Markdown source (3 rules, 185 skills, 240 workflows)", 428, "high"),
-    ("wshobson/commands", "commands", "57 production-ready slash commands (15 workflows, 42 tools)", 57, "high"),
+    ("wshobson/commands", "commands", "Multi-step workflow commands: feature development, full review, TDD cycle, incident response, legacy modernization (15 workflows)", 15, "high"),
     ("VoltAgent/awesome-claude-code-subagents", "agents", "Specialized subagents across dev, infra, quality, data, meta (166 workflows)", 166, "high"),
     ("hesreallyhim/awesome-claude-code", "meta", "Hand-picked list of Claude Code commands, agents, hooks, skills", 200, "med"),
     ("davila7/claude-code-templates", "general", "CLI + registry of agents, commands, skills, MCPs and hooks (901 skills, 824 workflows)", 1725, "high"),
@@ -803,15 +826,14 @@ WORKFLOWS = [
     ("lst97/claude-code-sub-agents", "agents", "33 specialized AI subagents for full-stack development", 33, "high"),
     ("chusri/claude-code-agents", "agents", "75 production-ready domain-specialist subagents", 75, "med"),
     ("dl-ezo/claude-code-sub-agents", "agents", "35 specialized subagents for end-to-end software development", 35, "high"),
-    ("iannuttall/claude-agents", "agents", "Custom subagents to copy into project .claude/agents/ directory", 12, "med"),
+    ("iannuttall/claude-agents", "agents", "Custom subagents to copy into a project's .claude/agents/ directory (7 workflows)", 7, "med"),
     ("talknerdytome-labs/claude-agents", "agents", "Production-ready growth marketing subagents for Claude Code", 20, "low"),
     ("hesreallyhim/a-list-of-claude-code-agents", "meta", "Community-submitted index of Claude Code subagents", 10, "med"),
     ("danielrosehill/Claude-Slash-Commands", "commands", "Personal collection of Claude Code slash commands", 30, "med"),
     ("hikarubw/claude-commands", "commands", "6 custom slash commands for daily dev workflows", 6, "high"),
-    ("brennercruvinel/CCPlugins", "commands", "24 slash commands for dev workflow, code quality, analysis", 24, "high"),
+    ("brennercruvinel/CCPlugins", "commands", "23 slash commands for dev workflow, code quality, analysis", 23, "high"),
     ("Comfy-Org/comfy-claude-prompt-library", "commands", "70+ Claude Code commands/prompts for agentic coding", 70, "high"),
     ("langgptai/awesome-claude-prompts", "general", "Curated Claude prompt collection for coding and general use", 50, "med"),
-    ("steipete/agent-rules", "general", "20+ rule/command files for Claude Code and Cursor agents", 20, "med"),
     ("kasperjunge/agent-resources-legacy", "general", "Installable collection of Claude Code skills, commands, subagents", 30, "low"),
     ("ChrisWiles/claude-code-showcase", "general", "Example config with hooks, skills, agents, commands, Actions", 20, "low"),
     ("subinium/awesome-claude-code", "meta", "Curated list of tools, skills, plugins, MCP servers for Claude Code", 80, "med"),
@@ -906,6 +928,7 @@ def rows(pairs, typ):
             **({"self_installing": SELF_INSTALLING[name]}
                if name in SELF_INSTALLING else {}),
             **({"formerly": list(FORMERLY[name])} if name in FORMERLY else {}),
+            **({"archived": True} if name in ARCHIVED else {}),
         }
 
 
