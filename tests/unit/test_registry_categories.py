@@ -141,6 +141,40 @@ MARKETING_MEASURED = {
     "minhnv0807/ai-business-skills": 169,
 }
 
+# Rows refiled on 2026-11-07 by the names of the items they ship, each with
+# the count `scripts/measure_registry.py` gave on a sparse clone taken that
+# day. An item with no category of its own inherits its row's, so a row filed
+# by its README or its fame mislabels every item in it.
+RECATEGORISED = {
+    # 17 of its 20 items are documents and design: docx, pdf, pptx, xlsx,
+    # canvas-design, algorithmic-art, brand-guidelines, theme-factory. Only
+    # claude-api, mcp-builder and skill-creator are AI. Filed `ai`, it
+    # answered `search "fine-tune an LLM with LoRA" --category ai` with
+    # brand-guidelines and algorithmic-art.
+    "anthropics/skills": ("general", 20),
+    # awq-quantization, deepspeed, fine-tuning-with-trl, llama-factory, dspy.
+    "Orchestra-Research/AI-Research-SKILLs": ("ai", 98),
+    # huggingface-llm-trainer, trl-training, huggingface-vision-trainer.
+    "huggingface/skills": ("ai", 26),
+    # aks-* and azure-* SDK clients; 148 of 232 names start with azure-.
+    "microsoft/skills": ("infra", 231),
+    # tdd, code-review, grill-me, handoff, writing-*: no web framework at all.
+    "mattpocock/skills": ("general", 40),
+    # spec, plan, build, test, review, ship: a lifecycle, not CI/CD.
+    "addyosmani/agent-skills": ("general", 38),
+    # Generative media models, filed with replicate and elevenlabs.
+    "fal-ai-community/skills": ("ai", 36),
+    # context-compression, memory-systems, multi-agent-patterns: the
+    # Owl-Listener/ai-design-skills precedent.
+    "muratcankoylan/Agent-Skills-for-Context-Engineering": ("ai", 24),
+    # These three were filed `workflow`, which is an item kind: `tap --catalog
+    # --category workflow` and `--type workflow` were one word naming two
+    # different sets. Each is an agent methodology, like nWave in `meta`.
+    "rsmdt/the-startup": ("meta", 50),
+    "shinpr/claude-code-workflows": ("meta", 66),
+    "garrytan/gstack": ("meta", 72),
+}
+
 _SLUG = re.compile(r"^[a-z][a-z0-9-]*$")
 
 
@@ -250,6 +284,41 @@ class TestDesignDomain:
         assert row["est_items"] < IMPECCABLE_MIRRORED_WALK // 2, (
             "est_items %d looks like the mirrored walk (%d), not the distinct "
             "item count" % (row["est_items"], IMPECCABLE_MIRRORED_WALK))
+
+
+class TestFiledByItemNames:
+    """A row's category is the one its items carry when they declare none."""
+
+    @pytest.mark.parametrize("name", sorted(RECATEGORISED))
+    def test_row_is_filed_by_the_items_it_ships(self, catalog, name):
+        row = next((e for e in catalog if e["name"] == name), None)
+        assert row is not None, "%s dropped out of the catalog" % name
+        assert row["category"] == RECATEGORISED[name][0], (
+            "%s is filed %r; its item names say %r"
+            % (name, row["category"], RECATEGORISED[name][0]))
+
+    @pytest.mark.parametrize("name", sorted(RECATEGORISED))
+    def test_refiled_row_was_re_measured(self, catalog, name):
+        """Moving a row's category is not a reason to trust its old count."""
+        row = next((e for e in catalog if e["name"] == name), None)
+        assert row is not None
+        assert row["est_items"] == RECATEGORISED[name][1], (
+            "%s est_items %d != the measured %d — re-run "
+            "scripts/measure_registry.py against a fresh clone"
+            % (name, row["est_items"], RECATEGORISED[name][1]))
+
+    def test_anthropics_skills_is_not_filed_as_ai(self, catalog):
+        """The default tap a newcomer meets first; its documents and art
+        skills must not answer an AI-engineering filter."""
+        row = next(e for e in catalog if e["name"] == "anthropics/skills")
+        assert row["category"] != "ai"
+
+    def test_no_category_is_an_item_kind(self, catalog):
+        """`--type` filters on kind; a category spelled like a kind makes
+        `--category workflow` and `--type workflow` disagree silently."""
+        kinds = {"skill", "rule", "workflow"}
+        assert sorted(e["name"] for e in catalog
+                      if e.get("category") in kinds) == []
 
 
 class TestEfficiencyDomain:

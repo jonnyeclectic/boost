@@ -189,15 +189,15 @@ SKILLS = [
     ("oaustegard/claude-skills", "general", "Personal collection of Claude skills (codebases, data, media, GitHub)", 50, "high"),
     ("veniceai/skills", "data", "23 skills for the Venice.ai API surface areas", 21, "high"),
     ("LambdaTest/agent-skills", "devops", "60+ test-automation skills across Selenium, Playwright, Appium", 72, "high"),
-    ("Orchestra-Research/AI-Research-SKILLs", "data", "98 skills across 23 categories for the AI research lifecycle", 98, "high"),
+    ("Orchestra-Research/AI-Research-SKILLs", "ai", "98 skills across 23 categories for the AI research lifecycle: quantization, fine-tuning with TRL and LLaMA-Factory, DeepSpeed, DSPy", 98, "high"),
     ("rampstackco/claude-skills", "web-dev", "103 skills covering full website lifecycle (brand, SEO, dev, ops)", 122, "high"),
     ("vercel-labs/agent-skills", "web-dev", "Vercel official skills: React/Next/RN best practices, deploy, design", 9, "high"),
     ("angular/skills", "web-dev", "Official Angular skills (angular-developer, angular-new-app)", 2, "high"),
-    ("huggingface/skills", "data", "27+ Hugging Face ecosystem skills (Hub, training, deployment, Gradio)", 26, "high"),
-    ("microsoft/skills", "devops", "175 Azure/Foundry SDK skills across Python, TS, .NET, Java, Rust", 175, "high"),
+    ("huggingface/skills", "ai", "Hugging Face ecosystem skills: Hub, LLM and vision training with TRL, local models, SageMaker deployment, Gradio and Spaces (26 skills)", 26, "high"),
+    ("microsoft/skills", "infra", "Azure and Foundry SDK skills across Python, TS, .NET, Java, Rust, plus Azure Kubernetes Service operations (209 skills, 22 workflows)", 231, "high"),
     ("antfu/skills", "web-dev", "17 skills for the Vue/Vite ecosystem (nuxt, pinia, vitest, unocss)", 17, "high"),
-    ("mattpocock/skills", "web-dev", "19 engineering/productivity skills (TDD, code review, spec, research)", 41, "high"),
-    ("addyosmani/agent-skills", "devops", "24 lifecycle skills across define/plan/build/verify/review/ship", 24, "high"),
+    ("mattpocock/skills", "general", "Engineering and productivity skills: TDD, code review, grill-me, handoff, spec and tickets, writing for agents (39 skills, 1 workflow)", 40, "high"),
+    ("addyosmani/agent-skills", "general", "Lifecycle skills and commands across spec, plan, build, test, review and ship (25 skills, 13 workflows)", 38, "high"),
     ("daymade/claude-code-skills", "general", "70+ skill marketplace (docs, GitHub, audio/video, finance, testing)", 70, "high"),
     ("mhattingpete/claude-skills-marketplace", "security", "Skills for forensics, metadata, git, test-fixing, review", 8, "med"),
     ("sanjay3290/ai-skills", "general", "Skills incl. deep-research, postgres, google-workspace, imagen", 8, "med"),
@@ -249,7 +249,7 @@ SKILLS = [
     ("langchain-ai/skills-benchmarks", "ai", "21 skills", 21, "high"),
     ("anthropics/claude-tag-plugins", "ai", "19 skills, 1 workflows", 20, "high"),
     ("langwatch/skills", "ai", "LangWatch Skills - reusable capabilities for AI agents. Install with... (19 skills)", 19, "high"),
-    ("anthropics/skills", "ai", "Public repository for Agent Skills (18 skills)", 18, "high"),
+    ("anthropics/skills", "general", "Anthropic's example skills: docx, pdf, pptx and xlsx documents, canvas design and algorithmic art, brand guidelines and themes, plus claude-api, mcp-builder and skill-creator (20 skills)", 20, "high"),
     ("cobusgreyling/agent-skills", "ai", "Personal collection of Agent Skills for AI coding agents (Claude Code... (18 skills)", 18, "med"),
     ("param087/agent-ml-skills", "ai", "Production-grade Machine Learning, Data Science & MLOps skills for AI... (15 skills)", 15, "med"),
     ("datarobot-oss/datarobot-agent-skills", "ai", "Bring DataRobot platform capabilities to your coding agents (14 skills)", 14, "med"),
@@ -437,7 +437,7 @@ SKILLS = [
     ("asgard-ai-platform/skills", "general", "301 open-source coding agent skills across 22 domains - methodology... (314 skills)", 314, "high"),
     ("nWave-ai/nWave", "meta", "AI agents that guide you from idea to working code, with you in... (151 skills, 130 workflows)", 281, "high"),
     ("anthropics/knowledge-work-plugins", "general", "Plugins for knowledge workers in Claude Cowork: sales, finance, legal... (252 skills, 20 workflows)", 272, "high"),
-    ("shinpr/claude-code-workflows", "workflow", "Production-ready development workflows for Claude Code, powered by... (115 skills, 91 workflows)", 206, "high"),
+    ("shinpr/claude-code-workflows", "meta", "Recipe-driven development workflows for Claude Code: plan, design, build and review recipes with subagent orchestration and role agents (42 skills, 24 workflows)", 66, "high"),
     ("OneWave-AI/claude-skills", "general", "172 production-ready Claude Code skills for sales, marketing, design... (204 skills)", 204, "high"),
     ("doccker/cc-use-exp", "general", "Claude CodeAntigravityGemini CLICodexCursor  (143 skills, 7 rules, 48 workflows)", 198, "high"),
     ("wanshuiyin/Auto-claude-code-research-in-sleep", "general", "ARIS (Auto-Research-In-Sleep) - Lightweight Markdown-only skills for... (185 skills)", 185, "high"),
@@ -554,7 +554,7 @@ SKILLS = [
     ("lingxling/awesome-skills-cn", "meta", "Skillscn+7000+Skillsclaude skills (11w+Star) | awesome-openclaw-skills... (29 skills, 1 workflows)", 30, "high"),
     ("Paramchoudhary/ResumeSkills", "meta", "A collection of AI agent skills focused on resume optimization, job... (29 skills)", 29, "high"),
     ("QinghongLin/data2story-skill", "meta", "Data Journalist Agent: Transforming Data into Verifiable Multimodal Story (29 skills)", 29, "high"),
-    ("muratcankoylan/Agent-Skills-for-Context-Engineering", "meta", "A comprehensive collection of Agent Skills for context engineering... (22 skills)", 22, "high"),
+    ("muratcankoylan/Agent-Skills-for-Context-Engineering", "ai", "Context-engineering skills for agents: compression, memory systems, multi-agent patterns, tool design, evaluation (24 skills)", 24, "high"),
     # --- end 2026-07 batch ---
     # --- 2026-08 batch: design/taste packs, plus one framework repo ---------
     # est_items measured with scripts/measure_registry.py, which counts an item
@@ -663,7 +663,7 @@ SKILLS = [
     ("Cold-IQ/ColdIQ-s-GTM-Skills", "marketing", "Cold email sequences, ABM messaging, buying signals, list building and deliverability", 90, "high"),
     ("LeadMagic/gtm-skills", "marketing", "CRM setup and hygiene (Salesforce, HubSpot, Attio), enrichment, AI SDR, ABM and lifecycle", 206, "high"),
     ("NEON-Rutger/B2B-revops-skills", "marketing", "B2B RevOps: CRM migration, lead routing, deal desk, pipeline visibility, ICP and forecasting", 38, "high"),
-    ("garrytan/gstack", "workflow", "Sprint-workflow slash commands — /ship, /qa, /review, /plan-*, /retro, /office-hours — self-installing across ten coding agents", 61, "high"),
+    ("garrytan/gstack", "meta", "Sprint-workflow slash commands — /ship, /qa, /review, /plan-*, /retro, /office-hours — self-installing across ten coding agents (72 skills)", 72, "high"),
     # Tapped in the wild with no row here, so every item they ship carried an
     # empty category. Measured with scripts/measure_registry.py.
     ("K-Dense-AI/scientific-agent-skills", "general", "Scientific research skills: bioinformatics, cheminformatics, lab databases, statistics, papers (177 skills)", 177, "high"),
@@ -724,7 +724,7 @@ SKILLS = [
     ("launchdarkly/ai-tooling", "devops", "Official LaunchDarkly: flag create and cleanup, guarded rollouts, experiments, metrics, AI Configs (56 skills, 1 workflows)", 57, "high"),
     ("sanity-io/agent-toolkit", "backend", "Official Sanity CMS: content modeling, Portable Text, schema deploys, migrations, Studio upgrades, typegen (10 skills, 4 workflows)", 14, "high"),
     ("HexRaysSA/claude-marketplace", "security", "Official Hex-Rays IDA Pro: IDA Domain API scripting, plugin development and packaging, an IDA expert agent (4 skills, 2 workflows)", 6, "high"),
-    ("fal-ai-community/skills", "general", "fal.ai generative media: image, video and audio models, prompting, character and product shots, ad and reel production (36 skills)", 36, "high"),
+    ("fal-ai-community/skills", "ai", "fal.ai generative media: image, video and audio models, prompting, character and product shots, ad and reel production (36 skills)", 36, "high"),
     ("EpicGames/unreal-engine-skills-for-claude-code-plugin", "general", "Official Epic Games: Unreal Engine skill, Unreal MCP, toolset creation (3 skills)", 3, "high"),
     ("googleworkspace/cli", "general", "Official Google Workspace CLI skills: Gmail, Drive, Calendar, Docs, Sheets, Chat, Admin; they drive the gws binary (95 skills, 1 workflows)", 96, "high"),
     ("kepano/obsidian-skills", "general", "Obsidian CLI, Obsidian Markdown, Bases, JSON Canvas and Defuddle, from Obsidian's CEO (6 skills)", 6, "high"),
@@ -734,7 +734,7 @@ SKILLS = [
     ("makenotion/claude-code-notion-plugin", "general", "Official Notion plugin: knowledge capture, meeting notes, research docs, spec-to-implementation, page, database and task commands (12 skills, 10 workflows)", 22, "high"),
     ("canonical/copilot-collections", "general", "Canonical: Go review and style, Ubuntu SRU and freeze reviews, Terraform migration, Temporal tests, docs review (27 skills, 6 workflows)", 33, "high"),
     ("feiskyer/claude-code-settings", "general", "Claude Code settings collection: deep research, GitHub issue and PR fixing and review, handoff, reflection agents (12 skills, 6 workflows)", 18, "med"),
-    ("rsmdt/the-startup", "workflow", "The Agentic Startup: specify, plan, build and review workflow with role skills and agents for Claude Code (34 skills, 16 workflows)", 50, "med"),
+    ("rsmdt/the-startup", "meta", "The Agentic Startup: specify, plan, build and review workflow with role skills and agents for Claude Code (34 skills, 16 workflows)", 50, "med"),
 ]
 
 # --- rules (Cursor .mdc / .cursorrules / Windsurf) --------------------------

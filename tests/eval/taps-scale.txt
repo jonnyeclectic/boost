@@ -12,9 +12,9 @@
 # fail. It is A scale, not THE scale: hit@1 decays continuously with corpus
 # size and never plateaus, so no size here can be canonical.
 #
-# 109 distractor registries, 20,035 est items (the curated list's own estimate).
+# 110 distractor registries, 20,033 est items (the curated list's own estimate).
 # est_items under-reports by about 2.5x against a real install, so that
-# projects to roughly 50,862 actual entries — a projection, not a measurement.
+# projects to roughly 50,857 actual entries — a projection, not a measurement.
 # The real counts are written in by `eval_corpus.py --refresh`, which is
 # also what pins these rows. Regenerating KEEPS any pin already here, so
 # --check verifies the selection, not the pins.
@@ -101,13 +101,13 @@ Galaxy-Dawn/claude-scholar                        2f7766fd541a723d4ddc6230b3277f
 oliver-kriska/claude-elixir-phoenix
 matank001/cursor-security-rules                   ebbe0abd48ba08cadfaa3723ebfdf4914081e682    16
 agentlas-ai/Agentlas-OS                           e378c0addf67527b4ad3934dd3229b224dbc146e   329
-pproenca/dot-skills                               cf93c57cac89d6fc3e4194686000411567f5caf3   211
+microsoft/skills                                  e20084b9d230c6f3b46ce36f011e6c3e50f79f8a   220
 obviousworks/vibe-coding-ai-rules
 secondsky/claude-skills                           84802a4841cb632eee14175f5abe5276f4cb9596   303
-LeadMagic/gtm-skills
+pproenca/dot-skills                               cf93c57cac89d6fc3e4194686000411567f5caf3   211
 pekral/cursor-rules                               158fbfa8dc63c0302c2f21293d97a6e97881ce2b    85
 Yeachan-Heo/oh-my-claudecode                      5aa678c6f7a769df84561d9486d8e9e30b68c3dc   103
-shinpr/claude-code-workflows                      5f2cdc07397a5eef4feba48a144123e42c0d41b3   208
+LeadMagic/gtm-skills
 DVC2/cursor-agent-configs
 giuseppe-trisciuoglio/developer-kit               306f428f278d83722afdea44a7398dc46dab967f   220
 indranilbanerjee/digital-marketing-pro            fa4ccd0a4afc1b902ef8de8d297b180aa148d46a   205
@@ -129,34 +129,35 @@ finsilabs/awesome-ecommerce-skills                30a1fb674e41284e738608c059690c
 composio-community/awesome-claude-plugins
 K-Dense-AI/scientific-agent-skills
 anthropics/claude-plugins-official
-microsoft/skills                                  e20084b9d230c6f3b46ce36f011e6c3e50f79f8a   220
-hoangsonww/Claude-Code-Agent-Monitor
 kostja94/marketing-skills
-dsifry/metaswarm
+hoangsonww/Claude-Code-Agent-Monitor
 minhnv0807/ai-business-skills
-jezweb/claude-skills
+dsifry/metaswarm
 aws/agent-toolkit-for-aws
-wshobson/commands
+jezweb/claude-skills
 nexscope-ai/eCommerce-Skills
-0xSteph/pentest-ai-agents
+wshobson/commands
 cursor/plugins
-glittercowboy/taches-cc-resources
+0xSteph/pentest-ai-agents
 claude-office-skills/skills
-aiwonglab/claude_code_agents
+glittercowboy/taches-cc-resources
 mohitmishra786/low-level-dev-skills
-CloudAI-X/claude-workflow-v2
+aiwonglab/claude_code_agents
 jabrena/plinth
-trailofbits/skills
+CloudAI-X/claude-workflow-v2
 JetBrains/skills
-cloudflare/agents
+trailofbits/skills
 aaron-he-zhu/aaron-marketing-skills
-pluginagentmarketplace/custom-plugin-nextjs
+cloudflare/agents
 ThibautBaissac/rails_ai_agents
-syahiidkamil/Software-Engineer-AI-Agent-Atlas
+pluginagentmarketplace/custom-plugin-nextjs
 Owl-Listener/designer-skills
-alirezarezvani/claude-code-skill-factory
+syahiidkamil/Software-Engineer-AI-Agent-Atlas
 rampstackco/claude-skills
-datopian/portaljs
+alirezarezvani/claude-code-skill-factory
 MengTo/Skills
-dl-ezo/claude-code-sub-agents
+datopian/portaljs
 40RTY-ai/shopify-admin-skills
+dl-ezo/claude-code-sub-agents
+guanyang/open-agent-hub
+humanlayer/humanlayer
