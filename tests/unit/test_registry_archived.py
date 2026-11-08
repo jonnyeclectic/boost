@@ -35,6 +35,13 @@ def _row(name, **extra):
             **extra}
 
 
+def _tapped(*names):
+    """Configure ``names`` as taps already held, with no clone behind them."""
+    cfg = config.load()
+    cfg["taps"] = [{"name": n, "url": GH + n, "curated": False} for n in names]
+    config.save(cfg)
+
+
 @pytest.fixture
 def catalogue(monkeypatch):
     """FROZEN is archived and was OLD; LIVE is not."""
@@ -91,6 +98,16 @@ class TestTapCatalogPreview:
         assert ("2 registries to tap (1 archived upstream) · ~10 items"
                 in capsys.readouterr().out)
 
+    def test_the_footer_counts_only_the_rows_it_would_tap(
+            self, sandbox, catalogue, capsys):
+        """An archived row already held is not in the table, so the footer
+        that stands in for the FOCUS column does not count it either."""
+        _tapped(FROZEN)
+        taps_cmd.cmd_tap(["--catalog", "--dry-run"])
+        out = capsys.readouterr().out
+        assert "1 registry to tap, 1 already tapped · ~5 items" in out
+        assert "archived" not in out
+
     def test_nothing_archived_adds_nothing(self, sandbox, monkeypatch, capsys):
         monkeypatch.setattr(config, "load_registry_catalog",
                             lambda: [_row(LIVE)])
@@ -134,6 +151,20 @@ class TestQuickstartPreview:
                 "commit, 1 archived upstream)"
                 % (bootstrap.MAX_NAMED_REGISTRIES + 1)
                 in capsys.readouterr().out)
+
+    def test_the_summary_line_counts_only_what_it_would_tap(
+            self, sandbox, catalogue, capsys):
+        """An archived registry already held is skipped, not tapped, so the
+        count of archived ones it would tap leaves it out."""
+        _tapped(FROZEN)
+        many = [{"name": "o/r%d" % i, "url": GH + "o/r%d" % i}
+                for i in range(bootstrap.MAX_NAMED_REGISTRIES + 1)]
+        quickstart._tap_defaults([*many, {"name": FROZEN, "url": GH + FROZEN}],
+                                 {}, dry_run=True)
+        out = capsys.readouterr().out
+        assert ("would tap %d registries (0 pinned to a published shard's "
+                "commit)" % (bootstrap.MAX_NAMED_REGISTRIES + 1)) in out
+        assert "archived" not in out
 
     def test_the_summary_line_is_unchanged_without_one(self, sandbox,
                                                       catalogue, capsys):
