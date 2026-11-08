@@ -43,6 +43,7 @@ except ImportError:  # pragma: no cover - 3.9+ always has it
 from ..errors import BoostError
 from . import (
     ai,
+    builtin,
     catalog,
     config,
     frontmatter,
@@ -426,14 +427,27 @@ def entry_path(entry: dict, tap_paths: dict[str, Path] | None = None
     Returns ``None`` when the entry names no defining file. A bare tap root is
     not where the item is, so returning one would hand the caller a path that
     opens the wrong thing rather than an absence it has to handle.
+
+    boost's own tap is read from the wheel whenever the tap on disk does not
+    hold the file, the rule :func:`builtin.wheel_source` applies:
+    :func:`catalog.find` describes its items from package data without
+    registering it (:func:`builtin.shipped_entries`), and a tap an older
+    wheel registered lacks whatever shipped since. Only that tap pays the
+    ``stat``; every other row is a string compare.
     """
     rel = entry.get("skill_md")
     if not rel:
         return None
     paths_map = _tap_paths() if tap_paths is None else tap_paths
-    base = paths_map.get(entry.get("tap", ""))
+    tap = str(entry.get("tap", ""))
+    base = paths_map.get(tap)
+    if builtin.is_builtin(tap) and (base is None
+                                    or not (Path(base) / rel).exists()):
+        shipped = builtin.shipped_path(rel)
+        if shipped is not None:
+            return shipped
     if base is None:
-        base = paths.repos_dir() / str(entry.get("tap", "")).replace("/", "__")
+        base = paths.repos_dir() / tap.replace("/", "__")
     return Path(base) / rel
 
 

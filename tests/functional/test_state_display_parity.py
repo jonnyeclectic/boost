@@ -51,23 +51,27 @@ def _mcp_line(text: str, key: str) -> str:
 
 class TestDisabledAgentParity:
     def test_skill_and_rule_drop_a_disabled_agent_on_every_surface(
-            self, boost, fixture_tap_src, tmp_path):
+            self, boost, fixture_tap_src, tmp_path, monkeypatch):
+        monkeypatch.setenv("COLUMNS", "400")   # `agents` wraps at 80
         boost("tap", _rule_tap(fixture_tap_src, tmp_path / "rtap"))
         boost("install", "tdd-workflow")
         boost("install", "dep-mgmt")
         boost("install", "commit-messages", "--local")
+        # `+` names the agents that read a user-scope skill from the store.
         assert _row(boost("list").out, "tdd-workflow")[3] == \
-            "antigravity·claude·cursor·windsurf"
+            "antigravity·claude·cursor·windsurf +codex·gemini"
         boost("config", "set", "agents.cursor.enabled", "false")
 
         listing = boost("list").out
-        assert _row(listing, "tdd-workflow")[3] == "antigravity·claude·windsurf"
+        assert _row(listing, "tdd-workflow")[3] == \
+            "antigravity·claude·windsurf +codex·gemini"
         assert _row(listing, "dep-mgmt")[3] == "claude·codex·gemini·windsurf"
         # Project scope copies into its own set: gemini and codex stay.
         assert _row(listing, "commit-messages")[3] == \
             "claude·codex·gemini·windsurf"
 
-        skill = "antigravity, claude-code, windsurf"
+        skill = ("antigravity, claude-code, windsurf; codex, gemini (read "
+                 "the store directly)")
         assert _kv(boost("info", "tdd-workflow").out, "agents") == skill
         assert _kv(boost("stats", "tdd-workflow").out, "agents") == skill
         text, err = configuration._tool_info({"name": "tdd-workflow"})

@@ -2762,6 +2762,15 @@ def cmd_changelog(argv):
             return 0
         out.info("no upstream history — %s was imported locally" % bare)
         return 0
+    if builtin.is_builtin(tap_name):
+        # Package data, not a clone, and unregistered until something is
+        # installed from it: the registry lookup below said "no such tap".
+        if args.json:
+            print(json.dumps({"name": bare, "tap": tap_name, "commits": []},
+                             indent=2))
+            return 0
+        out.info(builtin.no_history_note(bare))
+        return 0
     tap = registry.get(tap_name)
     if not tap.is_cloned:
         raise BoostError("tap %s is not cloned" % tap.name,

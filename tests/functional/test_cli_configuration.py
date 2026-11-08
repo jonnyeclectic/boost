@@ -3582,7 +3582,12 @@ class TestSearchNamesItsRanker:
 
     def test_a_degraded_search_says_the_rerank_did_not_run(self, monkeypatch):
         from boost_cli.commands import configuration
-        from boost_cli.core import rag
+        from boost_cli.core import ai, rag
+        # No backend at all: the one case whose remedy is a key or the CLI.
+        # AI switched off on purpose is test_unreranked_note's.
+        monkeypatch.delenv("BOOST_NO_AI", raising=False)
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.setattr(ai, "has_cli", lambda: False)
         monkeypatch.setattr(
             rag, "ensure", lambda *a, **k: True)
         monkeypatch.setattr(rag, "search", lambda *a, **k: (

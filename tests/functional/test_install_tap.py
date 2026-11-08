@@ -315,7 +315,7 @@ def test_y_does_not_also_register_mcp_servers(boost, fixture_tap_src,
     r = boost("install", _tap_name(), "-y")
     assert "needs-mcp" in _installed()
     assert registrations == []
-    assert "skipped — run these yourself" in r.out
+    assert "skipped — registering is machine-wide; ask the user" in r.out
     # The decline names no flag and no env var -- only what a yes would run.
     assert "pass -y" not in r.out
     assert "BOOST_ASSUME_YES" not in r.out + r.err
@@ -422,7 +422,7 @@ def test_y_answers_the_list_and_not_the_batched_offer(
     monkeypatch.delenv("BOOST_ASSUME_YES", raising=False)
     r = boost("install", _tap_name(), "-y")
     assert registrations == []
-    assert r.out.count("skipped — run these yourself") == 1
+    assert r.out.count("skipped — registering is machine-wide; ask the user") == 1
     assert "BOOST_ASSUME_YES" not in r.out + r.err
 
 

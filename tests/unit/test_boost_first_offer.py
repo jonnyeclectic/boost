@@ -373,3 +373,100 @@ class TestTheOfferIsNonFatalByConstruction:
         configuration._offer_boost_first(["claude"])
         assert capsys.readouterr().out == ""
         assert lockfile.get_rule(RULE) is None
+
+
+class TestAHostRegisteredLaterIsOfferedTheRule:
+    """The rule used to stay with whichever hosts were registered first.
+
+    Measured on a sandbox HOME: `boost mcp register -y --no-seed` with only
+    `claude` on PATH installed boost-first into CLAUDE.md with
+    ``only_agents: ["claude-code"]``. With gemini, agy and codex added, the
+    same command registered all four and made no offer -- "installed" ended
+    it -- so GEMINI.md and AGENTS.md never existed, and `boost sync` said
+    everything was in sync.
+    """
+
+    @staticmethod
+    def _block_count(path) -> int:
+        from boost_cli.core import rules
+        return path.read_text(encoding="utf-8").count(
+            rules.BLOCK_START % RULE)
+
+    def test_only_the_missing_files_are_offered(self, offering):
+        configuration._offer_boost_first(["claude"], yes=True)
+        names = sorted(pathlib.Path(t).name for t in
+                       configuration._boost_first_targets(
+                           ["claude", "gemini", "agy", "codex"]))
+        assert names == ["AGENTS.md", "GEMINI.md"]
+
+    def test_accepting_widens_the_install(self, offering, capsys):
+        configuration._offer_boost_first(["claude"], yes=True)
+        configuration._offer_boost_first(["claude", "gemini", "codex"],
+                                         yes=True)
+        rec = lockfile.get_rule(RULE)
+        assert rec["only_agents"] == ["claude-code", "codex", "gemini"]
+        home = paths.home()
+        for rel in (".claude/CLAUDE.md", ".gemini/GEMINI.md",
+                    ".codex/AGENTS.md"):
+            assert self._block_count(home / rel) == 1, rel
+        assert "could not install" not in capsys.readouterr().out
+
+    def test_the_offer_says_what_it_already_covers(self, offering, capsys,
+                                                   monkeypatch):
+        configuration._offer_boost_first(["claude"], yes=True)
+        capsys.readouterr()
+        monkeypatch.setattr(configuration.out, "confirm",
+                            lambda *a, **kw: False)
+        configuration._offer_boost_first(["claude", "gemini"])
+        flat = " ".join(capsys.readouterr().out.split())
+        assert ("`%s`, is installed for claude-code; it can also go into"
+                % RULE) in flat
+        assert "GEMINI.md" in flat and "CLAUDE.md" not in flat
+        assert lockfile.get_rule(RULE)["only_agents"] == ["claude-code"]
+
+    def test_the_hosts_it_covers_are_not_asked_again(self, offering, capsys):
+        configuration._offer_boost_first(["claude", "gemini"], yes=True)
+        capsys.readouterr()
+        configuration._offer_boost_first(["gemini", "agy", "claude"])
+        assert capsys.readouterr().out == ""
+
+    def test_an_install_with_no_declared_scope_covers_every_agent(
+            self, offering, capsys):
+        # `boost install boost-first` with no `--agent` records no narrowing:
+        # it already fans out to every agent that takes rules.
+        from boost_cli.core import catalog
+        store.install(catalog.resolve_one(RULE))
+        assert configuration._boost_first_targets(
+            ["claude", "gemini", "agy", "codex"]) == []
+
+    @pytest.mark.parametrize("flag", ["pinned", "quarantined"])
+    def test_a_frozen_record_is_left_alone(self, offering, flag):
+        configuration._offer_boost_first(["claude"], yes=True)
+        rec = lockfile.get_rule(RULE)
+        rec[flag] = True
+        lockfile.set_rule(RULE, rec)
+        assert builtin.rule_offer_agents(["gemini", "codex"]) == []
+
+    def test_a_project_scope_copy_makes_no_user_offer(self, offering):
+        rec = {"kind": "rule", "scope": "project", "base": "/somewhere",
+               "only_agents": ["claude-code"], "materializations": []}
+        lockfile.set_rule(RULE, rec)
+        assert builtin.rule_offer_agents(["gemini"]) == []
+
+
+class TestRuleOfferAgents:
+    def test_nothing_installed_offers_every_mapped_agent(self, sandbox):
+        assert builtin.rule_offer_agents(["codex", "agy", "claude"]) == [
+            "claude-code", "codex", "gemini"]
+
+    def test_a_host_with_no_agent_is_dropped(self, sandbox):
+        assert builtin.rule_offer_agents(["cursor", "gemini"]) == ["gemini"]
+
+    def test_no_hosts_nothing(self, sandbox):
+        assert builtin.rule_offer_agents([]) == []
+
+    def test_a_declared_scope_is_subtracted(self, sandbox):
+        lockfile.set_rule(RULE, {"kind": "rule", "scope": "user",
+                                 "only_agents": ["gemini"],
+                                 "materializations": []})
+        assert builtin.rule_offer_agents(["agy", "codex"]) == ["codex"]

@@ -101,11 +101,12 @@ class TestList:
         assert "NAME" in r.out and "VERSION" in r.out and "FLAGS" in r.out
         assert "brainstorming" in r.out and "1.4.0" in r.out
         assert "commit-messages" in r.out and "1.0.2" in r.out
-        # abbreviated agents column: the linked ones only — gemini reads the
-        # canonical store directly and is never symlinked
-        # Sorted, as a rule's agents are (`integrity.written_agent_names`).
-        assert "antigravity·claude·cursor·windsurf" in r.out
-        assert "gemini" not in r.out
+        # abbreviated agents column: the linked ones, sorted as a rule's
+        # agents are (`integrity.written_agent_names`), then `+` and the
+        # agents that read the canonical store with no link. Leaving those
+        # out told a Gemini or Codex user the skill had not reached them.
+        assert "antigravity·claude·cursor·windsurf +codex·gemini" in r.out
+        assert "+agents read ~/.agents/skills directly, with no link" in r.out
         assert "2 skills" in r.out
 
     def test_json_pure_with_fields(self, boost, installed):
@@ -302,7 +303,8 @@ class TestList:
 # ── info ─────────────────────────────────────────────────────────────────
 
 class TestInfo:
-    def test_installed_fields(self, boost, installed):
+    def test_installed_fields(self, boost, installed, monkeypatch):
+        monkeypatch.setenv("COLUMNS", "400")   # `agents` wraps at 80
         r = boost("info", "brainstorming")
         assert "brainstorming" in r.out
         assert "Structured ideation & divergent-thinking facilitation" in r.out
@@ -310,7 +312,10 @@ class TestInfo:
         assert re.search(r"tap\s+fixture-tap", r.out)
         assert "~/.agents/skills/brainstorming" in r.out   # ~-contracted store
         assert re.search(r"quality\s+95/100", r.out)
-        assert re.search(r"agents\s+antigravity, claude-code, cursor, windsurf$",
+        # The linked agents, then the two that read the store with no link,
+        # in boost_install's words.
+        assert re.search(r"agents\s+antigravity, claude-code, cursor, windsurf; "
+                         r"codex, gemini \(read the store directly\)$",
                          r.out, re.M)
         assert re.search(r"pinned\s+no", r.out)
         assert re.search(r"quarantined\s+no", r.out)

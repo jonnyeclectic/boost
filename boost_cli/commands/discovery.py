@@ -345,6 +345,18 @@ def cmd_search(argv):
     # pane-width gate only passed because its fixture returned one match.
     for line in out.wrap(footer, max(out.term_width() - 2, 20)):
         out.info(out.role(line, "muted"))
+    if shown and not (sys.stdout.isatty() or sys.stderr.isatty()):
+        # No terminal on either stream: an agent's shell is reading, so say
+        # how to read and install the top hit. On stderr, so the rows stay
+        # the only stdout lines naming a hit (`boost search x | grep
+        # owner/repo`); a command is data, so it is whole and unwrapped.
+        # Through out.info, which flushes stdout first: a bare print to stderr
+        # reached `boost search x 2>&1` -- how an agent's shell reads -- above
+        # the rows still sitting in stdout's pipe buffer.
+        top = shown[0][0]
+        out.info(out.role(out.search_next_step(
+            top["name"], top.get("tap") or ""), "muted", stream=sys.stderr),
+            stream=sys.stderr)
     if use_rag:
         _note_stem_expansions(query)
         _note_dropped_terms(dropped)
@@ -2850,8 +2862,7 @@ def cmd_stats(argv):
         # command describing two kinds of item.
         # Written agents only: a row boost no longer writes is kept so an
         # uninstall can reverse it, not because the item reaches that agent.
-        out.kv("agents",
-               ", ".join(integrity.written_agent_names(kind, lock)) or "none")
+        out.kv("agents", integrity.reach_line(kind, lock, name), wrap=True)
         out.kv("pinned", "yes" if lock.get("pinned") else "no")
         if lock.get("quarantined"):
             out.kv("quarantined", "yes")

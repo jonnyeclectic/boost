@@ -22,7 +22,17 @@ from pathlib import Path
 
 from .. import __version__
 from ..errors import BoostError
-from . import catalog, config, frontmatter, lockfile, logs, paths, registry, store
+from . import (
+    builtin,
+    catalog,
+    config,
+    frontmatter,
+    lockfile,
+    logs,
+    paths,
+    registry,
+    store,
+)
 from . import output as out
 
 SKILL_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
@@ -809,6 +819,14 @@ def skill_text(name: str) -> str | None:
     if fp is not None and _is_within(base, fp) and fp.is_file():
         return fp.read_text(encoding="utf-8", errors="replace")
     for e in catalog.find(trusted_name):
+        # boost's own items, read from the wheel until one is installed:
+        # `find` describes them from there without registering the tap.
+        wheel = builtin.wheel_source(str(e.get("tap") or ""),
+                                     str(e.get("skill_md") or ""))
+        if wheel is not None:
+            if wheel.is_file():
+                return wheel.read_text(encoding="utf-8", errors="replace")
+            continue
         try:
             tap_base = registry.get(e["tap"]).path
             rel = Path(e["skill_md"])

@@ -907,6 +907,26 @@ def native_store_agents() -> dict[str, Path]:
             if s["enabled"] and not s["links_skills"]}
 
 
+#: How a native-store agent is marked wherever agents are named beside the
+#: ones a skill was linked into. One spelling, so `boost_install`, `boost
+#: info`, `boost_info` and the register offer read as one fact.
+READS_STORE = "read the store directly"
+
+
+def reach_phrase(linked, native, none: str = "none") -> str:
+    """The agents a user-scope skill reaches, as one phrase.
+
+    ``linked`` got a symlink; ``native`` read ``~/.agents/skills`` without
+    one (:func:`native_store_agents`). Naming only the first told a Gemini
+    CLI or Codex session the skill had not reached it. ``none`` is the
+    answer when both are empty, in the caller's own spelling.
+    """
+    parts = [", ".join(linked)] if linked else []
+    if native:
+        parts.append("%s (%s)" % (", ".join(native), READS_STORE))
+    return "; ".join(parts) or none
+
+
 def display_name(agent: str) -> str:
     """`claude-code` -> "Claude Code"; unknown names pass through unchanged."""
     return DISPLAY.get(agent, agent)

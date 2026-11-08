@@ -1093,6 +1093,39 @@ def format_search_row(name: str, desc: str, kind: str, tap: str, frac: float,
     return row.rstrip()
 
 
+def search_next_step(name: str, tap: str = "") -> str:
+    """The note a `boost search` with no terminal on either stream closes
+    on: how to read its top hit, and how to install it.
+
+    An agent in a shell -- the only route on Cursor and Windsurf, and on any
+    host with no MCP server registered -- got the ranked rows and the match
+    count, and nothing about reading one before choosing. The MCP reply
+    points at `boost_read`; this is the same step in commands. The name is
+    tap-qualified so the command runs even where several taps ship it
+    (13 real skills are called `code-reviewer`).
+    """
+    name, tap = plain(name), plain(tap)
+    ref = "%s:%s" % (tap, name) if tap else name
+    return ("read one: boost cat %s · install: boost install %s "
+            "(--local for this repository only)" % (ref, ref))
+
+
+def install_use_now(kind: str, name: str, skill_md: str) -> str:
+    """How to use what `boost install` just wrote in the session that ran it.
+
+    ``skill_md`` is the installed SKILL.md, as it should be printed. The
+    install banner closed on ``next: boost info <name>`` alone, while
+    `boost_install` says where the text is; whether a host loads a skill
+    written after its session started depends on the host, so the text is
+    the step that works everywhere. A rule or workflow is written into agent
+    files, so its text comes from `boost cat`.
+    """
+    if kind == "skill":
+        return ("use it now: read %s — the files it names by relative path "
+                "sit beside it" % skill_md)
+    return "use it now: boost cat %s" % plain(name)
+
+
 def kv(key: str, value: str, width: int = 14, wrap: bool = False) -> None:
     """Print an indented key/value line: dim key padded to width, then value.
 

@@ -72,10 +72,11 @@ class TestEnsureTapIsIdempotent:
 class TestTheBuiltinTapRefreshesFromTheWheelRatherThanGit:
     """A revised rule has to be able to reach a machine that already has it.
 
-    `ensure_tap()` has exactly one caller — the `boost mcp register` offer —
-    and that offer never runs twice (`TestItNeverAsksTwice`). So once a user
-    accepts, the copy under `~/.boost/repos/boost__builtin/` is written once
-    and never again. `boost update` then reached for git against a directory
+    `ensure_tap()` had exactly one caller then — the `boost mcp register`
+    offer — and that offer never runs twice (`TestItNeverAsksTwice`). So once
+    a user accepted, the copy under `~/.boost/repos/boost__builtin/` was
+    written once and never again. (A lookup of a shipped name now calls it
+    too, `catalog.find`, but only when the name misses.) `boost update` then reached for git against a directory
     that is not a clone, the tap landed in `failures`, and every downstream
     loop skipped it on `tapname not in results`.
 
@@ -364,7 +365,12 @@ class TestTheRuleDoesNotDriftFromTheMcpSurface:
               "say in your reply which you chose and where it landed",
               "ask the user before installing a rule",
               "`boost mcp register`",
-              "applies to every project on this machine")
+              "applies to every project on this machine",
+              # A skill's own servers: the CLI printed "run these yourself"
+              # for the machine-wide `mcp add` lines while boost_install said
+              # to ask the user, and neither text said whose call it was.
+              "an mcp server a skill declares is the same kind of decision",
+              "they are the user's to run")
 
     @pytest.mark.parametrize("ai_available", [True, False])
     @pytest.mark.parametrize("phrase", PARITY)

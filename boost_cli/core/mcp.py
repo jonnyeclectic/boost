@@ -339,7 +339,10 @@ _INSTRUCTIONS_TAIL = (
     "installing a rule, which becomes standing "
     "text in their context files for every session after this one, and "
     "before registering boost with an agent (`boost mcp register`), which "
-    "applies to every project on this machine. " + SKIP_IT
+    "applies to every project on this machine. An MCP server a skill "
+    "declares is the same kind of decision: the `mcp add` lines boost prints "
+    "for it register it machine-wide, so they are the user's to run. "
+    + SKIP_IT
 )
 
 
@@ -474,9 +477,59 @@ def held_line(name: str, entry: dict | None) -> str | None:
     return None
 
 
+#: How many companion files :func:`companions_line` names before it counts
+#: the rest. A repo-root skill's "directory" is the whole repository.
+COMPANIONS_SHOWN = 8
+
+
+def unreranked_note(ranker: str, cause: str, reason: str) -> str:
+    """boost_search's closing line when the LLM rerank did not run.
+
+    ``cause`` and ``reason`` are :func:`ai.unavailable_cause` and
+    :func:`ai.unavailable_reason`. The line used to end "Configure
+    ANTHROPIC_API_KEY or the `claude` CLI to enable it." whatever the cause:
+    with ``BOOST_NO_AI=1`` and `claude` on PATH -- AI off on purpose, both
+    remedies already present -- every reply told the agent to set them up,
+    while the ``initialize`` instructions on the same connection correctly
+    said no backend was enabled. Only a missing backend gets that advice.
+    """
+    head = ("\n(ranked by %s — the LLM rerank did NOT run, so this is a "
+            "shortlist to read rather than a verdict to act on. " % ranker)
+    if cause == "disabled":
+        return head + ("AI is %s on this machine: a setting, not a fault, "
+                       "so leave it as it is.)" % reason)
+    if cause == "missing":
+        return head + ("Configure ANTHROPIC_API_KEY or the `claude` CLI to "
+                       "enable it.)")
+    return head + ("An AI backend is configured and did not rerank this "
+                   "call (%s).)" % reason)
+
+
+def companions_line(files: Sequence[str], skill_dir: str | None) -> str | None:
+    """The header line naming what a skill ships beside SKILL.md, or None.
+
+    ``skill_dir`` is the installed copy, where the files are now and where
+    the text's relative paths resolve; ``None`` for an item not installed,
+    whose files arrive with `boost_install`.
+    """
+    if not files:
+        return None
+    shown = list(files[:COMPANIONS_SHOWN])
+    more = len(files) - len(shown)
+    listed = ", ".join(shown) + (", and %d more" % more if more else "")
+    if skill_dir:
+        return ("files beside it: %s — in %s, where the text's relative "
+                "paths resolve" % (listed, skill_dir))
+    return ("also ships: %s — this reply is SKILL.md alone; boost_install "
+            "puts these beside it, and the text's relative paths resolve "
+            "in that directory" % listed)
+
+
 def read_reply(name: str, text: str, *, kind: str = "skill",
                installed: bool = False, limit: int = READ_LIMIT,
-               where: str | None = None, held: str | None = None) -> str:
+               where: str | None = None, held: str | None = None,
+               companions: Sequence[str] = (),
+               skill_dir: str | None = None) -> str:
     """`boost_read`'s reply: a header, then the item's own content.
 
     The header exists because the body alone does not say what the agent is
@@ -499,6 +552,9 @@ def read_reply(name: str, text: str, *, kind: str = "skill",
     at all, or one long line (a 1 MB ``description:`` on line 3 served 18
     characters of 12,000) — it hard-cuts at the budget instead, inside that
     line, announced the same way.
+
+    ``companions`` (:func:`store.companion_files`) and ``skill_dir`` add the
+    line that says the text is not the whole skill (:func:`companions_line`).
     """
     head = ["name: %s" % name]
     if kind != "skill":
@@ -510,6 +566,9 @@ def read_reply(name: str, text: str, *, kind: str = "skill",
     # ``held`` (:func:`held_line`): installed, and still not in effect.
     if held and installed:
         head.append(held)
+    also = companions_line(companions, skill_dir if installed else None)
+    if also:
+        head.append(also)
     body = text.strip("\n")
     if len(body) > limit:
         cut = body[:limit].rpartition("\n")[0]

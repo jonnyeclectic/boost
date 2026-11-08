@@ -1185,19 +1185,55 @@ def find(name: str, tap: str | None = None,
         tap, name = qualifier, bare
     pool = all_entries() if entries is None else entries
     matches = list(_name_index(pool).get(unicodedata.normalize("NFC", name), ()))
-    if tap:
-        # Same tiering as registry.get: a qualified owner/repo beats a bare
-        # repo tail, so `angular/skills:x` never picks up `microsoft/skills:x`.
-        # Without this the two resolvers disagreed — `boost untap skills`
-        # errored on the ambiguity while `boost bundle apply` with
-        # `skills:brainstorming` silently took matches[0] from whichever tap
-        # sorted first.
-        for tier in _tap_tiers(tap):
-            hits = [e for e in matches if tier(e["tap"])]
-            if hits:
-                return hits
-        return []
-    return matches
+    hits = _in_tap(matches, tap)
+    # On no *hits*, not no matches: `boost/builtin:boost-first` with another
+    # tap that ships a `boost-first` matched that tap's row, the qualifier
+    # then filtered it out, and the fallback had already been skipped.
+    if not hits and entries is None and _ships_builtin(name, tap):
+        # One of the two items boost ships itself, on a machine whose
+        # builtin tap was never registered, or was registered by a wheel
+        # that predates the item. Registration used to happen only when the
+        # user said yes to `boost mcp register`'s offer, so the decline
+        # line's own advice -- `boost install boost-first` -- failed with
+        # "no skill named", and on a Cursor- or Windsurf-only machine, where
+        # no MCP host settles and no offer is ever made, nothing could
+        # install it at all.
+        #
+        # Answered from the wheel, and nothing is written. This used to run
+        # `builtin.ensure_tap()` and a rescan, which write config.json and
+        # ~/.boost/repos/boost__builtin, from a lookup that `boost info`,
+        # `boost cat`, `boost_read` and `boost_info` all make -- the last
+        # two described as changing nothing. The install that needs the
+        # tap on disk registers it (`store.install`), and the read paths
+        # open the wheel's copy until then (`builtin.wheel_source`).
+        hits = _in_tap([e for e in builtin.shipped_entries()
+                        if e["name"] == name], tap)
+    return hits
+
+
+def _in_tap(matches: list[dict], tap: str | None) -> list[dict]:
+    """``matches`` narrowed to the tap ``tap`` names; all of them for None.
+
+    Same tiering as registry.get: a qualified owner/repo beats a bare repo
+    tail, so `angular/skills:x` never picks up `microsoft/skills:x`. Without
+    this the two resolvers disagreed — `boost untap skills` errored on the
+    ambiguity while `boost bundle apply` with `skills:brainstorming` silently
+    took matches[0] from whichever tap sorted first.
+    """
+    if not tap:
+        return matches
+    for tier in _tap_tiers(tap):
+        hits = [e for e in matches if tier(e["tap"])]
+        if hits:
+            return hits
+    return []
+
+
+def _ships_builtin(name: str, qualifier: str | None) -> bool:
+    """Whether ``name`` is an item boost's own tap ships, under a qualifier
+    that would select that tap (or none)."""
+    return builtin.ships(name) and (
+        qualifier is None or tap_matches(builtin.BUILTIN_TAP, qualifier))
 
 
 def addressable_name(name: str) -> str:
