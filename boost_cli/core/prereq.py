@@ -44,7 +44,7 @@ from collections.abc import Iterable, Iterator, Mapping, Sequence, Set
 from itertools import chain
 from typing import NamedTuple
 
-from . import catalog, deps, lockfile, projectlock
+from . import catalog, deps, lockfile, projectlock, scopes
 
 
 class ItemPrereqs(NamedTuple):
@@ -235,9 +235,36 @@ def for_installed() -> list[ItemPrereqs]:
     return for_entries(list(picked.values()), installed=have, corpus=entries)
 
 
-def required_by(names: Iterable[str]) -> dict[str, list[str]]:
+def _going(name: str, user: Mapping[str, Mapping], project: Mapping,
+           scope: str | None, kind: str | None) -> tuple[str, str] | None:
+    """The row ``boost uninstall`` takes out for ``name``: ``("user", kind)``,
+    ``("project", "skill")``, or None when the uninstall would refuse.
+
+    The resolution ``store.uninstall`` and ``store.uninstall_project`` make:
+    ``--local`` takes the repo's copy; otherwise the user lock answers, and a
+    bare uninstall falls back to the repo for a skill the user lock lacks. A
+    name held as more than one kind needs ``kind``, and a ``kind`` the name is
+    not held as removes nothing.
+    """
+    if scope == scopes.SCOPE_PROJECT:
+        return ("project", "skill") if name in project else None
+    held = [k for k, section in user.items() if name in section]
+    repo = scope is None and "skill" not in held and name in project
+    if repo:
+        held = ["skill", *held]
+    if kind is None:
+        if len(held) != 1:
+            return None
+        kind = held[0]
+    elif kind not in held:
+        return None
+    return ("project", "skill") if repo and kind == "skill" else ("user", kind)
+
+
+def required_by(names: Iterable[str], *, scope: str | None = None,
+                pbase=None, kind: str | None = None) -> dict[str, list[str]]:
     """``{name: [installed items whose requires: lists it]}``, for each of
-    ``names`` that something installed needs.
+    ``names`` whose removal leaves something installed without it.
 
     What ``boost uninstall`` names before it removes an item, read the way
     :func:`for_installed` reads a declaration. Only ``requires:``, the key
@@ -246,26 +273,50 @@ def required_by(names: Iterable[str]) -> dict[str, list[str]]:
     counted as a dependent: removing two together leaves neither waiting on
     the other. A qualified ``tap:name`` counts only when the target was
     installed from that tap, as :class:`InstalledSet` decides it.
+
+    ``scope`` and ``kind`` are the uninstall's own (see :func:`_going`), and
+    ``pbase`` is the repo whose project lock counts. A requirement is broken
+    only when it was met before and is not after, so a same-named item of
+    another kind, or a copy in the other scope, that stays still meets it.
+    Reading the user lock alone, ``uninstall --local`` warned about nothing,
+    and ``uninstall x --kind rule`` warned while a skill named x stayed. A
+    user-scope dependent counts user rows only, as doctor does; a project
+    one counts both locks, as ``install --local`` does.
     """
     targets = set(names)
     if not targets:
         return {}
-    installed = lockfile.all_installed()
-    taps: dict[str, set[str]] = defaultdict(set)
-    for section in installed.values():
-        for name, rec in section.items():
-            if name in targets:
+    user = lockfile.all_installed()
+    project = projectlock.installed(pbase) if pbase is not None else {}
+    going = {n: _going(n, user, project, scope, kind) for n in targets}
+    held = [("user", k, section) for k, section in user.items()]
+    held.append(("project", "skill", project))
+
+    def present(where: tuple[str, ...], removed: bool) -> InstalledSet:
+        taps: dict[str, set[str]] = defaultdict(set)
+        for at, k, section in held:
+            if at not in where:
+                continue
+            for name in targets & section.keys():
+                if removed and going[name] == (at, k):
+                    continue
+                rec = section[name]
                 taps[name].add(str((rec if isinstance(rec, dict) else {})
                                    .get("tap") or ""))
-    present = InstalledSet(taps)
+        return InstalledSet(taps)
+
+    corpus = catalog.cached_entries()
     found: dict[str, set[str]] = defaultdict(set)
-    for (_kind, dependent), entry in installed_entries(
-            installed, catalog.cached_entries()).items():
-        if dependent in targets:
-            continue
-        for token in deps.requirement_names(entry.get("meta")):
-            if token in present:
-                found[catalog.split_name(token)[1]].add(dependent)
+    for lock, where in ((user, ("user",)),
+                        ({"skill": project}, ("user", "project"))):
+        before, after = present(where, False), present(where, True)
+        for (_kind, dependent), entry in installed_entries(
+                lock, corpus).items():
+            if dependent in targets:
+                continue
+            for token in deps.requirement_names(entry.get("meta")):
+                if token in before and token not in after:
+                    found[catalog.split_name(token)[1]].add(dependent)
     return {name: sorted(who) for name, who in found.items()}
 
 

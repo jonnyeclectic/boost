@@ -1301,7 +1301,8 @@ def _report_tidied(info: dict) -> None:
                 wrap=True)
 
 
-def _warn_dependents(names: list[str]) -> None:
+def _warn_dependents(names: list[str], scope: str | None,
+                     kind: str | None) -> None:
     """Name the installed items whose ``requires:`` lists what is going.
 
     Before the prompt, so the person answering it has read it, and a warning
@@ -1309,7 +1310,9 @@ def _warn_dependents(names: list[str]) -> None:
     gap. An unreadable catalog or lock never blocks a removal over this.
     """
     try:
-        needed = prereq.required_by(names)
+        needed = prereq.required_by(
+            names, scope=scope, kind=kind,
+            pbase=scopes.resolve_base(scopes.SCOPE_PROJECT))
     except BoostError:
         return
     for name in names:
@@ -1345,7 +1348,7 @@ def cmd_uninstall(argv: list[str]) -> int:
                          % args.kind,
                          hint="drop --local: a %s installed into a repo is "
                               "recorded in your user lock" % args.kind)
-    _warn_dependents(args.names)
+    _warn_dependents(args.names, args.scope, args.kind)
     # Ask only when someone is there to answer. out.confirm() returns its
     # `default` on a non-TTY, so gating on it unconditionally would turn every
     # scripted `boost uninstall x` — CI step, Makefile, Dockerfile — into a

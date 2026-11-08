@@ -441,6 +441,30 @@ class TestUninstall:
         assert "cancelled" in r.out
         assert "commit-messages" in _lock()
 
+    def test_removing_a_project_requirement_names_what_needs_it(
+            self, boost, tapped, tmp_path, monkeypatch):
+        # Both are in .boost/, not the user lock, which is all the check read.
+        repo = tmp_path / "proj"
+        (repo / ".git").mkdir(parents=True)
+        monkeypatch.chdir(repo)
+        boost("install", "--local", "jira-integration")
+        assert not paths.lockfile_path().exists()
+        r = boost("uninstall", "--local", "commit-messages")
+        assert ("! commit-messages is required by jira-integration, which "
+                "stays installed without it"
+                in " ".join((r.out + r.err).split()))
+
+    def test_a_user_copy_that_stays_is_not_a_missing_requirement(
+            self, boost, tapped, tmp_path, monkeypatch):
+        repo = tmp_path / "proj"
+        (repo / ".git").mkdir(parents=True)
+        monkeypatch.chdir(repo)
+        boost("install", "--local", "jira-integration")
+        boost("install", "commit-messages")
+        r = boost("uninstall", "--local", "commit-messages")
+        assert "is required by" not in r.out + r.err
+        assert "commit-messages" in _lock()
+
     def test_single_unknown_rc1(self, boost, sandbox):
         r = boost("uninstall", "ghost", expect=1)
         assert "ghost is not installed" in r.err
