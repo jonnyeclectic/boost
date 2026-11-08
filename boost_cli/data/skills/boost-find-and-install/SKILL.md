@@ -1,7 +1,7 @@
 ---
 name: boost-find-and-install
 description: Find, read and install a skill, rule or workflow someone already wrote and debugged, from the boost shelf, mid-task. Use when the task has a name you could say out loud ("set up code review", "add commit conventions", "debug flaky tests"), touches more than one file, or sets up something that outlives this session — a config, a CI job, a linter, a test suite.
-version: 1.0.0
+version: 1.0.1
 ---
 
 # Find and install from boost
@@ -33,7 +33,9 @@ from it in the middle of a task.
 Ask the user before installing a rule, which becomes standing text in their
 context files for every session after this one, and before registering boost
 with an agent (`boost mcp register`), which applies to every project on this
-machine.
+machine. An MCP server a skill declares is the same kind of decision: the
+`mcp add` lines boost prints for it register it machine-wide, so they are the
+user's to run.
 
 Coming back empty is a real answer: build it yourself, now knowing nothing
 already covers it. Coming back with something is a head start, not an

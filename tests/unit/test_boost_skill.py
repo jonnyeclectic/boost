@@ -140,6 +140,8 @@ class TestItsVersionMovesWithItsText:
     KNOWN: ClassVar[dict[str, str]] = {
         "1.0.0":
             "0d77bd2ac7435024663778c7eb7367e25a2c11a1ba01cf860179dbd2c7cc3666",
+        "1.0.1":
+            "874c2854a1d5d7c2eba91f9857052a72a6175f03f8dfc350123a7c8515580b20",
     }
 
     def test_the_text_is_the_one_its_version_names(self):
@@ -168,7 +170,9 @@ class TestItSaysWhatTheRuleSays:
               "has a name", "more than one file", "outlives this session",
               "the task stays yours", "mcp__boost__boost_search",
               "look before you conclude it is absent",
-              "applies to every project on this machine")
+              "applies to every project on this machine",
+              "an mcp server a skill declares is the same kind of decision",
+              "they are the user's to run")
 
     @pytest.mark.parametrize("phrase", PARITY)
     def test_a_load_bearing_phrase_sits_in_both(self, phrase):

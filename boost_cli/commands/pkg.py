@@ -210,7 +210,12 @@ def _offer_registration(wirable: list[dict], scope: str) -> None:
             "  register %s with %s, for every project on this machine?"
             % (_plural(len(wirable), "server"), where), default=False,
             hint=""):
-        out.dim("  skipped — run these yourself when you're ready:", wrap=True)
+        # The same words boost_install's reply uses for the same servers
+        # (`_mcp_server_row`): non-TTY, the prompt above is never shown, so
+        # an agent reading "run these yourself" took an instruction to run a
+        # machine-wide registration that is the user's to make.
+        out.dim("  skipped — registering is machine-wide; ask the user before "
+                "running these:", wrap=True)
         for row in wirable:
             # One line per host, not `targets[0]` — the prompt named every
             # host and a yes would have registered with every one, so a no

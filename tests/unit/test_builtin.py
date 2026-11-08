@@ -365,7 +365,12 @@ class TestTheRuleDoesNotDriftFromTheMcpSurface:
               "say in your reply which you chose and where it landed",
               "ask the user before installing a rule",
               "`boost mcp register`",
-              "applies to every project on this machine")
+              "applies to every project on this machine",
+              # A skill's own servers: the CLI printed "run these yourself"
+              # for the machine-wide `mcp add` lines while boost_install said
+              # to ask the user, and neither text said whose call it was.
+              "an mcp server a skill declares is the same kind of decision",
+              "they are the user's to run")
 
     @pytest.mark.parametrize("ai_available", [True, False])
     @pytest.mark.parametrize("phrase", PARITY)

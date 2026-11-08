@@ -1258,7 +1258,7 @@ class TestProtocol:
         r = boost("protocol", "open", url, "-y")
         assert (paths.store_dir() / "mcp-needer" / "SKILL.md").is_file()
         assert registered == []
-        assert "skipped — run these yourself when you're ready:" in r.out
+        assert "skipped — registering is machine-wide; ask the user before running these:" in r.out
         assert "BOOST_ASSUME_YES" not in r.out
         assert "pass -y" not in r.out
 

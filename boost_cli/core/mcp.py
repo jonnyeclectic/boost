@@ -339,7 +339,10 @@ _INSTRUCTIONS_TAIL = (
     "installing a rule, which becomes standing "
     "text in their context files for every session after this one, and "
     "before registering boost with an agent (`boost mcp register`), which "
-    "applies to every project on this machine. " + SKIP_IT
+    "applies to every project on this machine. An MCP server a skill "
+    "declares is the same kind of decision: the `mcp add` lines boost prints "
+    "for it register it machine-wide, so they are the user's to run. "
+    + SKIP_IT
 )
 
 

@@ -65,7 +65,9 @@ for the user, in every agent they have enabled on this machine. Say in your
 reply which you chose and where it landed. Ask the user before installing a
 rule, which becomes standing text in their context files for every session
 after this one, and before registering boost with an agent
-(`boost mcp register`), which applies to every project on this machine.
+(`boost mcp register`), which applies to every project on this machine. An MCP
+server a skill declares is the same kind of decision: the `mcp add` lines boost
+prints for it register it machine-wide, so they are the user's to run.
 
 Say which way it went, in the first response where you set out what you are
 about to do: name the call you made, or the reason you skipped it. One clause

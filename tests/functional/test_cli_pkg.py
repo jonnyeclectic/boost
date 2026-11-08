@@ -4605,7 +4605,7 @@ class TestMcpAwareSkills:
             sidecar={"mcpServers": {"github": {"command": "npx"}}})
         r = boost("import", d)
         # non-TTY stdin makes confirm() return its default, which is False here
-        assert "skipped — run these yourself when you're ready:" in r.out
+        assert "skipped — registering is machine-wide; ask the user before running these:" in r.out
         assert "claude mcp add github --scope user -- npx" in r.out
         # agy and codex are not on PATH, so neither is in `targets` and
         # neither must be printed: the decline path prints what a yes would
@@ -4633,7 +4633,7 @@ class TestMcpAwareSkills:
         r = boost("import", d, "-y")
         assert calls == []
         assert "registered MCP server" not in r.out
-        assert "skipped — run these yourself when you're ready:" in r.out
+        assert "skipped — registering is machine-wide; ask the user before running these:" in r.out
         # No bypass hint: the -y they passed changes nothing here, and the
         # printed command is the consent, not a blanket env var.
         assert "pass -y" not in r.out
@@ -4655,7 +4655,7 @@ class TestMcpAwareSkills:
         calls = self._record_registrations(monkeypatch)
         r = boost("install", "needs-mcp", *extra)
         assert calls == []
-        assert "skipped — run these yourself when you're ready:" in r.out
+        assert "skipped — registering is machine-wide; ask the user before running these:" in r.out
         assert "pass -y" not in r.out
         assert "BOOST_ASSUME_YES" not in r.out
         assert "mcp add github" in r.out
@@ -4686,7 +4686,7 @@ class TestMcpAwareSkills:
             sidecar={"mcpServers": {"github": {"command": "npx",
                                                "args": ["-y", "srv"]}}})
         r = boost("import", d)
-        assert "skipped — run these yourself when you're ready:" in r.out
+        assert "skipped — registering is machine-wide; ask the user before running these:" in r.out
         assert "claude mcp add github --scope user -- npx -y srv" in r.out
         assert "gemini mcp add --scope user github npx -- -y srv" in r.out
         assert "agy mcp add github -- npx -y srv" in r.out
