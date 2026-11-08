@@ -781,9 +781,13 @@ SKILLS = [
 # archived, not a fork) and is in no set in this file under any name. Counts
 # are `scripts/measure_registry.py` against a clone at a recorded commit, so
 # each focus's breakdown sums to est_items; categories
-# come from item names. All but one were pushed after 2026-05-01:
+# come from item names. All but two were pushed after 2026-05-01:
 # MiniMax-AI/skills was last pushed 2026-04-18 and stays as the vendor's own
-# pack, with no successor named. ruvnet/ruflo is the name GitHub answers for
+# pack, with no successor named; Dimillian/Skills was last pushed 2026-03-29
+# and stays because its README calls each skill self-contained, they already
+# target Swift 6.2 and the iOS 26 Liquid Glass APIs, and no successor is
+# named. softaworks/agent-toolkit and cline/prompts, below, were not left out
+# on that date alone. ruvnet/ruflo is the name GitHub answers for
 # ruvnet/claude-flow; it has no FORMERLY entry because no claude-flow row ever
 # shipped. vtex/skills sits here though it measures 46 skills and 72 rules:
 # the rules are those skills re-rendered as Cursor .mdc plus per-track
@@ -798,7 +802,9 @@ SKILLS = [
 # bundles outside the skill directory), Unity-Technologies/unity-agent-plugin
 # (a repackaging of Unity-Technologies/skills, below), softaworks/agent-toolkit
 # (43 of 57 items byte-identical to davila7/claude-code-templates) and
-# cline/prompts (its `.clinerules/` directory measures as zero items).
+# cline/prompts (its 7 workflows are all written for Cline, it has no licence
+# and was last pushed 2026-02-27, and its 36 rules sit in a `.clinerules/`
+# directory, a form `scan_dir` does not read).
     ("vercel-labs/agent-browser", "ai", "Vercel Labs agent-browser CLI: browser automation core, Electron apps, Slack, dogfooding, Vercel Sandbox, WebMCP generation; the slack skill attaches to an already-open Chrome on port 9222 (11 skills)", 11, "high"),
     ("google/agents-cli", "ai", "Official Google Agents CLI for ADK: scaffold, ADK code, eval, deploy, observability, publish and workflow skills, plus Claude and LangChain template skills (9 skills)", 9, "high"),
     ("NVIDIA/skills", "ai", "Official NVIDIA: TAO model training and fine-tuning, NeMo and Megatron Bridge performance tuning, BioNeMo NIMs, Nemotron speech, cuDF, cuML, cuOpt, CUDA-Q, Jetson, DOCA and Holoscan (437 skills)", 437, "high"),
