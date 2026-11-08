@@ -87,6 +87,19 @@ FORMERLY = {
     "cheaper-inference/OmniRoute": ("diegosouzapw/OmniRoute",),
     "leogallego/ai-skills-ansible": ("leogallego/claude-ansible-skills",),
     "fmind/mlops-coding-skills": ("MLOps-Courses/mlops-coding-skills",),
+    # Moved by the 2026-10-16 sweep without a `formerly`, so a tap made under
+    # the old name read as no category and `tap --catalog` cloned it again.
+    # v1.2.197 shipped every old name below, and each answered 301 to the new
+    # one on 2026-11-07.
+    "cursor/community-plugins": ("pontusab/directories",),
+    "holtwood/awesome-cursorrules-zh": ("LessUp/awesome-cursorrules-zh",),
+    "appeeky/aso-skills": ("Eronred/aso-skills",),
+    "AIPentest/CyberStrikeAI": ("Ed1s0nZ/CyberStrikeAI",),
+    "DVC2/cursor-agent-configs": ("DVC2/cursor_prompts",),
+    "coreweave/forge-agent-lens-for-claude-code": ("wandb/weave-claude-code",),
+    "jeremylongshore/tons-of-skills-marketplace":
+        ("jeremylongshore/claude-code-plugins-plus-skills",),
+    "davepoon/buildwithclaude": ("davepoon/claude-code-subagents-collection",),
 }
 
 # Repos that ship their own installer and cannot be installed by copying

@@ -57,7 +57,10 @@
       "est_items": 1,
       "confidence": "high",
       "list_only": false,
-      "curated": false
+      "curated": false,
+      "formerly": [
+        "pontusab/directories"
+      ]
     },
     {
       "name": "ddd-crew/ai-ddd-prompts-and-rules",
@@ -104,7 +107,10 @@
       "est_items": 11,
       "confidence": "low",
       "list_only": false,
-      "curated": false
+      "curated": false,
+      "formerly": [
+        "DVC2/cursor_prompts"
+      ]
     },
     {
       "name": "flyeric0212/cursor-rules",
@@ -137,7 +143,10 @@
       "est_items": 446,
       "confidence": "high",
       "list_only": false,
-      "curated": false
+      "curated": false,
+      "formerly": [
+        "LessUp/awesome-cursorrules-zh"
+      ]
     },
     {
       "name": "ivangrynenko/cursorrules",
@@ -489,7 +498,10 @@
       "est_items": 40,
       "confidence": "high",
       "list_only": false,
-      "curated": false
+      "curated": false,
+      "formerly": [
+        "Ed1s0nZ/CyberStrikeAI"
+      ]
     },
     {
       "name": "air-gapped/skills",
@@ -764,7 +776,10 @@
       "est_items": 40,
       "confidence": "high",
       "list_only": false,
-      "curated": false
+      "curated": false,
+      "formerly": [
+        "Eronred/aso-skills"
+      ]
     },
     {
       "name": "appeeky/stripe-skills",
@@ -1394,7 +1409,10 @@
       "est_items": 3,
       "confidence": "med",
       "list_only": false,
-      "curated": false
+      "curated": false,
+      "formerly": [
+        "wandb/weave-claude-code"
+      ]
     },
     {
       "name": "coreyhaines31/marketingskills",
@@ -5870,7 +5888,10 @@
       "est_items": 763,
       "confidence": "high",
       "list_only": false,
-      "curated": false
+      "curated": false,
+      "formerly": [
+        "davepoon/claude-code-subagents-collection"
+      ]
     },
     {
       "name": "DavidROliverBA/Daves-Claude-Code-Skills",
@@ -6134,7 +6155,10 @@
       "est_items": 4253,
       "confidence": "med",
       "list_only": false,
-      "curated": false
+      "curated": false,
+      "formerly": [
+        "jeremylongshore/claude-code-plugins-plus-skills"
+      ]
     },
     {
       "name": "jezweb/claude-skills",
