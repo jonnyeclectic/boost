@@ -49,7 +49,7 @@ Code, Windsurf, Cursor and Antigravity CLI. Gemini CLI and Codex read `~/.agents
 and are deliberately excluded. For Gemini CLI, linking into `~/.gemini/skills` too would put one
 skill in two of its discovery tiers and produce a "Skill conflict detected" line per skill per
 session; Codex would collapse the link into the store entry it already sees. Rules *do*
-materialise for both, into `~/.gemini/GEMINI.md` and Codex's `AGENTS.md`, and Gemini CLI's
+materialise for both, into `~/.gemini/GEMINI.md` and Codex's `AGENTS.md`, and the Gemini CLI
 workflows into `~/.gemini/`, so the right helper depends on what you are writing —
 see [c4-containers.md](c4-containers.md).
 
