@@ -428,10 +428,12 @@ def entry_path(entry: dict, tap_paths: dict[str, Path] | None = None
     not where the item is, so returning one would hand the caller a path that
     opens the wrong thing rather than an absence it has to handle.
 
-    boost's own tap, when it is not one of the configured taps, is read from
-    the wheel: :func:`catalog.find` describes its items from package data
-    without registering it (:func:`builtin.shipped_entries`), so their files
-    are there and not under ``~/.boost/repos/``.
+    boost's own tap is read from the wheel whenever the tap on disk does not
+    hold the file, the rule :func:`builtin.wheel_source` applies:
+    :func:`catalog.find` describes its items from package data without
+    registering it (:func:`builtin.shipped_entries`), and a tap an older
+    wheel registered lacks whatever shipped since. Only that tap pays the
+    ``stat``; every other row is a string compare.
     """
     rel = entry.get("skill_md")
     if not rel:
@@ -439,7 +441,8 @@ def entry_path(entry: dict, tap_paths: dict[str, Path] | None = None
     paths_map = _tap_paths() if tap_paths is None else tap_paths
     tap = str(entry.get("tap", ""))
     base = paths_map.get(tap)
-    if base is None and builtin.is_builtin(tap):
+    if builtin.is_builtin(tap) and (base is None
+                                    or not (Path(base) / rel).exists()):
         shipped = builtin.shipped_path(rel)
         if shipped is not None:
             return shipped

@@ -716,28 +716,43 @@ def _shipped(entry: dict, path: Path) -> Path:
     return path
 
 
-def _register_builtin_tap(entry: dict) -> None:
+def _register_builtin_tap(entry: dict, doing: str = "install") -> dict:
     """Put boost's own tap on disk and in config before installing from it.
 
-    The one place a builtin item's tap gets registered on demand.
+    Where a builtin item's tap gets registered on demand.
     :func:`catalog.find` answers a lookup from the wheel and writes nothing,
     so an install is the first command that needs the copy under
     ``~/.boost/repos/``: every install path (`boost install`,
-    `boost_install`, a reinstall from a record) comes through here. Rescanned
+    `boost_install`, a reinstall from a record) comes through here, and so
+    does `boost sync` recording a lost lock's copy from this tap. Rescanned
     as well, because a tap an older wheel registered has a cache without the
     newer item, and ``load_tap`` serves a format-current cache as it is.
 
     A failed write says which write. Unhandled, an unwritable ``~/.boost``
     surfaced as "boost hit an unexpected error".
+
+    Returns ``entry``, brought up to the row the rescan just produced for
+    the same file when it is boost's own. ``ensure_tap`` rewrites the tap's
+    files from this wheel, so a row the caller resolved from a cache an
+    older wheel wrote describes bytes that are no longer there: installing
+    from it recorded the old ``version`` beside the new files, and the next
+    ``boost outdated`` offered to upgrade what the install had just
+    upgraded. Updated in place, so the caller's own success line
+    ("installed ... v1.0.1") names the version that was installed too.
     """
     if not builtin.is_builtin(str(entry.get("tap") or "")):
-        return
+        return entry
     try:
         builtin.ensure_tap()
-        catalog.rebuild_tap(registry.get(builtin.BUILTIN_TAP))
+        fresh = catalog.rebuild_tap(registry.get(builtin.BUILTIN_TAP))
     except OSError as exc:
-        raise BoostError("could not set up boost's own tap to install %r: %s"
-                         % (entry.get("name", "?"), exc)) from exc
+        raise BoostError("could not set up boost's own tap to %s %r: %s"
+                         % (doing, entry.get("name", "?"), exc)) from exc
+    row = next((e for e in fresh
+                if e.get("skill_md") == entry.get("skill_md")), None)
+    if row is not None:
+        entry.update(row)
+    return entry
 
 
 def unfetched_submodules(entry: dict) -> list[str]:
@@ -832,9 +847,17 @@ def skill_source_sha(entry: dict) -> str:
     """:func:`copy_view_sha` of a catalog entry's tap source.
 
     Raises ``BoostError`` as :func:`source_dir_for` does. Bounded by the tap
-    clone, as a tap install's copy is.
+    clone, as a tap install's copy is, or by the wheel's skills directory
+    when :func:`source_dir_for` read boost's own skill from there. Bounding
+    that one by the registry raised "no such tap" on a machine that never
+    registered it, so `boost sync` could not match a lost lock's copy of
+    ``boost-find-and-install`` to its source and re-recorded it as a local
+    skill, cut off from every later update.
     """
     src = source_dir_for(entry)
+    if builtin.wheel_source(str(entry.get("tap") or ""),
+                            entry["rel_dir"]) is not None:
+        return copy_view_sha(src, builtin.skills_source_dir())
     return copy_view_sha(src, registry.get(entry["tap"]).path)
 
 
@@ -3740,7 +3763,7 @@ def install(entry: dict, force: bool = False,
     """
     scopes.check_scope(scope)
     _refuse_self_installing(entry)
-    _register_builtin_tap(entry)
+    entry = _register_builtin_tap(entry)
     if scope != scopes.SCOPE_PROJECT:
         # Before anything is copied or linked: lockfile.write refuses a
         # corrupt lock too, but by then the files would be on disk unrecorded.
@@ -9671,7 +9694,9 @@ def _record_unrecorded(name: str, why: str) -> str | None:
     now = util.now_iso()
     record: dict[str, object]
     if len(matches) == 1:
-        cat = matches[0]
+        # A record naming boost's own tap needs that tap registered, as an
+        # install's does: the match may have come from the wheel.
+        cat = _register_builtin_tap(matches[0], doing="record")
         tap = registry.get(cat["tap"])
         record = {"version": cat.get("version", "0.0.0"), "tap": cat["tap"],
                   "tap_url": tap.url,

@@ -17,6 +17,7 @@ sandbox HOME before this change:
 """
 from __future__ import annotations
 
+import json
 import operator
 import subprocess
 
@@ -71,6 +72,13 @@ def _first_body_line(name: str) -> str:
     assert path is not None
     return frontmatter.parse(path.read_text(encoding="utf-8"))[1] \
         .strip().splitlines()[0]
+
+
+def _shipped_version() -> str:
+    """The ``version:`` the wheel's copy of the skill declares."""
+    path = builtin.skills_source_dir() / SKILL / "SKILL.md"
+    return str(frontmatter.parse(path.read_text(encoding="utf-8"))[0]
+               ["version"])
 
 
 class TestAShippedNameResolvesWithoutAnOffer:
@@ -203,6 +211,17 @@ class TestATapRegisteredByAnOlderWheel:
         assert _written() == before
         assert not (old_tap.path / "skills").exists()
 
+    def test_the_search_body_is_the_wheels_too(self, old_tap):
+        # `rag.entry_path` redirected only a tap that is not configured at
+        # all, so here it named the missing tap copy and `read_body` came
+        # back without the body, where every other read used the wheel.
+        before = _written()
+        entry = catalog.resolve_one(SKILL)
+        assert rag.entry_path(entry) == \
+            builtin.shipped_path(entry["skill_md"])
+        assert _first_body_line(SKILL) in rag.read_body(entry)
+        assert _written() == before
+
     def test_after_a_declined_offer_too(self, old_tap, boost, monkeypatch):
         # The offer copies the skill out before it asks, and only its yes
         # branch rescanned: a no left the copy on disk and the cache stale.
@@ -212,6 +231,71 @@ class TestATapRegisteredByAnOlderWheel:
         configuration._offer_boost_skill()
         boost("install", SKILL)
         assert lockfile.get_skill(SKILL) is not None
+
+
+class TestATapHoldingAnOlderCopy:
+    """The tap is registered and holds the item, at an older version.
+
+    What every machine has after a boost release revises the skill. The
+    lookup finds the cached row and never reaches the wheel, and the install
+    then rewrites the tap from this wheel before copying from it.
+    """
+
+    @pytest.fixture()
+    def stale_tap(self, sandbox):
+        tap = builtin.ensure_tap()
+        skill_md = tap.path / "skills" / SKILL / "SKILL.md"
+        text = skill_md.read_text(encoding="utf-8")
+        assert _shipped_version() in text
+        skill_md.write_text(text.replace("version: " + _shipped_version(),
+                                         "version: 0.0.1"), encoding="utf-8")
+        catalog.rebuild_tap(registry.get(builtin.BUILTIN_TAP))
+        assert [e["version"] for e in catalog.find(SKILL)] == ["0.0.1"]
+        return tap
+
+    def test_the_install_records_the_version_it_copied(self, stale_tap,
+                                                        boost):
+        # It recorded the stale row's 0.0.1 beside the new files, and
+        # `boost outdated` then offered to upgrade what had just upgraded.
+        boost("install", SKILL)
+        copied = (paths.store_dir() / SKILL / "SKILL.md").read_text(
+            encoding="utf-8")
+        assert "version: " + _shipped_version() in copied
+        assert lockfile.get_skill(SKILL)["version"] == _shipped_version()
+        assert SKILL not in boost("outdated").out
+
+
+    def test_boost_install_names_the_version_it_installed(self, stale_tap):
+        text, is_error = configuration._mcp_tool("boost_install",
+                                                 {"name": SKILL})
+        assert not is_error, text
+        assert "installed %s v%s from" % (SKILL, _shipped_version()) in text
+        assert lockfile.get_skill(SKILL)["version"] == _shipped_version()
+
+
+class TestALostLockIsRecoveredFromTheWheel:
+    def test_sync_records_it_from_boosts_tap_again(self, boost):
+        # The lock and everything under ~/.boost are gone; the store copy is
+        # the wheel's bytes. Matching it hashed the wheel's copy bounded by
+        # `registry.get("boost/builtin")`, which raised, so the skill was
+        # re-recorded as a local one that no update would ever reach.
+        import shutil
+        boost("install", SKILL)
+        shutil.rmtree(paths.boost_home())
+        paths.lockfile_path().unlink()
+        assert _tap_names() == []
+        assert "re-recorded %s from %s" % (SKILL, builtin.BUILTIN_TAP) in \
+            boost("sync").out
+        assert lockfile.get_skill(SKILL)["tap"] == builtin.BUILTIN_TAP
+        # The record names a tap, so the tap is registered: a write path.
+        assert _tap_names() == [builtin.BUILTIN_TAP]
+
+    def test_the_source_hash_reads_the_wheel_and_writes_nothing(self, sandbox):
+        from boost_cli.core import util
+        before = _written()
+        assert store.skill_source_sha(catalog.resolve_one(SKILL)) == \
+            util.sha256_dir(builtin.skills_source_dir() / SKILL)
+        assert _written() == before
 
 
 class TestALookupOfBoostsOwnItemsWritesNothing:
@@ -328,6 +412,75 @@ class TestALookupOfBoostsOwnItemsWritesNothing:
         for rel in ("../registries.json", "/etc/passwd", "rules/x.mdc",
                     "skills", ".", "skills/../../x"):
             assert builtin.shipped_path(rel) is None, rel
+
+    @pytest.mark.parametrize("rel", [
+        "skills\\..\\..\\x", "..\\registries.json", "skills/a\\..\\..\\..\\x",
+        "C:x.mdc", "C:\\Windows\\x.mdc", "\\\\server\\share\\x.mdc",
+        "\\x.mdc", "\\", "C:", "skills/a:b", "skills/x/C:SKILL.md"])
+    def test_a_windows_spelling_reads_nothing(self, rel):
+        # One component to PurePosixPath, so the `..` and absolute checks
+        # passed it. Joined onto a WindowsPath, a backslashed `..` climbs out
+        # of the package and a drive letter resets to that drive.
+        assert builtin.shipped_path(rel) is None
+
+    def test_the_shipped_layout_maps_either_separator(self):
+        skill_md = builtin.skills_source_dir() / SKILL / "SKILL.md"
+        assert builtin.shipped_path(RULE + ".mdc") == \
+            builtin.source_dir() / (RULE + ".mdc")
+        assert builtin.shipped_path("skills/%s/SKILL.md" % SKILL) == skill_md
+        assert builtin.shipped_path("skills\\%s\\SKILL.md" % SKILL) == skill_md
+
+    def test_only_shipped_names_come_back(self, monkeypatch, tmp_path):
+        # The scan roots hold whatever the package does; only the names
+        # `ensure_tap` copies are rows the registered tap would have.
+        rules, skills = tmp_path / "rules", tmp_path / "skills"
+        for path in (rules / (RULE + ".mdc"), rules / "stray.mdc",
+                     skills / SKILL / "SKILL.md",
+                     skills / "stray" / "SKILL.md"):
+            name = path.stem if path.suffix == ".mdc" else path.parent.name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("---\nname: %s\ndescription: d\n---\n\nbody\n"
+                            % name, encoding="utf-8")
+        monkeypatch.setattr(builtin, "source_dir", lambda: rules)
+        monkeypatch.setattr(builtin, "skills_source_dir", lambda: skills)
+        assert sorted((e["name"], e["kind"])
+                      for e in builtin.shipped_entries()) == \
+            sorted([(RULE, "rule"), (SKILL, "skill")])
+
+    @pytest.mark.parametrize("name", [RULE, SKILL])
+    def test_its_frontmatter_is_the_wheels(self, sandbox, name):
+        # What `deps` reads for a requirement that is not installed.
+        from boost_cli.commands import info
+        before = _written()
+        meta = info._skill_meta(name)
+        assert meta is not None and meta["name"] == name
+        assert _written() == before
+
+    @pytest.mark.parametrize("name", [RULE, SKILL])
+    def test_cli_changelog_says_why_there_is_no_history(self, boost, name):
+        # It asked the registry for the tap, and an unregistered one is
+        # "no such tap": exit 1 for a command that only reads.
+        before = _written()
+        assert builtin.no_history_note(name) in boost("changelog", name).out
+        data = json.loads(boost("changelog", name, "--json").out)
+        assert data == {"name": name, "tap": builtin.BUILTIN_TAP,
+                        "commits": []}
+        assert _written() == before
+
+    @pytest.mark.parametrize("name", [RULE, SKILL])
+    def test_cli_home_names_the_shipped_file(self, boost, name):
+        # It printed the bare `boost-first.mdc`, which reads as a local
+        # import's path, and once registered `builtin:boost/boost-first.mdc`.
+        before = _written()
+        entry = catalog.resolve_one(name)
+        shipped = builtin.shipped_path(catalog.upstream_path(entry))
+        assert shipped is not None and shipped.exists()
+        assert boost("home", name, "--print").out.strip() == \
+            paths.tilde(shipped)
+        assert _written() == before
+        boost("install", name)
+        assert boost("home", name, "--print").out.strip() == \
+            paths.tilde(shipped)
 
     def test_another_taps_rows_are_not_redirected(self, sandbox):
         assert builtin.wheel_source("someone/else", RULE + ".mdc") is None

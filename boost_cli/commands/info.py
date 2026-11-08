@@ -1382,8 +1382,7 @@ def cmd_log(argv):
                 print(json.dumps({"kind": "history", "name": bare,
                                   "tap": tap_name, "commits": []}, indent=2))
                 return 0
-            out.info("no upstream history (%s ships with boost and changes "
-                     "when boost does)" % bare)
+            out.info(builtin.no_history_note(bare))
             return 0
         # Only `local` is an import. Any other failure here is a recorded tap
         # that has since been untapped, and calling that a local import hid
@@ -1450,6 +1449,14 @@ def cmd_home(argv):
     # Lock first: the catalog guesses by name, the lock knows the copy that
     # was installed. A rule or workflow is linked to its own file.
     _bare, kind, tap_name, rel = store.upstream_source(args.name)
+    if builtin.is_builtin(tap_name):
+        # No web page of its own: it ships in boost's package data, so that
+        # file is its home. The registry lookup below printed the bare
+        # relative path (unregistered, read as a local import) or the
+        # sentinel URL glued to it (`builtin:boost/boost-first.mdc`).
+        shipped = builtin.shipped_path(rel)
+        out.info(_tilde(shipped) if shipped is not None else rel)
+        return 0
     try:
         tap = registry.get(tap_name)
     except BoostError:

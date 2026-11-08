@@ -31,7 +31,7 @@ open a file the unregistered tap does not hold. ``boost info``, ``boost cat``,
 from __future__ import annotations
 
 import shutil
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PureWindowsPath
 
 from . import config, paths, registry
 
@@ -183,10 +183,19 @@ def shipped_path(rel: str) -> Path | None:
     ``data/skills/<rest>``. None for any other shape, and for a path that is
     absolute or climbs with ``..``, so a catalog row can never point a read
     outside the package. Whether the file exists is the caller's question.
+
+    Split the way Windows splits it, on every platform, because that is
+    where a stray spelling bites: ``PurePosixPath`` read
+    ``skills\\..\\..\\x`` and ``C:x.mdc`` as one harmless component, and
+    joined onto a ``WindowsPath`` the first climbs out of the package and
+    the second resets to another drive. A ``:`` anywhere does the same from
+    any position, and no shipped name has one.
     """
-    pure = PurePosixPath(rel)
-    parts = pure.parts
-    if not parts or pure.is_absolute() or ".." in parts:
+    win = PureWindowsPath(rel)
+    parts = win.parts
+    # A drive always brings a root or a colon with it, so these two cover it.
+    if (not parts or win.root or ".." in parts
+            or any(":" in part for part in parts)):
         return None
     if parts[0] == "skills":
         return skills_source_dir().joinpath(*parts[1:]) if len(parts) > 1 \
@@ -210,6 +219,18 @@ def wheel_source(tap: str, rel: str) -> Path | None:
            for t in registry.list_taps()):
         return None
     return shipped_path(rel)
+
+
+def no_history_note(name: str) -> str:
+    """What ``boost log`` and ``boost changelog`` say about a shipped item.
+
+    The tap is package data, not a clone: it has no git history, and until
+    something is installed from it it is not registered at all. Both
+    commands used to go to the registry for it, so one said "no longer
+    tapped" and the other failed with "no such tap: boost/builtin".
+    """
+    return ("no upstream history (%s ships with boost and changes when boost "
+            "does)" % name)
 
 
 def configured_tap_count() -> int:
