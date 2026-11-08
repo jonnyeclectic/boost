@@ -125,6 +125,8 @@ DEFAULTS = {
         "author_model": "claude-sonnet-5",           # authoring (infer/distill/evolve)
     },
     "serve": {"port": 8787},
+    # Off: turning it on sends search text to skills.sh (core/skillssh.py).
+    "skills_sh": {"enabled": False},
     "policy_enforce": True,
     # A workflow (a subagent, or a slash command with a description) also gets
     # a copy in the canonical store, ``~/.agents/skills/<name>/SKILL.md``, so
