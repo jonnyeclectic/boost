@@ -199,6 +199,7 @@ def expand_dependencies(entries: list[dict], pbase=None, *,
         return found
 
     held: dict[str, list[str]] | None = None
+    rowed: set[str] = set()
 
     def installed_conflicts(name: str) -> list[str]:
         """An installed item's `conflicts:`, off the copy its lock row names.
@@ -206,7 +207,10 @@ def expand_dependencies(entries: list[dict], pbase=None, *,
         Not through `entry_for`: `resolve_one` refuses a name two taps ship,
         which silenced the warning, and for a name in no tap (a local skill)
         scores the whole catalogue for a hint nobody sees — per installed
-        item, on every install.
+        item, on every install. The exception is a name with no lock row,
+        which only ``also_installed`` adds: a dry run's earlier "would
+        install" has no row to read, and returning nothing for it kept the
+        dry run quiet about a conflict the real run warns about.
         """
         nonlocal held
         if held is None:
@@ -216,10 +220,14 @@ def expand_dependencies(entries: list[dict], pbase=None, *,
             if pbase is not None:
                 sections.append({"skill": projectlock.installed(pbase)})
             for section in sections:
+                for rows in section.values():
+                    rowed.update(rows)
                 for (_kind, n), e in prereq.installed_entries(
                         section, corpus).items():
                     held.setdefault(n, []).extend(
                         entry_relations(e, "conflicts"))
+        if name not in rowed:
+            return relations(name, "conflicts")
         return held.get(name, [])
 
     res = resolve.resolve(

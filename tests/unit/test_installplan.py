@@ -370,6 +370,39 @@ class TestInstalledSideConflicts:
         assert res.conflicts == [("tdd", "cowboy")]
 
 
+class TestAlsoInstalledConflicts:
+    """A dry run's earlier "would install" counts as installed but has no
+    lock row, so its `conflicts:` came back empty: `bundle install
+    --dry-run` said nothing about a pair the real run warns about."""
+
+    def _taps(self):
+        _fake_taps(("alpha", [_entry("tdd", "alpha", desc="a",
+                                     meta={"conflicts": ["cowboy"]}),
+                              _entry("cowboy", "alpha", desc="c")]))
+
+    def test_a_name_with_no_lock_row_is_read_off_the_catalog(self, sandbox):
+        self._taps()
+        _ordered, res = installplan.expand_dependencies(
+            [catalog.resolve_one("cowboy")], also_installed=["tdd"])
+        assert res.conflicts == [("tdd", "cowboy")]
+
+    def test_a_name_with_a_lock_row_is_still_read_off_the_row(
+            self, sandbox, monkeypatch):
+        self._taps()
+        lockfile.set_skill("tdd", {"tap": "alpha", "version": "1.0.0"})
+        lockfile.set_skill("mine", {"tap": "local", "version": "1.0.0"})
+        root = catalog.resolve_one("cowboy")
+        real = catalog.resolve_one
+
+        def only_the_plan(name, *a, **k):
+            assert name not in ("tdd", "mine"), name
+            return real(name, *a, **k)
+        monkeypatch.setattr(catalog, "resolve_one", only_the_plan)
+        _ordered, res = installplan.expand_dependencies(
+            [root], also_installed=["tdd", "mine"])
+        assert res.conflicts == [("tdd", "cowboy")]
+
+
 class TestAddedLine:
     def test_nothing_added(self):
         assert installplan.added_line(Resolution()) is None

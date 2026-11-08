@@ -5042,6 +5042,19 @@ class TestDeclaredConflicts:
         assert ("tdd-workflow declares a conflict with cowboy-coding (also "
                 "present)") in text
 
+    def test_a_bundle_dry_run_warns_as_the_real_run_does(self, boost, tapped,
+                                                         tmp_path):
+        # The dry run's earlier "would install" tdd-workflow has no lock row,
+        # so its `conflicts:` read as empty and the dry run said nothing.
+        bf = tmp_path / "Boostfile"
+        bf.write_text("skill tdd-workflow\nskill cowboy-coding\n",
+                      encoding="utf-8")
+        r = boost("bundle", "install", "--dry-run", bf)
+        assert self.LINE in r.out + r.err
+        assert not paths.lockfile_path().exists()
+        r = boost("bundle", "install", bf)
+        assert self.LINE in r.out + r.err
+
 
 # ── prerequisites declared under the wider spellings ─────────────────────
 
