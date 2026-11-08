@@ -761,9 +761,11 @@ def no_results(query: str, *, tapped: int,
         # that follows: boost_discover_github is this server's own tool for
         # exactly this reply. "no skills match" alone left the agent nowhere
         # to go, where the CLI's miss already points at `boost discover`.
+        # "skill registries": that tool code-searches for SKILL.md, so it
+        # finds no rule or workflow repo, and the reply must not imply it.
         return ("no skills, rules or workflows match %r — call "
                 "boost_discover_github with the same query to search GitHub "
-                "for registries nobody here has tapped" % echo(query))
+                "for skill registries nobody here has tapped" % echo(query))
     # Addressed to the user via the agent, and naming ONE command. Telling an
     # agent to run `boost mcp --seed` itself would have it re-register the
     # server with every CLI on PATH as a side effect, and would step straight

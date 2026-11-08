@@ -23,8 +23,8 @@ from boost_cli.errors import BoostError
 #: The reply to a genuine miss on a tapped machine, with the echoed query
 #: (already quoted) to fill in.
 MISS = ("no skills, rules or workflows match %s — call boost_discover_github "
-        "with the same query to search GitHub for registries nobody here has "
-        "tapped")
+        "with the same query to search GitHub for skill registries nobody "
+        "here has tapped")
 #: The 200 characters a miss reply was held to before it named the next tool
 #: (184 of them past "no skills match "), plus the sentence that did.
 MISS_CAP = len(MISS % "") + 184
