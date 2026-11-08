@@ -231,6 +231,48 @@ def for_installed() -> list[ItemPrereqs]:
     entries = catalog.cached_entries()
     installed = lockfile.all_installed()
     have = frozenset(chain.from_iterable(installed.values()))
+    picked = _installed_entries(installed, entries)
+    return for_entries(list(picked.values()), installed=have, corpus=entries)
+
+
+def required_by(names: Iterable[str]) -> dict[str, list[str]]:
+    """``{name: [installed items whose requires: lists it]}``, for each of
+    ``names`` that something installed needs.
+
+    What ``boost uninstall`` names before it removes an item, read the way
+    :func:`for_installed` reads a declaration. Only ``requires:``, the key
+    ``boost install`` acts on — removing an item boost pulled in for another
+    printed nothing, and doctor stayed green. An item in ``names`` is not
+    counted as a dependent: removing two together leaves neither waiting on
+    the other. A qualified ``tap:name`` counts only when the target was
+    installed from that tap, as :class:`InstalledSet` decides it.
+    """
+    targets = set(names)
+    if not targets:
+        return {}
+    installed = lockfile.all_installed()
+    taps: dict[str, set[str]] = defaultdict(set)
+    for section in installed.values():
+        for name, rec in section.items():
+            if name in targets:
+                taps[name].add(str((rec if isinstance(rec, dict) else {})
+                                   .get("tap") or ""))
+    present = InstalledSet(taps)
+    found: dict[str, set[str]] = defaultdict(set)
+    for (_kind, dependent), entry in _installed_entries(
+            installed, catalog.cached_entries()).items():
+        if dependent in targets:
+            continue
+        for token in deps.requirement_names(entry.get("meta")):
+            if token in present:
+                found[catalog.split_name(token)[1]].add(dependent)
+    return {name: sorted(who) for name, who in found.items()}
+
+
+def _installed_entries(installed: Mapping[str, Mapping],
+                       entries: list[dict]) -> dict[tuple[str, str], dict]:
+    """``{(kind, name): catalog entry}`` for each installed item whose tap
+    still describes it — the copy its lock row says was installed."""
     picked: dict[tuple[str, str], dict] = {}
     for kind, section in installed.items():
         for name, rec in section.items():
@@ -257,7 +299,7 @@ def for_installed() -> list[ItemPrereqs]:
             # name, and one `by_name` slot silently dropped whichever section
             # came first along with its declarations.
             picked[(kind, name)] = entry
-    return for_entries(list(picked.values()), installed=have, corpus=entries)
+    return picked
 
 
 def install_hint(rows: Sequence[ItemPrereqs]) -> str:

@@ -411,6 +411,36 @@ class TestUninstall:
         assert not (paths.store_dir() / "brainstorming").exists()
         assert not (paths.store_dir() / "commit-messages").exists()
 
+    def test_removing_a_requirement_names_what_needs_it(self, boost, tapped):
+        # `install jira-integration` pulls in commit-messages for its
+        # `requires:`; removing that said nothing, and doctor stayed green.
+        boost("install", "jira-integration")
+        assert sorted(_lock()) == ["commit-messages", "jira-integration"]
+        r = boost("uninstall", "commit-messages")
+        assert ("! commit-messages is required by jira-integration, which "
+                "stays installed without it"
+                in " ".join((r.out + r.err).split()))
+        assert "Uninstalled 1 skill" in r.out     # a warning, not a refusal
+        assert sorted(_lock()) == ["jira-integration"]
+
+    def test_removing_both_together_says_nothing(self, boost, tapped):
+        boost("install", "jira-integration")
+        r = boost("uninstall", "commit-messages", "jira-integration")
+        assert "is required by" not in r.out + r.err
+        assert _lock() == {}
+
+    def test_the_warning_comes_before_the_prompt(self, boost, tapped,
+                                                 monkeypatch):
+        boost("install", "jira-integration")
+        monkeypatch.delenv("BOOST_ASSUME_YES")
+        monkeypatch.setattr("sys.stdin", _FakeTtyStdin("n\n"))
+        r = boost("uninstall", "commit-messages", expect=1)
+        # Before the question, so the person answering it has read it.
+        assert (0 <= r.out.find("is required by jira-integration")
+                < r.out.find("uninstall commit-messages? [y/N]"))
+        assert "cancelled" in r.out
+        assert "commit-messages" in _lock()
+
     def test_single_unknown_rc1(self, boost, sandbox):
         r = boost("uninstall", "ghost", expect=1)
         assert "ghost is not installed" in r.err

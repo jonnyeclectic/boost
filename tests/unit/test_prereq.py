@@ -659,6 +659,88 @@ class TestForInstalled:
         assert prereq.for_installed()[0].kind == "rule"
 
 
+class TestRequiredBy:
+    """What `boost uninstall` names before removing something an installed
+    item's `requires:` lists — the key `boost install` itself acts on."""
+
+    _wire = staticmethod(TestForInstalled._wire)
+
+    ENTRIES: ClassVar[list[dict]] = [
+        {"name": "jira", "tap": "t1", "kind": "skill",
+         "meta": {"requires": ["commits"]}},
+        {"name": "board", "tap": "t1", "kind": "workflow",
+         "meta": {"requires": "commits, other"}},
+        {"name": "wide", "tap": "t1", "kind": "skill",
+         "meta": {"skills": ["commits"], "dependencies": ["commits"]}},
+        {"name": "commits", "tap": "t1", "kind": "skill", "meta": {}},
+        {"name": "other", "tap": "t1", "kind": "skill", "meta": {}}]
+
+    def _lock(self, *names, tap="t1"):
+        lock: dict = {"skill": {}, "workflow": {}}
+        for n in names:
+            kind = "workflow" if n == "board" else "skill"
+            lock[kind][n] = {"tap": tap}
+        return lock
+
+    def test_it_names_each_dependent_sorted(self, monkeypatch):
+        self._wire(monkeypatch, self._lock("jira", "board", "commits",
+                                           "other"), self.ENTRIES)
+        assert prereq.required_by(["commits"]) == {
+            "commits": ["board", "jira"]}
+
+    def test_only_targets_something_needs_are_keys(self, monkeypatch):
+        self._wire(monkeypatch, self._lock("jira", "board", "commits",
+                                           "other"), self.ENTRIES)
+        assert prereq.required_by(["commits", "other", "jira"]) == {
+            "commits": ["board"], "other": ["board"]}
+
+    def test_a_dependent_removed_in_the_same_batch_is_left_out(
+            self, monkeypatch):
+        self._wire(monkeypatch, self._lock("jira", "commits"), self.ENTRIES)
+        assert prereq.required_by(["commits", "jira"]) == {}
+
+    def test_the_widened_keys_are_not_requirements(self, monkeypatch):
+        # `skills:`/`dependencies:` are reported, never installed, so their
+        # absence is not something removing an item newly breaks.
+        self._wire(monkeypatch, self._lock("wide", "commits"), self.ENTRIES)
+        assert prereq.required_by(["commits"]) == {}
+
+    def test_a_qualified_requirement_counts_only_for_its_tap(self,
+                                                             monkeypatch):
+        entries = [{"name": "q", "tap": "t1", "kind": "skill",
+                    "meta": {"requires": ["t1:commits"]}},
+                   {"name": "commits", "tap": "t1", "kind": "skill",
+                    "meta": {}}]
+        self._wire(monkeypatch, {"skill": {"q": {"tap": "t1"},
+                                           "commits": {"tap": "t1"}}},
+                   entries)
+        assert prereq.required_by(["commits"]) == {"commits": ["q"]}
+        self._wire(monkeypatch, {"skill": {"q": {"tap": "t1"},
+                                           "commits": {"tap": "t2"}}},
+                   entries)
+        assert prereq.required_by(["commits"]) == {}
+
+    def test_one_name_in_two_sections_is_named_once(self, monkeypatch):
+        entries = [{"name": "same", "tap": "t1", "kind": "skill",
+                    "rel_dir": "skills/same", "meta": {"requires": ["c"]}},
+                   {"name": "same", "tap": "t1", "kind": "rule",
+                    "skill_md": "rules/same.mdc",
+                    "meta": {"requires": ["c"]}},
+                   {"name": "c", "tap": "t1", "kind": "skill", "meta": {}}]
+        self._wire(monkeypatch, {
+            "skill": {"same": {"tap": "t1", "source_dir": "skills/same"},
+                      "c": {"tap": "t1"}},
+            "rule": {"same": {"tap": "t1",
+                              "source_file": "rules/same.mdc"}}}, entries)
+        assert prereq.required_by(["c"]) == {"c": ["same"]}
+
+    def test_nothing_named_reads_nothing(self, monkeypatch):
+        def boom():
+            raise AssertionError("read the lock for an empty batch")
+        monkeypatch.setattr(prereq.lockfile, "all_installed", boom)
+        assert prereq.required_by([]) == {}
+
+
 class TestForEntriesDefaults:
     def test_it_builds_its_own_index_and_lock_read(self, monkeypatch):
         entries = [{"name": "needy", "tap": "t1", "kind": "skill",
