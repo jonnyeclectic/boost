@@ -88,10 +88,11 @@ EFFICIENCY_PINNED = {
 }
 
 # Measured with `scripts/measure_registry.py`, not walked: both repos render a
-# copy of each item per agent they support. Raw `scan_dir` walks find 13 and 28.
+# copy of each item per agent they support. Raw `scan_dir` walks find 13 and 43.
+# caveman was (21, 28) until it shipped 16 more skills; re-measured 2026-11-07.
 EFFICIENCY_MEASURED = {
     "DietrichGebert/ponytail": (7, 13),
-    "JuliusBrussee/caveman": (21, 28),
+    "JuliusBrussee/caveman": (35, 43),
 }
 
 # `pbakaus/impeccable` vendors one copy of each item into every agent dir it
@@ -139,6 +140,87 @@ MARKETING_SUBDOMAIN = {
 MARKETING_MEASURED = {
     "coreyhaines31/marketingskills": 50,
     "minhnv0807/ai-business-skills": 169,
+}
+
+# Rows refiled on 2026-11-07 by the names of the items they ship, each with
+# the count `scripts/measure_registry.py` gave on a sparse clone taken that
+# day. An item with no category of its own inherits its row's, so a row filed
+# by its README or its fame mislabels every item in it.
+RECATEGORISED = {
+    # 17 of its 20 items are documents and design: docx, pdf, pptx, xlsx,
+    # canvas-design, algorithmic-art, brand-guidelines, theme-factory. Only
+    # claude-api, mcp-builder and skill-creator are AI. Filed `ai`, it
+    # answered `search "fine-tune an LLM with LoRA" --category ai` with
+    # brand-guidelines and algorithmic-art.
+    "anthropics/skills": ("general", 20),
+    # awq-quantization, deepspeed, fine-tuning-with-trl, llama-factory, dspy.
+    "Orchestra-Research/AI-Research-SKILLs": ("ai", 98),
+    # huggingface-llm-trainer, trl-training, huggingface-vision-trainer.
+    "huggingface/skills": ("ai", 26),
+    # aks-* and azure-* SDK clients; 148 of 232 names start with azure-.
+    "microsoft/skills": ("infra", 236),
+    # tdd, code-review, grill-me, handoff, writing-*: no web framework at all.
+    "mattpocock/skills": ("general", 40),
+    # spec, plan, build, test, review, ship: a lifecycle, not CI/CD.
+    "addyosmani/agent-skills": ("general", 38),
+    # Generative media models, filed with replicate and elevenlabs.
+    "fal-ai-community/skills": ("ai", 36),
+    # context-compression, memory-systems, multi-agent-patterns: the
+    # Owl-Listener/ai-design-skills precedent.
+    "muratcankoylan/Agent-Skills-for-Context-Engineering": ("ai", 24),
+    # These three were filed `workflow`, which is an item kind: `tap --catalog
+    # --category workflow` and `--type workflow` were one word naming two
+    # different sets. Each is an agent methodology, like nWave in `meta`.
+    "rsmdt/the-startup": ("meta", 50),
+    "shinpr/claude-code-workflows": ("meta", 66),
+    "garrytan/gstack": ("meta", 72),
+}
+
+# Starred rows whose est_items was off by more than 10% on 2026-11-07, each
+# re-measured with `scripts/measure_registry.py` on a sparse clone that day.
+# The undercounts ran up to 15x (anthropics/financial-services said 8 and
+# ships 124), the overcounts up to 13x (taste-skill said 13 and ships 1).
+# JuliusBrussee/caveman (21 -> 35) is pinned in EFFICIENCY_MEASURED.
+# ECC, awesome-copilot and playwright were measured again after the scanner
+# learned Copilot instruction/prompt files and frontmatter-slotted agents.
+STARRED_MEASURED = {
+    "affaan-m/ECC": 1591,
+    "alirezarezvani/claude-skills": 754,
+    "anthropics/claude-plugins-official": 108,
+    "anthropics/financial-services": 124,
+    "davila7/claude-code-templates": 1725,
+    "Donchitos/Claude-Code-Game-Studios": 172,
+    "EveryInc/compound-engineering-plugin": 56,
+    "github/awesome-copilot": 913,
+    "google/skills": 187,
+    "jeffallan/claude-skills": 77,
+    "microsoft/playwright": 24,
+    "PatrickJS/awesome-cursorrules": 256,
+    "qdhenry/Claude-Command-Suite": 321,
+    "trailofbits/skills": 139,
+    "VoltAgent/awesome-claude-code-subagents": 166,
+    "wshobson/agents": 428,
+}
+
+# Rows that failed the ★ rule beside CURATED when re-measured on 2026-11-07,
+# with the count measured then. The reasons are recorded in CURATED itself.
+UNSTARRED = {
+    "anthropics/claude-code": 3,        # its stars are the product's
+    "Leonxlnx/taste-skill": 1,          # 1 item, under the rule's 5
+    "composio-community/awesome-codex-skills": 880,  # a vendor MCP funnel
+}
+
+# The archived rows, re-measured on a sparse clone on 2026-11-07 as type and
+# count. steipete/agent-rules sat under WORKFLOWS at est 20 and ships 32
+# rules; wshobson/commands said 57 and indexes 15, because its 42 tools/
+# prompts are not in a directory the scanner reads.
+ARCHIVED_MEASURED = {
+    "wshobson/commands": ("workflow", 15),
+    "steipete/agent-rules": ("rule", 32),
+    "iannuttall/claude-agents": ("workflow", 7),
+    "brennercruvinel/CCPlugins": ("workflow", 23),
+    "obra/superpowers-skills": ("skill", 31),
+    "DVC2/cursor-agent-configs": ("rule", 11),
 }
 
 _SLUG = re.compile(r"^[a-z][a-z0-9-]*$")
@@ -250,6 +332,69 @@ class TestDesignDomain:
         assert row["est_items"] < IMPECCABLE_MIRRORED_WALK // 2, (
             "est_items %d looks like the mirrored walk (%d), not the distinct "
             "item count" % (row["est_items"], IMPECCABLE_MIRRORED_WALK))
+
+
+class TestFiledByItemNames:
+    """A row's category is the one its items carry when they declare none."""
+
+    @pytest.mark.parametrize("name", sorted(RECATEGORISED))
+    def test_row_is_filed_by_the_items_it_ships(self, catalog, name):
+        row = next((e for e in catalog if e["name"] == name), None)
+        assert row is not None, "%s dropped out of the catalog" % name
+        assert row["category"] == RECATEGORISED[name][0], (
+            "%s is filed %r; its item names say %r"
+            % (name, row["category"], RECATEGORISED[name][0]))
+
+    @pytest.mark.parametrize("name", sorted(RECATEGORISED))
+    def test_refiled_row_was_re_measured(self, catalog, name):
+        """Moving a row's category is not a reason to trust its old count."""
+        row = next((e for e in catalog if e["name"] == name), None)
+        assert row is not None
+        assert row["est_items"] == RECATEGORISED[name][1], (
+            "%s est_items %d != the measured %d — re-run "
+            "scripts/measure_registry.py against a fresh clone"
+            % (name, row["est_items"], RECATEGORISED[name][1]))
+
+    def test_anthropics_skills_is_not_filed_as_ai(self, catalog):
+        """The default tap a newcomer meets first; its documents and art
+        skills must not answer an AI-engineering filter."""
+        row = next(e for e in catalog if e["name"] == "anthropics/skills")
+        assert row["category"] != "ai"
+
+    def test_no_category_is_an_item_kind(self, catalog):
+        """`--type` filters on kind; a category spelled like a kind makes
+        `--category workflow` and `--type workflow` disagree silently."""
+        kinds = {"skill", "rule", "workflow"}
+        assert sorted(e["name"] for e in catalog
+                      if e.get("category") in kinds) == []
+
+
+class TestStarRule:
+    """The ★ is what a newcomer reads as "most popular and most capable"."""
+
+    @pytest.mark.parametrize("name", sorted(STARRED_MEASURED))
+    def test_starred_row_carries_its_measured_count(self, catalog, name):
+        row = next((e for e in catalog if e["name"] == name), None)
+        assert row is not None, "%s dropped out of the catalog" % name
+        assert row["curated"], "%s lost its star" % name
+        assert row["est_items"] == STARRED_MEASURED[name], (
+            "%s est_items %d != the measured %d — re-run "
+            "scripts/measure_registry.py against a fresh clone"
+            % (name, row["est_items"], STARRED_MEASURED[name]))
+
+    @pytest.mark.parametrize("name", sorted(UNSTARRED))
+    def test_a_row_that_fails_the_rule_is_not_starred(self, catalog, name):
+        row = next((e for e in catalog if e["name"] == name), None)
+        assert row is not None, "%s dropped out of the catalog" % name
+        assert not row["curated"], "%s fails the ★ rule" % name
+        assert row["est_items"] == UNSTARRED[name]
+
+    def test_no_starred_row_ships_fewer_than_five_items(self, catalog):
+        """The rule's own floor, checked against the count the row ships."""
+        defaults = {str(d["name"]) for d in config.DEFAULT_TAPS}
+        assert sorted(e["name"] for e in catalog
+                      if e["curated"] and e["name"] not in defaults
+                      and e["est_items"] < 5) == []
 
 
 class TestEfficiencyDomain:
@@ -421,6 +566,35 @@ class TestSourceTuples:
         shipped = {e["name"]: e["formerly"] for e in catalog
                    if "formerly" in e}
         assert shipped == {n: list(o) for n, o in builder.FORMERLY.items()}
+
+    def test_the_shipped_catalog_carries_archived(self, catalog, builder):
+        """Emitted only where set, and only ever as a literal true."""
+        shipped = {e["name"]: e["archived"] for e in catalog
+                   if "archived" in e}
+        assert shipped == dict.fromkeys(builder.ARCHIVED, True)
+
+    def test_every_archived_row_is_a_row_and_none_is_retired(self, builder):
+        """Archived still clones; RETIRED is for the repos that do not."""
+        known = {r[0] for tup in (builder.SKILLS, builder.RULES,
+                                  builder.WORKFLOWS) for r in tup}
+        assert sorted(set(builder.ARCHIVED) - known) == []
+        assert sorted(set(builder.ARCHIVED) & set(builder.RETIRED)) == []
+
+    def test_no_archived_row_is_starred(self, builder):
+        """The rule beside CURATED says "not archived"."""
+        assert sorted(set(builder.ARCHIVED) & builder.CURATED) == []
+
+    def test_every_archived_repo_records_why(self, builder):
+        for name, note in builder.ARCHIVED.items():
+            assert name.count("/") == 1, "%r is not owner/repo" % name
+            assert note.strip(), "%s is archived with no note" % name
+
+    @pytest.mark.parametrize("name", sorted(ARCHIVED_MEASURED))
+    def test_archived_row_is_marked_and_measured(self, catalog, name):
+        row = next((e for e in catalog if e["name"] == name), None)
+        assert row is not None, "%s dropped out of the catalog" % name
+        assert row.get("archived") is True
+        assert (row["type"], row["est_items"]) == ARCHIVED_MEASURED[name]
 
     def test_every_retired_repo_records_why(self, builder):
         """A bare name is unfalsifiable later; the reason is what makes it

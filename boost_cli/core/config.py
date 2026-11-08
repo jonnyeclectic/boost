@@ -313,6 +313,28 @@ def registry_categories() -> dict:
             if row.get("category")}
 
 
+#: What every surface prints beside a catalogue row whose repository GitHub
+#: has archived. One phrase, so `tap --catalog --dry-run`, quickstart, `info`
+#: and `discover` cannot word the same fact four ways.
+ARCHIVED_NOTE = "archived upstream"
+
+
+def archived_registries() -> frozenset[str]:
+    """Every name of a bundled row whose repository GitHub has archived.
+
+    An archived repository still clones and still ships its items, so the
+    catalogue keeps the row; what the user is owed is being told that nothing
+    upstream will change it again. Names, not rows, because the callers hold
+    a tap name or a GitHub ``owner/repo``, and a tap made under a row's former
+    name is that row (:func:`registry_rows_by_name`). Only a literal ``true``
+    counts: a row without the key is live, and a damaged value is not a
+    verdict about GitHub. Ask once per command and test membership, rather
+    than re-keying 587 rows for every line printed.
+    """
+    return frozenset(name for name, row in registry_rows_by_name().items()
+                     if row.get("archived") is True)
+
+
 def self_installing_command(tap: str, url: str = "") -> str | None:
     """The repo's own install command, when boost must not copy its items.
 

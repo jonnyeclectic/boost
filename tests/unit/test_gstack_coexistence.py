@@ -14,7 +14,7 @@ Three things are pinned here, in the order they bite:
 
 1. **The row is measured.** gstack's repo description advertises "23
    opinionated tools" and its README lists ~35 slash commands;
-   `scripts/measure_registry.py` counts **61** distinct items. That spread is
+   `scripts/measure_registry.py` counts **72** distinct items. That spread is
    precisely why `est_items` is defined as measured rather than quoted.
 
 2. **boost refuses to half-install it.** A gstack skill is a thin Markdown
@@ -46,10 +46,11 @@ from boost_cli.errors import BoostError
 GSTACK = "garrytan/gstack"
 
 # Measured with `python3 scripts/measure_registry.py <clone>` over a sparse
-# clone of 07b59e39 (2026-08-30). The two numbers it is not:
+# clone of 914e7b6f taken 2026-11-07; it was 61 at 07b59e39 (2026-08-30). The
+# two numbers it is not:
 ADVERTISED_IN_DESCRIPTION = 23
 ADVERTISED_IN_README = 35
-MEASURED = 61
+MEASURED = 72
 
 
 @pytest.fixture(scope="module")
@@ -61,17 +62,20 @@ def row():
 
 class TestTheRowIsMeasured:
     def test_it_is_carried_as_a_scannable_skill_registry(self, row):
-        # scan_dir classifies all 61 as `skill` (they are <name>/SKILL.md), and
+        # scan_dir classifies all 72 as `skill` (they are <name>/SKILL.md), and
         # the repo ships them rather than linking out, so it is not list_only.
         assert row["type"] == "skill"
         assert not row["list_only"]
 
     def test_category_comes_from_the_item_names(self, row):
         # `ship`, `qa`, `review`, `plan-*`, `retro`, `office-hours`, `freeze`:
-        # sprint-workflow roles. Filing it `meta` would read the README (which
-        # looks like an index) instead of the items, the trap TestDesignDomain
-        # pins in the other direction.
-        assert row["category"] == "workflow"
+        # sprint-workflow roles, a delivery methodology with the shape of
+        # obra/superpowers and nWave, which `meta` holds. It was filed
+        # `workflow` until 2026-11-07, but that is an item kind: `tap --catalog
+        # --category workflow` and `--type workflow` named two different sets.
+        # The item names decide, so it ships items rather than linking out.
+        assert row["category"] == "meta"
+        assert not row["list_only"]
 
     def test_est_items_is_the_measurement_not_either_advertised_number(self, row):
         assert row["est_items"] == MEASURED, (

@@ -95,9 +95,10 @@ EST_TO_ACTUAL = 71_655 / 28_225
 DEFAULT_TARGET = 20_000
 
 #: The most of the target one distractor may carry. 5% of 20,000 is 1,000:
-#: above every registry the selection already took (the largest is 880), so the
-#: cap moves nothing that was measured, and below the 4,253 that would otherwise
-#: be a fifth of the corpus on its own.
+#: below the 4,253 that would otherwise be a fifth of the corpus on its own,
+#: and since the 2026-11-07 re-measure below davila7/claude-code-templates at
+#: 1,725, which the selection used to take when its row said 800. Those two
+#: are the only candidates over it.
 MAX_SHARE = 0.05
 
 #: Round-robin order. Rules are scarcest in the curated set and score worst when
@@ -122,12 +123,23 @@ def candidates(registries: Sequence[dict], exclude: Sequence[str]
     ``list_only`` rows are awesome-list indexes rather than skill trees, so they
     contribute nothing to scan and are dropped — the same distinction
     `registries.json` already draws for its own item-count math.
+
+    "What we have" is a repository, not a spelling. taps.txt pins
+    ``LessUp/awesome-cursorrules-zh``, whose row is now
+    ``holtwood/awesome-cursorrules-zh`` with the old name in ``formerly``, so
+    a name-only test drew the required repository a second time as a
+    distractor — and `registry.add` refuses the second name of a tapped
+    repository, so materialising the list failed on that row. Case-folded,
+    because a tap's identity is (`registry.name_key`).
     """
     out: dict[str, list[tuple[str, int]]] = {}
-    seen = set(exclude)
+    seen = {str(n).casefold() for n in exclude}
     for row in registries:
         name = str(row.get("name", ""))
-        if not name or name in seen or row.get("list_only"):
+        if not name or row.get("list_only"):
+            continue
+        if any(alias.casefold() in seen
+               for alias in (name, *map(str, row.get("formerly") or ()))):
             continue
         kind = str(row.get("type", "skill"))
         out.setdefault(kind, []).append((name, int(row.get("est_items") or 0)))

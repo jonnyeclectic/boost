@@ -44,17 +44,20 @@ def _tap_catalog(args, tapped: list[tuple[str, int]] | None = None) -> int:
         plan = registry.plan_specs([str(e["url"]) for e in selection])
         todo = [e for e, row in zip(selection, plan, strict=True)
                 if row.get("todo")]
+        archived = config.archived_registries()
         if todo:
             rows = [(e["name"], e["type"], e.get("category", ""),
                      "~%d" % (e.get("est_items") or 0),
-                     out.role(e.get("focus", ""), "muted")) for e in todo]
+                     _focus_cell(e, archived)) for e in todo]
             # NAME is the owner/repo `boost tap` takes.
             out.table(rows, headers=("NAME", "TYPE", "CATEGORY", "EST",
                                      "FOCUS"), whole=("NAME",))
             print()
         rc = _print_held(plan)
-        out.dim("%s · ~%d items (dry run — nothing tapped)"
+        frozen = sum(1 for e in todo if e["name"] in archived)
+        out.dim("%s%s · ~%d items (dry run — nothing tapped)"
                 % (_dry_run_counts(plan),
+                   " (%d %s)" % (frozen, config.ARCHIVED_NOTE) if frozen else "",
                    sum(e.get("est_items") or 0 for e in todo)))
         return rc
     focus = {str(e["name"]): e.get("focus", "") for e in selection}
@@ -65,6 +68,20 @@ def _tap_catalog(args, tapped: list[tuple[str, int]] | None = None) -> int:
                     focus=focus, tapped=tapped, curated=args.curated,
                     curated_names=frozenset(str(e["name"]) for e in selection
                                             if e.get("curated")))
+
+
+def _focus_cell(entry: dict, archived: frozenset[str]) -> str:
+    """The FOCUS cell, led by the archived marker when GitHub froze the repo.
+
+    In FOCUS rather than NAME, because NAME is the cell a user pastes into
+    `boost tap`; and at the front, because a narrow pane clips FOCUS from the
+    end. A pane too narrow for FOCUS drops the column, so the footer counts
+    the archived rows as well.
+    """
+    focus = out.role(entry.get("focus", ""), "muted")
+    if entry["name"] not in archived:
+        return focus
+    return "%s · %s" % (out.role(config.ARCHIVED_NOTE, "warn"), focus)
 
 
 def _print_dry_run(specs: list[str], at: str | None = None) -> int:

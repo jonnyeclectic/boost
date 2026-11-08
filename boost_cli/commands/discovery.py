@@ -1146,6 +1146,21 @@ def _fall_back(why: str, hint: str) -> None:
     return None
 
 
+def _repo_cell(it: dict, archived: frozenset[str]) -> str:
+    """The repo cell: the name, its "(N)" file count, and the archived marker.
+
+    out.plain because the name is a GitHub string. The marker follows the
+    count, so the name `boost tap` takes still leads the cell. It is the
+    catalogue's verdict, so a repository the catalogue does not carry gets
+    none whatever GitHub says.
+    """
+    cell = out.plain(it.get("repo", "?")) + (
+        " (%d)" % it["files"] if it.get("files", 1) > 1 else "")
+    if isinstance(it.get("repo"), str) and it["repo"] in archived:
+        cell += out.role(" (%s)" % config.ARCHIVED_NOTE, "warn")
+    return cell
+
+
 def _note_tapped(n: int) -> None:
     """Say how many matching repos were left out for being tapped already."""
     if n:
@@ -1191,8 +1206,8 @@ def _discover_live(args, tokens):
     # was the first thing a narrow terminal truncated away. out.plain because
     # every field here is a GitHub string — a repo name or path carrying a
     # cursor-movement escape would rewrite the rows printed above it.
-    out.table([(out.plain(it.get("repo", "?"))
-                + (" (%d)" % it["files"] if it.get("files", 1) > 1 else ""),
+    archived = config.archived_registries()
+    out.table([(_repo_cell(it, archived),
                 out.plain(it.get("path", "")),
                 out.role(out.plain(it.get("url", "")), "muted")) for it in rows],
               headers=("repo", "path", "url"), whole=("repo",))  # `boost tap`
@@ -1304,8 +1319,8 @@ def cmd_discover(argv):
         return 0
     # out.plain: these rows came from GitHub too, by way of `boost index`. The
     # "(N)" cell mirrors the live table for the same reason it exists there.
-    out.table([(out.plain(it.get("repo", "?"))
-                + (" (%d)" % it["files"] if it.get("files", 1) > 1 else ""),
+    archived = config.archived_registries()
+    out.table([(_repo_cell(it, archived),
                 out.plain(it.get("path", "")),
                 out.role(out.plain(it.get("url", "")), "muted")) for it in repo_rows],
               headers=("repo", "path", "url"), whole=("repo",))  # `boost tap`

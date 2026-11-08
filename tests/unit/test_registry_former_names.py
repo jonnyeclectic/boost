@@ -19,6 +19,21 @@ from boost_cli.core import catalog, config, rag, registry, serve
 OLD, NEW = "oldowner/claude-skills", "newowner/ai-skills"
 GH = "https://github.com/"
 
+# The 2026-10-16 sweep moved these rows to the names GitHub redirects to
+# and recorded none of the old ones. v1.2.197 shipped every old name, and
+# each answered 301 to the new one on 2026-11-07.
+SWEEP_2026_10_16 = {
+    "pontusab/directories": "cursor/community-plugins",
+    "LessUp/awesome-cursorrules-zh": "holtwood/awesome-cursorrules-zh",
+    "Eronred/aso-skills": "appeeky/aso-skills",
+    "Ed1s0nZ/CyberStrikeAI": "AIPentest/CyberStrikeAI",
+    "DVC2/cursor_prompts": "DVC2/cursor-agent-configs",
+    "wandb/weave-claude-code": "coreweave/forge-agent-lens-for-claude-code",
+    "jeremylongshore/claude-code-plugins-plus-skills":
+        "jeremylongshore/tons-of-skills-marketplace",
+    "davepoon/claude-code-subagents-collection": "davepoon/buildwithclaude",
+}
+
 
 @pytest.fixture
 def catalogue(monkeypatch):
@@ -72,6 +87,17 @@ class TestRowsByName:
             "leogallego/ai-skills-ansible")
         assert config.registry_categories()[
             "leogallego/claude-ansible-skills"] == "infra"
+
+    @pytest.mark.parametrize("old,new", sorted(SWEEP_2026_10_16.items()))
+    def test_a_tap_under_a_name_the_sweep_moved_is_its_row(self, old, new):
+        """Held under the old name, the tap kept no category and `tap
+        --catalog` cloned the same repository a second time."""
+        row = config.registry_rows_by_name()[old]
+        assert row["name"] == new
+        assert config.registry_categories()[old] == row["category"]
+        held = registry.Tap(name=old, url=GH + old)
+        assert registry.renamed_twin(row["url"], [held],
+                                     registry.renames()) is held
 
 
 class TestLookups:

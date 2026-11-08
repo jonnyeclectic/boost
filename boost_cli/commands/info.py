@@ -529,6 +529,21 @@ def cmd_list(argv):
     return 0
 
 
+def _tap_row(entry: dict) -> None:
+    """The ``tap`` row, marked when GitHub has archived the tap's repository.
+
+    The tap still clones and its items still install; the marker says that
+    nothing upstream will change them again. A tap held under a row's former
+    name is that row (`config.archived_registries`).
+    """
+    tap = entry.get("tap", "?")
+    if tap not in config.archived_registries():
+        out.kv("tap", tap)
+        return
+    out.kv("tap", "%s%s" % (tap, out.role("  (%s)" % config.ARCHIVED_NOTE,
+                                           "warn")))
+
+
 def _tap_url_row(entry: dict) -> None:
     """The ``tap url`` row under ``tap``: where the item's repository lives.
 
@@ -595,7 +610,7 @@ def _info_materialized(name: str, kind: str, entry: dict, as_json: bool) -> int:
     elif reason == staleness.CONTENT:
         out.kv("latest", (latest or "?")
                + out.role("  (content changed)", "muted"))
-    out.kv("tap", entry.get("tap", "?"))
+    _tap_row(entry)
     _tap_url_row(entry)
     if kind == "workflow" and entry.get("slot"):
         out.kv("slot", str(entry["slot"]))
@@ -856,7 +871,7 @@ def cmd_info(argv):
                                                "muted"))
     else:
         out.kv("latest", str((cat or {}).get("version", "?")))
-    out.kv("tap", (entry or cat or {}).get("tap", "?"))
+    _tap_row(entry or cat or {})
     _tap_url_row(entry or cat or {})
     category = (cat or {}).get("category")
     if category:
