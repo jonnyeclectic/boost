@@ -462,6 +462,15 @@ def _report_result(res: store.InstallResult, no_mcp: bool = False,
         _report_skill_copy(res)
         _warn_unwritable(res)
         out.ok("lock updated (.skill-lock.json)")
+        if res.scope == scopes.SCOPE_PROJECT:
+            # Only a project *skill* goes into the repo's own lock. These
+            # kinds are written into the repo and recorded in the user's, so
+            # "commit .boost/" does not carry them — the MCP reply says the
+            # same (`configuration._project_scope_lines`).
+            out.dim("  recorded in %s rather than in %s/ — teammates who "
+                    "clone this repo get the files but not boost's record "
+                    "of them" % (_tilde(paths.lockfile_path()),
+                                 projectlock.LOCK_DIRNAME), wrap=True)
         _warn_injection(res)
         _warn_secrets(res)
         return

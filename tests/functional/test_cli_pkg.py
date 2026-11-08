@@ -159,6 +159,35 @@ class TestInstall:
         assert (repo / ".cursor" / "rules" / "team-rules.mdc").is_file()
         assert not (paths.home() / ".claude" / "CLAUDE.md").exists()  # not global
 
+    def test_project_rule_and_workflow_say_where_they_are_recorded(
+            self, boost, fixture_tap_src, tmp_path, monkeypatch):
+        # A project skill goes into .boost/, which teammates get by cloning.
+        # A project rule or workflow is written into the repo and recorded in
+        # the user lock, and the install said only "lock updated" — the MCP
+        # reply already named the difference, the CLI did not.
+        tap_dir = _copy_tap(fixture_tap_src, tmp_path / "sp-tap")
+        _add_and_commit(tap_dir, "rules/team.mdc",
+                        "---\nname: team-rules\n---\n\nAlways TDD.\n",
+                        "add rule")
+        _add_and_commit(tap_dir, "commands/review-pr.md",
+                        "---\ndescription: review a PR\n---\n\nReview it.\n",
+                        "add workflow")
+        boost("tap", tap_dir)
+        repo = tmp_path / "proj"
+        repo.mkdir()
+        monkeypatch.chdir(repo)
+        said = ("recorded in ~/.agents/skills/.skill-lock.json rather than "
+                "in .boost/ — teammates who clone this repo get the files "
+                "but not boost's record of them")
+        for name in ("team-rules", "review-pr"):
+            r = boost("install", name, "--local")
+            assert "lock updated (.skill-lock.json)" in r.out
+            assert said in " ".join(r.out.split())
+        assert not (repo / ".boost").exists()
+        # User scope has no repo to clone, so nothing to say.
+        r = boost("install", "brainstorming")
+        assert "rather than in .boost/" not in r.out
+
     def test_next_hint_is_whole_on_a_narrow_pane(self, boost, tapped,
                                                  monkeypatch):
         # panel() clips its lines to the pane; inside it the hint became
