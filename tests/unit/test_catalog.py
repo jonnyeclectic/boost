@@ -766,13 +766,31 @@ class TestDocPages:
     def test_a_measured_real_item_stays_a_workflow(self, rel, meta):
         assert catalog._classify_workflow(Path(rel), meta) is True
 
-    @pytest.mark.parametrize("stem", sorted(catalog.DOC_STEMS))
+    # Listed out, not read from catalog.DOC_STEMS: a test built from the
+    # constant passes whatever the constant loses.
+    @pytest.mark.parametrize("stem", [
+        "readme", "contributing", "license", "licence", "code_of_conduct",
+        "index", "_index", "authors", "notice"])
     def test_a_doc_stem_is_a_doc_page_in_any_case(self, stem):
         for spelling in (stem, stem.upper(), stem.capitalize()):
             assert catalog._classify_workflow(
                 Path("commands/%s.md" % spelling), {}) is False, spelling
 
-    @pytest.mark.parametrize("stem", ["changelog", "security", "index"])
+    def test_docs_site_index_pages_stay_pages(self):
+        # Four of the 8 docs-site index pages over 470 taps, each with the
+        # keys it ships: a description, but no name and no workflow key.
+        for rel, meta in (
+                ("docs/agents/index.md", {}),
+                ("docs/commands/index.md",
+                 {"title": "Commands", "description": "124 slash commands"}),
+                ("site-content/agents/index.md",
+                 {"title": "t", "description": "d", "slug": "agents",
+                  "kind": "guide", "summary": "s", "h1": "h"}),
+                ("docs/src/content/docs/llamaagents/workflows/index.md",
+                 {"title": "Workflows", "sidebar": {"order": 1}})):
+            assert catalog._classify_workflow(Path(rel), meta) is False, rel
+
+    @pytest.mark.parametrize("stem", ["changelog", "security"])
     def test_a_doc_word_written_lowercase_can_be_a_command(self, stem):
         # The old list dropped these; ALL-CAPS still catches the doc page.
         assert catalog._classify_workflow(

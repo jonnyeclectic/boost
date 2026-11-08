@@ -85,8 +85,9 @@ from . import (
 #        one rather than as a slash command (`workflows.detect_slot`)
 #  12 -- a doc page under a workflow dir is not an item (`_is_doc_page`): an
 #        ALL-CAPS stem with no item frontmatter (`QUICKSTART.md`,
-#        `src/agents/AGENTS.md`) is dropped, and a lowercase `changelog.md`,
-#        `security.md` or `index.md` command is an item again
+#        `src/agents/AGENTS.md`) is dropped, a lowercase `changelog.md` or
+#        `security.md` command is an item again, and so is any doc-named file
+#        whose frontmatter describes an item (`commands/sc/index.md`)
 CACHE_FORMAT = 12
 # A cache is also stale when the tap's curated category has moved since it was
 # written: `category` falls back to that value at scan time, so recategorising
@@ -125,13 +126,16 @@ WORKFLOW_META_KEYS = {"tools", "model", "argument-hint", "allowed-tools",
 KIND_SUFFIXES = (*RULE_MD_SUFFIXES, *workflows.SUFFIX_SLOTS)
 # Markdown stems that are a repo's own documentation in any spelling
 # (`README.md`, `commands/readme.md`), never a workflow item -- see
-# `_is_doc_page`, which also takes every ALL-CAPS stem. Not `changelog`,
-# `security` or `index`: lowercase, each is a command name taps really ship
-# (`commands/git/changelog.md`, `.opencode/commands/security.md`, the
-# SuperClaude `commands/sc/index.md`), and all four were dropped while the doc
-# pages spelled `CHANGELOG.md` / `SECURITY.md` are ALL-CAPS anyway.
+# `_is_doc_page`, which also takes every ALL-CAPS stem. Not `changelog` or
+# `security`: lowercase, each is a command name taps really ship
+# (`commands/git/changelog.md`, `.opencode/commands/security.md`) -- over 470
+# taps every lowercase `security.md` under a workflow dir and 5 of the 6
+# `changelog.md` were commands -- while the pages spelled `CHANGELOG.md` /
+# `SECURITY.md` are ALL-CAPS anyway. `index` stays: the same 470 taps hold 8
+# docs-site `docs/agents/index.md`-style pages and one command, the
+# SuperClaude `commands/sc/index.md`, which its frontmatter keeps.
 DOC_STEMS = {"readme", "contributing", "license", "licence",
-             "code_of_conduct", "_index", "authors", "notice"}
+             "code_of_conduct", "index", "_index", "authors", "notice"}
 
 
 def is_binary(data: bytes) -> bool:
