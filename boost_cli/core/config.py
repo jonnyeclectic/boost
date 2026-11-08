@@ -270,6 +270,30 @@ def load_registry_catalog() -> list:
     return list(rows)
 
 
+def catalog_category_miss(category: str,
+                          rows: list | None = None) -> str | None:
+    """Why ``tap --catalog --category`` selected nothing, when the name is why.
+
+    None when some catalog row carries ``category`` (another filter emptied
+    the selection) or there is no catalog to compare against. Otherwise a
+    line naming the closest category and every category the catalog has:
+    `--category Testing` used to get only "no catalog registries match that
+    filter", and no command lists these — `boost browse --categories` lists
+    the categories of tapped items, a different set.
+    """
+    rows = load_registry_catalog() if rows is None else rows
+    known = sorted({str(r["category"]) for r in rows if r.get("category")})
+    if not known or category in known:
+        return None
+    line = "no catalog category is named %r — " % category
+    close = difflib.get_close_matches(category.lower(), known, n=1)
+    if close:
+        line += "did you mean %r? The catalog's" % close[0]
+    else:
+        line += "the catalog's"
+    return line + " categories are " + ", ".join(known)
+
+
 def registry_rows_by_name() -> dict[str, dict]:
     """Each bundled registry row under its name and under every name it had.
 

@@ -114,6 +114,31 @@ def test_every_copy_gone_names_what_works_and_sync_fails(boost, moved):
     assert _project_issues(boost) == []
 
 
+def test_an_edited_copy_is_no_source_so_doctor_does_not_send_to_heal(
+        boost, moved):
+    # The deleted copies' remedy was "run `boost heal`", but the copy left
+    # holds an edit, so heal goes to the moved tap and declines.
+    repo, copies = moved
+    with (copies[-1] / "SKILL.md").open("a", encoding="utf-8") as fh:
+        fh.write("Local edit.\n")
+    for c in copies[:-1]:
+        util.rmtree(c)
+    rels = [c.relative_to(repo).as_posix() for c in copies[:-1]]
+    edited, gone = _project_issues(boost)
+    assert edited.startswith("project skill movey modified since install")
+    assert gone == (
+        "project skill movey is missing %s, and its tap has moved since the "
+        "project lock was written, so `boost heal` restores it only if this "
+        "skill's files did not change — `boost heal --dry-run` says which; "
+        "otherwise `boost install --local movey --force` moves every copy "
+        "and the lock to the tap's new version and discards the local edit"
+        % ", ".join(rels))
+    r = boost("heal", "--dry-run", expect=1)
+    assert "repair declined" in r.out
+    assert "Local edit." in (copies[-1] / "SKILL.md").read_text(
+        encoding="utf-8")
+
+
 def test_committed_copies_get_a_git_checkout_that_restores_them(
         boost, moved):
     repo, copies = moved

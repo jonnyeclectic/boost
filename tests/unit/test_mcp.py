@@ -20,6 +20,15 @@ import pytest
 from boost_cli.core import mcp
 from boost_cli.errors import BoostError
 
+#: The reply to a genuine miss on a tapped machine, with the echoed query
+#: (already quoted) to fill in.
+MISS = ("no skills, rules or workflows match %s — call boost_discover_github "
+        "with the same query to search GitHub for skill registries nobody "
+        "here has tapped")
+#: The 200 characters a miss reply was held to before it named the next tool
+#: (184 of them past "no skills match "), plus the sentence that did.
+MISS_CAP = len(MISS % "") + 184
+
 
 def _ok(_args):
     return "ok", False
@@ -927,14 +936,16 @@ class TestTheEmptyCatalogAnswersDifferentlyFromAMiss:
     AND the move that fixes it.
     """
 
-    def test_a_real_miss_keeps_todays_wording(self):
-        # Pre-existing contract (tests/functional pin this string): a tapped
-        # machine that genuinely has no match must not start blaming setup.
-        assert mcp.no_results("widgets", tapped=4) == "no skills match 'widgets'"
+    def test_a_real_miss_names_every_kind_and_the_next_tool(self):
+        # A tapped machine that genuinely has no match must not start blaming
+        # setup. It names all three kinds, because the index holds all three,
+        # and the tool this server offers for exactly this reply: "no skills
+        # match" alone gave the agent nowhere to go.
+        assert mcp.no_results("widgets", tapped=4) == MISS % "'widgets'"
 
     def test_nothing_tapped_says_so_and_names_the_fix(self):
         reply = mcp.no_results("widgets", tapped=0)
-        assert "no skills match" not in reply
+        assert "no skills, rules or workflows match" not in reply
         assert "boost tap --defaults" in reply
 
     def test_nothing_tapped_does_not_blame_the_query(self):
@@ -948,7 +959,7 @@ class TestTheEmptyCatalogAnswersDifferentlyFromAMiss:
         # 45 C++ entries used to give. The agent has to learn that the term
         # never reached the index, not that the catalogue is empty.
         reply = mcp.no_results("R", tapped=4, dropped=["R"])
-        assert "no skills match" not in reply
+        assert "no skills, rules or workflows match" not in reply
         assert "'R'" in reply
 
     def test_it_names_the_rule_so_the_agent_can_retry(self):
@@ -957,7 +968,7 @@ class TestTheEmptyCatalogAnswersDifferentlyFromAMiss:
 
     def test_a_real_miss_is_unchanged_by_the_new_argument(self):
         assert (mcp.no_results("widgets", tapped=4, dropped=[])
-                == "no skills match 'widgets'")
+                == MISS % "'widgets'")
 
     def test_setup_state_still_outranks_an_unsearchable_query(self):
         # A machine with no taps could not have matched anything, whatever the
@@ -999,18 +1010,18 @@ class TestTheMissReplyDoesNotCostWhatTheQueryCost:
         # must never fire on a question anyone actually asks. The functional
         # suite pins the short form byte for byte.
         q = "x" * mcp.QUERY_ECHO_CHARS
-        assert mcp.no_results(q, tapped=4) == "no skills match %r" % q
+        assert mcp.no_results(q, tapped=4) == MISS % repr(q)
 
     def test_a_huge_query_comes_back_bounded(self):
         reply = mcp.no_results("word " * 40000, tapped=4)
-        assert len(reply) < 200, len(reply)
-        assert reply.endswith("…'")
+        assert len(reply) < MISS_CAP, len(reply)
+        assert "…' — call" in reply
 
     def test_the_bound_holds_for_a_query_with_no_spaces_to_cut_on(self):
         # rsplit(" ") finds no boundary inside the budget, so the cut has to
         # fall back to a hard one rather than returning the whole string.
         reply = mcp.no_results("z" * 100000, tapped=4)
-        assert len(reply) < 200, len(reply)
+        assert len(reply) < MISS_CAP, len(reply)
 
     def test_newlines_are_collapsed_before_the_cut_not_after(self):
         # repr expands what it cannot print, so a bound applied to text that
@@ -1018,7 +1029,7 @@ class TestTheMissReplyDoesNotCostWhatTheQueryCost:
         # characters of backslash-n.
         reply = mcp.no_results("\n" * 100000, tapped=4)
         assert "\\n" not in reply
-        assert len(reply) < 200, len(reply)
+        assert len(reply) < MISS_CAP, len(reply)
 
     def test_an_unsearchable_term_is_bounded_too(self):
         # Same amplifier by the other road: `dropped` holds words split off
@@ -1617,7 +1628,7 @@ class TestSearchSaysHowTheOrderWasProduced:
         # mcp.no_results owns the empty reply, including the untapped-machine
         # branch. Neither the marker nor the overlap note may bolt onto it.
         for text in self._both_branches(monkeypatch, []):
-            assert text == "no skills match 'rag'"
+            assert text == MISS % "'rag'"
 
 
 class TestDoctorCountsWithoutBuildingTheList:
@@ -2286,7 +2297,7 @@ class TestSearchAndListOnACorruptConfig:
 
     def test_no_error_keeps_the_old_replies(self):
         assert mcp.no_results("widgets", tapped=4, config_error=None) == \
-            "no skills match 'widgets'"
+            MISS % "'widgets'"
         assert "boost tap --defaults" in mcp.no_results(
             "widgets", tapped=0, config_error="")
 

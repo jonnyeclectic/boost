@@ -1770,7 +1770,7 @@ class TestMcp:
         assert "version: 1.4.0" in text(10)
         assert "no skill named 'zzz'" in text(11)
         assert by_id[11]["result"]["isError"] is True
-        assert "no skills match 'zzzz'" in text(12)
+        assert "no skills, rules or workflows match 'zzzz'" in text(12)
         assert "Error: no skill named 'ghost' in any tap" in text(13)
         assert by_id[13]["result"]["isError"] is True
 
@@ -1794,7 +1794,8 @@ class TestMcp:
         text, is_err = configuration._mcp_tool(
             "boost_search", {"query": "zzzznothing"})
         assert is_err is False
-        assert "no skills match 'zzzznothing'" in text
+        assert "no skills, rules or workflows match 'zzzznothing'" in text
+        assert "call boost_discover_github with the same query" in text
 
     def test_boost_search_says_when_the_query_never_reached_the_index(
             self, boost, tapped):
@@ -1805,7 +1806,7 @@ class TestMcp:
         boost("reindex")
         text, is_err = configuration._mcp_tool("boost_search", {"query": "R"})
         assert is_err is False
-        assert "no skills match" not in text
+        assert "no skills, rules or workflows match" not in text
         assert "nothing was searched" in text
         assert "2 or more" in text
 
@@ -1826,7 +1827,7 @@ class TestMcp:
         text, is_err = configuration._mcp_tool(
             "boost_search", {"query": "the and of"})
         assert is_err is False
-        assert "no skills match" not in text
+        assert "no skills, rules or workflows match" not in text
         assert "only common words and punctuation" in text
 
     def test_boost_search_stays_quiet_when_vectors_read_the_query(
@@ -1839,7 +1840,7 @@ class TestMcp:
         monkeypatch.setattr(dense, "ready", lambda: True)
         text, _is_err = configuration._mcp_tool("boost_search", {"query": "R"})
         assert "nothing was searched" not in text
-        assert "no skills match 'R'" in text
+        assert "no skills, rules or workflows match 'R'" in text
 
     def test_boost_search_on_a_fresh_machine_reports_setup_not_a_miss(
             self, sandbox):
@@ -1852,7 +1853,7 @@ class TestMcp:
         text, is_err = configuration._mcp_tool(
             "boost_search", {"query": "set up code review for a python repo"})
         assert is_err is False
-        assert "no skills match" not in text
+        assert "no skills, rules or workflows match" not in text
         assert "nothing is tapped yet" in text
         assert "boost tap --defaults" in text
 

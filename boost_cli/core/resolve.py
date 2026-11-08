@@ -42,7 +42,8 @@ class Resolution:
       added on their behalf.
     * ``conflicts`` — ``(skill, clashes_with)`` pairs where a skill in the plan
       declares a ``conflicts:`` against something already installed or also
-      being installed. Advisory (a warning), never a hard failure.
+      being installed, or an installed skill declares one against something
+      in the plan. Advisory (a warning), never a hard failure.
     * ``unresolved`` — required skill names with no known source (a dangling
       ``requires:``); surfaced so the caller can warn rather than crash.
     """
@@ -135,6 +136,16 @@ def resolve(
             if key not in seen_pairs:
                 seen_pairs.add(key)
                 conflicts.append(key)
+    # And the other direction: an installed item's own declaration against
+    # something this plan brings in. Reading the plan's side alone warned
+    # when tdd-workflow joined an installed cowboy-coding and said nothing
+    # in the opposite order. Items in the plan were read above, and `_norm`
+    # leaves no repeat for `seen_pairs` to catch: `name` is never planned.
+    planned = set(order)
+    for name in sorted(n for n in installed if n not in planned):
+        conflicts.extend((name, clash)
+                         for clash in _norm(list(conflicts_of(name) or []))
+                         if clash in planned)
 
     return Resolution(order=order, added=added,
                       conflicts=conflicts, unresolved=unresolved)

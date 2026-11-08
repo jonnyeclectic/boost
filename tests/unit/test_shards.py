@@ -695,15 +695,121 @@ class _StreamedResponse:
         return False
 
 
-def _served(monkeypatch, **kw):
-    """Serve a well-formed manifest through a streamed response."""
-    body = json.dumps({"version": 1, **SPACE,
+def _body() -> bytes:
+    return json.dumps({"version": 1, **SPACE,
                        "shards": [{"tap": "a/b", "commit": "1" * 40,
                                    "url": "https://example.test/a.json",
                                    "sha256": "0" * 64}]}).encode()
-    resp = _StreamedResponse(body, **kw)
-    monkeypatch.setattr(shards, "_open", lambda url, timeout: resp)
+
+
+def _served(monkeypatch, **kw):
+    """Serve a well-formed manifest through a streamed response.
+
+    A fresh response per request, as a server sends: a retried GET must not
+    resume a stream an earlier attempt already drained.
+    """
+    body = _body()
+    monkeypatch.setattr(shards, "_open",
+                        lambda url, timeout: _StreamedResponse(body, **kw))
     return body
+
+
+@pytest.fixture(autouse=True)
+def _no_backoff(monkeypatch):
+    """Record the retry backoff instead of sleeping through it."""
+    slept: list[float] = []
+    monkeypatch.setattr(shards, "_sleep", slept.append)
+    return slept
+
+
+class _Server:
+    """Answers each GET from its own script: a ``cut`` per request, ``None``
+    for a whole body, or an exception the body read raises."""
+
+    def __init__(self, monkeypatch, *script):
+        self.body = _body()
+        self.script = list(script)
+        self.calls = 0
+        monkeypatch.setattr(shards, "_open", self.open)
+
+    def open(self, url, timeout):
+        step = self.script[min(self.calls, len(self.script) - 1)]
+        self.calls += 1
+        if isinstance(step, BaseException):
+            return _BrokenBody(step)
+        return _StreamedResponse(self.body, chunk=64, cut=step)
+
+
+class TestManifestRetry:
+    """One short read used to end `quickstart`: the only advice was to run
+    it again, and behind a proxy that cut the stream every few hundred KB a
+    user doing so failed every time while curl got the whole file."""
+
+    def test_two_short_reads_then_a_whole_one_succeeds(self, monkeypatch,
+                                                       _no_backoff):
+        server = _Server(monkeypatch, 40, 90, None)
+        got = shards.fetch_manifest("https://example.test/m.json")
+        assert got["dim"] == 384
+        assert server.calls == 3
+        assert _no_backoff == [0.5, 1.0]
+
+    def test_a_stream_that_is_always_cut_fails_with_the_old_hint(
+            self, monkeypatch, _no_backoff):
+        server = _Server(monkeypatch, 40)
+        with pytest.raises(BoostError) as err:
+            shards.fetch_manifest("https://example.test/m.json")
+        assert "truncated (40 of %d bytes)" % len(server.body) in (
+            err.value.message)
+        assert err.value.hint == ("a proxy or a dropped connection cut the "
+                                  "stream — retry")
+        assert server.calls == shards.MANIFEST_ATTEMPTS == 3
+        assert _no_backoff == [0.5, 1.0]
+
+    def test_an_incomplete_read_is_retried(self, monkeypatch, _no_backoff):
+        server = _Server(monkeypatch, http.client.IncompleteRead(b"x"), None)
+        assert shards.fetch_manifest(
+            "https://example.test/m.json")["version"] == 1
+        assert server.calls == 2
+        assert _no_backoff == [0.5]
+
+    def test_a_whole_body_first_time_never_waits(self, monkeypatch,
+                                                 _no_backoff):
+        server = _Server(monkeypatch, None)
+        shards.fetch_manifest("https://example.test/m.json")
+        assert server.calls == 1
+        assert _no_backoff == []
+
+    @pytest.mark.parametrize("exc", [TimeoutError("timed out"),
+                                     ConnectionResetError(54, "reset")])
+    def test_other_body_failures_are_not_retried(self, monkeypatch,
+                                                 _no_backoff, exc):
+        # A stalled server already cost one full timeout; three would make a
+        # hang three times as long for the same answer.
+        server = _Server(monkeypatch, exc, None)
+        with pytest.raises(BoostError, match="cannot read"):
+            shards.fetch_manifest("https://example.test/m.json")
+        assert server.calls == 1
+        assert _no_backoff == []
+
+    def test_an_oversized_manifest_is_not_retried(self, monkeypatch,
+                                                  _no_backoff):
+        monkeypatch.setattr(shards, "MAX_MANIFEST_BYTES", 64)
+        server = _Server(monkeypatch, None)
+        with pytest.raises(BoostError, match="implausibly large"):
+            shards.fetch_manifest("https://example.test/m.json")
+        assert server.calls == 1
+
+    def test_a_connect_failure_is_not_retried(self, monkeypatch,
+                                              _no_backoff):
+        calls = []
+
+        def refuse(url, timeout):
+            calls.append(url)
+            raise BoostError("cannot reach %s: refused" % url)
+        monkeypatch.setattr(shards, "_open", refuse)
+        with pytest.raises(BoostError, match="cannot reach"):
+            shards.fetch_manifest("https://example.test/m.json")
+        assert len(calls) == 1
 
 
 class TestTruncatedManifest:

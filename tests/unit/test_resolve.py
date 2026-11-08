@@ -7,7 +7,7 @@ carve-out, cycle safety, dedup, conflict detection, and unresolved handling.
 The resolver is pure and dependency-injected, so a small in-test graph exercises
 every branch with no catalog or filesystem.
 """
-from boost_cli.core import resolve
+from boost_cli.core import prereq, resolve
 
 
 def _graph(deps):
@@ -158,6 +158,65 @@ class TestConflicts:
         r = resolve.resolve(["a"], _graph({"a": ["b"]}),
                             conflicts_of=lambda n: ["b", "b"] if n == "a" else [])
         assert r.conflicts == [("a", "b")]
+
+    def test_an_installed_items_declaration_counts_against_the_plan(self):
+        # The declaration was read only off the plan, so installing cowboy
+        # beside an installed tdd that declares `conflicts: [cowboy]` said
+        # nothing, while the opposite order warned.
+        r = resolve.resolve(["cowboy"], _graph({}),
+                            conflicts_of=lambda n: ["cowboy"] if n == "tdd"
+                            else [],
+                            installed=frozenset({"tdd"}))
+        assert r.conflicts == [("tdd", "cowboy")]
+
+    def test_both_install_orders_report_the_one_pair(self):
+        def decl(n):
+            return ["cowboy"] if n == "tdd" else []
+        first = resolve.resolve(["tdd"], _graph({}), conflicts_of=decl,
+                                installed=frozenset({"cowboy"}))
+        second = resolve.resolve(["cowboy"], _graph({}), conflicts_of=decl,
+                                 installed=frozenset({"tdd"}))
+        assert first.conflicts == second.conflicts == [("tdd", "cowboy")]
+
+    def test_a_dependency_pulled_in_is_checked_too(self):
+        r = resolve.resolve(["a"], _graph({"a": ["b"]}),
+                            conflicts_of=lambda n: ["b"] if n == "x" else [],
+                            installed=frozenset({"x"}))
+        assert r.conflicts == [("x", "b")]
+
+    def test_two_installed_items_clashing_are_not_this_installs_news(self):
+        # `boost conflict` reports a clash already on disk; an install that
+        # touches neither side has nothing to add to it.
+        r = resolve.resolve(["a"], _graph({}),
+                            conflicts_of=lambda n: ["z"] if n == "x" else [],
+                            installed=frozenset({"x", "z"}))
+        assert r.conflicts == []
+
+    def test_an_installed_root_is_read_once(self):
+        # A reinstall is in the plan, so the forward scan already read it.
+        calls = []
+
+        def decl(n):
+            calls.append(n)
+            return ["b"] if n == "a" else []
+        r = resolve.resolve(["a", "b"], _graph({}), conflicts_of=decl,
+                            installed=frozenset({"a"}))
+        assert r.conflicts == [("a", "b")]
+        assert sorted(calls) == ["a", "b"]
+
+    def test_installed_declarations_are_read_in_name_order(self):
+        installed = prereq.InstalledSet({"y": [""], "x": [""]})
+        r = resolve.resolve(["p"], _graph({}),
+                            conflicts_of=lambda n: ["p"] if n != "p" else [],
+                            installed=installed)
+        assert r.conflicts == [("x", "p"), ("y", "p")]
+
+    def test_a_mutual_conflict_is_reported_from_both_sides(self):
+        r = resolve.resolve(["a"], _graph({}),
+                            conflicts_of=lambda n: {"a": ["b"],
+                                                    "b": ["a"]}.get(n, []),
+                            installed=frozenset({"b"}))
+        assert r.conflicts == [("a", "b"), ("b", "a")]
 
     def test_no_conflicts_callable_defaults_empty(self):
         r = resolve.resolve(["a"], _graph({"a": ["b"]}))

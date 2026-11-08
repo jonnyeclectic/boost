@@ -372,6 +372,29 @@ class TestTapCatalog:
                   expect=1)
         assert "no catalog registries match" in r.out
 
+    def test_an_unknown_category_names_the_ones_there_are(self, boost,
+                                                           sandbox):
+        # Nothing else lists the catalog's categories: `browse --categories`
+        # lists those of tapped items, a different set.
+        r = boost("tap", "--catalog", "--category", "Securty", "--dry-run",
+                  expect=1)
+        text = " ".join(r.out.split())
+        assert "no catalog registries match" in text
+        assert "no catalog category is named 'Securty'" in text
+        assert "did you mean 'security'?" in text
+        assert "infra, java" in text
+
+    def test_a_known_category_emptied_by_another_filter_is_not_renamed(
+            self, boost, sandbox, monkeypatch):
+        from boost_cli.core import config
+        monkeypatch.setattr(config, "load_registry_catalog", lambda: [
+            {"name": "a/b", "url": "a/b", "type": "skill",
+             "category": "security"}])
+        r = boost("tap", "--catalog", "--type", "rule", "--category",
+                  "security", "--dry-run", expect=1)
+        assert "no catalog registries match" in r.out
+        assert "no catalog category is named" not in r.out
+
     def test_limit_must_be_positive_int(self, boost, sandbox):
         # --limit -1 used to silently drop the last registry (entries[:-1])
         # rather than being rejected as meaningless.
