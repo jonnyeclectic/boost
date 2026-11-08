@@ -21,7 +21,7 @@ import json
 import re
 import subprocess
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import pytest
 
@@ -482,6 +482,25 @@ def _agent_sets() -> tuple[set[str], set[str], set[str]]:
     return every, linking, every - linking
 
 
+def _agent_homes() -> tuple[set[str], set[str]]:
+    """(the dirs boost symlinks into, the store-reading agents' dirs), `~/…`.
+
+    Each is the parent of the agent's default skills dir, so
+    `~/.gemini/antigravity-cli/skills` is `~/.gemini/antigravity-cli`. Codex's
+    `${CODEX_HOME:-~/.codex}/skills` is read at its default, `~/.codex`.
+    """
+    from boost_cli.core import agents, config
+    rows: dict[str, dict] = config.DEFAULTS["agents"]  # type: ignore[assignment]
+
+    def home(agent: str) -> str:
+        raw = re.sub(r"\$\{\w+:-([^}]*)\}", r"\1", rows[agent]["dir"])
+        return PurePosixPath(raw).parent.as_posix()
+
+    linking = {home(a) for a in agents.DISPLAY
+               if agents.flag_default(a, "links_skills")}
+    return linking, {home(a) for a in agents.DISPLAY} - linking
+
+
 def _agent_runs(text: str) -> list[list[str]]:
     """Each run of agent names joined by commas, `·` or "and", tags removed."""
     from boost_cli.core import agents
@@ -508,12 +527,15 @@ class TestAgentListsAgree:
     def test_an_install_target_list_is_every_agent_or_the_linking_ones(self):
         # A list naming Cursor and Windsurf is a list of install targets:
         # neither is an MCP or hooks host, which is what the shorter
-        # "Claude Code, Gemini CLI, …" lists elsewhere describe.
+        # "Claude Code, Gemini CLI, …" lists elsewhere describe. Order is not
+        # part of the test: requiring the list to open with Claude Code let
+        # the stale four through as "Cursor, Windsurf, Claude Code or Gemini
+        # CLI".
         every, linking, _native = _agent_sets()
         surfaces = [*_docs_site(), ("README.md", README)]
         lists = [(name, run) for name, text in surfaces
                  for run in _agent_runs(text)
-                 if run[0] == "Claude Code" and {"Cursor", "Windsurf"} <= set(run)]
+                 if {"Claude Code", "Cursor", "Windsurf"} <= set(run)]
         assert {"README.md", "docs/index.html"} <= {d for d, _ in lists}, lists
         wrong = [(d, run) for d, run in lists if set(run) not in (every, linking)]
         assert wrong == [], (
@@ -539,6 +561,25 @@ class TestAgentListsAgree:
         assert m, "the container diagram no longer says who reads the store"
         assert {a for run in _agent_runs(m.group(1)) for a in run} == native, \
             m.group(1)
+
+    @pytest.mark.parametrize("doc", ["c4-containers.md", "c4-dynamic-install.md"])
+    def test_the_link_box_is_every_linking_agents_dir(self, doc):
+        # The agent names above are checked, but the directories beside them
+        # were not: either diagram could drop ~/.gemini/antigravity-cli from
+        # its symlink box and every name test still passed.
+        linking, _native = _agent_homes()
+        text = (ROOT / "docs" / "architecture" / doc).read_text(encoding="utf-8")
+        m = re.search(r'ContainerDb\(links, "([^"]*)"', text)
+        assert m, "%s lost its symlink box" % doc
+        assert {d.strip() for d in m.group(1).split(",")} == linking, m.group(1)
+
+    def test_the_native_box_is_every_store_reading_agents_dir(self):
+        _linking, native = _agent_homes()
+        text = (ROOT / "docs" / "architecture" / "c4-containers.md").read_text(
+            encoding="utf-8")
+        m = re.search(r'ContainerDb\(native, "([^"]*)"', text)
+        assert m, "the container diagram lost its native-store agents' box"
+        assert {d.strip() for d in m.group(1).split(",")} == native, m.group(1)
 
 
 class TestNoStaleCountsElsewhere:
