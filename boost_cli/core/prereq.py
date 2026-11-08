@@ -231,7 +231,7 @@ def for_installed() -> list[ItemPrereqs]:
     entries = catalog.cached_entries()
     installed = lockfile.all_installed()
     have = frozenset(chain.from_iterable(installed.values()))
-    picked = _installed_entries(installed, entries)
+    picked = installed_entries(installed, entries)
     return for_entries(list(picked.values()), installed=have, corpus=entries)
 
 
@@ -259,7 +259,7 @@ def required_by(names: Iterable[str]) -> dict[str, list[str]]:
                                    .get("tap") or ""))
     present = InstalledSet(taps)
     found: dict[str, set[str]] = defaultdict(set)
-    for (_kind, dependent), entry in _installed_entries(
+    for (_kind, dependent), entry in installed_entries(
             installed, catalog.cached_entries()).items():
         if dependent in targets:
             continue
@@ -269,8 +269,8 @@ def required_by(names: Iterable[str]) -> dict[str, list[str]]:
     return {name: sorted(who) for name, who in found.items()}
 
 
-def _installed_entries(installed: Mapping[str, Mapping],
-                       entries: list[dict]) -> dict[tuple[str, str], dict]:
+def installed_entries(installed: Mapping[str, Mapping],
+                      entries: list[dict]) -> dict[tuple[str, str], dict]:
     """``{(kind, name): catalog entry}`` for each installed item whose tap
     still describes it — the copy its lock row says was installed."""
     picked: dict[tuple[str, str], dict] = {}

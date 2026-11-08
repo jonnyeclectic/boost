@@ -317,6 +317,59 @@ class TestMissingDependencies:
         assert pulled == []
 
 
+class TestInstalledSideConflicts:
+    """An installed item's `conflicts:` against what the plan brings in,
+    read off the copy its lock row names — not `resolve_one`, which refuses
+    a name two taps ship (silencing the warning) and, for a name in no tap,
+    scores the whole catalogue for a hint nobody sees."""
+
+    def _taps(self):
+        _fake_taps(
+            ("alpha", [_entry("tdd", "alpha", desc="a"),
+                       _entry("cowboy", "alpha", desc="c")]),
+            ("beta", [_entry("tdd", "beta", desc="b",
+                             meta={"conflicts": ["cowboy"]})]))
+
+    def test_the_installed_copy_from_its_own_tap_is_read(self, sandbox):
+        self._taps()
+        lockfile.set_skill("tdd", {"tap": "beta", "version": "1.0.0"})
+        _ordered, res = installplan.expand_dependencies(
+            [catalog.resolve_one("cowboy")])
+        assert res.conflicts == [("tdd", "cowboy")]
+        assert installplan.dependency_warnings(res) == [
+            "tdd declares a conflict with cowboy (also present)"]
+
+    def test_the_other_taps_copy_is_not(self, sandbox):
+        self._taps()
+        lockfile.set_skill("tdd", {"tap": "alpha", "version": "1.0.0"})
+        _ordered, res = installplan.expand_dependencies(
+            [catalog.resolve_one("cowboy")])
+        assert res.conflicts == []
+
+    def test_a_project_install_is_read_for_pbase(self, sandbox, monkeypatch):
+        self._taps()
+        monkeypatch.setattr(installplan.projectlock, "installed",
+                            lambda base: {"tdd": {"tap": "beta"}})
+        _ordered, res = installplan.expand_dependencies(
+            [catalog.resolve_one("cowboy")], "/repo")
+        assert res.conflicts == [("tdd", "cowboy")]
+
+    def test_an_installed_name_is_never_resolved_against_the_catalog(
+            self, sandbox, monkeypatch):
+        self._taps()
+        lockfile.set_skill("tdd", {"tap": "beta", "version": "1.0.0"})
+        lockfile.set_skill("mine", {"tap": "local", "version": "1.0.0"})
+        root = catalog.resolve_one("cowboy")
+        real = catalog.resolve_one
+
+        def only_the_plan(name, *a, **k):
+            assert name not in ("tdd", "mine"), name
+            return real(name, *a, **k)
+        monkeypatch.setattr(catalog, "resolve_one", only_the_plan)
+        _ordered, res = installplan.expand_dependencies([root])
+        assert res.conflicts == [("tdd", "cowboy")]
+
+
 class TestAddedLine:
     def test_nothing_added(self):
         assert installplan.added_line(Resolution()) is None

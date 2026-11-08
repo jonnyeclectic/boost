@@ -198,10 +198,37 @@ def expand_dependencies(entries: list[dict], pbase=None, *,
                 declared_in.setdefault(dep, str(entry.get("tap") or ""))
         return found
 
+    held: dict[str, list[str]] | None = None
+
+    def installed_conflicts(name: str) -> list[str]:
+        """An installed item's `conflicts:`, off the copy its lock row names.
+
+        Not through `entry_for`: `resolve_one` refuses a name two taps ship,
+        which silenced the warning, and for a name in no tap (a local skill)
+        scores the whole catalogue for a hint nobody sees — per installed
+        item, on every install.
+        """
+        nonlocal held
+        if held is None:
+            held = {}
+            corpus = catalog.all_entries()
+            sections = [lockfile.all_installed()]
+            if pbase is not None:
+                sections.append({"skill": projectlock.installed(pbase)})
+            for section in sections:
+                for (_kind, n), e in prereq.installed_entries(
+                        section, corpus).items():
+                    held.setdefault(n, []).extend(
+                        entry_relations(e, "conflicts"))
+        return held.get(name, [])
+
     res = resolve.resolve(
         [e["name"] for e in entries],
         lambda n: relations(n, "requires"),
-        lambda n: relations(n, "conflicts"),
+        # Everything the plan holds has been picked by the time conflicts
+        # are read; any other name the resolver asks about is installed.
+        lambda n: (relations(n, "conflicts") if n in picked
+                   else installed_conflicts(n)),
         installed=installed,
         # Installed counts as known: a met requirement whose tap has since
         # been removed is met, not "in no tap".

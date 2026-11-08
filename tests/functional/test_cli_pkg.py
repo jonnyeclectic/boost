@@ -4979,6 +4979,35 @@ class TestLocalInstallGates:
 
 
 
+class TestDeclaredConflicts:
+    """tdd-workflow declares `conflicts: [cowboy-coding]` (make_fixture.py).
+    Installing tdd-workflow beside cowboy-coding warned; installing
+    cowboy-coding beside tdd-workflow said nothing, although `boost deps`
+    and `boost conflict` both knew the pair."""
+
+    LINE = "! tdd-workflow declares a conflict with cowboy-coding (also present)"
+
+    @pytest.mark.parametrize("first, second", [
+        ("cowboy-coding", "tdd-workflow"),
+        ("tdd-workflow", "cowboy-coding")])
+    def test_either_install_order_warns(self, boost, tapped, first, second):
+        r = boost("install", first)
+        assert "declares a conflict" not in r.out + r.err
+        r = boost("install", second)
+        assert self.LINE in r.out + r.err
+        assert sorted(_lock()) == ["cowboy-coding", "tdd-workflow"]
+
+    def test_the_mcp_install_reply_warns_in_the_quiet_order_too(self, boost,
+                                                                tapped):
+        from boost_cli.commands import configuration
+        boost("install", "tdd-workflow")
+        text, is_err = configuration._mcp_tool("boost_install",
+                                               {"name": "cowboy-coding"})
+        assert is_err is False
+        assert ("tdd-workflow declares a conflict with cowboy-coding (also "
+                "present)") in text
+
+
 # ── prerequisites declared under the wider spellings ─────────────────────
 
 class TestUnmetPrerequisites:
