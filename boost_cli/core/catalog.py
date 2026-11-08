@@ -84,7 +84,7 @@ from . import (
 #        workflow (`WORKFLOW_META_KEYS`), and a loose subagent is named as
 #        one rather than as a slash command (`workflows.detect_slot`)
 #  12 -- a doc page under a workflow dir is not an item (`_is_doc_page`): an
-#        ALL-CAPS stem with no workflow frontmatter (`QUICKSTART.md`,
+#        ALL-CAPS stem with no item frontmatter (`QUICKSTART.md`,
 #        `src/agents/AGENTS.md`) is dropped, and a lowercase `changelog.md`,
 #        `security.md` or `index.md` command is an item again
 CACHE_FORMAT = 12
@@ -477,6 +477,24 @@ def _declares_workflow(meta: dict) -> bool:
                 and (WORKFLOW_META_KEYS & set(meta)))
 
 
+def _describes_an_item(meta: dict) -> bool:
+    """True when ``meta`` makes a doc-shaped file an item anyway: a
+    ``description`` plus a ``name`` or one of :data:`WORKFLOW_META_KEYS`.
+
+    Looser than :func:`_declares_workflow` on purpose. That one decides
+    whether a loose file anywhere is a workflow; this one only overrides a
+    doc-shaped stem already under a workflow dir, where a real item's
+    frontmatter need not use Claude's keys: claude-office-skills/skills's
+    ``agents/*/AGENT.md`` carry ``name``, ``description``, ``skills`` and
+    ``mcp_tools``, and langchain-ai/deepagents's ``AGENTS.md`` subagents a
+    ``description`` and ``tools`` with no ``name``. A docs-site page carries
+    a ``description`` and neither (microsoft/hve-core's ``README.md``,
+    ``docs/agents/index.md`` with a ``title``), so it stays a page.
+    """
+    return bool(meta.get("description")
+                and (meta.get("name") or (WORKFLOW_META_KEYS & set(meta))))
+
+
 def _all_caps(stem: str) -> bool:
     """True when ``stem`` has at least two letters and every one of them is
     an ASCII capital: ``QUICKSTART``, ``ORCHESTRATION-README``, ``AGENTS``.
@@ -493,20 +511,22 @@ def _is_doc_page(stem: str, meta: dict) -> bool:
     """True when a Markdown file whose stem is ``stem`` documents its repo
     rather than being one of its workflows.
 
-    Doc-shaped stem AND no workflow frontmatter. The stem is doc-shaped when
-    it is in :data:`DOC_STEMS` in any case, or written ALL-CAPS, which is how
-    a repo names the pages it means people to read: qdhenry/Claude-Command-
-    Suite's ``.claude/commands/skills/QUICKSTART.md`` was indexed as the
-    command ``skills/QUICKSTART`` and ranked first for "write good git commit
-    messages". Over 30 registries (6,292 workflow items) the
-    ALL-CAPS stems were 7: six such pages and one real subagent,
-    ``agents/TASK-STATUS-PROTOCOL.md``, which carries ``name``,
-    ``description`` and ``tools`` -- hence the frontmatter exception, and
-    hence its full shape: 9 microsoft/hve-core ``README.md`` files carry a
-    docs-site ``description`` and nothing else.
+    Doc-shaped stem AND no item frontmatter (:func:`_describes_an_item`).
+    The stem is doc-shaped when it is in :data:`DOC_STEMS` in any case, or
+    written ALL-CAPS, which is how a repo names the pages it means people to
+    read: qdhenry/Claude-Command-Suite's
+    ``.claude/commands/skills/QUICKSTART.md`` was indexed as the command
+    ``skills/QUICKSTART`` and ranked first for "write good git commit
+    messages". Over 470 taps (10,687 workflow items) the ALL-CAPS stems
+    indexed as workflows were 90: 30 such pages, not one with frontmatter,
+    and 60 real items that all carry it -- 48 nowork-studio ``WORKFLOW.md``
+    commands, qdhenry's ``agents/TASK-STATUS-PROTOCOL.md``, and 8 subagents
+    whose keys are not Claude's -- hence the exception, and hence its second
+    half: 9 microsoft/hve-core ``README.md`` files carry a docs-site
+    ``description`` and nothing else.
     """
     return ((stem.lower() in DOC_STEMS or _all_caps(stem))
-            and not _declares_workflow(meta))
+            and not _describes_an_item(meta))
 
 
 def _classify_workflow(path: Path, meta: dict) -> bool:

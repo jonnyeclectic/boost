@@ -717,7 +717,9 @@ class TestDocPages:
     Every path and frontmatter key set below is a real one, from a 30-registry
     sample (6,292 workflow items) scanned on 2026-11-08: the old rule matched
     38 README.md pages rightly, dropped 4 real commands and let 6 ALL-CAPS
-    pages through; this one gets all 44 pages and keeps all 5 items.
+    pages through; this one gets all 44 pages and keeps all 5 items. The
+    AGENT.md / AGENTS.md rows are from the same check over 470 taps, where
+    the whole `_declares_workflow` signature would have dropped 8 subagents.
     """
 
     # The six ALL-CAPS pages, none carrying frontmatter. QUICKSTART is the one
@@ -731,12 +733,20 @@ class TestDocPages:
         "src/agents/AGENTS.md",
     ]
 
-    # The real items, each with the frontmatter keys it ships: one ALL-CAPS
-    # subagent, and the four lowercase commands the old DOC_STEMS dropped.
+    # The real items, each with the frontmatter keys it ships: the ALL-CAPS
+    # subagents, and the four lowercase commands the old DOC_STEMS dropped.
+    # The office and deepagents rows are from the 470-tap check: neither
+    # carries the whole `_declares_workflow` signature.
     ITEMS: ClassVar[list[tuple[str, dict]]] = [
         (".claude/agents/TASK-STATUS-PROTOCOL.md",
          {"name": "task-status-protocol", "description": "d",
           "tools": "Read, Write"}),
+        ("agents/data-analyst/AGENT.md",
+         {"name": "data-analyst", "display_name": "Data Analyst",
+          "description": "d", "version": "1.0.0", "category": "finance",
+          "skills": ["xlsx"], "mcp_tools": ["excel"]}),
+        ("libs/talon/deepagents_talon/defaults/agents/internal-research/"
+         "AGENTS.md", {"description": "d", "tools": []}),
         ("commands/git/changelog.md", {}),
         ("plugins/smart-commit/commands/changelog.md",
          {"name": "changelog", "description": "d"}),
@@ -770,20 +780,35 @@ class TestDocPages:
         assert catalog._classify_workflow(
             Path("commands/%s.md" % stem.upper()), {}) is False
 
-    def test_the_exception_needs_the_whole_workflow_signature(self):
+    def test_the_exception_is_a_description_and_a_name_or_workflow_key(self):
         rel = Path(".claude/agents/TASK-STATUS-PROTOCOL.md")
         assert catalog._classify_workflow(
             rel, {"name": "t", "description": "d", "tools": "Read"}) is True
+        # Either half after the description is enough...
         assert catalog._classify_workflow(
-            rel, {"name": "t", "description": "d"}) is False
+            rel, {"name": "t", "description": "d"}) is True
         assert catalog._classify_workflow(
-            rel, {"description": "d", "tools": "Read"}) is False
-        # microsoft/hve-core's docs-site README carries a description and
-        # nothing a workflow does; "has a description" would re-admit all 9.
+            rel, {"description": "d", "tools": "Read"}) is True
+        # ...but the description is not optional,
+        assert catalog._classify_workflow(
+            rel, {"name": "t", "tools": "Read"}) is False
+        assert catalog._classify_workflow(rel, {"name": "t"}) is False
+        # and neither is the half after it: microsoft/hve-core's docs-site
+        # README carries a description and nothing an item does; "has a
+        # description" would re-admit all 9.
         assert catalog._classify_workflow(
             Path("docs/agents/security/README.md"),
             {"description": "d", "title": "t", "sidebar_position": 2,
              "author": "a"}) is False
+
+    def test_the_exception_does_not_loosen_a_loose_file(self):
+        # Only a doc-shaped stem under a workflow dir gets the looser test;
+        # a loose file still needs the whole `_declares_workflow` signature.
+        loose = Path("prompts/agent.md")
+        assert catalog._classify_workflow(
+            loose, {"name": "a", "description": "d"}) is False
+        assert catalog._classify_workflow(
+            loose, {"description": "d", "tools": "Read"}) is False
 
     def test_the_exception_covers_a_doc_stem_too(self):
         # A README.md that declares itself a subagent is loaded as one.
