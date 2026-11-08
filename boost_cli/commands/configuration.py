@@ -1898,8 +1898,9 @@ def _tool_info(args: dict):
     if entry:
         # Only the agents boost still writes for: a recorded row whose agent
         # was disabled is kept for uninstall, not reached (same as `info`).
-        agents_s = ", ".join(
-            integrity.written_agent_names(kind, entry)) or "none"
+        # Plus the ones reading the store, in boost_install's words.
+        agents_s = integrity.reach_line(kind, entry,
+                                        catalog.split_name(name)[1])
         lines.extend(("installed: yes (%s)" % entry.get("installed_at", "?"),
                       "agents: %s" % agents_s))
         where = (_tilde(pbase) if pbase is not None

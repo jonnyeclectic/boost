@@ -2843,8 +2843,7 @@ def cmd_stats(argv):
         # command describing two kinds of item.
         # Written agents only: a row boost no longer writes is kept so an
         # uninstall can reverse it, not because the item reaches that agent.
-        out.kv("agents",
-               ", ".join(integrity.written_agent_names(kind, lock)) or "none")
+        out.kv("agents", integrity.reach_line(kind, lock, name), wrap=True)
         out.kv("pinned", "yes" if lock.get("pinned") else "no")
         if lock.get("quarantined"):
             out.kv("quarantined", "yes")

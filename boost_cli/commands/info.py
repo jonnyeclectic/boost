@@ -296,11 +296,16 @@ def _print_wrapped(text: str) -> None:
 
 # ---------------------------------------------------------------- commands
 
-def _materialized_agents(kind, entry):
+def _materialized_agents(kind, entry, name=None):
     """Abbreviated agent column for any kind: the agents boost still writes
-    for it, not every recorded row or link (`integrity.written_agent_names`)."""
-    return "·".join(a.split("-")[0]
-                    for a in integrity.written_agent_names(kind, entry))
+    for it, not every recorded row or link (`integrity.written_agent_names`),
+    then ``+`` and the agents that read a user-scope skill from the store
+    without one (`integrity.store_reader_names`)."""
+    written = "·".join(a.split("-")[0]
+                       for a in integrity.written_agent_names(kind, entry))
+    native = "·".join(integrity.store_reader_names(kind, entry, name))
+    return "%s +%s" % (written, native) if native and written else (
+        written or ("+" + native if native else ""))
 
 
 def _scope_flag(entry: dict) -> list[str]:
@@ -335,7 +340,7 @@ def _kind_table(heading, kind, items, extra=None):
         e = items[name]
         quarantined = bool(e.get("quarantined"))
         agents_cell = ("—" if quarantined
-                       else _materialized_agents(noun, e) or "none")
+                       else _materialized_agents(noun, e, name) or "none")
         flags = ([out.aurora("pinned", "yellow")] if e.get("pinned") else []) + \
                 ([out.aurora("quarantined", "pink")] if quarantined else []) + \
                 _scope_flag(e)
@@ -469,7 +474,8 @@ def cmd_list(argv):
                      if e.get("sidelined_by") else []) + \
                     [out.role("#" + t, "muted") for t in e.get("tags") or []]
             rows.append((name, e.get("version", "?"), e.get("tap", "?"),
-                         _materialized_agents("skill", e), " ".join(flags)))
+                         _materialized_agents("skill", e, name),
+                         " ".join(flags)))
         # NAME is what `uninstall`/`update`/`cat` take: `brainstorm…` is not
         # a name any of them accepts, so it is shown whole or dropped.
         out.table(rows, headers=("NAME", "VERSION", "TAP", "AGENTS", "FLAGS"),
@@ -478,6 +484,12 @@ def cmd_list(argv):
                                 % (len(rows), "" if len(rows) == 1 else "s",
                                    " with tag #%s" % args.tag.lstrip("#")
                                    if args.tag else ""), "cyan"))
+        # The `+` half of AGENTS (`_materialized_agents`) says something no
+        # other column does, so it is said once, under the table.
+        if any(integrity.store_reader_names("skill", e, n)
+               for n, e in skills.items()):
+            out.dim("  +agents read %s directly, with no link"
+                    % _tilde(paths.store_dir()))
         if gone:
             out.warn("%s missing from the store, so no agent can load %s "
                      "(%s) — `boost heal` restores %s"
@@ -883,8 +895,11 @@ def cmd_info(argv):
             out.kv("updated", "%s (%s)" % (ua, util.rel_time(ua)))
         # Written agents only, as for a rule: a link left in a disabled
         # agent's dir is kept for uninstall, not one boost still writes.
-        out.kv("agents", ", ".join(
-            integrity.written_agent_names("skill", entry)) or "(none)")
+        # And the agents that read the store without a link, which
+        # boost_install names: leaving them out told Gemini and Codex users
+        # the skill had not reached them.
+        out.kv("agents", integrity.reach_line("skill", entry, name,
+                                              none="(none)"), wrap=True)
     if plock and not lock:
         # Which copy the rows above describe. Only worth saying when there is
         # no user-scope record to confuse it with.
