@@ -123,12 +123,23 @@ def candidates(registries: Sequence[dict], exclude: Sequence[str]
     ``list_only`` rows are awesome-list indexes rather than skill trees, so they
     contribute nothing to scan and are dropped — the same distinction
     `registries.json` already draws for its own item-count math.
+
+    "What we have" is a repository, not a spelling. taps.txt pins
+    ``LessUp/awesome-cursorrules-zh``, whose row is now
+    ``holtwood/awesome-cursorrules-zh`` with the old name in ``formerly``, so
+    a name-only test drew the required repository a second time as a
+    distractor — and `registry.add` refuses the second name of a tapped
+    repository, so materialising the list failed on that row. Case-folded,
+    because a tap's identity is (`registry.name_key`).
     """
     out: dict[str, list[tuple[str, int]]] = {}
-    seen = set(exclude)
+    seen = {str(n).casefold() for n in exclude}
     for row in registries:
         name = str(row.get("name", ""))
-        if not name or name in seen or row.get("list_only"):
+        if not name or row.get("list_only"):
+            continue
+        if any(alias.casefold() in seen
+               for alias in (name, *map(str, row.get("formerly") or ()))):
             continue
         kind = str(row.get("type", "skill"))
         out.setdefault(kind, []).append((name, int(row.get("est_items") or 0)))
