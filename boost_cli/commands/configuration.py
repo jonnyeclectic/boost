@@ -1654,9 +1654,9 @@ def _ranking_note(ranker: str) -> str:
     """
     if ranker == rag.LLM_RANKER:
         return "\n(ranked by %s)" % ranker
-    return ("\n(ranked by %s — the LLM rerank did NOT run, so this is a "
-            "shortlist to read rather than a verdict to act on. Configure "
-            "ANTHROPIC_API_KEY or the `claude` CLI to enable it.)" % ranker)
+    # Why it did not run decides the remedy (`mcp.unreranked_note`).
+    return mcp.unreranked_note(ranker, ai.unavailable_cause(),
+                               ai.unavailable_reason())
 
 
 # The label for the pre-RAG fallback below. `_ranking_note` needs a name for

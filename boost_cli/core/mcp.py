@@ -482,6 +482,29 @@ def held_line(name: str, entry: dict | None) -> str | None:
 COMPANIONS_SHOWN = 8
 
 
+def unreranked_note(ranker: str, cause: str, reason: str) -> str:
+    """boost_search's closing line when the LLM rerank did not run.
+
+    ``cause`` and ``reason`` are :func:`ai.unavailable_cause` and
+    :func:`ai.unavailable_reason`. The line used to end "Configure
+    ANTHROPIC_API_KEY or the `claude` CLI to enable it." whatever the cause:
+    with ``BOOST_NO_AI=1`` and `claude` on PATH -- AI off on purpose, both
+    remedies already present -- every reply told the agent to set them up,
+    while the ``initialize`` instructions on the same connection correctly
+    said no backend was enabled. Only a missing backend gets that advice.
+    """
+    head = ("\n(ranked by %s — the LLM rerank did NOT run, so this is a "
+            "shortlist to read rather than a verdict to act on. " % ranker)
+    if cause == "disabled":
+        return head + ("AI is %s on this machine: a setting, not a fault, "
+                       "so leave it as it is.)" % reason)
+    if cause == "missing":
+        return head + ("Configure ANTHROPIC_API_KEY or the `claude` CLI to "
+                       "enable it.)")
+    return head + ("An AI backend is configured and did not rerank this "
+                   "call (%s).)" % reason)
+
+
 def companions_line(files: Sequence[str], skill_dir: str | None) -> str | None:
     """The header line naming what a skill ships beside SKILL.md, or None.
 

@@ -78,6 +78,28 @@ def has_cli() -> bool:
     return cli_backend() is not None
 
 
+#: :func:`unavailable_cause`'s answers. Three causes, and only one of them is
+#: a missing backend.
+CAUSE_DISABLED = "disabled"
+CAUSE_MISSING = "missing"
+CAUSE_FAILED = "failed"
+
+
+def unavailable_cause() -> str:
+    """Which of :func:`unavailable_reason`'s three cases holds, as a word.
+
+    For a caller that words a remedy, not just a reason: a user who set
+    ``BOOST_NO_AI`` or ``ai.enabled=false`` turned AI off on purpose, and
+    advice to configure a key is advice to undo their own setting.
+    """
+    if (typedvalue.env_flag("BOOST_NO_AI", unknown=True)
+            or not bool(config.get("ai.enabled", True))):
+        return CAUSE_DISABLED
+    if not (has_cli() or os.environ.get("ANTHROPIC_API_KEY")):
+        return CAUSE_MISSING
+    return CAUSE_FAILED
+
+
 def unavailable_reason() -> str:
     """Why the last AI attempt degraded, as a specific, attributable clause.
 
