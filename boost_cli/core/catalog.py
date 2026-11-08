@@ -1191,29 +1191,23 @@ def find(name: str, tap: str | None = None,
     # then filtered it out, and the fallback had already been skipped.
     if not hits and entries is None and _ships_builtin(name, tap):
         # One of the two items boost ships itself, on a machine whose
-        # builtin tap was never registered. Registration used to happen only
-        # when the user said yes to `boost mcp register`'s offer, so the
-        # decline line's own advice -- `boost install boost-first` -- failed
-        # with "no skill named", and on a Cursor- or Windsurf-only machine,
-        # where no MCP host settles and no offer is ever made, nothing could
-        # install it at all. The tap is package data: copying it out is
-        # offline and costs two small files, so a lookup can afford to.
+        # builtin tap was never registered, or was registered by a wheel
+        # that predates the item. Registration used to happen only when the
+        # user said yes to `boost mcp register`'s offer, so the decline
+        # line's own advice -- `boost install boost-first` -- failed with
+        # "no skill named", and on a Cursor- or Windsurf-only machine, where
+        # no MCP host settles and no offer is ever made, nothing could
+        # install it at all.
         #
-        # Rescanned, not just copied out: a tap registered by an older wheel
-        # has a format-current cache that predates the shipped skill, and
-        # `load_tap` serves such a cache as it is, so the copy alone left
-        # `boost install boost-find-and-install` missing after an upgrade.
-        # Only a miss gets here, so the rescan runs once per upgrade.
-        try:
-            builtin.ensure_tap()
-            rebuild_tap(registry.get(builtin.BUILTIN_TAP))
-        except OSError as exc:
-            # A lookup is not where a user expects a write to fail, so it says
-            # which write: unhandled, an unwritable ~/.boost turned
-            # `boost info boost-first` into "boost hit an unexpected error".
-            raise BoostError("could not set up boost's own tap to find %r: %s"
-                             % (name, exc)) from exc
-        hits = _in_tap(list(_name_index(all_entries()).get(name, ())), tap)
+        # Answered from the wheel, and nothing is written. This used to run
+        # `builtin.ensure_tap()` and a rescan, which write config.json and
+        # ~/.boost/repos/boost__builtin, from a lookup that `boost info`,
+        # `boost cat`, `boost_read` and `boost_info` all make -- the last
+        # two described as changing nothing. The install that needs the
+        # tap on disk registers it (`store.install`), and the read paths
+        # open the wheel's copy until then (`builtin.wheel_source`).
+        hits = _in_tap([e for e in builtin.shipped_entries()
+                        if e["name"] == name], tap)
     return hits
 
 

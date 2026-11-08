@@ -22,6 +22,7 @@ from pathlib import Path, PurePosixPath
 from ..errors import BoostError, NotUTF8Error
 from . import (
     agents,
+    builtin,
     catalog,
     config,
     foreign,
@@ -638,6 +639,10 @@ def source_file_for(entry: dict) -> Path:
     kind = entry.get("kind") or catalog.KIND_SKILL
     if kind == catalog.KIND_SKILL:
         return source_dir_for(entry) / "SKILL.md"
+    wheel = builtin.wheel_source(str(entry.get("tap") or ""),
+                                 entry.get("skill_md", ""))
+    if wheel is not None:
+        return _shipped(entry, wheel)
     tap = registry.get(entry["tap"])
     registry.ensure_cloned(tap)
     path = tap.path / entry.get("skill_md", "")
@@ -680,6 +685,9 @@ def source_dir_for(entry: dict) -> Path:
     if kind != catalog.KIND_SKILL:
         raise BoostError("%s is a %s, not a skill: it has no source directory"
                          % (entry["name"], kind))
+    wheel = builtin.wheel_source(str(entry.get("tap") or ""), entry["rel_dir"])
+    if wheel is not None:
+        return _shipped(entry, wheel / "SKILL.md").parent
     tap = registry.get(entry["tap"])
     # At its pin, never HEAD: see registry.ensure_cloned.
     registry.ensure_cloned(tap)
@@ -691,6 +699,45 @@ def source_dir_for(entry: dict) -> Path:
     refuse_escape(tap, src / "SKILL.md", entry["name"])
     _materialize_link_targets(tap.path, src)
     return src
+
+
+def _shipped(entry: dict, path: Path) -> Path:
+    """``path``, the wheel's copy of a builtin item, once it is a file.
+
+    :func:`builtin.wheel_source` sends a read here when boost's own tap is
+    not registered. Package data needs no clone, sparse widening or escape
+    check, and nothing is ever written to it. A missing file is a wheel
+    built without its package data, which `boost update` cannot fix.
+    """
+    if not path.is_file():
+        raise BoostError("source for %s is missing from this boost install"
+                         % entry["name"],
+                         hint="reinstall boost (`boost self-update`)")
+    return path
+
+
+def _register_builtin_tap(entry: dict) -> None:
+    """Put boost's own tap on disk and in config before installing from it.
+
+    The one place a builtin item's tap gets registered on demand.
+    :func:`catalog.find` answers a lookup from the wheel and writes nothing,
+    so an install is the first command that needs the copy under
+    ``~/.boost/repos/``: every install path (`boost install`,
+    `boost_install`, a reinstall from a record) comes through here. Rescanned
+    as well, because a tap an older wheel registered has a cache without the
+    newer item, and ``load_tap`` serves a format-current cache as it is.
+
+    A failed write says which write. Unhandled, an unwritable ``~/.boost``
+    surfaced as "boost hit an unexpected error".
+    """
+    if not builtin.is_builtin(str(entry.get("tap") or "")):
+        return
+    try:
+        builtin.ensure_tap()
+        catalog.rebuild_tap(registry.get(builtin.BUILTIN_TAP))
+    except OSError as exc:
+        raise BoostError("could not set up boost's own tap to install %r: %s"
+                         % (entry.get("name", "?"), exc)) from exc
 
 
 def unfetched_submodules(entry: dict) -> list[str]:
@@ -3693,6 +3740,7 @@ def install(entry: dict, force: bool = False,
     """
     scopes.check_scope(scope)
     _refuse_self_installing(entry)
+    _register_builtin_tap(entry)
     if scope != scopes.SCOPE_PROJECT:
         # Before anything is copied or linked: lockfile.write refuses a
         # corrupt lock too, but by then the files would be on disk unrecorded.

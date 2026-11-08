@@ -18,14 +18,20 @@ away from :func:`registry.remove`, which ends in ``util.remove_path(tap.path)`` 
 deleting part of the user's installed package. Here the worst case is that a
 recreatable directory goes away and :func:`ensure_tap` rebuilds it.
 
-The shipped files are therefore *copied out* of the wheel on first use, and the
-copy is what everything else — catalog scan, install, lock file, uninstall —
-sees. Nothing in ``core/`` needs to know this tap is different.
+The shipped files are therefore *copied out* of the wheel when something is
+installed from it, and the copy is what install, the lock file and uninstall
+see. Copying out is a write, though: two files under ``~/.boost/repos/`` and a
+row in ``config.json``. So a *lookup* never does it. :func:`shipped_entries`
+answers :func:`catalog.find` from the wheel itself, and :func:`wheel_source`
+tells the read paths (``store.source_file_for``, ``rag.entry_path``) where to
+open a file the unregistered tap does not hold. ``boost info``, ``boost cat``,
+``boost_read`` and ``boost_info`` read boost's own items and write nothing.
+``store.install`` registers the tap, because an install is a write anyway.
 """
 from __future__ import annotations
 
 import shutil
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from . import config, paths, registry
 
@@ -127,16 +133,83 @@ def is_builtin(tap_name: str) -> bool:
 def ships(name: str) -> bool:
     """Whether ``name`` (bare) is an item boost's own tap carries.
 
-    What :func:`catalog.find` asks before registering the tap on a miss, so
-    ``boost install boost-first`` resolves on a machine that never accepted
-    an offer. Only names that are actually in this wheel answer True: a
-    rule or skill missing from package data has nothing to register.
+    What :func:`catalog.find` asks before it answers a miss from the wheel
+    (:func:`shipped_entries`), so ``boost install boost-first`` resolves on a
+    machine that never accepted an offer. Only names that are actually in
+    this wheel answer True: a rule or skill missing from package data has
+    nothing to answer with.
     """
     if name in BUILTIN_RULES:
         return (source_dir() / (name + ".mdc")).is_file()
     if name in BUILTIN_SKILLS:
         return (skills_source_dir() / name / "SKILL.md").is_file()
     return False
+
+
+def shipped_entries() -> list[dict]:
+    """The catalog rows boost's own tap holds, scanned from the wheel.
+
+    **Writes nothing.** :func:`catalog.find` answers a miss on a shipped name
+    with these, so a read-only caller (``boost info``, ``boost cat``,
+    ``boost_read``, ``boost_info``) can describe and read boost's own items
+    without registering the tap. It used to register it: a lookup ran
+    :func:`ensure_tap` and a rescan, so the MCP tools whose descriptions say
+    they change nothing wrote ``config.json`` and ``~/.boost/repos/``.
+
+    The same scanner, over roots chosen so every row is the row the
+    registered tap's scan produces: the rule sits at the tap root and a skill
+    under ``skills/<name>/`` (:func:`ensure_tap`'s layout). Scanning ``data/``
+    whole would catalog the rule as ``rules/boost-first.mdc``, a different
+    row identity from the tap copy, so a lock written from one would not
+    match the other. Only shipped names come back, as :func:`ensure_tap`
+    copies only those.
+    """
+    from . import catalog  # catalog imports this module
+    rules = {name + ".mdc" for name in BUILTIN_RULES}
+    skills = {"skills/" + name for name in BUILTIN_SKILLS}
+    found = [e for e in catalog.scan_dir(source_dir(), BUILTIN_TAP, curated=True)
+             if e["skill_md"] in rules]
+    found += [e for e in catalog.scan_dir(skills_source_dir().parent,
+                                          BUILTIN_TAP, curated=True)
+              if e["kind"] == catalog.KIND_SKILL and e["rel_dir"] in skills]
+    return found
+
+
+def shipped_path(rel: str) -> Path | None:
+    """The wheel's copy of ``rel``, a path inside boost's own tap. Read-only.
+
+    :func:`ensure_tap`'s layout inverted: a file at the tap root is
+    ``data/rules/<file>`` and anything under ``skills/`` is
+    ``data/skills/<rest>``. None for any other shape, and for a path that is
+    absolute or climbs with ``..``, so a catalog row can never point a read
+    outside the package. Whether the file exists is the caller's question.
+    """
+    pure = PurePosixPath(rel)
+    parts = pure.parts
+    if not parts or pure.is_absolute() or ".." in parts:
+        return None
+    if parts[0] == "skills":
+        return skills_source_dir().joinpath(*parts[1:]) if len(parts) > 1 \
+            else None
+    return source_dir() / parts[0] if len(parts) == 1 else None
+
+
+def wheel_source(tap: str, rel: str) -> Path | None:
+    """Where a READ of ``rel`` in tap ``tap`` goes instead of the tap clone.
+
+    None, meaning read the clone as for any tap, unless ``tap`` is boost's
+    own and the registered tap does not hold ``rel``. Then the wheel's copy
+    (:func:`shipped_path`): the tap is not registered because nothing was
+    installed from it yet, or it was registered by an older wheel that did
+    not ship the file. Either way :func:`shipped_entries` described the item
+    from the wheel, so its body comes from there too.
+    """
+    if not is_builtin(tap):
+        return None
+    if any(t.name == BUILTIN_TAP and (t.path / rel).exists()
+           for t in registry.list_taps()):
+        return None
+    return shipped_path(rel)
 
 
 def configured_tap_count() -> int:

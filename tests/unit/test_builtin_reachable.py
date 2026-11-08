@@ -17,6 +17,7 @@ sandbox HOME before this change:
 """
 from __future__ import annotations
 
+import operator
 import subprocess
 
 import pytest
@@ -28,9 +29,13 @@ from boost_cli.core import (
     builtin,
     catalog,
     config,
+    frontmatter,
     lockfile,
     mcphost,
+    paths,
+    rag,
     registry,
+    store,
 )
 from boost_cli.errors import BoostError
 
@@ -42,6 +47,32 @@ def _tap_names() -> list[str]:
     return [t.name for t in registry.list_taps()]
 
 
+def _written() -> dict:
+    """Everything registering boost's own tap writes, as it stands now.
+
+    ``config.json``, every path under ``~/.boost/repos/`` and the builtin
+    tap's cache file. Logs are left out: every command may append to them.
+    """
+    cfg = paths.config_path()
+    repos = paths.repos_dir()
+    cache = registry.Tap(name=builtin.BUILTIN_TAP,
+                         url=builtin.BUILTIN_URL).cache_file
+    return {"config": cfg.read_bytes() if cfg.exists() else None,
+            "repos": (sorted(str(f.relative_to(repos))
+                             for f in repos.rglob("*"))
+                      if repos.exists() else None),
+            "cache": cache.read_bytes() if cache.exists() else None}
+
+
+def _first_body_line(name: str) -> str:
+    """The first line of ``name``'s body as the wheel ships it."""
+    entry = next(e for e in builtin.shipped_entries() if e["name"] == name)
+    path = builtin.shipped_path(entry["skill_md"])
+    assert path is not None
+    return frontmatter.parse(path.read_text(encoding="utf-8"))[1] \
+        .strip().splitlines()[0]
+
+
 class TestAShippedNameResolvesWithoutAnOffer:
     def test_the_rule_resolves_on_a_machine_that_never_registered_the_tap(
             self, sandbox):
@@ -49,7 +80,9 @@ class TestAShippedNameResolvesWithoutAnOffer:
         entry = catalog.resolve_one(RULE)
         assert entry["tap"] == builtin.BUILTIN_TAP
         assert entry["kind"] == "rule"
-        assert _tap_names() == [builtin.BUILTIN_TAP]
+        # Answered from the wheel: a lookup registers nothing. The install
+        # that needs the tap on disk is what registers it.
+        assert _tap_names() == []
 
     def test_the_skill_resolves_too(self, sandbox):
         entry = catalog.resolve_one(SKILL)
@@ -119,12 +152,15 @@ class TestAShippedNameResolvesWithoutAnOffer:
         def refuse():
             raise PermissionError("read-only home")
         monkeypatch.setattr(builtin, "ensure_tap", refuse)
-        with pytest.raises(BoostError, match="read-only home"):
-            catalog.find(RULE)
-        # Exit 1 with the reason, where it was 70 and a crash report.
-        r = boost("info", RULE, expect=1)
-        assert ("could not set up boost's own tap to find %r: read-only home"
-                % RULE) in r.err
+        # Exit 1 with the reason, where it was 70 and a crash report. The
+        # install is the write, so it is where the write fails.
+        r = boost("install", RULE, expect=1)
+        assert ("could not set up boost's own tap to install %r: "
+                "read-only home" % RULE) in r.err
+        assert lockfile.get_rule(RULE) is None
+        # A lookup needs no write, so an unwritable home does not stop it.
+        assert [e["tap"] for e in catalog.find(RULE)] == [builtin.BUILTIN_TAP]
+        boost("info", RULE)
 
 
 class TestATapRegisteredByAnOlderWheel:
@@ -155,6 +191,18 @@ class TestATapRegisteredByAnOlderWheel:
         boost("install", SKILL)
         assert lockfile.get_skill(SKILL) is not None
 
+    def test_reading_it_rewrites_nothing(self, old_tap, boost):
+        # Read from the wheel: the stale tap is neither re-copied nor
+        # rescanned by a lookup. The install below is what refreshes it.
+        before = _written()
+        text, is_error = configuration._mcp_tool("boost_read",
+                                                 {"name": SKILL})
+        assert not is_error, text
+        assert _first_body_line(SKILL) in text
+        assert _first_body_line(SKILL) in boost("cat", SKILL).out
+        assert _written() == before
+        assert not (old_tap.path / "skills").exists()
+
     def test_after_a_declined_offer_too(self, old_tap, boost, monkeypatch):
         # The offer copies the skill out before it asks, and only its yes
         # branch rescanned: a no left the copy on disk and the cache stale.
@@ -163,6 +211,141 @@ class TestATapRegisteredByAnOlderWheel:
                             lambda *a, **kw: False)
         configuration._offer_boost_skill()
         boost("install", SKILL)
+        assert lockfile.get_skill(SKILL) is not None
+
+
+class TestALookupOfBoostsOwnItemsWritesNothing:
+    """Reading one of boost's own items registers nothing.
+
+    ``catalog.find`` used to register the builtin tap on a miss, writing
+    ``config.json`` and ``~/.boost/repos/boost__builtin``. ``boost info``,
+    ``boost cat``, ``boost_read`` and ``boost_info`` all look up through it,
+    and the last two are described to agents as changing nothing. They now
+    describe and read the item from the wheel; an install still registers.
+    """
+
+    def test_the_rows_are_the_ones_the_registered_tap_scans_to(self, sandbox):
+        # Same row identity both ways, so a lock written from a wheel row
+        # matches the tap's row once an install has registered it.
+        shipped = builtin.shipped_entries()
+        tap = builtin.ensure_tap()
+        scanned = catalog.scan_dir(tap.path, builtin.BUILTIN_TAP,
+                                   curated=True)
+        by_file = operator.itemgetter("skill_md")
+        assert sorted(shipped, key=by_file) == sorted(scanned, key=by_file)
+        assert sorted(e["name"] for e in shipped) == sorted([RULE, SKILL])
+
+    @pytest.mark.parametrize("name", [RULE, SKILL])
+    def test_find(self, sandbox, name):
+        before = _written()
+        assert [e["tap"] for e in catalog.find(name)] == [builtin.BUILTIN_TAP]
+        assert _written() == before
+
+    @pytest.mark.parametrize("name", [RULE, SKILL,
+                                      "%s:%s" % (builtin.BUILTIN_TAP, RULE)])
+    def test_boost_read(self, sandbox, name):
+        before = _written()
+        text, is_error = configuration._mcp_tool("boost_read", {"name": name})
+        assert not is_error, text
+        assert _first_body_line(catalog.split_name(name)[1]) in text
+        assert "installed: no" in text
+        assert _written() == before
+
+    @pytest.mark.parametrize("name", [RULE, SKILL])
+    def test_boost_info(self, sandbox, name):
+        before = _written()
+        text, is_error = configuration._mcp_tool("boost_info", {"name": name})
+        assert not is_error, text
+        assert "tap: %s" % builtin.BUILTIN_TAP in text
+        assert "installed: no" in text
+        assert _written() == before
+
+    @pytest.mark.parametrize("name", [RULE, SKILL])
+    def test_cli_info(self, boost, name):
+        before = _written()
+        assert builtin.BUILTIN_TAP in boost("info", name).out
+        assert _written() == before
+
+    @pytest.mark.parametrize("name", [RULE, SKILL])
+    def test_cli_cat(self, boost, name):
+        before = _written()
+        assert _first_body_line(name) in boost("cat", name).out
+        assert _written() == before
+
+    @pytest.mark.parametrize("name", [RULE, SKILL])
+    def test_cli_log_says_why_there_is_no_history(self, boost, name):
+        # Not "comes from tap boost/builtin, which is no longer tapped": it
+        # was never tapped, and it has no git history to show if it were.
+        before = _written()
+        assert "ships with boost" in boost("log", name).out
+        assert _written() == before
+
+    @pytest.mark.parametrize("name", [RULE, SKILL])
+    def test_an_install_dry_run(self, boost, name):
+        before = _written()
+        assert "dry run" in boost("install", name, "--dry-run").out
+        assert _written() == before
+
+    @pytest.mark.parametrize("name", [RULE, SKILL])
+    def test_the_body_is_read_from_the_wheel(self, sandbox, name):
+        before = _written()
+        entry = catalog.resolve_one(name)
+        shipped = builtin.shipped_path(entry["skill_md"])
+        assert rag.entry_path(entry) == shipped
+        assert _first_body_line(name) in rag.read_body(entry)
+        assert store.source_file_for(entry) == shipped
+        assert _written() == before
+
+    @pytest.mark.parametrize("name", [RULE, SKILL])
+    def test_cli_deps(self, boost, name):
+        before = _written()
+        assert "requires: (none)" in boost("deps", name).out
+        assert _written() == before
+
+    def test_boost_serve_reads_it_too(self, sandbox):
+        from boost_cli.core import serve
+        before = _written()
+        text = serve.skill_text(SKILL)
+        assert text is not None and _first_body_line(SKILL) in text
+        assert _written() == before
+
+    def test_a_wheel_missing_the_file_says_so(self, sandbox):
+        # Package data a build left out is not something `boost update`
+        # can fetch, so the error does not send the user there.
+        ghost = {"name": "ghost", "tap": builtin.BUILTIN_TAP, "kind": "rule",
+                 "skill_md": "ghost.mdc", "rel_dir": "."}
+        with pytest.raises(BoostError, match="missing from this boost "
+                           "install") as err:
+            store.source_file_for(ghost)
+        assert "self-update" in (err.value.hint or "")
+
+    def test_the_skill_dir_is_the_wheels(self, sandbox):
+        entry = catalog.resolve_one(SKILL)
+        assert store.source_dir_for(entry) == \
+            builtin.skills_source_dir() / SKILL
+
+    def test_a_path_outside_the_shipped_layout_reads_nothing(self):
+        for rel in ("../registries.json", "/etc/passwd", "rules/x.mdc",
+                    "skills", ".", "skills/../../x"):
+            assert builtin.shipped_path(rel) is None, rel
+
+    def test_another_taps_rows_are_not_redirected(self, sandbox):
+        assert builtin.wheel_source("someone/else", RULE + ".mdc") is None
+
+    def test_the_cli_install_registers_it(self, boost):
+        boost("install", SKILL)
+        assert _tap_names() == [builtin.BUILTIN_TAP]
+        assert lockfile.get_skill(SKILL)["tap"] == builtin.BUILTIN_TAP
+        # Registered, the tap's own copy is what reads open from now on.
+        assert store.source_file_for(catalog.resolve_one(SKILL)) == \
+            registry.get(builtin.BUILTIN_TAP).path / "skills" / SKILL \
+            / "SKILL.md"
+
+    def test_boost_install_registers_it(self, sandbox):
+        text, is_error = configuration._mcp_tool("boost_install",
+                                                 {"name": SKILL})
+        assert not is_error, text
+        assert _tap_names() == [builtin.BUILTIN_TAP]
         assert lockfile.get_skill(SKILL) is not None
 
 

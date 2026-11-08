@@ -220,6 +220,12 @@ def _skill_meta(name: str, project: dict | None = None, pbase=None,
                  or next(iter(catalog.find(name)), None))
         if entry is None:
             return None
+        # boost's own items are described from the wheel until something is
+        # installed from them, so their frontmatter is there too.
+        wheel = builtin.wheel_source(entry["tap"], entry["skill_md"])
+        if wheel is not None:
+            return frontmatter.parse(_read(wheel))[0] if wheel.is_file() \
+                else None
         try:
             root = registry.get(entry["tap"]).path
         except BoostError:
@@ -1366,6 +1372,18 @@ def cmd_log(argv):
                                   "tap": None, "commits": []}, indent=2))
                 return 0
             out.info("no upstream history (imported locally)")
+            return 0
+        if builtin.is_builtin(tap_name):
+            # boost's own tap is package data, not a clone: it has no git
+            # history, and until something is installed from it it is not
+            # registered at all, which the branch below would report as
+            # "no longer tapped".
+            if args.as_json:
+                print(json.dumps({"kind": "history", "name": bare,
+                                  "tap": tap_name, "commits": []}, indent=2))
+                return 0
+            out.info("no upstream history (%s ships with boost and changes "
+                     "when boost does)" % bare)
             return 0
         # Only `local` is an import. Any other failure here is a recorded tap
         # that has since been untapped, and calling that a local import hid
