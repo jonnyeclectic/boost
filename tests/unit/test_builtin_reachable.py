@@ -280,7 +280,12 @@ class TestALostLockIsRecoveredFromTheWheel:
         # `registry.get("boost/builtin")`, which raised, so the skill was
         # re-recorded as a local one that no update would ever reach.
         import shutil
+
+        from boost_cli.core import logs
         boost("install", SKILL)
+        # The in-process run left its file handler holding logs/boost.log
+        # open, and Windows will not delete an open file.
+        logs.reset()
         shutil.rmtree(paths.boost_home())
         paths.lockfile_path().unlink()
         assert _tap_names() == []
