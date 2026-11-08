@@ -2961,9 +2961,9 @@ def _boost_first_targets(hosts: list[str]) -> list[str]:
     # `boost_search` to an agent that does not have it.
     if not hosts or not builtin.rule_is_available():
         return []
-    if lockfile.get_rule(builtin.BUILTIN_RULES[0]):
-        return []                   # already installed; do not re-ask
-    scoped_agents = {builtin.AGENT_FOR_HOST.get(h) for h in hosts}
+    # Less the agents an installed copy already covers: "installed" used to
+    # end the offer, so a host registered after the first one never got it.
+    scoped_agents = set(builtin.rule_offer_agents(hosts))
     # materializing_agents, not enabled_agents: this is a *rule*, so the
     # preview has to be built from the set the rule install actually writes to,
     # or it names a path nothing ever creates. AGENT_FOR_HOST maps every host
@@ -2971,8 +2971,8 @@ def _boost_first_targets(hosts: list[str]) -> list[str]:
     # maps to gemini rather than to its skills-only agent), so the two sets
     # coincide and this is a guard rather than a fix.
     #
-    # Note what it does and does not cover. `only_agents` below is
-    # `scoped_agents`, not this filtered list, so a skills-only agent added to
+    # Note what it does and does not cover. `only_agents` in the offer is
+    # built from `rule_offer_agents`, not this filtered list, so a skills-only agent added to
     # AGENT_FOR_HOST would be dropped from the preview and still passed to the
     # install, where `narrow_materializing` drops it again — silently, since
     # the intersection is non-empty as long as one real agent remains. If it
@@ -3014,10 +3014,20 @@ def _offer_boost_first(hosts: list[str], yes: bool = False) -> None:
     if not targets or not _ready_builtin_tap():
         return
     body = (builtin.source_dir() / (builtin.BUILTIN_RULES[0] + ".mdc"))
-    scoped_agents = {builtin.AGENT_FOR_HOST.get(h) for h in hosts}
+    # An installed copy is widened, never narrowed: its own agents stay in
+    # the scope, so the lock records every agent the rule now reaches.
+    rec = lockfile.get_rule(builtin.BUILTIN_RULES[0])
+    have = sorted(store.effective_scope(rec) or ()) if rec else []
+    only = sorted(set(have) | set(builtin.rule_offer_agents(hosts)))
     out.info("")
-    out.info("boost can also add its own rule, `%s`, to your agents' standing "
-             "instructions:" % builtin.BUILTIN_RULES[0])
+    if have:
+        out.info("boost's own rule, `%s`, is installed for %s; it can also go "
+                 "into the standing instructions of the agents just "
+                 "registered:" % (builtin.BUILTIN_RULES[0], ", ".join(have)),
+                 wrap=True)
+    else:
+        out.info("boost can also add its own rule, `%s`, to your agents' "
+                 "standing instructions:" % builtin.BUILTIN_RULES[0])
     for target in targets:
         out.info("  %s" % target)
     out.info("")
@@ -3030,8 +3040,11 @@ def _offer_boost_first(hosts: list[str], yes: bool = False) -> None:
         return
     try:
         catalog.rebuild_tap(registry.get(builtin.BUILTIN_TAP))
+        # `force` only when widening: an installed rule is otherwise refused
+        # as "already installed", and its existing files are rewritten with
+        # the same block they hold.
         res = store.install(catalog.resolve_one(builtin.BUILTIN_RULES[0]),
-                            only_agents=[a for a in scoped_agents if a])
+                            force=bool(have), only_agents=only)
     except (BoostError, OSError) as exc:
         out.warn("could not install %s: %s" % (builtin.BUILTIN_RULES[0], exc))
         return

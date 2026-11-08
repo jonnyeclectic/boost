@@ -72,6 +72,37 @@ AGENT_FOR_HOST = {"claude": "claude-code", "gemini": "gemini",
                   "agy": "gemini", "codex": "codex"}
 
 
+def rule_offer_agents(hosts) -> list[str]:
+    """The agents the boost-first offer would add the rule for, sorted.
+
+    The agents ``hosts`` map to (:data:`AGENT_FOR_HOST`), less the ones an
+    installed copy already covers. The offer used to stop at "installed", so
+    the rule stayed with whichever hosts were registered first: install it
+    for Claude Code, add Gemini CLI, Codex and Antigravity a week later, and
+    `boost mcp register` registered all four and offered nothing — GEMINI.md
+    and AGENTS.md never existed, and `boost sync` said everything was in
+    sync, because the lock's ``only_agents`` said ``["claude-code"]``.
+
+    Covered means the lock's declared scope (:func:`store.effective_scope`).
+    An install that declares none reaches every agent already, and a
+    ``--local`` copy is a choice about one repository; neither is offered.
+    Nor is a pinned or quarantined one: widening reinstalls, and the user
+    froze that record.
+    """
+    from . import lockfile, scopes, store  # store -> catalog -> builtin
+    wanted = {AGENT_FOR_HOST[h] for h in hosts if h in AGENT_FOR_HOST}
+    rec = lockfile.get_rule(BUILTIN_RULES[0])
+    if not rec:
+        return sorted(wanted)
+    if (rec.get("scope") == scopes.SCOPE_PROJECT or rec.get("pinned")
+            or rec.get("quarantined")):
+        return []
+    covered = store.effective_scope(rec)
+    if not covered:
+        return []
+    return sorted(wanted - set(covered))
+
+
 def source_dir() -> Path:
     """The shipped rules inside the installed package. **Read-only.**
 
