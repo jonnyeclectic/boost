@@ -12,9 +12,9 @@
 # fail. It is A scale, not THE scale: hit@1 decays continuously with corpus
 # size and never plateaus, so no size here can be canonical.
 #
-# 102 distractor registries, 20,026 est items (the curated list's own estimate).
+# 102 distractor registries, 20,028 est items (the curated list's own estimate).
 # est_items under-reports by about 2.5x against a real install, so that
-# projects to roughly 50,840 actual entries — a projection, not a measurement.
+# projects to roughly 50,845 actual entries — a projection, not a measurement.
 # The real counts are written in by `eval_corpus.py --refresh`, which is
 # also what pins these rows. Regenerating KEEPS any pin already here, so
 # --check verifies the selection, not the pins.

@@ -158,7 +158,7 @@ RECATEGORISED = {
     # huggingface-llm-trainer, trl-training, huggingface-vision-trainer.
     "huggingface/skills": ("ai", 26),
     # aks-* and azure-* SDK clients; 148 of 232 names start with azure-.
-    "microsoft/skills": ("infra", 236),
+    "microsoft/skills": ("infra", 237),
     # tdd, code-review, grill-me, handoff, writing-*: no web framework at all.
     "mattpocock/skills": ("general", 40),
     # spec, plan, build, test, review, ship: a lifecycle, not CI/CD.

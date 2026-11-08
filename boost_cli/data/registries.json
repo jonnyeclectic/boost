@@ -1,8 +1,8 @@
 {
   "generated_note": "Curated skill/rule/workflow registries for boost. est_items are research estimates; verify by tapping. list_only repos are index/awesome lists that link out.",
   "count": 588,
-  "est_items_total": 48479,
-  "est_items_scannable": 42341,
+  "est_items_total": 48474,
+  "est_items_scannable": 42336,
   "registries": [
     {
       "name": "Aaronontheweb/dotnet-cursor-rules",
@@ -2327,8 +2327,8 @@
       "url": "https://github.com/hiberus-magento/ai-tools",
       "type": "skill",
       "category": "ecommerce",
-      "focus": "AI-powered skills for Magento 2. This collection extends AI assistants... (16 skills, 7 workflows)",
-      "est_items": 23,
+      "focus": "AI-powered skills for Magento 2. This collection extends AI assistants... (16 skills, 6 workflows)",
+      "est_items": 22,
       "confidence": "med",
       "list_only": false,
       "curated": false
@@ -3309,8 +3309,8 @@
       "url": "https://github.com/microsoft/skills",
       "type": "skill",
       "category": "infra",
-      "focus": "Azure and Foundry SDK skills across Python, TS, .NET, Java, Rust, plus Azure Kubernetes Service operations (209 skills, 27 workflows)",
-      "est_items": 236,
+      "focus": "Azure and Foundry SDK skills across Python, TS, .NET, Java, Rust, plus Azure Kubernetes Service operations (209 skills, 28 workflows)",
+      "est_items": 237,
       "confidence": "high",
       "list_only": false,
       "curated": false
@@ -4279,7 +4279,7 @@
       "type": "skill",
       "category": "web-dev",
       "focus": "103 skills covering full website lifecycle (brand, SEO, dev, ops)",
-      "est_items": 122,
+      "est_items": 119,
       "confidence": "high",
       "list_only": false,
       "curated": false
@@ -6100,8 +6100,8 @@
       "url": "https://github.com/hnaymyh123-henry/claude-dev-skill",
       "type": "workflow",
       "category": "meta",
-      "focus": "A Claude Code custom skill that turns Claude into a Tech Lead... (26 workflows)",
-      "est_items": 26,
+      "focus": "A Claude Code custom skill that turns Claude into a Tech Lead... (24 workflows)",
+      "est_items": 24,
       "confidence": "high",
       "list_only": false,
       "curated": false
@@ -6122,8 +6122,8 @@
       "url": "https://github.com/humanlayer/humanlayer",
       "type": "workflow",
       "category": "meta",
-      "focus": "The best way to get AI coding agents to solve hard problems in complex... (34 workflows)",
-      "est_items": 34,
+      "focus": "The best way to get AI coding agents to solve hard problems in complex... (33 workflows)",
+      "est_items": 33,
       "confidence": "high",
       "list_only": false,
       "curated": false
@@ -6269,8 +6269,8 @@
       "url": "https://github.com/nth5693/gemini-kit",
       "type": "workflow",
       "category": "general",
-      "focus": "19 AI Agents + 44 Commands for Gemini CLI - Code 10x faster with auto... (15 skills, 58 workflows)",
-      "est_items": 73,
+      "focus": "19 AI Agents + 44 Commands for Gemini CLI - Code 10x faster with auto... (15 skills, 59 workflows)",
+      "est_items": 74,
       "confidence": "high",
       "list_only": false,
       "curated": false
