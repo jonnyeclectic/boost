@@ -2006,6 +2006,41 @@ class TestBundle:
         assert lines[1] == "tap fixture-tap %s" % fixture_tap_src.resolve()
         assert lines[2] == "skill fixture-tap:brainstorming@1.4.0"
 
+    def test_dump_after_untap_keeps_the_url_the_lock_recorded(
+            self, boost, installed, fixture_tap_src, tmp_path):
+        # `untap` drops the config row, and the tap line came out as a bare
+        # `tap fixture-tap`: `cannot parse tap spec` on replay, or a
+        # same-named directory under the cwd tapped in its place.
+        commit = _lock()["brainstorming"]["commit"]
+        boost("untap", "fixture-tap", "-y")
+        vf = tmp_path / "Boostfile"
+        r = boost("bundle", "dump", vf)
+        assert "no URL" not in r.out + r.err
+        lines = vf.read_text(encoding="utf-8").splitlines()
+        assert lines[1] == "tap fixture-tap %s --at %s" % (
+            fixture_tap_src.resolve(), commit)
+        boost("uninstall", "brainstorming")
+        r = boost("bundle", "install", vf)
+        assert "tapped fixture-tap" in r.out
+        assert "installed brainstorming v1.4.0 (fixture-tap)" in r.out
+
+    def test_dump_says_when_a_tap_line_cannot_be_replayed(self, boost,
+                                                          installed):
+        # A row written before `tap_url` existed, its tap untapped since:
+        # nothing says where it came from, and the dump has to say so.
+        boost("untap", "fixture-tap", "-y")
+        path = paths.lockfile_path()
+        data = json.loads(path.read_text(encoding="utf-8"))
+        del data["skills"]["brainstorming"]["tap_url"]
+        path.write_text(json.dumps(data), encoding="utf-8")
+        r = boost("bundle", "dump")
+        assert r.out.splitlines()[1].startswith("tap fixture-tap")
+        err = " ".join(r.err.split())
+        assert ("! tap fixture-tap is written without a URL: it is no longer "
+                "tapped and the lock does not record where it came from, so "
+                "`boost bundle install` cannot re-tap it — add its URL to "
+                "that line") in err
+
     def test_dump_to_file_and_reinstall_roundtrip(self, boost, installed,
                                                   tmp_path):
         vf = tmp_path / "Boostfile"
@@ -3576,12 +3611,16 @@ class TestBundleEdges:
         boost("bundle", "install", bf)
         assert "brainstorming" in complete._cached_names()
 
-    def test_dump_local_comment_and_lost_tap_url(self, boost, installed,
-                                                 tmp_path):
+    def test_dump_local_comment_and_untapped_tap_url(self, boost, installed,
+                                                     tmp_path):
         boost("import", _skill_dir(tmp_path, "local-thing"))
+        row = _lock()["brainstorming"]
         boost("untap", "fixture-tap", "--force")
         lines = boost("bundle", "dump").out.splitlines()
-        assert "tap fixture-tap" in lines         # URL lost → bare tap line
+        # Untapped, but the lock row still says where it came from: a bare
+        # `tap fixture-tap` line cannot be replayed.
+        assert "tap fixture-tap %s --at %s" % (row["tap_url"],
+                                              row["commit"]) in lines
         assert "# local skill (no tap source): local-thing" in lines
         assert "skill fixture-tap:brainstorming@1.4.0" in lines
 

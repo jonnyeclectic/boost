@@ -139,6 +139,49 @@ class TestRender:
             tags=[] if local else entry.get("tags", []))
 
 
+class TestRecordedSource:
+    """A tap untapped since its skills were installed: the lock rows still
+    say where it came from, and a `tap NAME` line with no URL cannot be
+    replayed (`cannot parse tap spec`, or a same-named directory under the
+    cwd tapped instead)."""
+
+    OTHER = "fedcba9876543210fedcba9876543210fedcba98"
+
+    def test_the_url_and_the_commit_every_row_shares(self):
+        rows = [{"tap_url": "/src/fix", "commit": SHA},
+                {"tap_url": "/src/fix", "commit": SHA}]
+        assert boostfile.recorded_source(rows) == ("/src/fix", SHA)
+
+    def test_rows_at_different_commits_pin_nothing(self):
+        # No one tree holds every row; holding the tap at either would hold
+        # it where the other skill was never installed from.
+        rows = [{"tap_url": "/src/fix", "commit": SHA},
+                {"tap_url": "/src/fix", "commit": self.OTHER}]
+        assert boostfile.recorded_source(rows) == ("/src/fix", "")
+
+    def test_a_row_without_a_commit_breaks_the_agreement(self):
+        rows = [{"tap_url": "/src/fix", "commit": SHA}, {"tap_url": "/src/fix"}]
+        assert boostfile.recorded_source(rows) == ("/src/fix", "")
+
+    def test_the_first_recorded_url_wins_over_a_legacy_row(self):
+        # A row written before `tap_url` existed has none to offer.
+        rows = [{"commit": SHA}, {"tap_url": "https://x/a", "commit": SHA},
+                {"tap_url": "https://x/b", "commit": SHA}]
+        assert boostfile.recorded_source(rows) == ("https://x/a", SHA)
+
+    def test_the_wheel_tap_is_not_a_url_a_boostfile_can_tap(self):
+        rows = [{"tap_url": "builtin:boost", "commit": SHA}]
+        assert boostfile.recorded_source(rows) == ("", SHA)
+
+    def test_a_short_commit_is_not_a_pin(self):
+        # `--at` refuses anything but a full SHA on the way back in.
+        rows = [{"tap_url": "/src/fix", "commit": "abc123"}]
+        assert boostfile.recorded_source(rows) == ("/src/fix", "")
+
+    def test_no_rows_no_source(self):
+        assert boostfile.recorded_source([]) == ("", "")
+
+
 def test_the_grammar_constant_names_every_option():
     for opt in ("--at", "--local", "--agent", "--pin", "--commit-pin", "--tag"):
         assert opt in boostfile.GRAMMAR
