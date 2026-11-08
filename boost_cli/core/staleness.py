@@ -224,6 +224,21 @@ def kind_changed_message(label: str, name: str, tap: str,
             "install %s:%s`, switches to it" % (label, tap, now, name, tap, name))
 
 
+def renamed_message(kind: str, name: str, tap: str, now: str) -> str:
+    """Why an installed rule or workflow is left alone: tap ``tap`` still
+    ships the file it was installed from, catalogued as ``now``.
+
+    A scanner change renames rows with nothing changed upstream: dropping
+    `.agent` from `qa.agent.md`, or naming a subagent outside `agents/` by
+    its frontmatter rather than its file. "No longer in tap" was false for
+    each of them. The switch is the user's, as in
+    :func:`kind_changed_message`, so this names it rather than making it.
+    """
+    return ("%s %s is catalogued as %s by tap %s now — leaving as-is; `boost "
+            "uninstall %s`, then `boost install %s:%s`, switches to it"
+            % (kind, name, now, tap, name, tap, now))
+
+
 def outdated_footer(total: int, source_missing: int, removed: int = 0,
                     source_changed: int = 0, not_cloned: int = 0,
                     downgrade: int = 0, quarantined: int = 0,

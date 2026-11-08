@@ -268,8 +268,9 @@ _UNSAFE_TRANSPORTS = ("ext::", "file::", "fd::")
 
 
 # The working tree boost actually reads. `catalog.scan_dir` opens exactly three
-# things: SKILL.md and loose workflow Markdown (`*.md`), the rule suffixes
-# (`*.mdc`), and the rule filenames. Everything else a tap ships is freight —
+# things: SKILL.md and loose workflow Markdown (`*.md`, which also covers the
+# Copilot files named by a second extension, `catalog.KIND_SUFFIXES`), the rule
+# suffixes (`*.mdc`), and the rule filenames. Everything else a tap ships is freight —
 # measured across 458 taps on one machine, 12 GB of clones held 1.9 GB of
 # Markdown; `Shopify/agent-skills` was 611 MB for the 30 SKILL.md files boost
 # wanted, and checks out at 11 MB under this cone with a byte-identical catalog.

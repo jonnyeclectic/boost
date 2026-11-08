@@ -6106,7 +6106,8 @@ def _install_workflow(entry: dict, force: bool = False,
     """Materialize a workflow (slash command / subagent) into each enabled agent.
 
     A verbatim Markdown drop into the agent's ``commands/`` or ``agents/`` dir —
-    the slot derived from the source path — with no transformation. With
+    the slot :func:`workflows.slot_of` reads off the source's Copilot suffix,
+    directory and frontmatter — with no transformation. With
     ``scope="project"`` the drop lands under the repo (``<repo>/.claude/…``).
     Every drop is recorded so ``uninstall`` removes exactly the files it wrote.
     """
@@ -6132,7 +6133,7 @@ def _install_workflow(entry: dict, force: bool = False,
     refuse_escape(tap, src, name)
     _enforce_capability_policy(name, src)
     raw = src.read_text(encoding="utf-8", errors="replace")
-    slot = workflows.detect_slot(source_rel)
+    slot = workflows.slot_of(source_rel, raw)
 
     # As for rules: the store refuses the whole install, a target dir only
     # its own agent.
@@ -7071,8 +7072,8 @@ def _expected_row_text(kind: str, name: str, entry: dict, m: dict,
             return want, (rules.read_block(on_disk, name)
                           if on_disk is not None else None)
         return raw, on_disk
-    slot = m.get("slot") or entry.get("slot") or workflows.detect_slot(
-        entry.get("source_file", ""))
+    slot = m.get("slot") or entry.get("slot") or workflows.slot_of(
+        entry.get("source_file", ""), raw)
     return workflows.render(m.get("agent"), slot, name, raw), on_disk
 
 
@@ -7311,8 +7312,8 @@ def _backfill_candidates() -> list[tuple[str, dict, str]]:
         raw = _installed_raw(entry)
         if raw is None:
             continue
-        slot = entry.get("slot") or workflows.detect_slot(
-            entry.get("source_file", ""))
+        slot = entry.get("slot") or workflows.slot_of(
+            entry.get("source_file", ""), raw)
         if workflows.skill_description(slot, frontmatter.parse(raw)[0]):
             out.append((name, entry, raw))
     return out
@@ -7347,8 +7348,8 @@ def backfill_skill_copies(dry: bool = False) -> list[str]:
                             " and link it → %s" % " · ".join(will)
                             if will else ""))
             continue
-        slot = entry.get("slot") or workflows.detect_slot(
-            entry.get("source_file", ""))
+        slot = entry.get("slot") or workflows.slot_of(
+            entry.get("source_file", ""), raw)
         row, note = _skill_copy(name, slot, raw, entry, None,
                                 scopes.SCOPE_USER)
         if row is None:

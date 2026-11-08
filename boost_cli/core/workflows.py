@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Mapping
 from pathlib import Path
 from typing import NamedTuple
 
@@ -45,9 +46,26 @@ SLOT_AGENTS = "agents"
 SLOT_SKILL = "skill"
 
 # Source directory names that mark a workflow as a subagent rather than a
-# slash command. Everything else (commands/, workflows/, or frontmatter-only)
-# is treated as a command.
+# slash command. A file under neither these nor :data:`COMMAND_DIRS` is decided
+# by its frontmatter (:func:`detect_slot`).
 AGENT_DIRS = {"agents", "subagents"}
+
+#: The second extension VS Code and GitHub Copilot read a file's kind from:
+#: ``x.prompt.md`` is a prompt file, run as ``/x`` — a slash command — and
+#: ``x.agent.md`` is a custom agent, ``x.chatmode.md`` the name custom agents
+#: had before VS Code 1.106. It is the format's own declaration, so it outranks
+#: the directory: microsoft/playwright ships
+#: ``src/agents/playwright-test-plan.prompt.md``, a five-line prompt that hands
+#: off to its planner agent, and is not an agent itself.
+SUFFIX_SLOTS = {".prompt.md": SLOT_COMMANDS, ".agent.md": SLOT_AGENTS,
+                ".chatmode.md": SLOT_AGENTS}
+#: Frontmatter a Claude Code subagent carries and a slash command does not: a
+#: subagent lists ``tools`` where a command lists ``allowed-tools``, and
+#: ``color`` is what ``/agents`` writes for the subagent's label.
+AGENT_META_KEYS = {"tools", "color"}
+#: Frontmatter only a slash command carries; one of these settles a file as a
+#: command whatever else it declares.
+COMMAND_META_KEYS = {"allowed-tools", "argument-hint"}
 
 # Agents whose slash commands are TOML rather than Markdown, and the extension
 # they use. Only the ``commands`` slot differs — a Gemini *subagent* is Markdown
@@ -58,16 +76,56 @@ TOML_EXT = ".toml"
 DEFAULT_EXT = ".md"
 
 
-def detect_slot(source_rel: str) -> str:
-    """Return the target slot (``commands`` or ``agents``) for a workflow whose
-    defining file is ``source_rel`` (path relative to the tap repo root).
+def suffix_slot(filename: str) -> str | None:
+    """The slot ``filename``'s :data:`SUFFIX_SLOTS` extension names, or None.
 
-    A file under ``agents/`` or ``subagents/`` is a subagent; anything else —
-    ``commands/``, ``workflows/``, or a bare frontmatter-tagged file — is a
-    slash command.
+    Only with a stem in front of it: a file called ``.agent.md`` declares
+    nothing.
     """
-    parts = {p.lower() for p in Path(source_rel).parts}
-    return SLOT_AGENTS if parts & AGENT_DIRS else SLOT_COMMANDS
+    low = filename.lower()
+    for suffix, slot in SUFFIX_SLOTS.items():
+        if low.endswith(suffix) and len(low) > len(suffix):
+            return slot
+    return None
+
+
+def detect_slot(source_rel: str, meta: Mapping | None = None) -> str:
+    """Return the target slot (``commands`` or ``agents``) for a workflow whose
+    defining file is ``source_rel`` (path relative to the tap repo root) and
+    whose frontmatter is ``meta``.
+
+    In order: a Copilot suffix (:data:`SUFFIX_SLOTS`); a directory —
+    ``agents/`` or ``subagents/`` is a subagent, ``commands/`` or
+    ``workflows/`` a command; then, for a file under none of those, its
+    frontmatter — :data:`AGENT_META_KEYS` without any
+    :data:`COMMAND_META_KEYS` is a subagent. Anything else is a slash command.
+
+    The frontmatter step is why ``meta`` is asked for. Registries file
+    subagents by topic, not under ``agents/``: every one of the 166 in
+    VoltAgent/awesome-claude-code-subagents sits under
+    ``categories/<n>-<topic>/``, and each was installed into
+    ``~/.claude/commands/`` — a subagent that became a slash command. It comes
+    after the directory because a command may list ``tools`` too:
+    qdhenry/Claude-Command-Suite's ``.claude/commands/boundary/*.md`` do.
+    """
+    path = Path(source_rel)
+    by_suffix = suffix_slot(path.name)
+    if by_suffix is not None:
+        return by_suffix
+    dirs = {p.lower() for p in path.parts[:-1]}
+    if dirs & AGENT_DIRS:
+        return SLOT_AGENTS
+    if dirs & COMMAND_DIRS:
+        return SLOT_COMMANDS
+    keys = set(meta or ())
+    if keys & AGENT_META_KEYS and not keys & COMMAND_META_KEYS:
+        return SLOT_AGENTS
+    return SLOT_COMMANDS
+
+
+def slot_of(source_rel: str, raw: str) -> str:
+    """:func:`detect_slot` for a workflow whose file text is ``raw``."""
+    return detect_slot(source_rel, frontmatter.parse(raw)[0])
 
 
 #: Source dirs a slash command's namespace is read under: the subdirectories
