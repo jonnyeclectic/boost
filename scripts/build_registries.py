@@ -195,6 +195,22 @@ CURATED = frozenset({
     # 167,121 stars on 2026-11-07, 284 items: catalogued once the scanner
     # read a persona's `color` (catalog.WORKFLOW_META_KEYS).
     "msitarzewski/agency-agents",
+    # 2026-11-08 sweep, stars as that sweep's GET /repos read them. Not
+    # shanraisshan/claude-code-best-practice (68,788): they belong to the
+    # README guide, and 20 of its 43 items maintain the repo itself. Not
+    # heygen-com/hyperframes (80,666), ruvnet/ruflo (81,198),
+    # vercel-labs/agent-browser (46,984) or larksuite/cli (18,012): they
+    # belong to the framework, platform or CLI the skills drive, as
+    # googleworkspace/cli's do: each is a tool people run without its skills,
+    # which are one surface among several. Not anthropics/claude-for-legal:
+    # 9,931, under the bar. Yeachan-Heo/oh-my-codex (33,737) is starred
+    # although 18 of its 29 skills call its `omx` CLI, because that CLI is
+    # the other way round: its README sells OMX as "better prompts,
+    # workflows, and runtime help", and the team, hud, state and question
+    # subcommands are that help for the repo's own workflows. So the stars
+    # are for the pack, as they are for its starred sibling oh-my-claudecode.
+    "Yuan1z0825/nature-skills", "MiniMax-AI/skills", "Yeachan-Heo/oh-my-codex",
+    "tanweai/pua", "AgriciDaniel/claude-obsidian", "ibelick/ui-skills",
 })
 
 # --- skills (SKILL.md registries) -------------------------------------------
@@ -764,6 +780,122 @@ SKILLS = [
     ("canonical/copilot-collections", "general", "Canonical: Go review and style, Ubuntu SRU and freeze reviews, Terraform migration, Temporal tests, docs review (27 skills, 17 rules, 6 workflows)", 50, "high"),
     ("feiskyer/claude-code-settings", "general", "Claude Code settings collection: deep research, GitHub issue and PR fixing and review, handoff, reflection agents (12 skills, 6 workflows)", 18, "med"),
     ("rsmdt/the-startup", "meta", "The Agentic Startup: specify, plan, build and review workflow with role skills and agents for Claude Code (34 skills, 16 workflows)", 50, "med"),
+
+# --- 2026-11-08 sweep: vendor repos and packs the 2026-11 sweep had not reached ---
+# Every repo answered GET /repos by 2026-11-08 under the name below (not
+# archived, not a fork) and is in no set in this file under any name. Counts
+# are `scripts/measure_registry.py` against a clone at a recorded commit, so
+# each focus's breakdown sums to est_items; categories
+# come from item names. All but two were pushed after 2026-05-01:
+# MiniMax-AI/skills was last pushed 2026-04-18 and stays as the vendor's own
+# pack, with no successor named; Dimillian/Skills was last pushed 2026-03-29
+# and stays because its README calls each skill self-contained, they already
+# target Swift 6.2 and the iOS 26 Liquid Glass APIs, and no successor is
+# named. softaworks/agent-toolkit and cline/prompts, below, were not left out
+# on that date alone. ruvnet/ruflo is the name GitHub answers for
+# ruvnet/claude-flow; it has no FORMERLY entry because no claude-flow row ever
+# shipped. vtex/skills sits here though it measures 46 skills and 72 rules:
+# the rules are those skills re-rendered as Cursor .mdc plus per-track
+# concatenations, the way microsoft/playwright is filed by what it authors.
+# Left out on purpose: microsoft/power-platform-skills and
+# actionbook/rust-skills, for the reasons the sweeps above record;
+# Snowflake-Labs/cocoplus (193 of 274 item files read `.cocoplus/` state its
+# installer's templates create), open-gsd/gsd-core (self-installing: 351 of
+# 502 item files call gsd-tools or paths its npx installer writes),
+# tractorjuice/arc-kit (331 of 356 items read ${CLAUDE_PLUGIN_ROOT}),
+# microsoft/skills-for-copilot-studio (24 of 31 skills run ../../scripts
+# bundles outside the skill directory), Unity-Technologies/unity-agent-plugin
+# (a repackaging of Unity-Technologies/skills, below), softaworks/agent-toolkit
+# (43 of 57 items byte-identical to davila7/claude-code-templates) and
+# cline/prompts (its 7 workflows are all written for Cline, it has no licence
+# and was last pushed 2026-02-27, and its 36 rules sit in a `.clinerules/`
+# directory, a form `scan_dir` does not read). Snowflake-Labs/coco-skills
+# measures 99 items, but 90 carry a per-skill Snowflake Skills License that
+# forbids keeping copies outside Snowflake's service — the copy `boost
+# install` makes — so it is held for the maintainer rather than catalogued.
+    ("vercel-labs/agent-browser", "ai", "Vercel Labs agent-browser CLI: browser automation core, Electron apps, Slack, dogfooding, Vercel Sandbox, WebMCP generation; the slack skill attaches to an already-open Chrome on port 9222 (11 skills)", 11, "high"),
+    ("google/agents-cli", "ai", "Official Google Agents CLI for ADK: scaffold, ADK code, eval, deploy, observability, publish and workflow skills, plus Claude and LangChain template skills (9 skills)", 9, "high"),
+    ("NVIDIA/skills", "ai", "Official NVIDIA: TAO model training and fine-tuning, NeMo and Megatron Bridge performance tuning, BioNeMo NIMs, Nemotron speech, cuDF, cuML, cuOpt, CUDA-Q, Jetson, DOCA and Holoscan (437 skills)", 437, "high"),
+    ("scenario-labs/skills", "ai", "Official Scenario generative media through its API: image, video, audio and 3D generation, model training, brand kits and ad variants, Blender, Godot, Maya, Roblox, Unity and Unreal asset pipelines, plus PR-hygiene skills (176 skills, 4 workflows)", 180, "high"),
+    ("amd/skills", "ai", "Official AMD: ROCm doctor and profiling, LLM serving on Instinct and EPYC, Quark LLM quantization, FlyDSL kernels, LLM evals, local AI apps (21 skills)", 21, "high"),
+    ("BerriAI/litellm-skills", "ai", "Official LiteLLM proxy admin through its REST API: keys, users, teams, orgs, models, agents and MCP servers, usage (21 skills)", 21, "high"),
+    ("SebastienDegodez/copilot-instructions", "architecture", ".NET architecture rules and skills: clean architecture, DDD, CQRS, modular monolith, object calisthenics, conventional commits, outside-in TDD, mutation testing, Microcks samples (21 skills, 18 rules, 2 workflows)", 41, "med"),
+    ("Aaronontheweb/dotnet-skills", "backend", ".NET from the Akka.NET author: Akka.NET actors, hosting and testing, Aspire, EF Core, C# API design, concurrency and nullable types, Testcontainers, snapshot testing, OpenTelemetry, plus benchmark, concurrency and Roslyn generator agents (39 skills, 6 workflows)", 45, "high"),
+    ("TencentCloudBase/CloudBase-AI-Toolkit", "backend", "Official Tencent CloudBase: auth, cloud functions, document and relational databases, storage, CloudRun, WeChat mini-program and web integration, deploys, plus spec, review and architect agents (59 skills, 2 rules, 15 workflows)", 76, "high"),
+    ("circlefin/skills", "backend", "Official Circle: USDC, developer- and user-controlled wallets, agent wallets and payments, Gateway, token bridging and swaps, Arc chain, smart contract platform (20 skills)", 20, "high"),
+    ("zoom/skills", "backend", "Official Zoom: Meeting and Video SDKs for web, mobile and desktop, REST API, webhooks and WebSockets, OAuth, RTMS, Zoom MCP, contact center and virtual agents; most skills link files in other skills' folders by relative path, which a single-skill install leaves behind (64 skills, 3 rules)", 67, "high"),
+    ("RevenueCat/ai-toolkit", "backend", "Official RevenueCat: project setup and SDK integration, paywalls, entitlements, subscriptions and billing, webhooks, experiments, migration to RevenueCat (46 skills)", 46, "high"),
+    ("microsoft/skills-for-fabric", "data", "Official Microsoft Fabric: Spark, SQL DB and warehouse, Eventhouse and Eventstream, pipelines, semantic models, OneLake, cost estimation, Databricks/Synapse/HDInsight migration; every skill points at the repo's shared common/ docs, which a single-skill install leaves behind (26 skills, 2 rules, 5 workflows)", 33, "high"),
+    ("posit-dev/skills", "data", "Official Posit: R package development, testthat, tidyverse style, CRAN checks, Shiny and bslib theming, Quarto, brand.yml, ggsql, deploy to Connect, plus PR, review and release workflow skills (30 skills)", 30, "high"),
+    ("astronomer/agents", "data", "Official Astronomer: Airflow DAG authoring, testing and debugging, Airflow 2-to-3 and Dagster migrations, Cosmos dbt, OpenLineage lineage, Astro deploys, warehouse profiling (35 skills, 3 workflows)", 38, "high"),
+    ("databricks/databricks-agent-skills", "data", "Official Databricks: Apps, AI Functions, AI/BI dashboards, Asset Bundles, DBSQL, jobs and Lakeflow pipelines, Lakebase, Unity Catalog, model serving, MLflow tracing and evaluation, vector search, plus setup and doctor commands and a routing rule; licensed only for use within or connecting to Databricks services (36 skills, 1 rules, 6 workflows)", 43, "high"),
+    ("GoogleCloudPlatform/data-agent-kit-plugin", "data", "Official Google Cloud data: BigQuery (AI/ML, graph, optimization, troubleshooting), Bigtable, Spark, Dataflow, managed Airflow and Composer, Cloud Storage, Dataform and dbt pipelines (40 skills)", 40, "high"),
+    ("motherduckdb/agent-skills", "data", "Official MotherDuck (cloud DuckDB): connect, query, load and model data, DuckLake, pipelines, dashboards and Dives, sharing and governance, REST API (21 skills)", 21, "high"),
+    ("spotify/portal-ai-plugins", "devops", "Official Spotify Portal (Backstage): catalog and docs search, scaffolder actions, services, Fleetshift fleet-wide changes and PRs, setup and doctor through the Portal CLI; bulk-reader and code-writer need the plugin's scripts (13 skills)", 13, "high"),
+    ("AvdLee/Xcode-Build-Optimization-Agent-Skill", "devops", "Xcode build optimisation by Antoine van der Lee: build benchmarks, compilation and project analysis, SPM build analysis, a fixer and an orchestrator (6 skills)", 6, "high"),
+    ("harness/harness-skills", "devops", "Official Harness: pipelines and deployments, feature flags and experiments, chaos engineering, security scans, SBOM and SLSA, GitOps, cost, DORA and SEI metrics, via Harness MCP; the 16 feature-management (FME) skills and two others read the repo's shared references/ docs, which a single-skill install leaves behind (73 skills, 1 rules, 1 workflows)", 75, "high"),
+    ("vtex/skills", "ecommerce", "Official VTEX commerce: VTEX IO apps and services, FastStore storefront, headless BFF and checkout, payment connectors (PPF, idempotency, PCI), marketplace, Master Data; the rules are Cursor exports of the skills (46 skills, 72 rules)", 118, "high"),
+    ("HoangNguyen0403/agent-skills-standard", "framework", "Per-framework standards: Android, Angular, Flutter, Go, iOS, Laravel, NestJS, Next.js, React, Spring Boot, plus common, security and specialist agents; committed sync copies add about 42 skills (393 skills, 22 rules, 100 workflows)", 515, "med"),
+    ("Yuan1z0825/nature-skills", "general", "Nature-style academic writing and research: literature search and pipeline, citation and reference verification, figures, statistics, polishing, reviewer responses, paper to PPT, Word or patent; 10 of them read the nature-shared skill's files, so install it alongside (24 skills)", 24, "high"),
+    ("larksuite/cli", "general", "Official Lark/Feishu CLI skills: IM, Docs, Drive, Base, Sheets, Calendar, Mail, Meetings, Approval, OKR, Wiki; they drive the lark-cli binary, and 7 of the 34 are the repo's own test fixtures and an end-to-end test writer (34 skills)", 34, "high"),
+    ("AgriciDaniel/claude-obsidian", "general", "Obsidian second brain from the claude-seo author: wiki ingest, query, lint and fold, autoresearch, Obsidian Markdown, Bases, Canvas and Defuddle, with ingest, lint and verifier agents (16 skills, 1 rules, 3 workflows)", 20, "high"),
+    ("MiniMax-AI/skills", "general", "Official MiniMax: Android, iOS, Flutter, React Native, full-stack and shader dev, DOCX/PDF/XLSX/PPTX and slide generation, MiniMax music, vision and mmx CLI (23 skills, 5 workflows)", 28, "high"),
+    ("anthropics/claude-for-legal", "general", "Official Anthropic legal plugins for in-house, firm and clinic practice: NDA and SaaS MSA review, board minutes and written consents, legal holds and docket watching, DPA and DSAR handling, IP clearance and FTO triage, employment, regulatory gap analysis, law-student drills (151 skills, 10 workflows)", 161, "high"),
+    ("tw93/Waza", "general", "Engineering habits as skills: check (review and ship), hunt (root cause), think (plans), read (URLs and PDFs), write, learn (research), health (agent config audit), ui (8 skills)", 8, "high"),
+    ("Dimillian/Skills", "general", "Thomas Ricouard's Codex skills: SwiftUI patterns, Liquid Glass, performance audits and view refactors, Swift concurrency, macOS SPM packaging and menu-bar apps, iOS debugging, App Store changelogs, plus review and bug-hunt swarms (16 skills)", 16, "high"),
+    ("himself65/finance-skills", "general", "Financial analysis: company and SaaS valuation, earnings preview/recap, estimates, options payoff, ETF premium, stock correlation and liquidity, plus social/market-data readers (Discord, Telegram, X, LinkedIn, TradingView, yfinance) (26 skills)", 26, "high"),
+    ("google-deepmind/science-skills", "general", "Official Google DeepMind science: AlphaFold DB, AlphaGenome variant analysis, UniProt, PDB, ChEMBL, gnomAD, ClinVar, Ensembl and literature search (40 skills)", 40, "high"),
+    ("t3dotgg/tstack", "general", "Theo's daily-driver skills: babysit, file and take over PRs, leave PR comments, council, full-send and full-stop, modernize, sol-loop (9 skills)", 9, "high"),
+    ("arjun988/blender-skills", "general", "Blender 3D: modeling, sculpting, rigging, UVs, lookdev, rendering, geometry nodes, export to Unity/Unreal/Godot, plus visual-style and game-genre art direction (94 skills)", 94, "high"),
+    ("Besty0728/Unity-Skills", "general", "Unity editor automation: scenes, prefabs, animator, Addressables, asmdef, shaders and ShaderGraph, URP, netcode, DOTween, YooAsset, plus design-guidance skills and release commands (85 skills, 4 workflows)", 89, "high"),
+    ("RefoundAI/lenny-skills", "general", "Product management, growth and leadership playbooks distilled from Lenny's Podcast: PRDs, roadmaps, PMF, pricing, PLG, hiring, fundraising, OKRs (76 skills)", 76, "high"),
+    ("dzhng/skills", "general", "Software-factory skills: write, implement and close specs, audits of tests, performance, agents and decisions, auto-research, code review, retros, launch videos and marketing pages (36 skills)", 36, "high"),
+    ("matlab/simulink-agentic-toolkit", "general", "Official MathWorks Simulink: model building and layout, Model Advisor checks, code generation and interfaces, real-time targets, AUTOSAR, testing and coverage, variants, Simscape; licensed only for use with MathWorks products (47 skills)", 47, "high"),
+    ("matlab/matlab-agentic-toolkit", "general", "Official MathWorks MATLAB: signal, image and audio processing, antenna, PCB and RF design, radar and 5G/WLAN waveforms, data analysis and machine learning, code generation, testing and code review, plus RoadRunner and SimBiology; licensed only for use with MathWorks products (158 skills)", 158, "high"),
+    ("Unity-Technologies/skills", "general", "Official Unity: 2D physics and tiles, URP and render graph, audio mixers, UI Toolkit and uGUI, multiplayer and Vivox, Cloud Build, in-app purchases, Unity CLI; Unity Companion License, for Unity-dependent projects only (36 skills)", 36, "high"),
+    ("ClawBio/ClawBio", "general", "Bioinformatics: GWAS and polygenic risk scores, variant annotation and clinical reports, nf-core RNA-seq/scRNA wrappers, proteomics, public-data fetchers (GEO, ENA, PRIDE, NCBI) (111 skills, 4 workflows)", 115, "high"),
+    ("openclaw/agent-skills", "general", "OpenClaw's agent skills: autoreview, handoff, behavior validation against a contract, session transcripts and HTML viewer, README standard, plus OpenClaw Gateway and Crabbox handoff tools (9 skills)", 9, "high"),
+    ("GarethManning/education-agent-skills", "general", "Evidence-grounded teaching skills: curriculum and assessment design, explicit instruction, AI learning science and AI literacy, EAL language scaffolds, UDL, historical and systems thinking, wellbeing and professional learning (165 skills)", 165, "med"),
+    ("lawve-ai/awesome-legal-skills", "general", "Legal skills contributed by practising lawyers and synced from lawve.ai: contract and NDA review, GDPR, EU AI Act, NIS2 and ISO compliance, litigation and arbitration, international criminal tribunals, French, Icelandic and Latin American practice; CC BY-NC-ND 4.0, so no commercial use and no shared adaptations (279 skills)", 279, "med"),
+    ("coreyhaines31/makerskills", "general", "Solo-operator skills: company and personal CFO, decide, deep research, second brain and company brain, business brainstorm, slide decks, read-book and watch-video, CI audit (24 skills)", 24, "med"),
+    ("levnikolaevich/claude-code-skills", "general", "Numbered product-to-operations lifecycle skills: opportunity and PRD, system design and ADRs, delivery and test plans, implementation, code and architecture audits, release and deployment, engineering baselines (41 skills)", 41, "med"),
+    ("n8n-io/skills", "general", "Official n8n through its instance MCP: agents, AI nodes, Code nodes, expressions, credentials, data tables, loops, sub-workflows, error handling, debugging (15 skills)", 15, "high"),
+    ("MiniMax-AI/mcode-stack", "general", "MiniMax Code team's working practice: code review, small PRs, change descriptions, agent briefs and handoffs, context, tool-budget and long-session audits, trajectory review, plus Chinese requirement-tracking skills for Feishu and Meegle (28 skills)", 28, "high"),
+    ("slackapi/slack-skills-plugin", "general", "Official Slack platform: Block Kit, create/test/deploy Slack apps, Slack CLI and Web API, messaging and search, plus channel digest, standup and announcement commands (9 skills, 5 workflows)", 14, "high"),
+    ("amplitude/builder-skills", "general", "Official Amplitude: product analytics (charts, dashboards, experiments, retention and activation diagnosis), PM frameworks, specs and PRDs, launch content (62 skills, 7 workflows)", 69, "high"),
+    ("microsoft/upgrade-agent-plugins", "general", "Official Microsoft modernization: .NET Framework to modern .NET, ASP.NET MVC/OWIN/WCF/WebForms to Core and Blazor, EF6 to EF Core, Aspire and Azure Functions upgrades, PowerShell 7 and TypeScript upgrades, plus upgrade-planning agents; pre-release licence for use only with Microsoft products, and the upgrade MCP tools its skills call send usage telemetry by default (116 skills, 21 workflows)", 137, "high"),
+    ("itsmostafa/aws-agent-skills", "infra", "Per-service AWS skills: API Gateway, Bedrock, CloudFormation, CloudWatch, Cognito, DynamoDB, EC2, ECS, EKS, EventBridge, IAM, Lambda, RDS, S3, SQS, Step Functions (18 skills)", 18, "high"),
+    ("oracle/skills", "infra", "Official Oracle: OCI Terraform (Exadata, IAM, security zones, landing zones), OKE clusters, OCI Functions, APEX and APEXlang apps, Oracle Database, Data Guard, GraalVM (27 skills)", 27, "high"),
+    ("docker/skills", "infra", "Official Docker: build strategies, Compose patterns, project foundations, destructive-command guardrails, docker-agent config/run/deploy, Docker Sandboxes (12 skills)", 12, "high"),
+    ("vercel/vercel-plugin", "infra", "Official Vercel plugin: deployments and CI/CD, domains, env vars, functions, storage, firewall, CDN and runtime cache, sandbox, AI Gateway, AI SDK, Chat SDK, CLI (45 skills, 8 workflows)", 53, "high"),
+    ("aliyun/alibabacloud-aiops-skills", "infra", "Official Alibaba Cloud: ECS, ACK, OSS, CDN, PAI, DataWorks, MaxCompute, Flink, cloud firewall and DDoS operations, diagnosis and migration via the aliyun CLI (399 skills)", 399, "high"),
+    ("splunk/splunk-agent-skills", "infra", "Official Splunk: SPL search and tuning, dashboards and custom visualizations, alerting and notables, data onboarding and CIM mapping, forwarder/indexer/search-head cluster ops, upgrades (32 skills)", 32, "high"),
+    ("huaweicloud/huaweicloud-skills", "infra", "Official Huawei Cloud: ECS, CCE, OBS, CDN, MRS, DWS, ModelArts and Ascend, CloudRobo, WAF, IAM, migration and Terraform (194 skills)", 194, "high"),
+    ("maxrave-dev/kotlin-footguns", "java", "Kotlin and Compose Multiplatform footguns: Compose screens and visuals, data layer, KMP architecture, remote APIs, background state, WebView, media playback, desktop builds, plus a footgun scan (11 skills)", 11, "high"),
+    ("gooseworks-ai/goose-skills", "marketing", "Growth and paid media: ad-angle mining, Meta ad policy checks and campaigns, static and video ad rendering, lifecycle email, audience/competitor/market research, creator outreach (185 skills)", 185, "high"),
+    ("salesforce/salesforce-skills", "marketing", "Official Salesforce for Sales: account plans and tiering, deal review and signals, pipeline and forecast, call prep and follow-up, outreach, lead triage, SDR assignment (40 skills)", 40, "high"),
+    ("ruvnet/ruflo", "meta", "Ruflo (formerly claude-flow) agent harness: swarm and hive-mind orchestration, AgentDB memory, SPARC, GitHub automation, cost tracking, browser and plugin packs; most skills call its own MCP server or CLI (365 skills)", 365, "high"),
+    ("Yeachan-Heo/oh-my-codex", "meta", "Codex counterpart of oh-my-claudecode: autopilot, ralph and ultrawork loops, team mode, deep interview, planning, code review, research; most skills drive the omx runtime (29 skills, 1 workflows)", 30, "high"),
+    ("tanweai/pua", "meta", "High-agency pressure prompting (PUA) for coding agents: try-harder escalation levels, evidence and done-checks, a persistent pua-loop, P7/P9/P10 role personas, in Chinese, English and Japanese, rendered for Codex, Cursor, VS Code, Kimi and more (34 skills, 6 rules, 32 workflows)", 72, "high"),
+    ("nyldn/claude-octopus", "meta", "Multi-model orchestration plugin: discover/define/develop/deliver flows, debate and council, PRD and spec, TDD, staged review, persona agents; 107 of its items, every flow-* skill among them, call the plugin's own orchestrate.sh (121 skills, 116 workflows)", 237, "high"),
+    ("rohitg00/pro-workflow", "meta", "Self-correcting Claude Code workflow: learn-rule and replay-learnings memory, context and token discipline, parallel worktrees, orchestration, session handoff, smart commits, TDD and an LLM wiki, with planner, reviewer and debugger agents and .mdc guardrails (41 skills, 11 rules, 31 workflows)", 83, "high"),
+    ("fcakyon/claude-codex-settings", "meta", "Claude, Codex and Cursor plugin marketplace: GitHub dev, Ultralytics, Python, QA and test audit, Azure, gcloud, Hetzner and Dokploy tools, plus re-hosted vendor packs (Cloudflare, Stripe, Supabase, MongoDB, LiveKit) (113 skills, 14 workflows)", 127, "high"),
+    ("ljagiello/ctf-skills", "security", "CTF solving: pwn, crypto, web, reverse, forensics, OSINT, malware and AI/ML challenge skills, writeups, plus per-category solver agents (12 skills, 9 workflows)", 21, "high"),
+    ("google/mantis", "security", "Google Mantis: staged vulnerability review from threat model and VCS history through research, dedupe, critic and review, crash reproducers, exploit chains, minimal patches and reports; it generates and runs code autonomously, and its README says to use it only in isolated, restricted environments (21 skills)", 21, "high"),
+    ("yaklang/hack-skills", "security", "Offensive security playbooks: web injection and auth bypass, Active Directory and Kerberos attacks, privilege escalation, binary and kernel exploitation, mobile and cloud pentesting, crypto attacks (103 skills)", 103, "high"),
+    ("utkusen/sast-skills", "security", "SAST vulnerability hunting per class: SQLi, XSS, SSRF, SSTI, XXE, RCE, IDOR, JWT, GraphQL, file upload, business logic, hardcoded secrets, plus a report skill (16 skills)", 16, "high"),
+    ("hypnguyen1209/offensive-claude", "security", "Authorized red-team toolkit: Active Directory attacks, CI/CD supply chain, browser and exploit development, EDR evasion, privesc, cloud/container escape, plus engage.* engagement commands and researcher/validator agents (38 skills, 26 workflows)", 64, "med"),
+    ("heygen-com/hyperframes", "ui", "Official HyperFrames (HTML to video): compositions, CLI, captions, title and camera templates, Remotion migration, rebuilding a video as a project; several skills fire a `npx hyperframes events` usage beacon on start (22 skills)", 22, "high"),
+    ("ibelick/ui-skills", "ui", "Design-engineering fixes for agent-built UI: baseline UI constraints, accessibility, metadata and motion-performance fixes, improve-ui, DESIGN.md authoring and component canvases (9 skills)", 9, "high"),
+    ("CloudAI-X/threejs-skills", "ui", "Three.js: fundamentals, geometry, materials, textures, lighting, shaders, post-processing, animation, loaders and asset pipeline, interaction, performance, React Three Fiber (13 skills)", 13, "high"),
+    ("evanca/flutter-ai-rules", "ui", "Flutter and Dart: effective Dart, flutter_bloc, Riverpod, Provider, app architecture, testing with Mockito, Mocktail and Patrol, plus 14 Firebase service skills (36 skills)", 36, "med"),
+    ("CesiumGS/cesiumjs-skills", "ui", "Official CesiumJS: viewer setup, camera, entities, 3D Tiles, imagery and terrain, primitives, materials and custom shaders, time-dynamic properties, spatial math (15 skills)", 15, "high"),
+    ("DevExpress/agent-skills", "ui", "Official DevExpress: Blazor, WinForms, WPF, XAF and DevExtreme UI components, Reporting, Dashboard and Office File API (87 skills, 1 workflows)", 88, "high"),
+    ("addyosmani/web-quality-skills", "web-dev", "Lighthouse-based web quality from Addy Osmani: performance, Core Web Vitals, accessibility, SEO, best practices and a full web-quality audit (6 skills)", 6, "high"),
+    ("adobe/skills", "web-dev", "Official Adobe: AEM (Edge Delivery blocks and page import, dispatcher, replication, workflows) plus Creative Cloud photo and document tools, App Builder, Commerce apps, Adobe Analytics/CJA and Workfront (195 skills)", 195, "high"),
+    ("webflow/webflow-skills", "web-dev", "Official Webflow: MCP site and CMS work (bulk CMS updates, accessibility, asset and link audits, safe publish, Figma-to-Webflow), Webflow CLI, code components, DevLink (33 skills, 1 workflows)", 34, "high"),
+    ("mapbox/mapbox-agent-skills", "web-dev", "Official Mapbox: web, iOS, Android and Flutter map patterns, search and navigation, store locators, styles and cartography, data viz, Google Maps/MapLibre migration, token security (20 skills)", 20, "high"),
+    ("UI5/plugins-coding-agents", "web-dev", "Official SAP UI5: fixes for bootstrap params, async components, CSP, deprecated controls and globals, manifest.json, plus best practices (tables, MDC, OPA5/QUnit, a11y) and TypeScript conversion (28 skills)", 28, "high"),
 ]
 
 # --- rules (Cursor .mdc / .cursorrules / Windsurf) --------------------------
@@ -914,6 +1046,11 @@ WORKFLOWS = [
     # and named for a role (`software-architect`, `growth-hacker`,
     # `brand-guardian`), so `agents` like VoltAgent's, not one department.
     ("msitarzewski/agency-agents", "agents", "Role-play subagent personas filed by department: engineering, marketing, sales, design, game development, security, GIS and more (284 workflows)", 284, "high"),
+    # --- 2026-11-08 sweep (see the SKILLS section for how it was measured) ---
+    ("shanraisshan/claude-code-best-practice", "general", "Claude Code best-practice guide's own examples: research, plan and implement (RPI) commands with eight role agents and agent-browser, plus demo weather and time orchestrations and the repo's own docs-drift and presentation agents (9 skills, 34 workflows)", 43, "high"),
+    ("FlorianBruniaux/claude-code-ultimate-guide", "general", "Claude Code guide's example skills, commands and agents: plan pipelines, ship and release, CI, git worktrees, handoffs, security audits, agent and skill evals; about 40 of its workflows are guide chapters (96 skills, 154 workflows)", 250, "high"),
+    ("CharlesWiltgen/Axiom", "general", "Axiom iOS/xOS development: SwiftUI, concurrency, SwiftData and Core Data, IAP, accessibility, energy and memory audits, Xcode builds and tests, with audit agents and commands for Claude, Codex and Cursor (112 skills, 220 workflows)", 332, "high"),
+    ("GRCEngClub/claude-grc-engineering", "security", "GRC engineering: SOC 2, ISO 27001, FedRAMP, NIST, PCI DSS, HIPAA, GDPR and 30+ other framework experts and commands, cloud/SaaS evidence connectors, control mapping, vendor risk, audit diagrams (101 skills, 263 workflows)", 364, "med"),
 ]
 
 PRIORITY = {"skill": 3, "workflow": 2, "rule": 1}
