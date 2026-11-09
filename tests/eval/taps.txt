@@ -15,12 +15,12 @@
 # distribution without a network with `--audit`.
 #
 # --- corpus size: written from the rows below by eval_corpus.py ---
-# total:   10,736 entries in 20 repos
+# total:   10,737 entries in 20 repos
 # sixrepo: 921 entries in the 6 repos above the scale
 #          divider -- a historical baseline, not a subset that scores
 # largest: sickn33/antigravity-awesome-skills, 6,634 entries (61.8%)
-# next:    affaan-m/ECC, 1,626 entries (15.1%)
-# content: 5,942 distinct items; sickn33/antigravity-awesome-skills holds 35.6%
+# next:    affaan-m/ECC, 1,627 entries (15.2%)
+# content: 5,943 distinct items; sickn33/antigravity-awesome-skills holds 35.6%
 #          of them, and the rows overstate the corpus 1.81x
 # scores:  tests/eval/baseline.json, re-baselined with every move
 # --- end corpus size ---
@@ -133,7 +133,7 @@ LessUp/awesome-cursorrules-zh           ce39351450c4720a11c7edeadaef26d60c5c02e7
 #     "no golden targets" line -- golden.jsonl pins two repos below it and
 #     golden-natural.jsonl pins five, so this file has no tail that can be dropped ---
 aliarghyani/vue-cursor-rules            92609798e192312ce16edb78aa5424a8caaa415b    14    14
-affaan-m/ECC                            ca185ef5f7667078a1e70a763bd3a9c71c48acf0  1626  1593
+affaan-m/ECC                            ca185ef5f7667078a1e70a763bd3a9c71c48acf0  1627  1594
 BagelHole/DevOps-Security-Agent-Skills  0365f57a079b1332f95cf26e31dd2d5332a8399f   163   163
 composio-community/awesome-codex-skills 0930e1373789d2eda449039f7ac154b33031de89   880   880
 first-fluke/oh-my-agent                 75b3fbce93258f37843d6db8a7e32ab52a6d9aa3   205   139

@@ -83,7 +83,12 @@ from . import (
 #        tap (`_keep_short_names_free`); a loose file carrying `color` is a
 #        workflow (`WORKFLOW_META_KEYS`), and a loose subagent is named as
 #        one rather than as a slash command (`workflows.detect_slot`)
-CACHE_FORMAT = 11
+#  12 -- a doc page under a workflow dir is not an item (`_is_doc_page`): an
+#        ALL-CAPS stem with no item frontmatter (`QUICKSTART.md`,
+#        `src/agents/AGENTS.md`) is dropped, a lowercase `changelog.md` or
+#        `security.md` command is an item again, and so is any doc-named file
+#        whose frontmatter describes an item (`commands/sc/index.md`)
+CACHE_FORMAT = 12
 # A cache is also stale when the tap's curated category has moved since it was
 # written: `category` falls back to that value at scan time, so recategorising
 # a registry in `registries.json` reached no machine that had already tapped it
@@ -119,8 +124,17 @@ WORKFLOW_META_KEYS = {"tools", "model", "argument-hint", "allowed-tools",
 # was `a11y-audit.prompt` here. Only while the short name is free in its tap
 # (`_keep_short_names_free`).
 KIND_SUFFIXES = (*RULE_MD_SUFFIXES, *workflows.SUFFIX_SLOTS)
-# Markdown filenames that are documentation, never workflow items.
-DOC_STEMS = {"readme", "contributing", "license", "changelog", "security",
+# Markdown stems that are a repo's own documentation in any spelling
+# (`README.md`, `commands/readme.md`), never a workflow item -- see
+# `_is_doc_page`, which also takes every ALL-CAPS stem. Not `changelog` or
+# `security`: lowercase, each is a command name taps really ship
+# (`commands/git/changelog.md`, `.opencode/commands/security.md`) -- over 470
+# taps every lowercase `security.md` under a workflow dir and 5 of the 6
+# `changelog.md` were commands -- while the pages spelled `CHANGELOG.md` /
+# `SECURITY.md` are ALL-CAPS anyway. `index` stays: the same 470 taps hold 8
+# docs-site `docs/agents/index.md`-style pages and one command, the
+# SuperClaude `commands/sc/index.md`, which its frontmatter keeps.
+DOC_STEMS = {"readme", "contributing", "license", "licence",
              "code_of_conduct", "index", "_index", "authors", "notice"}
 
 
@@ -460,21 +474,85 @@ def _classify_rule(path: Path) -> bool:
             or _suffixed(path.name, RULE_MD_SUFFIXES) is not None)
 
 
+def _declares_workflow(meta: dict) -> bool:
+    """True when ``meta`` is a subagent's or slash command's frontmatter: a
+    ``name``, a ``description`` and one of :data:`WORKFLOW_META_KEYS`."""
+    return bool(meta.get("name") and meta.get("description")
+                and (WORKFLOW_META_KEYS & set(meta)))
+
+
+def _describes_an_item(meta: dict) -> bool:
+    """True when ``meta`` makes a doc-shaped file an item anyway: a
+    ``description`` plus a ``name`` or one of :data:`WORKFLOW_META_KEYS`.
+
+    Looser than :func:`_declares_workflow` on purpose. That one decides
+    whether a loose file anywhere is a workflow; this one only overrides a
+    doc-shaped stem already under a workflow dir, where a real item's
+    frontmatter need not use Claude's keys: claude-office-skills/skills's
+    ``agents/*/AGENT.md`` carry ``name``, ``description``, ``skills`` and
+    ``mcp_tools``, and langchain-ai/deepagents's ``AGENTS.md`` subagents a
+    ``description`` and ``tools`` with no ``name``. A docs-site page carries
+    a ``description`` and neither (microsoft/hve-core's ``README.md``,
+    ``docs/agents/index.md`` with a ``title``), so it stays a page.
+    """
+    return bool(meta.get("description")
+                and (meta.get("name") or (WORKFLOW_META_KEYS & set(meta))))
+
+
+def _all_caps(stem: str) -> bool:
+    """True when ``stem`` has at least two letters and every one of them is
+    an ASCII capital: ``QUICKSTART``, ``ORCHESTRATION-README``, ``AGENTS``.
+
+    ASCII on purpose -- a CJK letter is ``isalpha()`` and never upper, and a
+    Greek capital would pass ``isupper()`` -- and two letters so a one-letter
+    stem says nothing about its author's intent.
+    """
+    letters = [c for c in stem if c.isalpha()]
+    return len(letters) >= 2 and all("A" <= c <= "Z" for c in letters)
+
+
+def _is_doc_page(stem: str, meta: dict) -> bool:
+    """True when a Markdown file whose stem is ``stem`` documents its repo
+    rather than being one of its workflows.
+
+    Doc-shaped stem AND no item frontmatter (:func:`_describes_an_item`).
+    The stem is doc-shaped when it is in :data:`DOC_STEMS` in any case, or
+    written ALL-CAPS, which is how a repo names the pages it means people to
+    read: qdhenry/Claude-Command-Suite's
+    ``.claude/commands/skills/QUICKSTART.md`` was indexed as the command
+    ``skills/QUICKSTART`` and ranked first for "write good git commit
+    messages". Over 470 taps (10,687 workflow items) the ALL-CAPS stems
+    indexed as workflows were 90: 30 such pages, not one with frontmatter,
+    and 60 real items that all carry it -- 48 nowork-studio ``WORKFLOW.md``
+    commands, 4 with the whole :func:`_declares_workflow` signature
+    (qdhenry's ``agents/TASK-STATUS-PROTOCOL.md`` among them), and 8
+    subagents whose keys are not Claude's -- hence the exception, and its second
+    half: 9 microsoft/hve-core ``README.md`` files carry a docs-site
+    ``description`` and nothing else.
+    """
+    return ((stem.lower() in DOC_STEMS or _all_caps(stem))
+            and not _describes_an_item(meta))
+
+
 def _classify_workflow(path: Path, meta: dict) -> bool:
-    """A Markdown file is a workflow if it lives under a commands/agents/
-    workflows directory, carries subagent/slash-command frontmatter, or names
-    itself one by a Copilot suffix (:data:`workflows.SUFFIX_SLOTS`)."""
+    """A Markdown file is a workflow if it names itself one by a Copilot
+    suffix (:data:`workflows.SUFFIX_SLOTS`), or is not a doc page
+    (:func:`_is_doc_page`) and lives under a commands/agents/workflows
+    directory or carries subagent/slash-command frontmatter.
+
+    The suffix is checked first because it is a declaration, as the
+    frontmatter is: no :data:`DOC_STEMS` stem ever carries one, and an
+    ALL-CAPS ``X.prompt.md`` is still a prompt file Copilot loads."""
     if path.suffix.lower() != ".md" or path.name == "SKILL.md":
-        return False
-    if path.stem.lower() in DOC_STEMS:
         return False
     if workflows.suffix_slot(path.name) is not None:
         return True
+    if _is_doc_page(path.stem, meta):
+        return False
     parent_parts = {p.lower() for p in path.parent.parts}
     if parent_parts & WORKFLOW_DIRS:
         return True
-    return bool(meta.get("name") and meta.get("description")
-                and (WORKFLOW_META_KEYS & set(meta)))
+    return _declares_workflow(meta)
 
 
 def escapes(root: Path, path: Path) -> bool:
