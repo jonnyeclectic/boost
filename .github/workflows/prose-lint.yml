@@ -36,5 +36,9 @@ jobs:
       - name: vale (pinned binary)
         # Same pinned-release pattern as the gitleaks/actionlint lint steps.
         run: |
-          curl -sSL https://github.com/errata-ai/vale/releases/download/v3.13.0/vale_3.13.0_Linux_64-bit.tar.gz | tar xz vale
+          # Retried and checked, never piped: a truncated download fed to tar
+          # failed this job as "Error is not recoverable".
+          curl -fsSL --retry 5 --retry-all-errors -o vale.tar.gz https://github.com/errata-ai/vale/releases/download/v3.13.0/vale_3.13.0_Linux_64-bit.tar.gz
+          echo "4378ee4bc7c2493760826270e55d5569cda35d7c89582e9fdc3070e2a1089193  vale.tar.gz" | sha256sum -c -
+          tar xzf vale.tar.gz vale
           ./vale README.md CONTRIBUTING.md SECURITY.md CLAUDE.md docs/DEBUGGING.md docs/rag-architecture.md docs/security-design.md docs/code-review.md docs/semantic-search.md docs/bmad.md docs/openssf-badge.md docs/openssf-playbook.md docs/dependencies.md docs/verifying-releases.md MAINTAINERS.md SUPPORT.md GOVERNANCE.md docs/architecture/*.md examples/README.md style/README.md
