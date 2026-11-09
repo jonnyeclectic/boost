@@ -144,6 +144,8 @@ class TestItsVersionMovesWithItsText:
             "874c2854a1d5d7c2eba91f9857052a72a6175f03f8dfc350123a7c8515580b20",
         "1.1.0":
             "24147001f26a8e9bd077f8a54618ec0966842b6863bb6724384a85d5fb5096e1",
+        "1.2.0":
+            "1ccb3bc3c6835263e62ae007c38185b1f3bf73342196c7075cd3610cf377e20f",
     }
 
     def test_the_text_is_the_one_its_version_names(self):
@@ -346,3 +348,18 @@ class TestMcpRegisterOffersIt:
                 % SKILL) in " ".join(r.out.split())
         assert lockfile.get_skill(SKILL) is None
         assert not pathlib.Path(paths.store_dir() / SKILL).exists()
+
+
+class TestItCoversWhatTheToolsGrew:
+    """The MCP tools gained `tap`/`owner` on search and `tap` on install;
+    an agent only uses an argument it has been told exists."""
+
+    def test_it_names_the_search_filters(self):
+        text = _text()
+        assert "`tap` or `owner` on `boost_search`" in text
+        assert "`--tap` or `--owner`" in text
+
+    def test_it_says_how_to_install_from_an_untapped_repo(self):
+        text = " ".join(_text().split())
+        assert "`owner/repo@skill`" in text
+        assert "ask the user first, then pass `tap: true`" in text

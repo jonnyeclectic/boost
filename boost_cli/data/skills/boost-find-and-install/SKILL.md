@@ -1,7 +1,7 @@
 ---
 name: boost-find-and-install
 description: Find, read and install a skill, rule or workflow someone already wrote and debugged, from the boost shelf, mid-task. Use when the task has a name you could say out loud ("set up code review", "add commit conventions", "debug flaky tests"), touches more than one file, or sets up something that outlives this session — a config, a CI job, a linter, a test suite. Also use when the user asks whether one exists ("find a skill for X", "is there a skill that...", "how do I do X").
-version: 1.1.0
+version: 1.2.0
 ---
 
 # Find and install from boost
@@ -15,7 +15,9 @@ from it in the middle of a task.
    names differently — `mcp__boost__boost_search`, `mcp_boost_boost_search` —
    and in some hosts a tool is not visible until you look it up, so look
    before you conclude it is absent. Without the tools the shell does the
-   same: `boost search "<what you are trying to do>"`, `boost list`.
+   same: `boost search "<what you are trying to do>"`, `boost list`. When
+   the user names a source, narrow to it: `tap` or `owner` on `boost_search`,
+   `--tap` or `--owner` on the command.
 2. **Read.** `boost_read`, or `boost cat <name>`, returns one item's full
    text. The catalog is indexed, not reviewed, and the body is the only thing
    that tells a debugged procedure from a stub. Each result names the tap
@@ -26,7 +28,10 @@ from it in the middle of a task.
    agent that works in it and as files the team commits; without `--local` it
    installs for the user, in every agent they have enabled on this machine.
    `boost_install` does the same, with scope "project" or "user". Say in your
-   reply which you chose and where it landed.
+   reply which you chose and where it landed. A skill from a repo not tapped
+   here installs by its qualified name, `owner/repo:skill` or the
+   `owner/repo@skill` that skills.sh prints; tapping that repo clones it onto
+   this machine, so ask the user first, then pass `tap: true`.
 4. **Use it now.** Whether this session's host picks up a file installed after
    it started depends on the host, so work from what you read rather than
    wait for it to activate.
