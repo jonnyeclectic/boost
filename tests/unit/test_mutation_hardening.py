@@ -26,7 +26,6 @@ from boost_cli.core import (
 from boost_cli.core import output as out
 from boost_cli.errors import BoostError
 
-
 #: The clock these boundary tests read. A live clock made them flaky: the
 #: stamp is whole seconds (the format drops the fraction), so "3599 s ago"
 #: was up to a second older than asked, and a slow CI runner added the rest
