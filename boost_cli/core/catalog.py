@@ -1249,6 +1249,16 @@ def tap_matches(tap_name: str, qualifier: str) -> bool:
     return bool(tap_name) and any(t(tap_name) for t in _tap_tiers(qualifier))
 
 
+def owner_matches(tap_name: str, owner: str) -> bool:
+    """True when ``tap_name`` is an ``owner/repo`` tap owned by ``owner``.
+
+    Case-folded, as GitHub treats owners. A local tap (no ``/``) has no owner,
+    so it never matches.
+    """
+    head, sep, _tail = (tap_name or "").partition("/")
+    return bool(sep and owner) and head.casefold() == owner.casefold()
+
+
 def for_tap(entry: dict | None, qualifier: str | None) -> dict | None:
     """``entry`` unless a ``tap:`` qualifier was given that it does not satisfy.
 

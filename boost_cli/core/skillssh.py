@@ -31,6 +31,7 @@ import json
 import re
 import urllib.parse
 import urllib.request
+from collections.abc import Callable
 
 from boost_cli.core import config, nethttp, typedvalue
 
@@ -168,7 +169,8 @@ def local_names(sources: set[str]) -> dict[str, set[str]]:
 
 
 def section(query: str, *, force: bool = False, owner: str | None = None,
-            show: int = SHOW, fetch=None) -> list[str]:
+            show: int = SHOW, fetch=None,
+            keep: Callable[[str], bool] | None = None) -> list[str]:
     """Plain-text lines that follow a search, or ``[]`` when not enabled.
 
     One renderer for ``boost search`` and ``boost_search``, so an agent and a
@@ -179,6 +181,9 @@ def section(query: str, *, force: bool = False, owner: str | None = None,
     hits, err = (fetch or search)(query, owner)
     if err:
         return ["skills.sh: " + err]
+    if keep is not None:
+        # A `--tap` the API has no parameter for: narrow by source here.
+        hits = [h for h in hits if keep(h["source"])]
     if not hits:
         return ["skills.sh: no matches for %r" % query]
     hits = hits[:show]

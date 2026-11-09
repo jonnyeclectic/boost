@@ -123,6 +123,12 @@ def cmd_search(argv):
                    help="rerank the top hits with Claude")
     p.add_argument("--category", type=util.nonempty_str,
                    help="only show entries whose category matches (case-insensitive)")
+    p.add_argument("--tap", type=util.nonempty_str, metavar="TAP",
+                   help="only show entries from this tap (owner/repo, or "
+                        "the repo name alone)")
+    p.add_argument("--owner", type=util.nonempty_str, metavar="OWNER",
+                   help="only show entries from taps this GitHub owner "
+                        "publishes")
     p.add_argument("-k", "--limit", type=util.positive_int, default=15,
                    help="max results (default 15)")
     p.add_argument("--collapse-near-duplicates", action="store_true",
@@ -155,6 +161,7 @@ def cmd_search(argv):
                              hint=jsonstate.read_remedy(cfg_err, paths.tilde))
         raise BoostError("no taps configured — nothing to search",
                         hint=config.setup_hint())
+    _check_source_filters(args)
     # Full-content (RAG) search is the default: build the index on first use so
     # every user gets BM25 ranking without having to know about `boost reindex`.
     # rag.ensure() is incremental, offline, and degrades to frontmatter search
@@ -182,15 +189,13 @@ def cmd_search(argv):
         # built and floors to BM25 otherwise, so the CLI and the MCP server
         # answer from the same engine instead of the CLI being BM25-only.
         k = max(60, args.limit * 4)
-        if args.category:
+        keep = _search_filter(args)
+        if keep is not None:
             # Widen until --limit rows survive the filter: filtering one
             # page of `k` returned 10 of a category's 20 matches against a
             # --limit of 15, the rest sitting past the cut unmentioned.
-            categories = _tap_categories()
             hits, engine, k = rag.retrieve_filtered(
-                query, k=k, want=args.limit,
-                keep=lambda e: catalog.matches_category(e, args.category,
-                                                        categories),
+                query, k=k, want=args.limit, keep=keep,
                 collapse_near_duplicates=args.collapse_dupes)
         else:
             hits, engine = rag.retrieve_any(
@@ -207,10 +212,9 @@ def cmd_search(argv):
     # Whether the query matched before --category narrowed it: an empty list
     # the filter produced is a different answer from one the query did.
     matched_before_filter = len(scored)
-    if args.category:
-        categories = _tap_categories()
-        scored = [(e, s) for e, s in scored
-                 if catalog.matches_category(e, args.category, categories)]
+    keep = _search_filter(args)
+    if keep is not None:
+        scored = [(e, s) for e, s in scored if keep(e)]
     # One measurement, three branches below: the words the index cannot hold.
     # Two gates, and each excludes an engine that did not drop anything.
     # `catalog.search` is a substring match, so the non-RAG path discards
@@ -258,19 +262,22 @@ def cmd_search(argv):
             # matches outside that category" would be a claim about the
             # whole catalogue made from one page of it.
             print(out.empty_state(
-                "none of the top %d matches for %r are in category %r"
-                % (matched_before_filter, query, args.category),
-                "narrow the query so the category's items rank higher, or "
-                "drop --category"))
+                "none of the top %d matches for %r are %s"
+                % (matched_before_filter, query, _filter_words(args)),
+                "narrow the query so those items rank higher, or drop %s"
+                % _filter_flags(args)))
             _note_dropped_terms(dropped)
         elif matched_before_filter:
             # The query matched; only the filter emptied the list. "no
             # matches" plus a `boost discover` hint sent the user to GitHub
             # for something already on disk, never naming the filter.
             print(out.empty_state(
-                "no matches for %r in category %r" % (query, args.category),
-                "it matches outside that category — drop --category, or "
-                "`boost browse --categories` lists them"))
+                "no matches for %r %s" % (query, _filter_words(args)),
+                "it matches outside that %s — drop %s%s"
+                % ("filter" if args.tap or args.owner else "category",
+                   _filter_flags(args),
+                   ", or `boost browse --categories` lists them"
+                   if args.category else "")))
             _note_dropped_terms(dropped)
         else:
             # The standardized ○/→ empty state, so "nothing here" reads the same
@@ -379,9 +386,77 @@ def cmd_search(argv):
 
 
 def _skills_sh_section(query: str, args) -> None:
-    """The opt-in skills.sh block, after the local rows (core/skillssh.py)."""
-    for i, line in enumerate(skillssh.section(query, force=args.skills_sh)):
+    """The opt-in skills.sh block, after the local rows (core/skillssh.py).
+
+    ``--owner`` is the API's own parameter; ``--tap`` has none, so its hits
+    are narrowed by source, and the owner half of an ``owner/repo`` is sent
+    too so the page the API returns is that owner's.
+    """
+    tap = getattr(args, "tap", None)
+    owner = getattr(args, "owner", None) or (
+        tap.partition("/")[0] if tap and "/" in tap else None)
+    keep = None
+    if tap or owner:
+        def keep(src: str) -> bool:
+            return ((not tap or catalog.tap_matches(src, tap))
+                    and (not owner or catalog.owner_matches(src, owner)))
+    for i, line in enumerate(skillssh.section(
+            query, force=args.skills_sh, owner=owner, keep=keep)):
         out.info(line if i else out.role(line, "muted"))
+
+
+def _search_filter(args):
+    """One predicate for --category, --tap and --owner, or None if unset."""
+    tests = []
+    if args.category:
+        categories = _tap_categories()
+        tests.append(lambda e: catalog.matches_category(
+            e, args.category, categories))
+    if args.tap:
+        tests.append(lambda e: catalog.tap_matches(
+            str(e.get("tap") or ""), args.tap))
+    if args.owner:
+        tests.append(lambda e: catalog.owner_matches(
+            str(e.get("tap") or ""), args.owner))
+    if not tests:
+        return None
+    return lambda e: all(t(e) for t in tests)
+
+
+def _filter_words(args) -> str:
+    """The active filters as a phrase: "in category 'x' from tap 'y'"."""
+    parts = []
+    if args.category:
+        parts.append("in category %r" % args.category)
+    if args.tap:
+        parts.append("from tap %r" % args.tap)
+    if args.owner:
+        parts.append("by owner %r" % args.owner)
+    return " ".join(parts)
+
+
+def _filter_flags(args) -> str:
+    """The flags to drop to widen the search: "--category" or "--tap"."""
+    return " or ".join(f for f, v in (("--category", args.category),
+                                      ("--tap", args.tap),
+                                      ("--owner", args.owner)) if v)
+
+
+def _check_source_filters(args) -> None:
+    """Refuse a --tap/--owner no configured tap answers to.
+
+    Otherwise a typo reads as "no matches", which says the catalogue lacks
+    something it was never asked about.
+    """
+    names = [t.name for t in registry.list_taps()]
+    if args.tap and not any(catalog.tap_matches(n, args.tap) for n in names):
+        raise BoostError("no tap named %r is configured" % args.tap,
+                         hint="`boost taps` lists them; `boost tap %s` "
+                              "adds it" % args.tap)
+    if args.owner and not any(catalog.owner_matches(n, args.owner)
+                              for n in names):
+        raise BoostError("no configured tap is owned by %r" % args.owner,
+                         hint="`boost taps` lists them")
 
 
 def _collapse_ignored(args) -> str | None:
