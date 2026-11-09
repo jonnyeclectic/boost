@@ -27,7 +27,8 @@ def _make_tap(root):
             "---\nname: %s\ndescription: %s\nversion: 1.0.0\n---\n\n"
             "# %s\n\nBody text.\n" % (name, desc, name), encoding="utf-8")
     for argv in (["init", "-q"], ["add", "-A"], ["commit", "-qm", "skills"]):
-        subprocess.run(["git", *argv], cwd=root, check=True,
+        subprocess.run(["git", "-c", "user.email=t@t.test", "-c",
+                        "user.name=t", *argv], cwd=root, check=True,
                        capture_output=True)
     return root
 
