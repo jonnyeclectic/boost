@@ -1,8 +1,8 @@
 {
   "generated_note": "Curated skill/rule/workflow registries for boost. est_items are research estimates; verify by tapping. list_only repos are index/awesome lists that link out.",
-  "count": 675,
-  "est_items_total": 55743,
-  "est_items_scannable": 49605,
+  "count": 681,
+  "est_items_total": 55824,
+  "est_items_scannable": 49686,
   "registries": [
     {
       "name": "Aaronontheweb/dotnet-cursor-rules",
@@ -1601,6 +1601,17 @@
       "curated": false
     },
     {
+      "name": "convex/agent-skills",
+      "url": "https://github.com/convex/agent-skills",
+      "type": "skill",
+      "category": "backend",
+      "focus": "Official Convex: schema design, auth and authz, migrations with rehearsal, crons, components, seeding, cost and performance review, deploy guards and launch readiness (33 skills)",
+      "est_items": 33,
+      "confidence": "high",
+      "list_only": false,
+      "curated": false
+    },
+    {
       "name": "coreweave/forge-agent-lens-for-claude-code",
       "url": "https://github.com/coreweave/forge-agent-lens-for-claude-code",
       "type": "skill",
@@ -1655,6 +1666,17 @@
       "focus": "UX and design skills for Claude Code - research, critique... (10 skills)",
       "est_items": 10,
       "confidence": "med",
+      "list_only": false,
+      "curated": false
+    },
+    {
+      "name": "currents-dev/playwright-best-practices-skill",
+      "url": "https://github.com/currents-dev/playwright-best-practices-skill",
+      "type": "skill",
+      "category": "web-dev",
+      "focus": "Playwright best practices from Currents: flaky-test fixes, Page Object Model, API mocking, auth and OAuth, accessibility, mobile layouts and CI, with reference pages per topic (1 skill)",
+      "est_items": 1,
+      "confidence": "high",
       "list_only": false,
       "curated": false
     },
@@ -2204,6 +2226,17 @@
       "category": "backend",
       "focus": "Official Firebase: Firestore, Data Connect (Postgres/GraphQL), Auth, security rules",
       "est_items": 14,
+      "confidence": "high",
+      "list_only": false,
+      "curated": false
+    },
+    {
+      "name": "firecrawl/firecrawl-workflows",
+      "url": "https://github.com/firecrawl/firecrawl-workflows",
+      "type": "skill",
+      "category": "ai",
+      "focus": "Official Firecrawl recipes: deep research, competitive intel, lead and market research, SEO audits, knowledge-base ingest, job and paper collection (19 skills)",
+      "est_items": 19,
       "confidence": "high",
       "list_only": false,
       "curated": false
@@ -5410,12 +5443,34 @@
       "curated": false
     },
     {
+      "name": "software-mansion/argent",
+      "url": "https://github.com/software-mansion/argent",
+      "type": "skill",
+      "category": "web-dev",
+      "focus": "Software Mansion Argent: drive, debug and profile iOS and Android apps \u2014 simulator and device setup, React Native profiling and optimization, Metro debugging, E2E and screenshot-diff tests (18 skills)",
+      "est_items": 18,
+      "confidence": "high",
+      "list_only": false,
+      "curated": false
+    },
+    {
       "name": "Soju06/codex-lb",
       "url": "https://github.com/Soju06/codex-lb",
       "type": "skill",
       "category": "meta",
       "focus": "Codex/ChatGPT multiple account load balancer & proxy with usage... (17 skills, 10 workflows)",
       "est_items": 27,
+      "confidence": "high",
+      "list_only": false,
+      "curated": false
+    },
+    {
+      "name": "solana-foundation/solana-dev-skill",
+      "url": "https://github.com/solana-foundation/solana-dev-skill",
+      "type": "skill",
+      "category": "backend",
+      "focus": "Official Solana Foundation: Anchor programs, tokens, wallet connection, testing and fuzzing, devnet deploys, v1 transactions and core concepts like PDAs and CPIs (1 skill)",
+      "est_items": 1,
       "confidence": "high",
       "list_only": false,
       "curated": false
@@ -5978,6 +6033,17 @@
       "focus": "Cross-platform dotfiles managed by Chezmoi with Homebrew/apt and... (50 skills, 8 workflows)",
       "est_items": 58,
       "confidence": "med",
+      "list_only": false,
+      "curated": false
+    },
+    {
+      "name": "usestrix/strix",
+      "url": "https://github.com/usestrix/strix",
+      "type": "skill",
+      "category": "security",
+      "focus": "Strix (open-source AI pentester): find and fix vulnerabilities in code, OWASP Top 10, API and web-app pentesting, CI security scanning (9 skills)",
+      "est_items": 9,
+      "confidence": "high",
       "list_only": false,
       "curated": false
     },
