@@ -270,7 +270,7 @@ install it, and `BOOST_NO_NET=1` turns it off.
 
 ## The registry catalog
 
-`boost tap --defaults` gives you seven registries. The full catalog is 650
+`boost tap --defaults` gives you seven registries. The full catalog is 656
 classified GitHub registries of skills, Cursor/Windsurf rules and Claude Code
 workflows, indexing roughly 50,000 items.
 
