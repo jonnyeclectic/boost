@@ -1719,6 +1719,17 @@ def _tool_search(args: dict):
         # told the agent the catalogue was missing something it never asked.
         return ("boost_search needs a query — pass a plain-word description "
                 "of the task"), True
+    tap = mcp.str_arg(args, "tap") or None
+    owner = mcp.str_arg(args, "owner") or None
+    taps = registry.list_taps()
+    why = catalog.unmatched_source(tap, owner, (t.name for t in taps))
+    if why and taps:
+        return why + " — boost_list's tap names, or omit the filter", True
+    keep = catalog.source_filter(tap, owner)
+    # The corpus itself is narrowed, not the ten results: filtering a page of
+    # ten afterwards could return none of a tap's matches.
+    scope = None if keep is None else [
+        e for t in taps if keep(t.name) for e in catalog.load_tap(t)]
     rag.ensure()  # build the full-content index on first use (BM25 by default)
     # smart=True is stated, not inherited. It is `rag.search`'s default, so this
     # path was spending an LLM call per search by accident of a signature —
@@ -1732,7 +1743,7 @@ def _tool_search(args: dict):
     # worth it. Written down here so
     # the asymmetry with the CLI is a decision someone can revisit, not a
     # default nobody chose. It degrades on its own when no AI is configured.
-    rag_result = rag.search(query, limit=10, smart=True)
+    rag_result = rag.search(query, limit=10, smart=True, entries=scope)
     # Both empty branches route through mcp.no_results, which tells a real
     # miss apart from a machine that has never been tapped — the two used to
     # share one sentence, and the fresh-install case is the one an agent reads
@@ -1747,7 +1758,9 @@ def _tool_search(args: dict):
         hits, ranker = rag_result
         entries = [h["entry"] for h in hits]
     else:  # no index yet -> today's frontmatter search, so nothing regresses
-        entries = [e for e, _score in catalog.search(query)[:10]]
+        found = (catalog.search(query) if scope is None
+                 else catalog.search(query, scope))
+        entries = [e for e, _score in found[:10]]
         ranker = FRONTMATTER_RANKER
     if not entries:
         # mcp.no_results owns the empty reply on all three paths: a genuine
@@ -1761,7 +1774,8 @@ def _tool_search(args: dict):
         ignored = tokenized_only and rag.ignored_by_design(query)
         empty = mcp.no_results(query, tapped=tapped, dropped=dropped,
                                ignored=ignored, config_error=config.check())
-        return "\n".join([empty, *skillssh.section(query)]), False
+        return "\n".join([empty, *skillssh.section(
+            query, owner=owner, tap=tap)]), False
     # Name-keyed, the same test `lockfile.find_any` and `store.install` apply —
     # those are the tools this marker is advising about. mcp.hit_line's
     # docstring records why the imprecision is disclosed rather than removed,
@@ -1782,7 +1796,7 @@ def _tool_search(args: dict):
     if note:
         lines.append(note)
     lines.append(_ranking_note(ranker))
-    lines.extend(skillssh.section(query))
+    lines.extend(skillssh.section(query, owner=owner, tap=tap))
     return "\n".join(lines), False
 
 
@@ -2748,7 +2762,13 @@ REGISTRY.register(
                               "description": "what you are trying to do, in "
                               "your own words — a task, capability or problem "
                               "(\"set up pre-commit hooks for a python repo\") "
-                              "rather than a bare keyword"}},
+                              "rather than a bare keyword"},
+                    "tap": {"type": "string",
+                            "description": "optional: search only this tap "
+                            "(owner/repo, or the repo name alone)"},
+                    "owner": {"type": "string",
+                              "description": "optional: search only the "
+                              "taps this GitHub owner publishes"}},
      "required": ["query"]},
     _tool_search)
 REGISTRY.register(

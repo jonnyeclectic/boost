@@ -31,7 +31,6 @@ import json
 import re
 import urllib.parse
 import urllib.request
-from collections.abc import Callable
 
 from boost_cli.core import config, nethttp, typedvalue
 
@@ -168,21 +167,32 @@ def local_names(sources: set[str]) -> dict[str, set[str]]:
         return {}
 
 
+def request_owner(tap: str | None, owner: str | None) -> str | None:
+    """The ``owner`` parameter to send: ``owner``, else an ``owner/repo``
+    tap's owner half. A bare repo name says nothing about its owner."""
+    if owner:
+        return owner
+    return tap.partition("/")[0] if tap and "/" in tap else None
+
+
 def section(query: str, *, force: bool = False, owner: str | None = None,
-            show: int = SHOW, fetch=None,
-            keep: Callable[[str], bool] | None = None) -> list[str]:
+            tap: str | None = None, show: int = SHOW,
+            fetch=None) -> list[str]:
     """Plain-text lines that follow a search, or ``[]`` when not enabled.
 
     One renderer for ``boost search`` and ``boost_search``, so an agent and a
     person read the same block. ``fetch`` replaces :func:`search` in tests.
+    ``owner`` is the API's own parameter; ``tap`` has none, so its owner half
+    is sent and the hits are narrowed by source here.
     """
     if not enabled(force):
         return []
-    hits, err = (fetch or search)(query, owner)
+    hits, err = (fetch or search)(query, request_owner(tap, owner))
     if err:
         return ["skills.sh: " + err]
+    from boost_cli.core import catalog
+    keep = catalog.source_filter(tap, owner)
     if keep is not None:
-        # A `--tap` the API has no parameter for: narrow by source here.
         hits = [h for h in hits if keep(h["source"])]
     if not hits:
         return ["skills.sh: no matches for %r" % query]

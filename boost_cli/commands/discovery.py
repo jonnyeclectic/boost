@@ -386,22 +386,10 @@ def cmd_search(argv):
 
 
 def _skills_sh_section(query: str, args) -> None:
-    """The opt-in skills.sh block, after the local rows (core/skillssh.py).
-
-    ``--owner`` is the API's own parameter; ``--tap`` has none, so its hits
-    are narrowed by source, and the owner half of an ``owner/repo`` is sent
-    too so the page the API returns is that owner's.
-    """
-    tap = getattr(args, "tap", None)
-    owner = getattr(args, "owner", None) or (
-        tap.partition("/")[0] if tap and "/" in tap else None)
-    keep = None
-    if tap or owner:
-        def keep(src: str) -> bool:
-            return ((not tap or catalog.tap_matches(src, tap))
-                    and (not owner or catalog.owner_matches(src, owner)))
+    """The opt-in skills.sh block, after the local rows (core/skillssh.py)."""
     for i, line in enumerate(skillssh.section(
-            query, force=args.skills_sh, owner=owner, keep=keep)):
+            query, force=args.skills_sh, owner=getattr(args, "owner", None),
+            tap=getattr(args, "tap", None))):
         out.info(line if i else out.role(line, "muted"))
 
 
@@ -412,12 +400,9 @@ def _search_filter(args):
         categories = _tap_categories()
         tests.append(lambda e: catalog.matches_category(
             e, args.category, categories))
-    if args.tap:
-        tests.append(lambda e: catalog.tap_matches(
-            str(e.get("tap") or ""), args.tap))
-    if args.owner:
-        tests.append(lambda e: catalog.owner_matches(
-            str(e.get("tap") or ""), args.owner))
+    source = catalog.source_filter(args.tap, args.owner)
+    if source is not None:
+        tests.append(lambda e: source(str(e.get("tap") or "")))
     if not tests:
         return None
     return lambda e: all(t(e) for t in tests)
@@ -443,20 +428,13 @@ def _filter_flags(args) -> str:
 
 
 def _check_source_filters(args) -> None:
-    """Refuse a --tap/--owner no configured tap answers to.
-
-    Otherwise a typo reads as "no matches", which says the catalogue lacks
-    something it was never asked about.
-    """
-    names = [t.name for t in registry.list_taps()]
-    if args.tap and not any(catalog.tap_matches(n, args.tap) for n in names):
-        raise BoostError("no tap named %r is configured" % args.tap,
-                         hint="`boost taps` lists them; `boost tap %s` "
-                              "adds it" % args.tap)
-    if args.owner and not any(catalog.owner_matches(n, args.owner)
-                              for n in names):
-        raise BoostError("no configured tap is owned by %r" % args.owner,
-                         hint="`boost taps` lists them")
+    """Refuse a --tap/--owner no configured tap answers to."""
+    why = catalog.unmatched_source(args.tap, args.owner,
+                                   (t.name for t in registry.list_taps()))
+    if why:
+        raise BoostError(why, hint="`boost taps` lists them" + (
+            "; `boost tap %s` adds it" % args.tap
+            if args.tap and why.startswith("no tap named") else ""))
 
 
 def _collapse_ignored(args) -> str | None:

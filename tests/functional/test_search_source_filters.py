@@ -141,50 +141,105 @@ class TestSearchFilter:
 
 
 class TestSkillsShNarrowing:
-    """skills.sh takes `owner`; `--tap` is narrowed by source afterwards."""
+    """skills.sh takes `owner`; `tap` is narrowed by source afterwards."""
 
-    def _run(self, monkeypatch, capsys, **kw):
+    hits = ({"source": "acme/one", "name": "a", "installs": 3},
+            {"source": "acme/two", "name": "b", "installs": 2},
+            {"source": "zed/one", "name": "c", "installs": 1})
+
+    def _run(self, monkeypatch, **kw):
         seen = {}
-        hits = [{"source": "acme/one", "name": "a", "installs": 3},
-                {"source": "acme/two", "name": "b", "installs": 2},
-                {"source": "zed/one", "name": "c", "installs": 1}]
 
         def fetch(query, owner):
             seen["owner"] = owner
-            return hits, None
-        real = skillssh.section
+            return list(self.hits), None
         monkeypatch.setattr(skillssh, "local_names", lambda sources: {})
-        monkeypatch.setattr(
-            discovery.skillssh, "section",
-            lambda q, **k: real(q, **k, fetch=fetch))
-        discovery._skills_sh_section("q", _args(**kw))
-        text = capsys.readouterr().out
-        return seen["owner"], [h["source"] for h in hits
-                               if h["source"] + ")" in text
-                               or "  " + h["name"] + " " in text]
+        lines = skillssh.section("q", force=True, fetch=fetch, **kw)
+        shown = [h["source"] for h in self.hits
+                 if any(" %s " % h["source"] in ln for ln in lines)]
+        return seen["owner"], shown
 
-    def test_owner_is_sent_to_the_api(self, monkeypatch, capsys):
-        owner, _shown = self._run(monkeypatch, capsys, owner="acme")
+    def test_owner_is_sent_to_the_api(self, monkeypatch):
+        owner, shown = self._run(monkeypatch, owner="acme")
         assert owner == "acme"
+        assert shown == ["acme/one", "acme/two"]
 
     def test_a_tap_sends_its_owner_and_keeps_only_that_repo(
-            self, monkeypatch, capsys):
-        owner, shown = self._run(monkeypatch, capsys, tap="acme/one")
+            self, monkeypatch):
+        owner, shown = self._run(monkeypatch, tap="acme/one")
         assert owner == "acme"
         assert shown == ["acme/one"]
 
-    def test_a_bare_repo_tap_sends_no_owner(self, monkeypatch, capsys):
-        owner, shown = self._run(monkeypatch, capsys, tap="one")
+    def test_a_bare_repo_tap_sends_no_owner(self, monkeypatch):
+        owner, shown = self._run(monkeypatch, tap="one")
         assert owner is None
         assert shown == ["acme/one", "zed/one"]
 
-    def test_unfiltered_shows_everything(self, monkeypatch, capsys):
-        owner, shown = self._run(monkeypatch, capsys)
+    def test_unfiltered_shows_everything(self, monkeypatch):
+        owner, shown = self._run(monkeypatch)
         assert owner is None and len(shown) == 3
 
-    def test_nothing_left_after_narrowing(self):
+    def test_nothing_left_after_narrowing(self, monkeypatch):
+        monkeypatch.setattr(skillssh, "local_names", lambda sources: {})
         lines = skillssh.section(
-            "q", force=True, keep=lambda s: False,
+            "q", force=True, tap="x/y",
             fetch=lambda q, o: ([{"source": "a/b", "name": "x",
                                   "installs": 1}], None))
         assert lines == ["skills.sh: no matches for 'q'"]
+
+    @pytest.mark.parametrize("tap, owner, want", [
+        (None, None, None), ("a/b", None, "a"), ("b", None, None),
+        ("a/b", "z", "z"), (None, "z", "z")])
+    def test_request_owner(self, tap, owner, want):
+        assert skillssh.request_owner(tap, owner) == want
+
+
+class TestSourceFilterCore:
+    def test_none_without_a_filter(self):
+        assert catalog.source_filter() is None
+
+    def test_unmatched_source(self):
+        names = ["acme/one", "local"]
+        assert catalog.unmatched_source(None, None, names) is None
+        assert catalog.unmatched_source("one", None, names) is None
+        assert catalog.unmatched_source(None, "ACME", names) is None
+        assert catalog.unmatched_source("two", None, names) == (
+            "no tap named 'two' is configured")
+        assert catalog.unmatched_source(None, "zed", names) == (
+            "no configured tap is owned by 'zed'")
+        assert catalog.unmatched_source("one", "zed", names) == (
+            "no configured tap is owned by 'zed'")
+
+
+class TestMcpSearch:
+    def _call(self, **args):
+        from boost_cli.commands import configuration
+        return configuration._tool_search(args)
+
+    def test_tap_narrows_the_corpus(self, two_taps):
+        text, err = self._call(query="commit", tap="extra-tap")
+        assert err is False
+        assert "python-style" in text
+        assert "commit-messages" not in text
+
+    def test_unfiltered_sees_both(self, two_taps):
+        text, _err = self._call(query="commit")
+        assert "python-style" in text and "commit-messages" in text
+
+    def test_an_unknown_tap_is_an_error(self, two_taps):
+        text, err = self._call(query="commit", tap="nope")
+        assert err is True
+        assert text.startswith("no tap named 'nope' is configured")
+
+    def test_owner_on_local_taps_is_an_error(self, two_taps):
+        text, err = self._call(query="commit", owner="acme")
+        assert err is True
+        assert "no configured tap is owned by 'acme'" in text
+
+    def test_the_schema_declares_both(self):
+        from boost_cli.commands import configuration
+        spec = next(s for s in configuration.REGISTRY.specs()
+                    if s["name"] == "boost_search")
+        props = spec["inputSchema"]["properties"]
+        assert props["tap"]["type"] == props["owner"]["type"] == "string"
+        assert spec["inputSchema"]["required"] == ["query"]
