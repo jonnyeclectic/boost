@@ -418,6 +418,44 @@ def tap_target(name: str) -> registry.Tap | None:
 _REPO_SHAPE = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 
 
+#: ``owner/repo@skill``: the spelling `npx skills add` takes. GitHub's own
+#: owner and repo grammar on the left, an item name on the right.
+_NPX_SPEC = re.compile(r"([A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_.-]+)@"
+                       r"([A-Za-z0-9][A-Za-z0-9._-]*)")
+
+
+def normalize_spec(name: str) -> str:
+    """``owner/repo@skill`` -> ``owner/repo:skill``; anything else unchanged.
+
+    The vercel-labs/skills CLI and the skills.sh pages write an install as
+    ``owner/repo@skill``, so that is what gets pasted. boost's grammar is
+    ``tap:skill``. Only a whole match converts: an ``@`` elsewhere (a scoped
+    npm-like name, an email) is left for the resolver to refuse as before.
+    """
+    m = _NPX_SPEC.fullmatch(name)
+    return "%s:%s" % (m.group(1), m.group(2)) if m else name
+
+
+def untapped_repo(name: str) -> str | None:
+    """The ``owner/repo`` an ``owner/repo:skill`` names when it is not tapped.
+
+    None for an unqualified name, a qualifier that is not repo-shaped, or one
+    a configured tap already answers to (any of :func:`catalog.tap_matches`'
+    tiers, so ``Owner/Repo`` and a bare repo tail count as tapped). Only the
+    qualified form is offered a tap: ``owner/repo:skill`` can only mean a
+    repository, where a bare ``owner/repo`` is also how a namespaced workflow
+    is spelled, so that one keeps :func:`untapped_hint`.
+    """
+    qualifier, bare = catalog.split_name(name)
+    if qualifier is None or not bare or not _REPO_SHAPE.fullmatch(qualifier) \
+            or qualifier.split("/")[0] in (".", ".."):
+        return None
+    if any(catalog.tap_matches(t.name, qualifier)
+           for t in registry.list_taps()):
+        return None
+    return qualifier
+
+
 def untapped_hint(name: str) -> str | None:
     """What to do about a NAME shaped like ``owner/repo`` that nothing knows.
 
