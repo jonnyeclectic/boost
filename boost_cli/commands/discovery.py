@@ -42,6 +42,7 @@ from ..core import (
     registry,
     rules,
     scopes,
+    skillssh,
     store,
     util,
 )
@@ -132,6 +133,11 @@ def cmd_search(argv):
                         "against a real corpus, see the roadmap")
     p.add_argument("--json", action="store_true", dest="as_json",
                    help="machine-readable output")
+    p.add_argument("--skills-sh", action="store_true", dest="skills_sh",
+                   help="also ask skills.sh (sends the query there) for "
+                        "install counts and repos not tapped here; "
+                        "`boost config set skills_sh.enabled true` makes it "
+                        "the default (text output only; --json is unchanged)")
     args = p.parse_args(argv)
     query = " ".join(args.query)
     if not query.strip():
@@ -220,6 +226,11 @@ def cmd_search(argv):
     collapse_note = _collapse_ignored(args)
     if collapse_note and args.as_json:
         out.warn(collapse_note, wrap=True, stream=sys.stderr)
+    if args.as_json and args.skills_sh:
+        # --json stays a bare list, so the skills.sh block has nowhere to go;
+        # say so rather than let the flag do nothing silently.
+        out.warn("--skills-sh is ignored with --json (its output is a list "
+                 "of local hits)", wrap=True, stream=sys.stderr)
     if not scored:
         if args.as_json:
             print(json.dumps([]))
@@ -268,6 +279,7 @@ def cmd_search(argv):
                 "no matches for %r" % query,
                 "try `boost discover %s` to search all of GitHub" % query))
             _note_dropped_terms(dropped)
+        _skills_sh_section(query, args)
         _hint_semantic_search(engine, collapse_note)
         # Especially here: "no matches" is exactly the answer an out-of-date
         # tap set produces, and the user has no other way to suspect it.
@@ -360,9 +372,16 @@ def cmd_search(argv):
     if use_rag:
         _note_stem_expansions(query)
         _note_dropped_terms(dropped)
+    _skills_sh_section(query, args)
     _hint_semantic_search(engine, collapse_note)
     _hint_stale_taps()
     return 0
+
+
+def _skills_sh_section(query: str, args) -> None:
+    """The opt-in skills.sh block, after the local rows (core/skillssh.py)."""
+    for i, line in enumerate(skillssh.section(query, force=args.skills_sh)):
+        out.info(line if i else out.role(line, "muted"))
 
 
 def _collapse_ignored(args) -> str | None:

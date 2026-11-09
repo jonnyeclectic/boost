@@ -26,35 +26,53 @@ from boost_cli.core import (
 from boost_cli.core import output as out
 from boost_cli.errors import BoostError
 
+#: The clock these boundary tests read. A live clock made them flaky: the
+#: stamp is whole seconds (the format drops the fraction), so "3599 s ago"
+#: was up to a second older than asked, and a slow CI runner added the rest
+#: -- `'1h ago' == '59m ago'` failed main's mutation clean-test 2026-11-08.
+#: Frozen on a whole second, each boundary is hit exactly, which is also what
+#: tells `<` from `<=`; the old +0.5 s padding could not.
+_NOW = datetime(2026, 11, 8, 12, 0, 0, tzinfo=UTC)
+
+
+class _FrozenDatetime(datetime):
+    @classmethod
+    def now(cls, tz=None):
+        return _NOW if tz is not None else _NOW.replace(tzinfo=None)
+
 
 def _iso(seconds_ago: float) -> str:
-    then = datetime.now(UTC) - timedelta(seconds=seconds_ago)
+    then = _NOW - timedelta(seconds=seconds_ago)
     return then.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 class TestRelTimeExactBoundaries:
     """Kills the (60|3600|86400|604800) -> n+1 and < -> <= mutants."""
 
+    @pytest.fixture(autouse=True)
+    def _frozen(self, monkeypatch):
+        monkeypatch.setattr(util, "datetime", _FrozenDatetime)
+
     def test_exactly_one_minute_is_minutes(self):
-        assert util.rel_time(_iso(60.5)) == "1m ago"
+        assert util.rel_time(_iso(60)) == "1m ago"
 
     def test_just_under_one_minute_is_seconds(self):
         assert util.rel_time(_iso(59)) == "59s ago"
 
     def test_exactly_one_hour_is_hours(self):
-        assert util.rel_time(_iso(3600.5)) == "1h ago"
+        assert util.rel_time(_iso(3600)) == "1h ago"
 
     def test_just_under_one_hour_is_minutes(self):
         assert util.rel_time(_iso(3599)) == "59m ago"
 
     def test_exactly_one_day_is_days(self):
-        assert util.rel_time(_iso(86400.5)) == "1d ago"
+        assert util.rel_time(_iso(86400)) == "1d ago"
 
     def test_just_under_one_day_is_hours(self):
         assert util.rel_time(_iso(86399)) == "23h ago"
 
     def test_exactly_one_week_is_weeks(self):
-        assert util.rel_time(_iso(604800.5)) == "1w ago"
+        assert util.rel_time(_iso(604800)) == "1w ago"
 
     def test_just_under_one_week_is_days(self):
         assert util.rel_time(_iso(604799)) == "6d ago"

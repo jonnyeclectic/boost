@@ -49,6 +49,7 @@ from ..core import (
     scopes,
     selfupdate,
     serve,
+    skillssh,
     snapshot,
     staleness,
     store,
@@ -1758,9 +1759,9 @@ def _tool_search(args: dict):
                           and rag.tokenizer_is_the_only_reader())
         dropped = rag.dropped_terms(query) if tokenized_only else []
         ignored = tokenized_only and rag.ignored_by_design(query)
-        return mcp.no_results(query, tapped=tapped, dropped=dropped,
-                              ignored=ignored,
-                              config_error=config.check()), False
+        empty = mcp.no_results(query, tapped=tapped, dropped=dropped,
+                               ignored=ignored, config_error=config.check())
+        return "\n".join([empty, *skillssh.section(query)]), False
     # Name-keyed, the same test `lockfile.find_any` and `store.install` apply —
     # those are the tools this marker is advising about. mcp.hit_line's
     # docstring records why the imprecision is disclosed rather than removed,
@@ -1781,6 +1782,7 @@ def _tool_search(args: dict):
     if note:
         lines.append(note)
     lines.append(_ranking_note(ranker))
+    lines.extend(skillssh.section(query))
     return "\n".join(lines), False
 
 
