@@ -1,8 +1,8 @@
 {
   "generated_note": "Curated skill/rule/workflow registries for boost. est_items are research estimates; verify by tapping. list_only repos are index/awesome lists that link out.",
-  "count": 681,
-  "est_items_total": 55824,
-  "est_items_scannable": 49686,
+  "count": 687,
+  "est_items_total": 55863,
+  "est_items_scannable": 49725,
   "registries": [
     {
       "name": "Aaronontheweb/dotnet-cursor-rules",
@@ -1004,6 +1004,17 @@
       "curated": false
     },
     {
+      "name": "AvdLee/SwiftUI-Agent-Skill",
+      "url": "https://github.com/AvdLee/SwiftUI-Agent-Skill",
+      "type": "skill",
+      "category": "ui",
+      "focus": "SwiftUI expert skill by Antoine van der Lee: writing, reviewing and refactoring SwiftUI for iOS and macOS, plus a skill that refreshes it against Apple's deprecations (2 skills)",
+      "est_items": 2,
+      "confidence": "high",
+      "list_only": false,
+      "curated": false
+    },
+    {
       "name": "AvdLee/Xcode-Build-Optimization-Agent-Skill",
       "url": "https://github.com/AvdLee/Xcode-Build-Optimization-Agent-Skill",
       "type": "skill",
@@ -1480,6 +1491,17 @@
       "curated": false
     },
     {
+      "name": "cloudflare/security-audit-skill",
+      "url": "https://github.com/cloudflare/security-audit-skill",
+      "type": "skill",
+      "category": "security",
+      "focus": "Official Cloudflare: security guidance and vulnerability review for codebases, APIs, services, CLI tools and libraries (1 skill)",
+      "est_items": 1,
+      "confidence": "high",
+      "list_only": false,
+      "curated": false
+    },
+    {
       "name": "cloudflare/skills",
       "url": "https://github.com/cloudflare/skills",
       "type": "skill",
@@ -1508,6 +1530,17 @@
       "category": "backend",
       "focus": "Official CockroachDB: SQL and transaction design, multi-region apps, MOLT migration, ops",
       "est_items": 34,
+      "confidence": "high",
+      "list_only": false,
+      "curated": false
+    },
+    {
+      "name": "coderabbitai/skills",
+      "url": "https://github.com/coderabbitai/skills",
+      "type": "skill",
+      "category": "devops",
+      "focus": "Official CodeRabbit: CLI code reviews and autofix of PR review threads, as skills and subagents (2 skills, 2 workflows)",
+      "est_items": 4,
       "confidence": "high",
       "list_only": false,
       "curated": false
@@ -1697,6 +1730,17 @@
       "type": "skill",
       "category": "general",
       "focus": "n8n workflows: node configuration, expressions, Code node JS and Python, error handling, n8n MCP tools (15 skills)",
+      "est_items": 15,
+      "confidence": "high",
+      "list_only": false,
+      "curated": false
+    },
+    {
+      "name": "dart-lang/skills",
+      "url": "https://github.com/dart-lang/skills",
+      "type": "skill",
+      "category": "general",
+      "focus": "Official Dart team: unit tests and mocks, coverage, static analysis and dart fix, package conflicts, FFI and ffigen, pattern matching, primary constructors, CLI apps and doc comments (15 skills)",
       "est_items": 15,
       "confidence": "high",
       "list_only": false,
@@ -4604,6 +4648,17 @@
       "curated": false
     },
     {
+      "name": "parallel-web/parallel-agent-skills",
+      "url": "https://github.com/parallel-web/parallel-agent-skills",
+      "type": "skill",
+      "category": "ai",
+      "focus": "Official Parallel: web search and extraction, deep research, entity discovery, bulk enrichment, monitoring, and migrating from Exa, Tavily or Firecrawl (15 skills, 1 workflow)",
+      "est_items": 16,
+      "confidence": "high",
+      "list_only": false,
+      "curated": false
+    },
+    {
       "name": "param087/agent-ml-skills",
       "url": "https://github.com/param087/agent-ml-skills",
       "type": "skill",
@@ -5988,6 +6043,17 @@
       "category": "general",
       "focus": "Engineering habits as skills: check (review and ship), hunt (root cause), think (plans), read (URLs and PDFs), write, learn (research), health (agent config audit), ui (8 skills)",
       "est_items": 8,
+      "confidence": "high",
+      "list_only": false,
+      "curated": false
+    },
+    {
+      "name": "twostraws/SwiftUI-Agent-Skill",
+      "url": "https://github.com/twostraws/SwiftUI-Agent-Skill",
+      "type": "skill",
+      "category": "ui",
+      "focus": "SwiftUI Pro by Paul Hudson: reviews SwiftUI code for modern APIs, maintainability and performance (1 skill)",
+      "est_items": 1,
       "confidence": "high",
       "list_only": false,
       "curated": false
