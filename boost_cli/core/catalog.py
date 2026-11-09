@@ -1255,7 +1255,7 @@ def owner_matches(tap_name: str, owner: str) -> bool:
     Case-folded, as GitHub treats owners. A local tap (no ``/``) has no owner,
     so it never matches.
     """
-    head, sep, _tail = (tap_name or "").partition("/")
+    head, sep, _tail = tap_name.partition("/")
     return bool(sep and owner) and head.casefold() == owner.casefold()
 
 
