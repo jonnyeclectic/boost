@@ -256,6 +256,18 @@ When both indexes exist boost fuses the rankings rather than choosing between
 them. See [docs/semantic-search.md](https://github.com/jonnyeclectic/boost/blob/main/docs/semantic-search.md) for the whole
 setup, what it costs, and how to tell which engine is actually serving.
 
+Search reads only the taps on your machine and sends nothing anywhere. To also
+see install counts and repos you have not tapped, ask
+[skills.sh](https://skills.sh), the index behind `npx skills find`:
+
+```bash
+boost search "pr review" --skills-sh        # this search only
+boost config set skills_sh.enabled true     # every search, and boost_search for agents
+```
+
+This sends your query to skills.sh. Each hit says how to read it before you
+install it, and `BOOST_NO_NET=1` turns it off.
+
 ## The registry catalog
 
 `boost tap --defaults` gives you seven registries. The full catalog is 650
