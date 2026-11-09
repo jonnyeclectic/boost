@@ -274,7 +274,7 @@ narrow the skills.sh block.
 
 ## The registry catalog
 
-`boost tap --defaults` gives you seven registries. The full catalog is 656
+`boost tap --defaults` gives you seven registries. The full catalog is 662
 classified GitHub registries of skills, Cursor/Windsurf rules and Claude Code
 workflows, indexing roughly 50,000 items.
 

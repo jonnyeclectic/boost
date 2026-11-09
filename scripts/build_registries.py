@@ -902,6 +902,12 @@ SKILLS = [
     ("firecrawl/firecrawl-workflows", "ai", "Official Firecrawl recipes: deep research, competitive intel, lead and market research, SEO audits, knowledge-base ingest, job and paper collection (19 skills)", 19, "high"),
     ("currents-dev/playwright-best-practices-skill", "web-dev", "Playwright best practices from Currents: flaky-test fixes, Page Object Model, API mocking, auth and OAuth, accessibility, mobile layouts and CI, with reference pages per topic (1 skill)", 1, "high"),
     ("solana-foundation/solana-dev-skill", "backend", "Official Solana Foundation: Anchor programs, tokens, wallet connection, testing and fuzzing, devnet deploys, v1 transactions and core concepts like PDAs and CPIs (1 skill)", 1, "high"),
+    ("dart-lang/skills", "general", "Official Dart team: unit tests and mocks, coverage, static analysis and dart fix, package conflicts, FFI and ffigen, pattern matching, primary constructors, CLI apps and doc comments (15 skills)", 15, "high"),
+    ("cloudflare/security-audit-skill", "security", "Official Cloudflare: security guidance and vulnerability review for codebases, APIs, services, CLI tools and libraries (1 skill)", 1, "high"),
+    ("twostraws/SwiftUI-Agent-Skill", "ui", "SwiftUI Pro by Paul Hudson: reviews SwiftUI code for modern APIs, maintainability and performance (1 skill)", 1, "high"),
+    ("AvdLee/SwiftUI-Agent-Skill", "ui", "SwiftUI expert skill by Antoine van der Lee: writing, reviewing and refactoring SwiftUI for iOS and macOS, plus a skill that refreshes it against Apple's deprecations (2 skills)", 2, "high"),
+    ("coderabbitai/skills", "devops", "Official CodeRabbit: CLI code reviews and autofix of PR review threads, as skills and subagents (2 skills, 2 workflows)", 4, "high"),
+    ("parallel-web/parallel-agent-skills", "ai", "Official Parallel: web search and extraction, deep research, entity discovery, bulk enrichment, monitoring, and migrating from Exa, Tavily or Firecrawl (15 skills, 1 workflow)", 16, "high"),
 ]
 
 # --- rules (Cursor .mdc / .cursorrules / Windsurf) --------------------------
