@@ -1249,6 +1249,47 @@ def tap_matches(tap_name: str, qualifier: str) -> bool:
     return bool(tap_name) and any(t(tap_name) for t in _tap_tiers(qualifier))
 
 
+def owner_matches(tap_name: str, owner: str) -> bool:
+    """True when ``tap_name`` is an ``owner/repo`` tap owned by ``owner``.
+
+    Case-folded, as GitHub treats owners. A local tap (no ``/``) has no owner,
+    so it never matches.
+    """
+    head, sep, _tail = tap_name.partition("/")
+    return bool(sep and owner) and head.casefold() == owner.casefold()
+
+
+def source_filter(tap: str | None = None, owner: str | None = None
+                  ) -> Callable[[str], bool] | None:
+    """A test on a tap name for ``--tap``/``--owner``, or None if neither.
+
+    Both must hold when both are given. One predicate for the catalogue rows
+    and the skills.sh sources, so the two blocks of one search agree.
+    """
+    if not tap and not owner:
+        return None
+
+    def keep(name: str) -> bool:
+        return ((not tap or tap_matches(name, tap))
+                and (not owner or owner_matches(name, owner)))
+    return keep
+
+
+def unmatched_source(tap: str | None, owner: str | None,
+                     names: Iterable[str]) -> str | None:
+    """Why ``--tap``/``--owner`` selects none of ``names``, or None if it does.
+
+    Without this a typo answered "no matches", a claim about a catalogue that
+    was never searched.
+    """
+    names = list(names)
+    if tap and not any(tap_matches(n, tap) for n in names):
+        return "no tap named %r is configured" % tap
+    if owner and not any(owner_matches(n, owner) for n in names):
+        return "no configured tap is owned by %r" % owner
+    return None
+
+
 def for_tap(entry: dict | None, qualifier: str | None) -> dict | None:
     """``entry`` unless a ``tap:`` qualifier was given that it does not satisfy.
 

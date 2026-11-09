@@ -896,6 +896,12 @@ SKILLS = [
     ("webflow/webflow-skills", "web-dev", "Official Webflow: MCP site and CMS work (bulk CMS updates, accessibility, asset and link audits, safe publish, Figma-to-Webflow), Webflow CLI, code components, DevLink (33 skills, 1 workflows)", 34, "high"),
     ("mapbox/mapbox-agent-skills", "web-dev", "Official Mapbox: web, iOS, Android and Flutter map patterns, search and navigation, store locators, styles and cartography, data viz, Google Maps/MapLibre migration, token security (20 skills)", 20, "high"),
     ("UI5/plugins-coding-agents", "web-dev", "Official SAP UI5: fixes for bootstrap params, async components, CSP, deprecated controls and globals, manifest.json, plus best practices (tables, MDC, OPA5/QUnit, a11y) and TypeScript conversion (28 skills)", 28, "high"),
+    ("convex/agent-skills", "backend", "Official Convex: schema design, auth and authz, migrations with rehearsal, crons, components, seeding, cost and performance review, deploy guards and launch readiness (33 skills)", 33, "high"),
+    ("usestrix/strix", "security", "Strix (open-source AI pentester): find and fix vulnerabilities in code, OWASP Top 10, API and web-app pentesting, CI security scanning (9 skills)", 9, "high"),
+    ("software-mansion/argent", "web-dev", "Software Mansion Argent: drive, debug and profile iOS and Android apps — simulator and device setup, React Native profiling and optimization, Metro debugging, E2E and screenshot-diff tests (18 skills)", 18, "high"),
+    ("firecrawl/firecrawl-workflows", "ai", "Official Firecrawl recipes: deep research, competitive intel, lead and market research, SEO audits, knowledge-base ingest, job and paper collection (19 skills)", 19, "high"),
+    ("currents-dev/playwright-best-practices-skill", "web-dev", "Playwright best practices from Currents: flaky-test fixes, Page Object Model, API mocking, auth and OAuth, accessibility, mobile layouts and CI, with reference pages per topic (1 skill)", 1, "high"),
+    ("solana-foundation/solana-dev-skill", "backend", "Official Solana Foundation: Anchor programs, tokens, wallet connection, testing and fuzzing, devnet deploys, v1 transactions and core concepts like PDAs and CPIs (1 skill)", 1, "high"),
 ]
 
 # --- rules (Cursor .mdc / .cursorrules / Windsurf) --------------------------
