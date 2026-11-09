@@ -876,14 +876,42 @@ def _mcp_declined(args) -> bool:
                 or typedvalue.env_flag("BOOST_NO_MCP_OFFER", unknown=True))
 
 
+def _tap_named_repos(args) -> None:
+    """Tap each untapped repo an ``owner/repo:skill`` NAME names, after asking.
+
+    `npx skills add owner/repo@skill` installs from any repository in one
+    step; boost answered "no tap named" and made the user tap first. The
+    qualified form can only mean a repository, so this offers the tap with a
+    default of yes (-y or BOOST_ASSUME_YES answers it). A clone is sparse and
+    holds Markdown only, and nothing is installed but the named skill. A
+    decline leaves the name as it was, so the resolver's own error, with its
+    `boost tap` hint, is what the user sees. --dry-run taps nothing.
+    """
+    repos = list(dict.fromkeys(
+        r for r in map(installplan.untapped_repo, args.names) if r))
+    for repo in repos:
+        if args.dry_run:
+            out.info("would tap %s first (not tapped here)" % repo)
+            continue
+        if not (args.yes or out.confirm(
+                "%s is not tapped here. Tap it now?" % repo, default=True)):
+            continue
+        tap = registry.add(repo)
+        n = len(catalog.rebuild_tap(tap))
+        out.ok("tapped %s (%d item%s)" % (tap.name, n,
+                                          "" if n == 1 else "s"))
+
+
 def cmd_install(argv: list[str]) -> int:
     ap = cliparse.parser(prog="boost install",
                                  description="Install a skill from a tap registry")
     ap.add_argument("names", type=util.nonempty_str, nargs="+", metavar="NAME",
-                    help="skill name, optionally qualified as tap:skill; a "
-                         "tap's own name (owner/repo) installs every skill "
-                         "it ships, after listing them and asking (-y "
-                         "skips the question)")
+                    help="skill name, optionally qualified as tap:skill; "
+                         "owner/repo:skill (or owner/repo@skill) on a repo "
+                         "not tapped here offers to tap it first; a tap's "
+                         "own name (owner/repo) installs every skill it "
+                         "ships, after listing them and asking (-y answers "
+                         "both questions)")
     ap.add_argument("--force", action="store_true",
                     help="reinstall even if already installed or pinned")
     ap.add_argument("--path", type=util.nonempty_str, metavar="P", default=None,
@@ -908,7 +936,8 @@ def cmd_install(argv: list[str]) -> int:
                          "repo's .mcp.json (remembered)")
     ap.add_argument("-y", "--yes", action="store_true",
                     help="with a tap as NAME, install its skill list without "
-                         "asking first. Never answers the offer to register "
+                         "asking first; tap an untapped owner/repo:skill "
+                         "without asking. Never answers the offer to register "
                          "the MCP servers a skill declares: a typed y does, "
                          "or BOOST_ASSUME_YES=1 for the whole command, or "
                          "running the `mcp add` lines a declined offer "
@@ -925,6 +954,8 @@ def cmd_install(argv: list[str]) -> int:
                               "remembered")
     args = ap.parse_args(argv)
     args.scope = args.scope or scopes.SCOPE_USER
+    args.names = [installplan.normalize_spec(n) for n in args.names]
+    _tap_named_repos(args)
     # Resolved before the dry-run branch, because both sides need it and only
     # one of them used to bind it: the preview returns early, so a `pbase`
     # assigned inside `if args.dry_run:` is unbound by the time the run path
