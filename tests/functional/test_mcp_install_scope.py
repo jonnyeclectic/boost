@@ -193,7 +193,7 @@ class TestAGuessedArgumentIsNotDropped:
         text, is_err = _call("boost_install", name="tdd-workflow", local=True)
         assert is_err is True
         assert text == ("Error: boost_install does not take 'local'\n"
-                        "hint: it takes: name, path, scope")
+                        "hint: it takes: name, path, scope, tap")
         assert lockfile.get_skill("tdd-workflow") is None
 
     def test_every_boost_tool_declares_its_arguments(self):

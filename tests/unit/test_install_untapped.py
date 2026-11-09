@@ -142,3 +142,46 @@ class TestInstallTapsFirst:
         with pytest.raises(BoostError):
             pkg.cmd_install([REPO])
         assert _tapped() == []
+
+
+class TestMcpInstall:
+    """`boost_install` cannot ask, so `tap: true` is the user's answer."""
+
+    def _call(self, **args):
+        from boost_cli.commands import configuration
+        return configuration._tool_install(args)
+
+    def test_without_tap_it_says_whose_call_it_is(self, github_named):
+        text, err = self._call(name=REPO + ":jira-integration")
+        assert err is True
+        assert text == (
+            "acme/widgets is not tapped here. Tapping it clones that "
+            "repository (its Markdown only) onto this machine. Ask the user; "
+            "if they agree, call boost_install again with tap: true, or they "
+            "can run `boost tap acme/widgets`.")
+        assert _tapped() == []
+
+    @pytest.mark.parametrize("value", ["true", 1, "yes"])
+    def test_only_a_json_true_counts(self, github_named, value):
+        _text, err = self._call(name=REPO + ":jira-integration", tap=value)
+        assert err is True and _tapped() == []
+
+    def test_tap_true_taps_and_installs(self, github_named):
+        text, err = self._call(name=REPO + "@jira-integration", tap=True)
+        assert err is False
+        assert text.splitlines()[0].startswith("tapped acme/widgets (")
+        assert _tapped() == [REPO]
+        from boost_cli.core import lockfile
+        assert "jira-integration" in lockfile.installed()
+
+    def test_tap_is_ignored_for_a_tapped_repo(self, github_named):
+        registry.add(REPO)
+        text, err = self._call(name=REPO + ":jira-integration", tap=True)
+        assert err is False and "tapped acme/widgets (" not in text
+
+    def test_the_schema_declares_tap(self):
+        from boost_cli.commands import configuration
+        spec = next(s for s in configuration.REGISTRY.specs()
+                    if s["name"] == "boost_install")
+        assert spec["inputSchema"]["properties"]["tap"]["type"] == "boolean"
+        assert "tap" not in spec["inputSchema"]["required"]

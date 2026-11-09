@@ -2154,6 +2154,23 @@ def _tool_install(args: dict):
     name = mcp.str_arg(args, "name") or ""
     if not name.strip():
         return mcp.needs_name("boost_install"), True
+    name = installplan.normalize_spec(name)
+    tapped_line = None
+    repo = installplan.untapped_repo(name)
+    if repo is not None:
+        # The CLI asks before tapping; a tool call cannot, so `tap: true` is
+        # the answer and only a JSON true counts. Without it the reply says
+        # what tapping does and that it is the user's call, where it used to
+        # be a bare "no tap named" with no next step.
+        if args.get("tap") is not True:
+            return ("%s is not tapped here. Tapping it clones that repository "
+                    "(its Markdown only) onto this machine. Ask the user; if "
+                    "they agree, call boost_install again with tap: true, or "
+                    "they can run `boost tap %s`." % (repo, repo)), True
+        tap = registry.add(repo)
+        n = len(catalog.rebuild_tap(tap))
+        tapped_line = "tapped %s (%d item%s)" % (tap.name, n,
+                                                 "" if n == 1 else "s")
     scope, base = _install_scope(args)
     entry = catalog.resolve_one(name, path=mcp.str_arg(args, "path"))
     # The requested item's own refusal ("already installed", "is pinned")
@@ -2163,6 +2180,8 @@ def _tool_install(args: dict):
     entries = the_plan.entries
     warnings = [*the_plan.confusions, *the_plan.dep_warnings]
     lines: list[str] = [the_plan.added] if the_plan.added else []
+    if tapped_line:
+        lines.insert(0, tapped_line)
     done: list[dict] = []
     for e in entries:
         try:
@@ -2840,9 +2859,17 @@ REGISTRY.register(
                              "description": "the name exactly as boost_search "
                              "or boost_list returned it; qualify with the tap "
                              "(\"owner/repo:name\") when the same name exists "
-                             "in more than one"},
+                             "in more than one. \"owner/repo:name\" (or "
+                             "owner/repo@name) also works for a repository "
+                             "that is not tapped yet, with tap: true"},
                     "path": _PATH_PROP,
-                    "scope": _SCOPE_PROP},
+                    "scope": _SCOPE_PROP,
+                    "tap": {"type": "boolean",
+                            "description": "true taps the owner/repo a "
+                            "qualified name names when it is not tapped yet "
+                            "(clones its Markdown onto this machine). Pass it "
+                            "only after the user agreed; without it the "
+                            "reply says the repo is untapped"}},
      "required": ["name"]},
     _tool_install)
 REGISTRY.register(
