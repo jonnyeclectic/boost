@@ -416,25 +416,49 @@ def cmd_untap(argv) -> int:
     args = p.parse_args(argv)
 
     force = args.force or args.yes
+    # A name given twice is one tap: removing it twice warned "no such tap"
+    # about the tap the first pass had just removed.
+    names = list(dict.fromkeys(args.name))
     # Every name unknown is a failed command, reported the way `update
     # nonesuch` reports it; a partial failure keeps the per-name warning so
     # the taps that did resolve still get removed.
     failures: list[BoostError] = []
-    for name in args.name:
+    for name in names:
         try:
             registry.get(name)
         except BoostError as exc:
             failures.append(exc)
-    if failures and len(failures) == len(args.name):
+    if failures and len(failures) == len(names):
         if len(failures) == 1:
             raise failures[0]
-        raise BoostError(
-            "no such tap: %s" % ", ".join(args.name),
-            hint="list taps with `boost taps`")
+        raise _untap_failures(failures)
     rc = 0
-    for name in args.name:
+    for name in names:
         rc |= _untap_one(name, force)
     return rc
+
+
+def _untap_failures(failures: list[BoostError]) -> BoostError:
+    """One error for several names that all failed, each in its own words.
+
+    ``registry.get`` refuses an ambiguous name too, and a summary that called
+    every failure "no such tap" said that about ``skills`` while two taps
+    answered to it, and dropped each name's did-you-mean. The unknown names
+    still share one "no such tap:" clause; every hint is kept, once.
+    """
+    prefix = "no such tap: "
+    parts: list[str] = []
+    missing: list[str] = []
+    for exc in failures:
+        if exc.message.startswith(prefix):
+            if not missing:
+                parts.append("")            # the clause's place, filled below
+            missing.append(exc.message.removeprefix(prefix))
+        else:
+            parts.append(exc.message)
+    message = "; ".join(p or prefix + ", ".join(missing) for p in parts)
+    hint = "; ".join(dict.fromkeys(e.hint for e in failures if e.hint))
+    return BoostError(message, hint=hint or None)
 
 
 def _tap_updated(tap: registry.Tap) -> str | None:

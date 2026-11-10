@@ -480,6 +480,30 @@ class TestUntap:
         r = boost("untap", "nope", "nada", expect=1)
         assert r.err.splitlines()[0] == "Error: no such tap: nope, nada"
 
+    def test_each_failure_keeps_its_own_words_and_hint(self, boost, sandbox):
+        cfg = config.load()
+        cfg["taps"] = [{"name": "angular/skills", "url": "https://x/a"},
+                       {"name": "microsoft/skills", "url": "https://x/m"}]
+        config.save(cfg)
+        r = boost("untap", "skills", "nope", "angular/skils", expect=1)
+        # The hint folds to the pane; its words are what is pinned.
+        assert " ".join(r.err.split()) == (
+            "Error: 'skills' is ambiguous — it matches 2 taps: "
+            "angular/skills, microsoft/skills; no such tap: nope, angular/skils "
+            "hint: use the full owner/repo name; list taps with `boost "
+            "taps`; did you mean angular/skills?")
+
+    def test_a_name_given_twice_is_named_once(self, boost, sandbox):
+        r = boost("untap", "nope", "nope", expect=1)
+        assert r.err.splitlines() == [
+            "Error: no such tap: nope",
+            "  hint: list taps with `boost taps`"]
+
+    def test_a_tap_given_twice_is_untapped_once(self, boost, tapped):
+        r = boost("untap", "fixture-tap", "fixture-tap")
+        assert r.out.count("untapped fixture-tap") == 1
+        assert "could not untap" not in r.err
+
     def test_partial_failure_still_warns_and_removes_the_rest(self, boost,
                                                              tapped):
         r = boost("untap", "nope", "fixture-tap", expect=1)
