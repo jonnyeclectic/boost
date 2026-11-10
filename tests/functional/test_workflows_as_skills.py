@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -131,6 +132,26 @@ class TestInstall:
         assert "removed its copy from the skill store" in _flat(r.out)
         assert not (paths.store_dir() / "reviewer").exists()
         assert not any(m["slot"] == "skill" for m in _rows())
+
+    def test_as_skill_on_an_installed_workflow_is_not_a_no_op(self, boost,
+                                                              wf_tap):
+        # The same version again, asking for the copy it was installed
+        # without: a no-op there exits 0 and writes no copy.
+        boost("install", "reviewer", "--no-as-skill")
+        r = boost("install", "reviewer", "--as-skill", expect=1)
+        flat = _flat(r.err)
+        assert flat.startswith("Error: reviewer is already installed hint: ")
+        hinted = re.search(r"`(boost install [^`]*--as-skill --force)` to "
+                           r"apply it$", flat)
+        assert hinted, flat
+        assert "reinstall" not in flat
+        assert not (paths.store_dir() / "reviewer").exists()
+        # The hinted command writes the copy.
+        boost(*hinted.group(1).split()[1:], expect=0)
+        assert _copy().is_file()
+        assert lockfile.get_workflow("reviewer")["as_skill"] is True
+        r = boost("install", "reviewer", "--as-skill", expect=0)
+        assert "! reviewer is already installed" in r.err
 
     def test_as_skill_overrides_config_off_and_is_recorded(self, boost,
                                                            wf_tap):

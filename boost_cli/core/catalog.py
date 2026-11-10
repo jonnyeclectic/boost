@@ -1774,6 +1774,7 @@ def resolve_one(name: str, path: str | None = None) -> dict:
         # when the qualifier itself is wrong, misreports a missing *skill*
         # instead of naming the tap that does not exist.
         query, search_entries = name, None
+        where = "in any tap"
         if qualifier is not None:
             known = [t.name for t in registry.list_taps()
                      if tap_matches(t.name, qualifier)]
@@ -1786,6 +1787,7 @@ def resolve_one(name: str, path: str | None = None) -> dict:
                           if shipped_by else None))
             query = bare
             search_entries = [e for e in all_entries() if e["tap"] in known]
+            where = "in tap %s" % ", ".join(known)
         # The whole scored list, not a pre-sliced top 3 — see _suggestions:
         # slicing first collapses to one suggestion exactly when a registry
         # mirrors a skill per agent, which is the case it exists to handle.
@@ -1805,7 +1807,9 @@ def resolve_one(name: str, path: str | None = None) -> dict:
                 # nothing on, which silenced this hint exactly where a new
                 # user needs it.
                 hint = NO_TAPS_HINT
-        raise BoostError("no skill named %r in any tap" % name,
+            else:
+                hint = "try `boost search %s`" % util.shell_arg(query)
+        raise BoostError("no skill named %r %s" % (query, where),
                          hint=join_hints(hint, stale_commit_hint()))
     if len(matches) > 1:
         # `name` may already be tap-qualified; hints must re-qualify the BARE

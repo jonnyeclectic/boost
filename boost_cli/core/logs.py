@@ -17,7 +17,8 @@ Verbosity is resolved once, in this order (first wins):
 
   1. ``--debug`` flag / ``BOOST_DEBUG=1``      -> console shows DEBUG + tracebacks
   2. ``--verbose`` / ``-v`` flag              -> console shows INFO
-  3. ``--quiet`` / ``-q`` flag                -> console stays silent
+  3. ``--quiet`` / ``-q`` flag                -> console diagnostic lines silenced
+                                                 (overrides steps 4-5)
   4. ``BOOST_LOG_LEVEL=OFF|DEBUG|INFO|…``   -> explicit console level
   5. config ``logging.level`` (default ``OFF`` -> console silent)
 

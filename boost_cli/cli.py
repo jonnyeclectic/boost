@@ -199,6 +199,8 @@ def print_help() -> None:
     print(out.c(
         "Options:  -V/--version   -v/--verbose   --debug   -q/--quiet",
         out.DIM))
+    out.dim("  -q/--quiet silences diagnostic log lines on the console; "
+            "command output and the log file are unchanged.", wrap=True)
     _print_first_run_line(cols)
 
     width = max(len(n) for n, _, _, _ in COMMANDS)
@@ -293,7 +295,7 @@ def _unknown(name: str) -> int:
     if name.startswith("-"):
         out.err("unknown option: %s" % name, hint="see `boost --help`")
         return 2
-    close = difflib.get_close_matches(name, list(_BY_NAME), n=3)
+    close = difflib.get_close_matches(name, ["help", *_BY_NAME], n=3)
     out.err("unknown command: %s" % name,
             hint=("did you mean: %s?" % ", ".join(close)) if close
             else "see `boost --help`")

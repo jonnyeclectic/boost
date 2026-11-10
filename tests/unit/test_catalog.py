@@ -1589,11 +1589,11 @@ class TestResolveOne:
             catalog.resolve_one("some/thing")
         assert ei.value.message == "no skill named 'some/thing' in any tap"
 
-    def test_miss_no_close_match_no_hint(self, sandbox):
+    def test_miss_no_close_match_points_at_search(self, sandbox):
         _fake_taps(("t", [_entry("brainstorming", "t")]))
         with pytest.raises(BoostError) as ei:
             catalog.resolve_one("qqqq")
-        assert ei.value.hint is None
+        assert ei.value.hint == "try `boost search qqqq`"
 
     def test_miss_no_taps_hint(self, sandbox):
         with pytest.raises(BoostError) as ei:
@@ -1650,7 +1650,7 @@ class TestResolveOne:
         _fake_taps(("owner/repo", [_entry("brainstorming", "owner/repo")]))
         with pytest.raises(BoostError) as ei:
             catalog.resolve_one("repo:ghost")
-        assert ei.value.message == "no skill named 'repo:ghost' in any tap"
+        assert ei.value.message == "no skill named 'ghost' in tap owner/repo"
 
     def test_qualified_miss_searches_bare_name_within_the_named_tap_only(
             self, sandbox):

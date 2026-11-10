@@ -1349,10 +1349,15 @@ def lint_failed(skill_dir: Path, score: int, min_score: int = 40) -> bool:
 
 
 def shell_arg(arg: str) -> str:
-    """`arg` as one argument a user can paste into their shell."""
+    """Quote a POSIX argument, or a simple Windows argument with spaces.
+
+    This is not a general Windows shell escape: callers accepting arbitrary
+    values must handle cmd.exe and PowerShell metacharacters separately.
+    """
     if sys.platform == "win32":
-        # cmd.exe and PowerShell both take double quotes; neither takes the
-        # single quotes `shlex.quote` emits.
+        # Preserve the Windows spelling for simple arguments with spaces.
+        # Shell metacharacters need shell-specific handling: cmd.exe and
+        # PowerShell do not share one general-purpose quoting convention.
         return '"%s"' % arg if any(c.isspace() for c in arg) else arg
     return shlex.quote(arg)
 

@@ -66,7 +66,7 @@ flag after the command name belongs to that subcommand:
 |------------|--------|
 | `--debug` / `BOOST_DEBUG=1` | console shows `DEBUG`; **unexpected errors re-raise the full traceback** |
 | `--verbose` / `-v` | console shows `INFO` (invocations, key steps) |
-| `--quiet` / `-q` | console diagnostic channel stays silent |
+| `--quiet` / `-q` | silences diagnostic log lines on the console; overrides `BOOST_LOG_LEVEL` and config `logging.level`. Command output and the log file are unchanged. `--debug` or `-v` given alongside it still win |
 | `BOOST_LOG_LEVEL=DEBUG\|INFO\|WARNING\|ERROR` | explicit console level |
 | config `logging.level` (default `OFF`) | persistent console level — set it once instead of passing a flag |
 

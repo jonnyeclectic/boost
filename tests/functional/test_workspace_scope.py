@@ -202,10 +202,34 @@ def test_user_and_project_installs_coexist(boost, tapped, repo):
     assert projectlock.get_skill(repo, "brainstorming") is not None
 
 
-def test_a_second_local_install_is_refused_without_force(boost, tapped, repo):
+def test_a_second_local_install_is_a_no_op_without_force(boost, tapped, repo):
     boost("install", "brainstorming", "--local")
-    res = boost("install", "brainstorming", "--local", expect=1)
+    res = boost("install", "brainstorming", "--local", expect=0)
     assert "already installed in this project" in (res.out + res.err)
+
+
+def _tree_state(*roots):
+    """Bytes (or link target) and mtime of every path under ``roots``."""
+    state = {}
+    for root in roots:
+        for p in sorted([root, *root.rglob("*")] if root.is_dir() else [root]):
+            st = p.lstat()
+            state[str(p)] = (str(p.readlink()) if p.is_symlink()
+                             else p.read_bytes() if p.is_file() else None,
+                             st.st_mtime_ns)
+    return state
+
+
+def test_a_same_version_local_reinstall_changes_nothing(boost, tapped, repo):
+    boost("install", "brainstorming", "--local")
+    lock = repo / ".boost" / "skill-lock.json"
+    assert lock.is_file() and (repo / ".claude").is_dir()
+    before = _tree_state(repo / ".claude", lock)
+    res = boost("install", "brainstorming", "--local", expect=0)
+    assert res.err == ("  ! brainstorming is already installed in this "
+                       "project (v1.4.0)\n  hint: `boost reinstall "
+                       "brainstorming --local` to force\n")
+    assert _tree_state(repo / ".claude", lock) == before
 
 
 def test_force_reinstalls_locally(boost, tapped, repo):
@@ -634,6 +658,49 @@ def test_the_last_local_uninstall_removes_the_lock_and_its_dirs(boost, tapped,
     res = boost("uninstall", "brainstorming", "--local", "-y")
     assert _tree(repo) == []
     assert "no project skills left — removed .boost/skill-lock.json" in res.out
+    # one entry per agent directory: `.claude/skills/` is inside `.claude/`
+    flat = " ".join(res.out.split())
+    assert ".claude/," in flat and ".claude/skills/" not in flat
+    assert flat.count(".claude/") == 1
+
+
+def test_a_local_install_names_the_copies_to_commit(boost, tapped, repo):
+    res = boost("install", "brainstorming", "--local")
+    flat = " ".join(res.out.split())
+    copies = sorted(m["path"] for m in projectlock.get_skill(
+        repo, "brainstorming")["materializations"])
+    assert ".claude/skills/brainstorming" in copies
+    assert ("commit .boost/ and %s (the copies agents read) to share this "
+            "with the team" % ", ".join(copies)) in flat
+    # Not the dotdir: "commit .claude/" sweeps in settings.local.json.
+    assert "commit .boost/ and .claude/ " not in flat
+    assert ".mcp.json" not in flat
+
+
+def test_the_commit_hint_names_copies_in_dirs_that_already_existed(
+        boost, tapped, repo):
+    # The dirs were there before, so the install created none of them; the
+    # hint used to fall back to "the agent skill dirs" or name only some.
+    for d in (".claude", ".cursor", ".windsurf"):
+        (repo / d / "skills").mkdir(parents=True)
+    res = boost("install", "brainstorming", "--local")
+    flat = " ".join(res.out.split())
+    assert ".claude/skills/brainstorming" in flat
+    assert ".cursor/skills/brainstorming" in flat
+    assert "the agent skill dirs" not in flat
+
+
+def test_the_commit_hint_names_mcp_json_when_the_install_wrote_it(
+        boost, fixture_tap_src, tmp_path, repo):
+    boost("tap", _mcp_skill_tap(
+        fixture_tap_src, tmp_path,
+        sidecar={"mcpServers": {"github": {"command": "npx",
+                                           "args": ["-y", "srv"]}}}))
+    res = boost("install", "mcp-proj-skill", "--local")
+    flat = " ".join(res.out.split())
+    assert ".claude/skills/mcp-proj-skill" in flat
+    assert ("(the copies agents read) and .mcp.json (its MCP servers) to "
+            "share this with the team") in flat
 
 
 def test_without_git_the_lock_goes_and_its_guard_file_stays(boost, tapped,

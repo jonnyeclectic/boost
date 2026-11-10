@@ -47,7 +47,7 @@ from ..core import (
     util,
 )
 from ..core import output as out
-from ..errors import BoostError
+from ..errors import AlreadyInstalled, BoostError
 from ._common import _shadowed_kinds
 
 _tilde = paths.tilde
@@ -440,6 +440,62 @@ def _register_mcp_server(name: str, spec: dict, host: str = "claude",
     journal.log("mcp-register", name, host=host)
 
 
+def _named(name: str, message: str) -> str:
+    """``name: message``, without saying the name twice.
+
+    Store errors often open with the item ("jira-integration is already
+    installed"), so prefixing them again read `jira-integration:
+    jira-integration is already installed`.
+    """
+    if message.startswith((name + " ", name + ":")):
+        return message
+    return "%s: %s" % (name, message)
+
+
+def _say_already_installed(err: AlreadyInstalled) -> None:
+    """Report an install that would change nothing: a warning, not a failure.
+
+    brew's answer to installing what is already there. Exiting 1 broke every
+    script, CI step and `boost install` re-run that only means "make sure X
+    is installed"; the hint still names `reinstall` and `update`.
+    """
+    out.warn(err.message, stream=sys.stderr, wrap=True)
+    if err.hint:
+        # Beside the warning it qualifies, as `Error:` keeps its `hint:`.
+        out.info("hint: " + err.hint, stream=sys.stderr, wrap=True)
+
+
+def _commit_hint(res) -> str:
+    """What a teammate needs committed to get this project install.
+
+    The lock alone is not it: agents read the copies under their own skill
+    dirs, so each copy this skill has is named, at skill level
+    (``.claude/skills/<name>``), from its lock row. Not the top-level dirs
+    the install created: a dir that already existed was left out, and
+    "commit .claude/" sweeps in the personal, git-ignored
+    ``settings.local.json`` beside it. ``.mcp.json`` is named when this
+    install recorded servers in it. A row that names no copies says "the
+    agent skill dirs" rather than guess.
+    """
+    from ..core import mcpdecl
+    lock_dir = "%s/" % projectlock.LOCK_DIRNAME
+    try:
+        base = scopes.resolve_base(scopes.SCOPE_PROJECT)
+        row = projectlock.get_skill(base, res.name) or {}
+    except (BoostError, OSError):
+        row = {}
+    rows = row.get("materializations")
+    copies = sorted({m["path"] for m in rows
+                     if isinstance(m, dict) and isinstance(m.get("path"), str)
+                     and m["path"]}) if isinstance(rows, list) else []
+    what = "%s (the copies agents read)" % (", ".join(copies)
+                                            or "the agent skill dirs")
+    if getattr(res, "mcp_recorded", None):
+        return ("commit %s, %s and %s (its MCP servers) to share this with "
+                "the team" % (lock_dir, what, mcpdecl.SIDECAR))
+    return "commit %s and %s to share this with the team" % (lock_dir, what)
+
+
 def _report_result(res: store.InstallResult, no_mcp: bool = False,
                    defer_mcp: list | None = None) -> None:
     """The canonical three-line install report.
@@ -488,8 +544,7 @@ def _report_result(res: store.InstallResult, no_mcp: bool = False,
                % (" · ".join(res.linked) or "(no enabled agents)"))
         out.ok("project lock updated (%s/%s)"
                % (projectlock.LOCK_DIRNAME, projectlock.LOCK_FILENAME))
-        out.dim("  commit %s/ to share these with the team"
-                % projectlock.LOCK_DIRNAME, wrap=True)
+        out.dim("  %s" % _commit_hint(res), wrap=True)
         _warn_submodules(res)
         _warn_injection(res)
         _warn_secrets(res)
@@ -1025,7 +1080,7 @@ def cmd_install(argv: list[str]) -> int:
                 err.hint = catalog.join_hints(err.hint, extra)
             if not multi:
                 raise
-            out.warn("%s: %s" % (n, err.message), stream=sys.stderr)
+            out.warn(_named(n, err.message), stream=sys.stderr)
             if extra:
                 out.dim("  " + extra, wrap=True)
             failed += 1
@@ -1127,7 +1182,8 @@ def cmd_install(argv: list[str]) -> int:
                     # The run's own refusal, ahead of the header: a preview
                     # must not promise a reinstall the run declines.
                     seen = store.check_existing(e, force=args.force,
-                                                scope=args.scope)
+                                                scope=args.scope,
+                                                only_agents=only)
                     _refuse_preview_by_policy(e, args.scope, pbase, seen)
                     # agents_for_scope(pbase), not enabled_agents(): project scope
                     # copies into each agent's *repo-local* dotdir, which excludes
@@ -1168,7 +1224,9 @@ def cmd_install(argv: list[str]) -> int:
                     # --force, a cross-scope clash even with it), so a record
                     # that is seen here is one --force replaces: a reinstall.
                     seen = store.check_existing(e, force=args.force,
-                                                scope=args.scope)
+                                                scope=args.scope,
+                                                only_agents=only,
+                                                as_skill=args.as_skill)
                     _refuse_preview_by_policy(e, args.scope, pbase, seen)
                     verb = "reinstall" if seen else "install"
                     where = "into this repo" if args.scope == "project" else "user config"
@@ -1196,7 +1254,8 @@ def cmd_install(argv: list[str]) -> int:
                 # Same refusal as the run ("already installed", "is pinned");
                 # past it, a seen record is one --force overwrites.
                 seen = store.check_existing(e, force=args.force,
-                                            scope=args.scope)
+                                            scope=args.scope,
+                                            only_agents=only)
                 # The run's refusal, ahead of the header, as the branches above.
                 store.refuse_unreachable_skill(only, e["name"])
                 _refuse_preview_by_policy(e, args.scope, pbase, seen)
@@ -1230,10 +1289,13 @@ def cmd_install(argv: list[str]) -> int:
                         out.info("  mcp   → offer to register %s with %s"
                                  % (row["name"], " · ".join(mcphost.label(h)
                                                             for h in mcp_hosts)))
+            except AlreadyInstalled as err:
+                _say_already_installed(err)
+                continue
             except BoostError as err:
                 if not multi:
                     raise
-                out.warn("%s: %s" % (e["name"], err.message), stream=sys.stderr)
+                out.warn(_named(e["name"], err.message), stream=sys.stderr)
                 failed += 1
                 continue
         _report_prerequisites(entries, pbase=pbase, would=True)
@@ -1255,10 +1317,13 @@ def cmd_install(argv: list[str]) -> int:
             res = store.install(e, force=args.force, only_agents=only,
                                 scope=args.scope, as_skill=args.as_skill,
                                 record_mcp=not _mcp_declined(args))
+        except AlreadyInstalled as err:
+            _say_already_installed(err)
+            continue
         except BoostError as err:
             if not multi:
                 raise
-            out.warn("%s: %s" % (e["name"], err.message), stream=sys.stderr)
+            out.warn(_named(e["name"], err.message), stream=sys.stderr)
             failed += 1
             continue
         _report_result(res, no_mcp=args.no_mcp, defer_mcp=pending)
@@ -1345,7 +1410,13 @@ def _report_tidied(info: dict) -> None:
     the empty lock, and the empty directories its installs created."""
     gone = (["%s/%s" % (projectlock.LOCK_DIRNAME, projectlock.LOCK_FILENAME)]
             if info.get("lock_removed") else [])
-    gone += ["%s/" % d for d in info.get("dirs_removed") or ()]
+    removed = list(info.get("dirs_removed") or ())
+    # `.claude/skills` and `.claude` both come back (deepest first): the
+    # parent already says the child went, so one entry per directory tree.
+    removed = [d for d in removed
+               if not any(o != d and d.startswith(o.rstrip("/") + "/")
+                          for o in removed)]
+    gone += ["%s/" % d for d in removed]
     if gone:
         out.dim("  no project skills left — removed %s" % ", ".join(gone),
                 wrap=True)

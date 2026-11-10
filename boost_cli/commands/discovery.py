@@ -49,7 +49,7 @@ from ..core import (
 from ..core import discovery as discovery_core
 from ..core import output as out
 from ..core.stackprobe import detect_stack  # re-exported: shared with Quality
-from ..errors import BoostError
+from ..errors import AlreadyInstalled, BoostError
 from ._common import _s
 
 __all__ = ["detect_stack"]
@@ -1982,11 +1982,23 @@ def _browse_tui(curses, entries, install=None, category=""):
 
     def run_request(roots):
         """One Enter: refuse what `boost install` refuses, plan the closure,
-        install it dependencies first."""
+        install it dependencies first.
+
+        A root already installed at the version offered is `boost install`'s
+        no-op: its row says so, the exit report warns, the exit stays 0, and
+        its missing `requires:` are still planned and installed."""
         ok_roots = []
+        already: dict = {}                      # row key -> AlreadyInstalled
         for e in roots:
             try:
                 store.check_existing(e)
+            except AlreadyInstalled as err:
+                session.already.append(err)
+                key = _desc_key(e)
+                already[key] = err
+                installed_rows.add(key)
+                status[key] = (browse.OK, "%s — nothing was changed"
+                               % err.message)
             except BoostError as err:
                 fail(e, err)
                 continue
@@ -1996,7 +2008,13 @@ def _browse_tui(curses, entries, install=None, category=""):
         try:
             the_plan = installplan.plan(ok_roots)
         except BoostError as err:
+            # Each pick reported once: a failed plan is the outcome for an
+            # installed pick too (its requirements were not installed), so
+            # it leaves the no-op list rather than being said both ways.
             for e in ok_roots:
+                noop = already.get(_desc_key(e))
+                if noop is not None:
+                    session.already.remove(noop)
                 fail(e, err)
             return
         session.notes.extend(the_plan.notes())
@@ -2007,6 +2025,8 @@ def _browse_tui(curses, entries, install=None, category=""):
                 session.cancelled.extend(the_plan.entries[i:])
                 return
             key = _desc_key(item)
+            if key in already:
+                continue                        # installed: nothing to do
             if key not in root_keys and \
                     status.get(key, ("", ""))[0] == browse.OK:
                 continue                        # landed earlier this session
@@ -2674,13 +2694,15 @@ def _report_browse_session(session: browse.InstallSession) -> int:
 
     Each landed item gets the canonical install report
     (:func:`pkg._report_result`) — the injection and secret scan, and the MCP
-    offer, which prompts and so could not run under curses. A refused or
+    offer, which prompts and so could not run under curses. A pick already
+    installed at the version offered gets ``boost install``'s warning and
+    hint and leaves the exit 0. A refused or
     failed pick is named on stderr with its hint and makes the exit 1, as
     ``boost install`` does; before this the refusal lived only in a pane that
     had already closed, and the exit was 0. An interrupt names what it
     cancelled, then re-raises so the exit code stays the interrupt's.
     """
-    from .pkg import _report_prerequisites, _report_result
+    from .pkg import _report_prerequisites, _report_result, _say_already_installed
     for role, text in dict.fromkeys(session.notes):
         (out.warn if role == "warn" else out.info)(text, wrap=True)
     for entry, res in session.installed:
@@ -2690,6 +2712,8 @@ def _report_browse_session(session: browse.InstallSession) -> int:
         _report_result(res)
     if session.installed:
         _report_prerequisites(session.landed())
+    for err in session.already:
+        _say_already_installed(err)
     for entry, message, hint in session.failed:
         out.warn("%s: %s" % (entry["name"], message), stream=sys.stderr,
                  wrap=True)

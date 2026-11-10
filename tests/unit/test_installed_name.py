@@ -8,10 +8,13 @@ paths and ``install --dry-run`` decide whether an existing record refuses.
 """
 from __future__ import annotations
 
+import json
+import re
+
 import pytest
 
-from boost_cli.core import lockfile, projectlock, scopes, store
-from boost_cli.errors import BoostError
+from boost_cli.core import lockfile, output, projectlock, scopes, store, util
+from boost_cli.errors import AlreadyInstalled, BoostError
 
 
 def _rec(tap, **extra):
@@ -222,3 +225,405 @@ class TestCheckExisting:
         with pytest.raises(BoostError) as ei:
             store.check_existing(entry)
         assert ei.value.message == "x is already installed (v1.2.3)"
+
+
+def _same(kind="skill", name="x", **over):
+    """An entry at the version and tap ``_rec`` records."""
+    return {**_entry(kind, name), "version": "1.2.3", **over}
+
+
+class TestSameVersionIsANoOp:
+    """Installing what is already installed, at the same version from the same
+    tap, raises :class:`AlreadyInstalled` — the refusal's own words, in
+    the subclass `boost install` and MCP `boost_install` report as a no-op.
+    Every other "already installed" stays a plain :class:`BoostError`."""
+
+    def test_a_user_skill_at_the_same_version(self, sandbox):
+        lockfile.set_entry("skill", "x", _rec("acme/kit"))
+        with pytest.raises(AlreadyInstalled) as ei:
+            store.check_existing(_same())
+        assert ei.value.message == "x is already installed (v1.2.3)"
+        assert ei.value.hint == ("`boost reinstall x` to force, `boost update` "
+                                 "to upgrade")
+        assert (ei.value.name, ei.value.version) == ("x", "1.2.3")
+        assert ei.value.wrap is False
+
+    def test_a_different_version_is_still_a_refusal(self, sandbox):
+        lockfile.set_entry("skill", "x", _rec("acme/kit"))
+        with pytest.raises(BoostError) as ei:
+            store.check_existing(_entry())            # catalog has 2.0.0
+        assert type(ei.value) is BoostError
+        assert "`boost update` to upgrade" in (ei.value.hint or "")
+
+    def test_force_still_returns_the_record(self, sandbox):
+        lockfile.set_entry("skill", "x", _rec("acme/kit"))
+        assert store.check_existing(_same(), force=True)["version"] == "1.2.3"
+
+    def test_a_pin_is_still_a_refusal(self, sandbox):
+        lockfile.set_entry("skill", "x", _rec("acme/kit", pinned=True))
+        with pytest.raises(BoostError) as ei:
+            store.check_existing(_same())
+        assert type(ei.value) is BoostError
+        assert ei.value.message == "x is pinned"
+
+    def test_another_tap_is_still_a_refusal(self, sandbox):
+        lockfile.set_entry("skill", "x", _rec("zed/kit"))
+        with pytest.raises(BoostError) as ei:
+            store.check_existing(_same())
+        assert type(ei.value) is BoostError
+        assert "from zed/kit, not acme/kit" in ei.value.message
+
+    @pytest.mark.parametrize("kind", ["rule", "workflow"])
+    def test_a_rule_or_workflow_at_the_same_version(self, sandbox, kind):
+        lockfile.set_entry(kind, "x", _rec("acme/kit", scope="user"))
+        with pytest.raises(AlreadyInstalled) as ei:
+            store.check_existing(_same(kind))
+        assert ei.value.message == "x is already installed"
+        assert ei.value.hint == "`boost reinstall x` to force"
+
+    @pytest.mark.parametrize("kind", ["rule", "workflow"])
+    def test_a_rule_or_workflow_from_another_tap_is_a_refusal(self, sandbox,
+                                                              kind):
+        lockfile.set_entry(kind, "x", _rec("zed/kit", scope="user"))
+        with pytest.raises(BoostError) as ei:
+            store.check_existing(_same(kind))
+        assert type(ei.value) is BoostError
+
+    def test_a_project_skill_at_the_same_version(self, sandbox, tmp_path,
+                                                 monkeypatch):
+        repo = tmp_path / "proj"
+        (repo / ".git").mkdir(parents=True)
+        monkeypatch.chdir(repo)
+        projectlock.set_skill(repo, "x", _rec("acme/kit"))
+        with pytest.raises(AlreadyInstalled) as ei:
+            store.check_existing(_same(), scope=scopes.SCOPE_PROJECT,
+                                 base=repo)
+        assert ei.value.message == ("x is already installed in this project "
+                                    "(v1.2.3)")
+        assert ei.value.hint == "`boost reinstall x --local` to force"
+        with pytest.raises(BoostError) as ei2:
+            store.check_existing(_entry(), scope=scopes.SCOPE_PROJECT,
+                                 base=repo)
+        assert type(ei2.value) is BoostError
+
+
+class TestSameInstall:
+    def test_same_version_and_tap(self):
+        assert store.same_install(_same(), _rec("acme/kit")) is True
+
+    def test_a_different_version(self):
+        assert store.same_install(_entry(), _rec("acme/kit")) is False
+
+    def test_versions_compare_as_text(self):
+        assert store.same_install(_same(version=2), {"tap": "acme/kit",
+                                                     "version": "2"}) is True
+
+    @pytest.mark.parametrize("want,have", [(None, "1.2.3"), ("1.2.3", None),
+                                           (None, None)])
+    def test_a_missing_version_is_never_a_match(self, want, have):
+        assert store.same_install({"name": "x", "tap": "acme/kit",
+                                   "version": want},
+                                  {"tap": "acme/kit", "version": have}) is False
+
+    def test_another_tap(self):
+        assert store.same_install(_same(), _rec("zed/kit")) is False
+
+    def test_a_side_without_a_tap_is_not_another_tap(self):
+        assert store.same_install(_same(tap=None), _rec("zed/kit")) is True
+
+
+class TestAnUndeclaredVersionIsUnknown:
+    """``catalog.UNDECLARED_VERSION`` is what the scanner writes when the
+    frontmatter names no version, so two of them say nothing about whether
+    the bodies agree — only a recorded content digest does."""
+
+    U = "0.0.0"
+
+    def _pair(self, have_content, want_content):
+        entry = {"name": "x", "tap": "acme/kit", "version": self.U,
+                 "content": want_content}
+        rec = {"tap": "acme/kit", "version": self.U}
+        if have_content is not None:
+            rec["content"] = have_content
+        return entry, rec
+
+    def test_the_constant_is_the_scanners(self):
+        from boost_cli.core import catalog
+        assert catalog.UNDECLARED_VERSION == self.U
+
+    def test_different_content_is_not_the_same(self):
+        assert store.same_install(*self._pair("aaa", "bbb")) is False
+
+    def test_an_equal_digest_is_the_same(self):
+        assert store.same_install(*self._pair("aaa", "aaa")) is True
+
+    def test_a_missing_digest_is_not_the_same(self):
+        assert store.same_install(*self._pair(None, "aaa")) is False
+
+    def test_two_missing_digests_are_not_the_same(self):
+        assert store.same_install(*self._pair(None, None)) is False
+
+    def test_two_empty_digests_are_not_the_same(self):
+        assert store.same_install(*self._pair("", "")) is False
+
+    def test_a_declared_version_needs_no_digest(self):
+        entry, rec = self._pair(None, "aaa")
+        entry["version"] = rec["version"] = "1.0.0"
+        assert store.same_install(entry, rec) is True
+
+    def test_another_tap_loses_even_with_an_equal_digest(self):
+        entry, rec = self._pair("aaa", "aaa")
+        rec["tap"] = "zed/kit"
+        assert store.same_install(entry, rec) is False
+
+    def test_check_existing_refuses_an_undeclared_reinstall(self, sandbox):
+        lockfile.set_entry("skill", "x", {"tap": "acme/kit",
+                                          "version": self.U})
+        with pytest.raises(BoostError) as ei:
+            store.check_existing({**self._pair(None, "aaa")[0],
+                                  "kind": "skill"})
+        assert type(ei.value) is BoostError
+        assert ei.value.message == "x is already installed (v0.0.0)"
+
+
+class TestRequestChanges:
+    """A same-version re-install is a no-op only when the request asks for
+    nothing the lock row lacks: another agent set, or another --as-skill."""
+
+    def test_no_flags_change_nothing(self):
+        assert store.request_changes(_rec("acme/kit", agents=["cursor"])) is False
+
+    def test_the_recorded_agent_set_again_changes_nothing(self):
+        rec = _rec("acme/kit", agents=["cursor", "windsurf"])
+        assert store.request_changes(rec, ["windsurf", "cursor"]) is False
+
+    def test_a_declared_set_again_changes_nothing(self):
+        rec = _rec("acme/kit", only_agents=["cursor"], agents=["cursor"])
+        assert store.request_changes(rec, ["cursor"]) is False
+
+    def test_another_agent_is_a_change(self):
+        rec = _rec("acme/kit", only_agents=["cursor"], agents=["cursor"])
+        assert store.request_changes(rec, ["codex"]) is True
+
+    def test_a_subset_is_a_change(self):
+        rec = _rec("acme/kit", agents=["cursor", "windsurf"])
+        assert store.request_changes(rec, ["cursor"]) is True
+
+    def test_any_explicit_set_differs_from_every_agent(self):
+        # A rule that records an undeclared install: every agent.
+        rec = _rec("acme/kit", only_agents=None)
+        assert store.preserved_agent_scope(None, rec) is None
+        assert store.request_changes(rec, ["cursor"]) is True
+
+    def test_the_recorded_as_skill_again_changes_nothing(self):
+        assert store.request_changes(_rec("acme/kit", as_skill=False),
+                                     as_skill=False) is False
+
+    def test_another_as_skill_is_a_change(self):
+        assert store.request_changes(_rec("acme/kit", as_skill=False),
+                                     as_skill=True) is True
+
+    def test_as_skill_absent_from_the_row_follows_the_config(self, sandbox):
+        # workflows_as_skills defaults on, so --as-skill asks for nothing new.
+        assert store.request_changes(_rec("acme/kit"), as_skill=True) is False
+        assert store.request_changes(_rec("acme/kit"), as_skill=False) is True
+
+
+class TestARequestThatAddsSomethingIsARefusal:
+    """check_existing threads the request through, so the no-op is decided on
+    what was asked as well as what is installed."""
+
+    def test_a_user_skill_with_another_agent(self, sandbox):
+        lockfile.set_entry("skill", "x", _rec("acme/kit", agents=["cursor"]))
+        with pytest.raises(BoostError) as ei:
+            store.check_existing(_same(), only_agents=["codex"])
+        assert type(ei.value) is BoostError
+        assert ei.value.message == "x is already installed (v1.2.3)"
+        assert ei.value.hint == ("`boost install acme/kit:x --agent cursor "
+                                 "--agent codex --force` to apply it")
+        with pytest.raises(AlreadyInstalled):
+            store.check_existing(_same(), only_agents=["cursor"])
+
+    def test_another_version_keeps_the_generic_hint(self, sandbox):
+        # Not the same install: the request's flags are not the obstacle.
+        lockfile.set_entry("skill", "x", _rec("acme/kit", agents=["cursor"]))
+        with pytest.raises(BoostError) as ei:
+            store.check_existing(_entry(), only_agents=["codex"])
+        assert ei.value.hint == ("`boost reinstall x` to force, `boost update` "
+                                 "to upgrade")
+
+    def test_a_project_skill_with_another_agent(self, sandbox, tmp_path,
+                                                monkeypatch):
+        repo = tmp_path / "proj"
+        (repo / ".git").mkdir(parents=True)
+        monkeypatch.chdir(repo)
+        projectlock.set_skill(repo, "x", _rec("acme/kit", agents=["cursor"]))
+        with pytest.raises(BoostError) as ei:
+            store.check_existing(_same(), scope=scopes.SCOPE_PROJECT,
+                                 base=repo, only_agents=["codex"])
+        assert type(ei.value) is BoostError
+        assert ei.value.hint == ("`boost install acme/kit:x --agent cursor "
+                                 "--agent codex --local --force` to apply it")
+
+    @pytest.mark.parametrize("kind", ["rule", "workflow"])
+    def test_a_rule_or_workflow_with_another_agent(self, sandbox, kind):
+        lockfile.set_entry(kind, "x", _rec("acme/kit", scope="user",
+                                           only_agents=["cursor"]))
+        with pytest.raises(BoostError) as ei:
+            store.check_existing(_same(kind), only_agents=["codex"])
+        assert type(ei.value) is BoostError
+        assert ei.value.message == "x is already installed"
+        assert ei.value.hint == ("`boost install acme/kit:x --agent cursor "
+                                 "--agent codex --force` to apply it")
+
+    def test_a_workflow_with_another_as_skill(self, sandbox):
+        lockfile.set_entry("workflow", "x", _rec("acme/kit", scope="user",
+                                                 as_skill=False))
+        with pytest.raises(BoostError) as ei:
+            store.check_existing(_same("workflow"), as_skill=True)
+        assert type(ei.value) is BoostError
+        assert ei.value.hint == ("`boost install acme/kit:x --as-skill "
+                                 "--force` to apply it")
+        with pytest.raises(AlreadyInstalled):
+            store.check_existing(_same("workflow"), as_skill=False)
+
+    def test_as_skill_is_a_workflows_alone(self, sandbox):
+        lockfile.set_entry("rule", "x", _rec("acme/kit", scope="user",
+                                             as_skill=False))
+        with pytest.raises(AlreadyInstalled):
+            store.check_existing(_same("rule"), as_skill=True)
+
+
+class TestChangedRequestHint:
+    @pytest.mark.parametrize("width", [20, 80])
+    @pytest.mark.parametrize("value", [
+        "skills/a  b & c", "skills/a`b`c`d`e & f", "skills/a**b**c**d**e & f",
+    ])
+    def test_windows_argument_list_survives_the_cli_renderer(
+            self, monkeypatch, capsys, width, value):
+        monkeypatch.setenv("NO_COLOR", "1")
+        monkeypatch.setattr(output, "term_width", lambda default=80, stream=None: width)
+        with monkeypatch.context() as patch:
+            patch.setattr(util.sys, "platform", "win32")
+            hint = store.changed_request_hint(
+                {"name": "x", "tap": "acme/kit", "rel_dir": value}, ["a  b"], True, scopes.SCOPE_PROJECT)
+        output.err("already installed", hint=hint)
+        rendered = capsys.readouterr().err
+        assert "not an executable command" in " ".join(rendered.split())
+        encoded = next(line.strip() for line in rendered.splitlines() if line.lstrip().startswith("["))
+        assert json.loads(encoded) == [
+            "boost", "install", "acme/kit:x", "--path", value,
+            "--agent", "a  b", "--as-skill", "--local", "--force"]
+
+    @pytest.mark.parametrize("value", [
+        "x&y", "x|y", "x(y)", "$HOME", "%PATH%", 'x"y', "x'y",
+        "x`y", "x;y", "x<y", "x>y", "x^y", "x!y", "x,y", "@args",
+        "x\ty", "x\ny", "x\ry", "x\x00y", "x\x7fy", r"x\y", "café",
+    ])
+    def test_windows_unsafe_path_is_a_literal_argument_list(
+            self, monkeypatch, value):
+        e = {"name": "x", "tap": "acme/kit", "rel_dir": value}
+        rec = _rec("acme/kit", only_agents=["cursor"], agents=["cursor"])
+        with monkeypatch.context() as patch:
+            patch.setattr(util.sys, "platform", "win32")
+            hint = store.changed_request_hint(
+                e, ["windsurf", "cursor"], False, scopes.SCOPE_PROJECT, rec)
+        assert hint.startswith("ARGUMENT LIST (JSON; not an executable command):\n")
+        label, encoded, instruction = hint.splitlines()
+        assert label == "ARGUMENT LIST (JSON; not an executable command):"
+        assert instruction == "Quote each argument for your chosen shell before running it."
+        assert json.loads(encoded) == [
+            "boost", "install", "acme/kit:x", "--path", value,
+            "--agent", "cursor", "--agent", "windsurf",
+            "--no-as-skill", "--local", "--force"]
+
+    @pytest.mark.parametrize("field", ["tap", "name", "rel_dir", "agent", "recorded_agent"])
+    @pytest.mark.parametrize("as_skill,flag", [(None, []), (True, ["--as-skill"]), (False, ["--no-as-skill"])])
+    @pytest.mark.parametrize("scope,local", [(scopes.SCOPE_USER, []), (scopes.SCOPE_PROJECT, ["--local"])])
+    def test_windows_argument_list_preserves_every_field_and_flag(
+            self, monkeypatch, field, as_skill, flag, scope, local):
+        value = 'x & "$HOME%PATH%`\t\\@args'
+        e = {"name": "x", "tap": "acme/kit", "rel_dir": "skills/x"}
+        requested, recorded = "windsurf", "cursor"
+        if field in e:
+            e[field] = value
+        elif field == "agent":
+            requested = value
+        else:
+            recorded = value
+        rec = _rec("acme/kit", only_agents=[recorded], agents=[recorded])
+        with monkeypatch.context() as patch:
+            patch.setattr(util.sys, "platform", "win32")
+            hint = store.changed_request_hint(e, [requested], as_skill, scope, rec)
+        label, encoded, instruction = hint.splitlines()
+        assert label == "ARGUMENT LIST (JSON; not an executable command):"
+        assert instruction == "Quote each argument for your chosen shell before running it."
+        assert json.loads(encoded) == [
+            "boost", "install", f"{e['tap']}:{e['name']}", "--path", e["rel_dir"],
+            "--agent", recorded, "--agent", requested, *flag, *local, "--force"]
+
+    def test_posix_keeps_shell_quoting_for_special_values(self, monkeypatch):
+        import shlex
+        value = 'skills/x & "$HOME%PATH%`\\@args'
+        e = {"name": "x", "tap": "acme/kit", "rel_dir": value}
+        with monkeypatch.context() as patch:
+            patch.setattr(util.sys, "platform", "linux")
+            hint = store.changed_request_hint(e, ["a b"], True, scopes.SCOPE_PROJECT)
+        cmd = re.fullmatch(r"`(.*)` to apply it", hint).group(1)
+        assert shlex.split(cmd) == [
+            "boost", "install", "acme/kit:x", "--path", value,
+            "--agent", "a b", "--as-skill", "--local", "--force"]
+
+    @pytest.mark.parametrize("platform", ["linux", "win32"])
+    def test_every_flag_in_order(self, monkeypatch, platform):
+        e = {"name": "x", "tap": "acme/kit", "rel_dir": "skills/x"}
+        with monkeypatch.context() as patch:
+            patch.setattr(util.sys, "platform", platform)
+            hint = store.changed_request_hint(
+                e, ["cursor", "a b"], False, scopes.SCOPE_PROJECT)
+        agent = '"a b"' if platform == "win32" else "'a b'"
+        assert hint == (
+            "`boost install acme/kit:x --path skills/x --agent cursor "
+            f"--agent {agent} --no-as-skill --local --force` to apply it")
+
+    def test_bare_user_scope(self):
+        assert store.changed_request_hint({"name": "x"}, None, None) == (
+            "`boost install x --force` to apply it")
+
+    def test_the_hint_adds_to_the_recorded_agents(self):
+        e = {"name": "x", "tap": "acme/kit"}
+        rec = _rec("acme/kit", only_agents=["cursor"], agents=["cursor"])
+        assert store.changed_request_hint(e, ["windsurf", "cursor"], None,
+                                          existing=rec) == (
+            "`boost install acme/kit:x --agent cursor --agent windsurf "
+            "--force` to apply it")
+
+    def test_a_record_of_every_agent_keeps_the_requested_set(self):
+        rec = _rec("acme/kit", only_agents=None)
+        assert store.changed_request_hint({"name": "x"}, ["cursor"], None,
+                                          existing=rec) == (
+            "`boost install x --agent cursor --force` to apply it")
+
+    def test_a_path_with_a_space_is_one_argument(self):
+        import shlex
+        e = {"name": "x y", "tap": "acme/kit", "rel_dir": "my skills/x y"}
+        hint = store.changed_request_hint(e, ["cursor"], None)
+        cmd = re.fullmatch(r"`(.*)` to apply it", hint).group(1)
+        assert shlex.split(cmd) == ["boost", "install", "acme/kit:x y",
+                                    "--path", "my skills/x y",
+                                    "--agent", "cursor", "--force"]
+
+
+class TestInstallSpelling:
+    def test_safe_spellings_are_unchanged(self):
+        assert store.install_spelling("acme/kit", "x", "skills/x") == (
+            "boost install acme/kit:x --path skills/x")
+        assert store.install_spelling(None, "x") == "boost install x"
+        assert store.install_spelling("acme/kit", "x", ".") == (
+            "boost install acme/kit:x")
+
+    def test_spaces_are_quoted(self):
+        import shlex
+        cmd = store.install_spelling("acme/kit", "x", "a dir/x")
+        assert shlex.split(cmd) == ["boost", "install", "acme/kit:x",
+                                    "--path", "a dir/x"]

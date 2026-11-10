@@ -247,6 +247,22 @@ class TestTap:
         assert "dry run — nothing tapped" in r.out
         assert registry.list_taps() == []
 
+    def test_defaults_dry_run_never_clips_a_url_at_80_columns(
+            self, boost, monkeypatch):
+        from boost_cli.core import config
+
+        monkeypatch.setenv("COLUMNS", "80")
+        r = boost("tap", "--defaults", "--dry-run")
+        urls = [ln.split()[-1] for ln in r.out.splitlines()
+                if "https://" in ln]
+        assert len(urls) >= len(config.DEFAULT_TAPS)
+        assert all(not u.endswith("…") for u in urls)
+        # NAME survives beside URL: both are identifiers, so the row
+        # overflows whole instead of dropping one.
+        assert any(ln.split()[:2] == ["NAME", "URL"] for ln in r.out.splitlines())
+        assert all(ln.split()[0] and "/" in ln.split()[0]
+                   for ln in r.out.splitlines() if "https://" in ln)
+
     def test_dry_run_marks_a_tapped_spec_as_skipped_like_the_run(
             self, boost, fixture_tap_src, tmp_path):
         other = _copy_tap(fixture_tap_src, tmp_path / "other-tap")
@@ -442,14 +458,58 @@ class TestTapCatalog:
         assert len(taps) == 12 and all(t["curated"] for t in taps)
 
 
+class TestTapDuplicateSpecs:
+    def test_the_same_spec_twice_is_one_tap(self, boost, fixture_tap_src):
+        boost("tap", fixture_tap_src)
+        r = boost("tap", fixture_tap_src, fixture_tap_src)
+        assert r.out.count("fixture-tap already tapped") == 1
+
+
 # ── untap ────────────────────────────────────────────────────────────────
 
 class TestUntap:
     def test_unknown_rc1(self, boost, sandbox):
         r = boost("untap", "nope", expect=1)
         # The reason for rc 1 is on stderr, where a script looks for it.
-        assert r.err == "  ! could not untap nope: no such tap: nope\n"
-        assert "could not untap" not in r.out
+        assert r.err.splitlines() == [
+            "Error: no such tap: nope",
+            "  hint: list taps with `boost taps`"]
+        assert r.out == ""
+
+    def test_several_unknown_names_are_all_named(self, boost, sandbox):
+        r = boost("untap", "nope", "nada", expect=1)
+        assert r.err.splitlines()[0] == "Error: no such tap: nope, nada"
+
+    def test_each_failure_keeps_its_own_words_and_hint(self, boost, sandbox):
+        cfg = config.load()
+        cfg["taps"] = [{"name": "angular/skills", "url": "https://x/a"},
+                       {"name": "microsoft/skills", "url": "https://x/m"}]
+        config.save(cfg)
+        r = boost("untap", "skills", "nope", "angular/skils", expect=1)
+        # The hint folds to the pane; its words are what is pinned.
+        assert " ".join(r.err.split()) == (
+            "Error: 'skills' is ambiguous — it matches 2 taps: "
+            "angular/skills, microsoft/skills; no such tap: nope, angular/skils "
+            "hint: use the full owner/repo name; list taps with `boost "
+            "taps`; did you mean angular/skills?")
+
+    def test_a_name_given_twice_is_named_once(self, boost, sandbox):
+        r = boost("untap", "nope", "nope", expect=1)
+        assert r.err.splitlines() == [
+            "Error: no such tap: nope",
+            "  hint: list taps with `boost taps`"]
+
+    def test_a_tap_given_twice_is_untapped_once(self, boost, tapped):
+        r = boost("untap", "fixture-tap", "fixture-tap")
+        assert r.out.count("untapped fixture-tap") == 1
+        assert "could not untap" not in r.err
+
+    def test_partial_failure_still_warns_and_removes_the_rest(self, boost,
+                                                             tapped):
+        r = boost("untap", "nope", "fixture-tap", expect=1)
+        assert "  ! could not untap nope: no such tap: nope" in r.err
+        assert "Error:" not in r.err
+        assert "untapped fixture-tap" in r.out
 
     def test_dependents_declined_keeps_tap(self, boost, installed, monkeypatch):
         monkeypatch.delenv("BOOST_ASSUME_YES")

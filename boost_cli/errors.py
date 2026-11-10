@@ -23,6 +23,25 @@ class BoostError(Exception):
         self.wrap = wrap
 
 
+class AlreadyInstalled(BoostError):
+    """The item is already installed here, from the same tap, at the version
+    the catalog offers: an install of it would change nothing.
+
+    A subclass so the callers that mean "make sure X is installed" — a plain
+    `boost install`, its dry run, MCP `boost_install` — can report it as a
+    no-op (brew's warning, exit 0) and every other caller keeps the refusal it
+    always had. A different version, another tap, a pin or another scope is
+    a decision for the user and stays a plain :class:`BoostError`;
+    :func:`boost_cli.core.store.check_existing` decides which.
+    """
+
+    def __init__(self, message: str, hint: str | None = None, *,
+                 name: str, version: str):
+        super().__init__(message, hint=hint)
+        self.name = name
+        self.version = version
+
+
 class NotUTF8Error(BoostError):
     """A file the *user* owns holds bytes that are not UTF-8.
 

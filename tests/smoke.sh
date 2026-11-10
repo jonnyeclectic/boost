@@ -57,7 +57,8 @@ run "install jira-integration" 0 ./boost install jira-integration --no-deps
 run "install commit-messages"  0 ./boost install commit-messages
 run "install tdd-workflow"     0 ./boost install tdd-workflow
 run "install cowboy-coding"    0 ./boost install cowboy-coding
-run "install duplicate fails"  1 ./boost install brainstorming
+run "install duplicate no-op"  0 ./boost install brainstorming
+run "reinstall new agent fails" 1 ./boost install brainstorming --agent cursor
 run "list"                   0 ./boost list
 run "list --json"            0 ./boost list --json
 run "info"                   0 ./boost info brainstorming
@@ -128,7 +129,7 @@ run "walk-up from a subdir"  0 bash -c 'cd "$0/src/deep" && "'"$ROOT"'/boost" in
 run "landed at the root"     0 test -d "$PROJ/.claude/skills/cowboy-coding"
 run "no stray subdir store"  1 test -d "$PROJ/src/deep/.claude"
 run "list --local"           0 bash -c 'cd "$0" && "'"$ROOT"'/boost" list --local' "$PROJ"
-run "dup --local fails"      1 bash -c 'cd "$0" && "'"$ROOT"'/boost" install tdd-workflow --local' "$PROJ"
+run "dup --local is a no-op"  0 bash -c 'cd "$0" && "'"$ROOT"'/boost" install tdd-workflow --local' "$PROJ"
 run "uninstall --local"      0 bash -c 'cd "$0" && "'"$ROOT"'/boost" uninstall tdd-workflow --local' "$PROJ"
 run "local copy is gone"     1 test -d "$PROJ/.claude/skills/tdd-workflow"
 run "user copy untouched"    0 test -d "$HOME/.agents/skills/tdd-workflow"
@@ -278,7 +279,7 @@ if [ "${1:-}" = "--online" ]; then
   # NOTE the sandbox has the offline fixture tapped as well, so a hero name
   # that collided with a fixture skill would pass here for the wrong reason;
   # that is what the fixture-name test upstream of this one rules out.
-  HERO="$(awk '/^```bash$/{inb=1;anchored=0;name="";next} /^```$/{if(inb&&anchored&&name!=""){print name;exit} inb=0;next} inb&&/^pipx install boost-skill-cli/{anchored=1} inb&&/^boost install /&&name==""{name=$3}' README.md)"
+  HERO="$(awk '/^```bash$/{inb=1;anchored=0;name="";next} /^```$/{if(inb&&anchored&&name!=""){print name;exit} inb=0;next} inb&&/^pipx install --python 3.13/{anchored=1} inb&&/^boost install /&&name==""{name=$3}' README.md)"
   run "README hero install ($HERO)" 0 ./boost install "$HERO"
   # Every other name a README fence installs, uninstalls or describes must
   # resolve from the same starter taps; `info` asks without installing. The

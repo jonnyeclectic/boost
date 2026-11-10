@@ -15,7 +15,7 @@ import subprocess
 import pytest
 
 from boost_cli.commands import configuration
-from boost_cli.core import lockfile, mcp
+from boost_cli.core import lockfile, mcp, paths
 
 
 def _tool(tool, **args):
@@ -75,13 +75,59 @@ class TestInstallPullsInRequires:
         assert "pulling in" not in text
         assert text.startswith("installed jira-integration v2.1.0 from ")
 
-    def test_a_refused_request_installs_none_of_its_dependencies(
+    def test_an_installed_request_installs_its_missing_dependencies(
             self, boost, tapped):
+        # As `boost install jira-integration` does: the item asked for is
+        # left alone, and what it requires is installed. The reply used to
+        # say "nothing was changed" while the CLI installed commit-messages.
         boost("install", "jira-integration", "--no-deps")
+        before = lockfile.get_skill("jira-integration")
         text, is_err = _call("boost_install", name="jira-integration")
-        assert is_err is True
-        assert "already installed" in text
-        assert "commit-messages" not in lockfile.all_installed()["skill"]
+        assert is_err is False
+        lines = text.splitlines()
+        assert lines[0] == ("pulling in 1 dependency required by your "
+                            "selection: commit-messages")
+        assert lines[1].startswith("installed commit-messages v1.0.2 from ")
+        assert ("jira-integration is already installed (v2.1.0) — left as it "
+                "was; only its missing requirements were installed.") in lines
+        assert not any(ln.startswith("installed jira-integration")
+                       for ln in lines)
+        assert "nothing was changed" not in text
+        assert set(lockfile.all_installed()["skill"]) == {"commit-messages",
+                                                          "jira-integration"}
+        assert lockfile.get_skill("jira-integration") == before
+
+    def test_an_installed_request_with_its_requirements_met_changes_nothing(
+            self, boost, tapped):
+        boost("install", "jira-integration")
+        text, is_err = _call("boost_install", name="jira-integration")
+        assert is_err is False
+        assert text == ("jira-integration is already installed (v2.1.0) — "
+                        "nothing was changed.")
+
+    def test_an_installed_request_keeps_its_unavailable_requirement_warning(
+            self, boost, tmp_path):
+        body = _md("root-probe", "Needs an unavailable requirement").replace(
+            "version: 1.0.0", "version: 1.0.0\nrequires: [missing-probe]")
+        boost("tap", _git_tap(tmp_path / "requirements", {
+            "skills/root-probe": body}))
+        boost("install", "root-probe", "--no-deps")
+        before_lock = paths.lockfile_path().read_bytes()
+        installed = paths.store_dir() / "root-probe" / "SKILL.md"
+        before_source = installed.read_bytes()
+
+        text, is_err = _call("boost_install", name="root-probe")
+
+        assert is_err is False
+        assert text == (
+            "root-probe is already installed (v1.0.0) — nothing was changed.\n"
+            "\nWARNING — check before you rely on this install:\n"
+            "required skill 'missing-probe' is in no tap — skipped (install "
+            "it manually or `boost tap` its source)")
+        assert paths.lockfile_path().read_bytes() == before_lock
+        assert installed.read_bytes() == before_source
+        assert lockfile.get_skill("missing-probe") is None
+        assert not (paths.store_dir() / "missing-probe").exists()
 
     def test_a_failed_dependency_is_a_warning_on_a_success(
             self, boost, tapped, monkeypatch):
@@ -147,6 +193,23 @@ class TestInstallWarnsAboutLookalikes:
         # The CLI prints the same words.
         cli = boost("install", "brainstormimg", "--dry-run", expect=None)
         assert lines[i + 1] in cli.out + cli.err
+
+    def test_an_installed_request_keeps_its_lookalike_warning(
+            self, boost, tapped, tmp_path):
+        boost("tap", _git_tap(tmp_path / "evil", {
+            "skills/brainstormimg": _md("brainstormimg", "Totally legit")}))
+        boost("install", "brainstormimg")
+        before = paths.lockfile_path().read_bytes()
+
+        text, is_err = _call("boost_install", name="brainstormimg")
+
+        assert is_err is False
+        assert text.splitlines() == [
+            "brainstormimg is already installed (v1.0.0) — nothing was changed.",
+            "", "WARNING — check before you rely on this install:",
+            "brainstormimg (evil) closely resembles brainstorming (fixture-tap) "
+            "— double-check you meant this one"]
+        assert paths.lockfile_path().read_bytes() == before
 
 
 @pytest.fixture()

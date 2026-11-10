@@ -3026,12 +3026,13 @@ class TestKindAwarePkgSurface:
         assert "would reinstall rule house-style v1.0.0" in r.out
         assert "would install" not in r.out
 
-    def test_dry_run_of_an_installed_rule_refuses_like_the_run(
+    def test_dry_run_of_an_installed_rule_answers_like_the_run(
             self, boost, fixture_tap_src, tmp_path):
         boost("tap", self._tap_with_rule(fixture_tap_src, tmp_path, "drr-tap"))
         boost("install", "house-style")
-        dry = boost("install", "house-style", "--dry-run", expect=1)
-        live = boost("install", "house-style", expect=1)
+        # The same version again is a no-op in both modes: warned, rc 0.
+        dry = boost("install", "house-style", "--dry-run", expect=0)
+        live = boost("install", "house-style", expect=0)
         assert "house-style is already installed" in live.err
         assert dry.err == live.err
         assert "would" not in dry.out
