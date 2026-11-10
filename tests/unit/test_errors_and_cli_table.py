@@ -455,6 +455,16 @@ class TestGlobalOptionsLine:
         assert "--debug" in out
         assert "-q/--quiet" in out
 
+    def test_quiet_says_what_it_silences(self, sandbox, capsys):
+        # -q only silences diagnostic log lines on the console. The help must
+        # not imply it hides command output (it does not), and must say the
+        # log file is unaffected. Whitespace is collapsed because the line
+        # word-wraps to the pane.
+        assert cli.main(["--help"]) == 0
+        out = " ".join(capsys.readouterr().out.split())
+        assert ("-q/--quiet silences diagnostic log lines on the console; "
+                "command output and the log file are unchanged.") in out
+
 
 class TestPrintHelpColorRole:
     """The command-name column is the same semantic role ("accent") as every
