@@ -1806,7 +1806,7 @@ def resolve_one(name: str, path: str | None = None) -> dict:
                 # user needs it.
                 hint = NO_TAPS_HINT
             else:
-                hint = "try `boost search %s`" % query
+                hint = "try `boost search %s`" % util.shell_arg(query)
         where = ("in tap %s" % ", ".join(known)) if qualifier is not None \
             else "in any tap"
         raise BoostError("no skill named %r %s" % (query, where),

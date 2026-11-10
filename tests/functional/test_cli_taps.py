@@ -460,6 +460,10 @@ class TestUntap:
             "  hint: list taps with `boost taps`"]
         assert r.out == ""
 
+    def test_several_unknown_names_are_all_named(self, boost, sandbox):
+        r = boost("untap", "nope", "nada", expect=1)
+        assert r.err.splitlines()[0] == "Error: no such tap: nope, nada"
+
     def test_partial_failure_still_warns_and_removes_the_rest(self, boost,
                                                              tapped):
         r = boost("untap", "nope", "fixture-tap", expect=1)

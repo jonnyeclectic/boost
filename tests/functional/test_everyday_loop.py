@@ -93,3 +93,10 @@ def test_missing_skill_with_no_close_match_still_points_at_search(boost,
     r = boost("install", "zzqxv", expect=1)
     assert "Error: no skill named 'zzqxv' in any tap" in r.err
     assert "try `boost search zzqxv`" in r.err
+
+
+def test_multi_install_failure_does_not_repeat_the_name(boost, tapped):
+    boost("install", "brainstorming")
+    r = boost("install", "brainstorming", "jira-integration", expect=1)
+    assert "brainstorming is already installed" in r.err
+    assert "brainstorming: brainstorming" not in r.err

@@ -426,7 +426,11 @@ def cmd_untap(argv) -> int:
         except BoostError as exc:
             failures.append(exc)
     if failures and len(failures) == len(args.name):
-        raise failures[0]
+        if len(failures) == 1:
+            raise failures[0]
+        raise BoostError(
+            "no such tap: %s" % ", ".join(args.name),
+            hint="list taps with `boost taps`")
     rc = 0
     for name in args.name:
         rc |= _untap_one(name, force)

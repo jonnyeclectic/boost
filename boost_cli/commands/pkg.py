@@ -447,7 +447,7 @@ def _named(name: str, message: str) -> str:
     installed"), so prefixing them again read `jira-integration:
     jira-integration is already installed`.
     """
-    if message.startswith(name):
+    if message.startswith((name + " ", name + ":")):
         return message
     return "%s: %s" % (name, message)
 
