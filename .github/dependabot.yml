@@ -140,6 +140,14 @@ updates:
     rebase-strategy: disabled
     schedule:
       interval: weekly
+    # stylelint-config-standard peers a single stylelint major, so a lone bump of
+    # either fails `npm ci` with ERESOLVE (#1330 stylelint 17->18 and #1332
+    # config-standard 40->41 each went red that way). One group, one PR.
+    groups:
+      stylelint:
+        patterns:
+          - stylelint
+          - stylelint-config-*
   - package-ecosystem: npm
     directory: /tests/visual
     rebase-strategy: disabled

@@ -8,7 +8,7 @@ name: theme-lint
 # Config notes (.stylelintrc.json): extends stylelint-config-standard with the
 # file's deliberate idioms switched off —
 #   - compact multi-declaration lines + section-comment organization
-#     (single-line-max-declarations, *-empty-line-before, duplicate/descending
+#     (*-empty-line-before, duplicate/descending
 #     selectors: the sheet is organized by concern-section on purpose);
 #   - -webkit- prefixes (Safari still needs them for backdrop-filter and
 #     background-clip: text);
