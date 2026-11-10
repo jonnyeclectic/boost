@@ -68,3 +68,28 @@ def test_version_and_help(boost):
     for group in ("Package Management", "Discovery & Search", "Intelligence",
                   "Quality & Health", "Team & Collaboration"):
         assert group in r.out
+
+
+def test_unknown_command_offers_help(boost):
+    r = boost("hepl", expect=2)
+    assert "did you mean: help" in r.err
+
+
+def test_mcp_bad_action_names_the_metavar_not_the_dest(boost):
+    r = boost("mcp", "bogus", expect=2)
+    assert "argument ACTION: invalid choice: 'bogus'" in r.err
+    assert "argument action" not in r.err
+
+
+def test_missing_skill_in_a_named_tap_says_which_tap(boost, tapped):
+    r = boost("install", "fixture-tap:nonesuch", expect=1)
+    lines = r.err.splitlines()
+    assert lines[0] == "Error: no skill named 'nonesuch' in tap fixture-tap"
+    assert "hint: try `boost search nonesuch`" in lines[1]
+
+
+def test_missing_skill_with_no_close_match_still_points_at_search(boost,
+                                                                  tapped):
+    r = boost("install", "zzqxv", expect=1)
+    assert "Error: no skill named 'zzqxv' in any tap" in r.err
+    assert "try `boost search zzqxv`" in r.err

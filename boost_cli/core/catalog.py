@@ -1805,7 +1805,11 @@ def resolve_one(name: str, path: str | None = None) -> dict:
                 # nothing on, which silenced this hint exactly where a new
                 # user needs it.
                 hint = NO_TAPS_HINT
-        raise BoostError("no skill named %r in any tap" % name,
+            else:
+                hint = "try `boost search %s`" % query
+        where = ("in tap %s" % ", ".join(known)) if qualifier is not None \
+            else "in any tap"
+        raise BoostError("no skill named %r %s" % (query, where),
                          hint=join_hints(hint, stale_commit_hint()))
     if len(matches) > 1:
         # `name` may already be tap-qualified; hints must re-qualify the BARE

@@ -634,6 +634,17 @@ def test_the_last_local_uninstall_removes_the_lock_and_its_dirs(boost, tapped,
     res = boost("uninstall", "brainstorming", "--local", "-y")
     assert _tree(repo) == []
     assert "no project skills left — removed .boost/skill-lock.json" in res.out
+    # one entry per agent directory: `.claude/skills/` is inside `.claude/`
+    flat = " ".join(res.out.split())
+    assert ".claude/," in flat and ".claude/skills/" not in flat
+    assert flat.count(".claude/") == 1
+
+
+def test_a_local_install_names_the_agent_dirs_to_commit(boost, tapped, repo):
+    res = boost("install", "brainstorming", "--local")
+    flat = " ".join(res.out.split())
+    assert "commit .boost/ and .claude/" in flat
+    assert "(the copies agents read)" in flat
 
 
 def test_without_git_the_lock_goes_and_its_guard_file_stays(boost, tapped,

@@ -440,6 +440,41 @@ def _register_mcp_server(name: str, spec: dict, host: str = "claude",
     journal.log("mcp-register", name, host=host)
 
 
+def _named(name: str, message: str) -> str:
+    """``name: message``, without saying the name twice.
+
+    Store errors often open with the item ("jira-integration is already
+    installed"), so prefixing them again read `jira-integration:
+    jira-integration is already installed`.
+    """
+    if message.startswith(name):
+        return message
+    return "%s: %s" % (name, message)
+
+
+def _commit_hint() -> str:
+    """What a teammate needs committed to get this project install.
+
+    The lock alone is not it: agents read the copies under their own skill
+    dirs (``.claude/skills/`` …), so those are named too — the top-level
+    directories this project's installs created, from the lock's record. A
+    lock that names none (older, or the dirs already existed) says
+    "the agent skill dirs" rather than guess.
+    """
+    lock_dir = "%s/" % projectlock.LOCK_DIRNAME
+    try:
+        base = scopes.resolve_base(scopes.SCOPE_PROJECT)
+        rows = projectlock.read(base).get(store.DIRS_CREATED_KEY)
+    except (BoostError, OSError):
+        rows = None
+    tops = sorted({r.split("/", 1)[0] + "/" for r in rows
+                   if isinstance(r, str) and r and r != projectlock.LOCK_DIRNAME}
+                  ) if isinstance(rows, list) else []
+    dirs = ", ".join(tops) if tops else "the agent skill dirs"
+    return ("commit %s and %s (the copies agents read) to share these with "
+            "the team" % (lock_dir, dirs))
+
+
 def _report_result(res: store.InstallResult, no_mcp: bool = False,
                    defer_mcp: list | None = None) -> None:
     """The canonical three-line install report.
@@ -488,8 +523,7 @@ def _report_result(res: store.InstallResult, no_mcp: bool = False,
                % (" · ".join(res.linked) or "(no enabled agents)"))
         out.ok("project lock updated (%s/%s)"
                % (projectlock.LOCK_DIRNAME, projectlock.LOCK_FILENAME))
-        out.dim("  commit %s/ to share these with the team"
-                % projectlock.LOCK_DIRNAME, wrap=True)
+        out.dim("  %s" % _commit_hint(), wrap=True)
         _warn_submodules(res)
         _warn_injection(res)
         _warn_secrets(res)
@@ -1025,7 +1059,7 @@ def cmd_install(argv: list[str]) -> int:
                 err.hint = catalog.join_hints(err.hint, extra)
             if not multi:
                 raise
-            out.warn("%s: %s" % (n, err.message), stream=sys.stderr)
+            out.warn(_named(n, err.message), stream=sys.stderr)
             if extra:
                 out.dim("  " + extra, wrap=True)
             failed += 1
@@ -1233,7 +1267,7 @@ def cmd_install(argv: list[str]) -> int:
             except BoostError as err:
                 if not multi:
                     raise
-                out.warn("%s: %s" % (e["name"], err.message), stream=sys.stderr)
+                out.warn(_named(e["name"], err.message), stream=sys.stderr)
                 failed += 1
                 continue
         _report_prerequisites(entries, pbase=pbase, would=True)
@@ -1258,7 +1292,7 @@ def cmd_install(argv: list[str]) -> int:
         except BoostError as err:
             if not multi:
                 raise
-            out.warn("%s: %s" % (e["name"], err.message), stream=sys.stderr)
+            out.warn(_named(e["name"], err.message), stream=sys.stderr)
             failed += 1
             continue
         _report_result(res, no_mcp=args.no_mcp, defer_mcp=pending)
@@ -1345,7 +1379,13 @@ def _report_tidied(info: dict) -> None:
     the empty lock, and the empty directories its installs created."""
     gone = (["%s/%s" % (projectlock.LOCK_DIRNAME, projectlock.LOCK_FILENAME)]
             if info.get("lock_removed") else [])
-    gone += ["%s/" % d for d in info.get("dirs_removed") or ()]
+    removed = list(info.get("dirs_removed") or ())
+    # `.claude/skills` and `.claude` both come back (deepest first): the
+    # parent already says the child went, so one entry per directory tree.
+    removed = [d for d in removed
+               if not any(o != d and d.startswith(o.rstrip("/") + "/")
+                          for o in removed)]
+    gone += ["%s/" % d for d in removed]
     if gone:
         out.dim("  no project skills left — removed %s" % ", ".join(gone),
                 wrap=True)

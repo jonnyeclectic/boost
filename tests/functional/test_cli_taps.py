@@ -442,14 +442,30 @@ class TestTapCatalog:
         assert len(taps) == 12 and all(t["curated"] for t in taps)
 
 
+class TestTapDuplicateSpecs:
+    def test_the_same_spec_twice_is_one_tap(self, boost, fixture_tap_src):
+        boost("tap", fixture_tap_src)
+        r = boost("tap", fixture_tap_src, fixture_tap_src)
+        assert r.out.count("fixture-tap already tapped") == 1
+
+
 # ── untap ────────────────────────────────────────────────────────────────
 
 class TestUntap:
     def test_unknown_rc1(self, boost, sandbox):
         r = boost("untap", "nope", expect=1)
         # The reason for rc 1 is on stderr, where a script looks for it.
-        assert r.err == "  ! could not untap nope: no such tap: nope\n"
-        assert "could not untap" not in r.out
+        assert r.err.splitlines() == [
+            "Error: no such tap: nope",
+            "  hint: list taps with `boost taps`"]
+        assert r.out == ""
+
+    def test_partial_failure_still_warns_and_removes_the_rest(self, boost,
+                                                             tapped):
+        r = boost("untap", "nope", "fixture-tap", expect=1)
+        assert "  ! could not untap nope: no such tap: nope" in r.err
+        assert "Error:" not in r.err
+        assert "untapped fixture-tap" in r.out
 
     def test_dependents_declined_keeps_tap(self, boost, installed, monkeypatch):
         monkeypatch.delenv("BOOST_ASSUME_YES")

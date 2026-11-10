@@ -3263,7 +3263,7 @@ def cmd_mcp(argv) -> int:
     p = cliparse.parser(
         prog="boost mcp",
         description="Register boost as an MCP server for your agent CLIs")
-    p.add_argument("action", nargs="?", default="register",
+    p.add_argument("action", nargs="?", default="register", metavar="ACTION",
                    choices=("register", "unregister"),
                    help="what to do (default: register)")
     p.add_argument("--host", type=util.nonempty_str, metavar="H", default="auto",

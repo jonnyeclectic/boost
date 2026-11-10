@@ -265,6 +265,9 @@ def cmd_tap(argv) -> int:
                         "%d)" % (registry.DEFAULT_TAP_JOBS,
                                  registry.MAX_TAP_JOBS))
     args = p.parse_args(argv)
+    # `tap A A` is one registry, not two: the same spec twice printed
+    # "already tapped" twice. Order kept, so output follows the command line.
+    args.spec = list(dict.fromkeys(args.spec))
     if not args.catalog:
         # Each of these only narrows --catalog. Ignoring them elsewhere let
         # `tap --limit 2 --defaults` clone every default registry.
@@ -413,6 +416,17 @@ def cmd_untap(argv) -> int:
     args = p.parse_args(argv)
 
     force = args.force or args.yes
+    # Every name unknown is a failed command, reported the way `update
+    # nonesuch` reports it; a partial failure keeps the per-name warning so
+    # the taps that did resolve still get removed.
+    failures: list[BoostError] = []
+    for name in args.name:
+        try:
+            registry.get(name)
+        except BoostError as exc:
+            failures.append(exc)
+    if failures and len(failures) == len(args.name):
+        raise failures[0]
     rc = 0
     for name in args.name:
         rc |= _untap_one(name, force)
