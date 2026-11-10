@@ -1255,7 +1255,7 @@ _MIN_COL = 7
 
 
 def _fit_columns(widths, numeric, avail: int, sep: int = 2, protected=(),
-                 whole=()):
+                 whole=(), blank=()):
     """Choose which columns an `avail`-wide pane shows, and how wide.
 
     Shrinking first (:func:`_fit_widths`, down to :data:`_MIN_COL`), then
@@ -1289,8 +1289,15 @@ def _fit_columns(widths, numeric, avail: int, sep: int = 2, protected=(),
     one standing overflows rather than clipping, as a protected one does: a
     clipped identifier reads like data and is not.
 
+    `blank` names columns whose body cells are all empty although the header
+    is not: `boost list`'s FLAGS, when nothing is pinned or tagged, kept its
+    5-cell header and a gutter and squeezed the AGENTS beside it to
+    ``windsu…``. They go with the empty columns, header and all, but only
+    when the row does not fit.
+
     Returns the surviving column indexes (ascending) and their widths.
     """
+    blank = set(blank)
     protected = set(protected)
     unshrinkable = protected | set(whole)
     show = list(range(len(widths)))
@@ -1299,7 +1306,8 @@ def _fit_columns(widths, numeric, avail: int, sep: int = 2, protected=(),
         return sum(ws) + sep * (len(ws) - 1)
 
     if total(widths) > avail:
-        show = [i for i in show if widths[i] or i in protected] or show
+        show = [i for i in show if (widths[i] and i not in blank)
+                or i in protected] or show
     order = [i for i in reversed(show) if i not in protected]
 
     def fit(floor: int):
@@ -1405,7 +1413,11 @@ def table(rows, headers=None, stream=None, keep=(), text=(),
                                     protected=_keep_indexes(keep, headers,
                                                             ncols),
                                     whole=_keep_indexes(whole, headers,
-                                                        ncols))
+                                                        ncols),
+                                    blank=[i for i in range(ncols)
+                                           if rows and not any(
+                                               i < len(r) and r[i].strip()
+                                               for r in rows)])
         for i, w in zip(show, fitted, strict=True):
             widths[i] = w
 

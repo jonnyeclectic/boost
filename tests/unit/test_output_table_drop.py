@@ -396,3 +396,51 @@ class TestFitColumns:
                                    sep=2)[0] == [0, 1, 2]
         assert output._fit_columns([20, 20, 5], [False] * 3, avail=23,
                                    sep=3)[0] == [0, 1]
+
+
+class TestBlankColumns:
+    """A column whose header is set but whose every body cell is empty goes
+    before anything is shrunk, when the row does not fit."""
+
+    def test_blank_header_only_column_is_dropped_when_too_wide(self):
+        # 12 + 20 + 5 + two gutters = 41 > 36
+        assert output._fit_columns([12, 20, 5], [False] * 3, avail=36,
+                                   blank=[2]) == ([0, 1], [12, 20])
+
+    def test_blank_column_stays_when_the_row_fits(self):
+        show, fitted = output._fit_columns([12, 20, 5], [False] * 3, avail=41,
+                                           blank=[2])
+        assert show == [0, 1, 2] and fitted == [12, 20, 5]
+
+    def test_protected_blank_column_is_not_dropped(self):
+        show, _ = output._fit_columns([12, 20, 5], [False] * 3, avail=36,
+                                      blank=[2], protected=[2])
+        assert 2 in show
+
+    def test_table_keeps_agents_whole_beside_an_empty_flags_column(
+            self, monkeypatch):
+        monkeypatch.setenv("COLUMNS", "78")
+        monkeypatch.setenv("BOOST_COLOR", "never")
+        buf = io.StringIO()
+        agents = "antigravity·claude·cursor·windsurf"
+        output.table([("jira-integration", "2.1.0", "skills-repo", agents, "")],
+                     headers=("NAME", "VERSION", "TAP", "AGENTS", "FLAGS"),
+                     stream=buf, whole=("NAME",))
+        text = buf.getvalue()
+        assert agents in text and "FLAGS" not in text
+        assert "…" not in text
+        assert all(output.visible_len(ln) <= 78 for ln in text.splitlines())
+
+    def test_table_keeps_a_flags_column_that_has_data(self, monkeypatch):
+        monkeypatch.setenv("COLUMNS", "30")
+        monkeypatch.setenv("BOOST_COLOR", "never")
+        buf = io.StringIO()
+        output.table([("a", "pinned")], headers=("NAME", "FLAGS"), stream=buf)
+        assert "FLAGS" in buf.getvalue() and "pinned" in buf.getvalue()
+
+    def test_table_header_only_column_survives_a_wide_pane(self, monkeypatch):
+        monkeypatch.setenv("COLUMNS", "200")
+        monkeypatch.setenv("BOOST_COLOR", "never")
+        buf = io.StringIO()
+        output.table([("a", "")], headers=("NAME", "FLAGS"), stream=buf)
+        assert "FLAGS" in buf.getvalue()

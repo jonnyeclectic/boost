@@ -109,7 +109,8 @@ def _print_dry_run(specs: list[str], at: str | None = None) -> int:
                     _held_line(row).removeprefix(row["name"] + " "))
     todo = [(row["name"], row["url"]) for row in plan if row.get("todo")]
     if todo:
-        out.table(todo, headers=("NAME", "URL"), whole=("NAME",))
+        out.table(todo, headers=("NAME", "URL"), whole=("NAME",),
+                  keep=("URL",))
         print()
     rc = _print_held(plan)
     out.dim("%s (dry run — nothing tapped)" % _dry_run_counts(plan))

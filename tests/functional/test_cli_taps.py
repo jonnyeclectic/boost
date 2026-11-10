@@ -247,6 +247,17 @@ class TestTap:
         assert "dry run — nothing tapped" in r.out
         assert registry.list_taps() == []
 
+    def test_defaults_dry_run_never_clips_a_url_at_80_columns(
+            self, boost, monkeypatch):
+        from boost_cli.core import config
+
+        monkeypatch.setenv("COLUMNS", "80")
+        r = boost("tap", "--defaults", "--dry-run")
+        urls = [ln.split()[-1] for ln in r.out.splitlines()
+                if "https://" in ln]
+        assert len(urls) >= len(config.DEFAULT_TAPS)
+        assert all(not u.endswith("…") for u in urls)
+
     def test_dry_run_marks_a_tapped_spec_as_skipped_like_the_run(
             self, boost, fixture_tap_src, tmp_path):
         other = _copy_tap(fixture_tap_src, tmp_path / "other-tap")

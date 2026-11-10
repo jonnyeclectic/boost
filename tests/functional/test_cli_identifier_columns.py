@@ -127,3 +127,16 @@ def test_leading_identifier_is_never_clipped(boost, tapped, monkeypatch,
     for cols in PANES:
         monkeypatch.setenv("COLUMNS", str(cols))
         assert _cells(boost(*argv).out, column) == whole, cols
+
+
+def test_list_shows_every_agent_name_whole_while_flags_is_empty(
+        boost, installed, monkeypatch):
+    """audit-cli 4: an empty FLAGS column must not squeeze AGENTS to
+    `windsu…` at 80 columns."""
+    monkeypatch.setenv("BOOST_COLOR", "never")
+    monkeypatch.setenv("COLUMNS", "80")
+    out = boost("list").out
+    head, row = out.splitlines()[1:3]
+    assert head.startswith("NAME")
+    assert "FLAGS" not in head
+    assert "antigravity·claude·cursor·windsurf" in row
