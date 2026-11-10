@@ -641,7 +641,7 @@ ONLINE_VERIFIED_FIXTURE_NAMES: set[str] = set()
 #: both at once and the pin between them stayed green while the online check
 #: verified a skill nobody is told to install. Anchoring on the install command
 #: the block prescribes is the one property that cannot drift.
-HERO_ANCHOR = "pipx install boost-skill-cli"
+HERO_ANCHOR = "pipx install --python 3.13 --fetch-python=always"
 
 
 def _hero_block() -> str:

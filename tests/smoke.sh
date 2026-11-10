@@ -278,7 +278,7 @@ if [ "${1:-}" = "--online" ]; then
   # NOTE the sandbox has the offline fixture tapped as well, so a hero name
   # that collided with a fixture skill would pass here for the wrong reason;
   # that is what the fixture-name test upstream of this one rules out.
-  HERO="$(awk '/^```bash$/{inb=1;anchored=0;name="";next} /^```$/{if(inb&&anchored&&name!=""){print name;exit} inb=0;next} inb&&/^pipx install boost-skill-cli/{anchored=1} inb&&/^boost install /&&name==""{name=$3}' README.md)"
+  HERO="$(awk '/^```bash$/{inb=1;anchored=0;name="";next} /^```$/{if(inb&&anchored&&name!=""){print name;exit} inb=0;next} inb&&/^pipx install --python 3.13/{anchored=1} inb&&/^boost install /&&name==""{name=$3}' README.md)"
   run "README hero install ($HERO)" 0 ./boost install "$HERO"
   # Every other name a README fence installs, uninstalls or describes must
   # resolve from the same starter taps; `info` asks without installing. The

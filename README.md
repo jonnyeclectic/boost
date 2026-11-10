@@ -7,7 +7,7 @@
 [![Mutation score](https://img.shields.io/badge/mutation_score-%E2%89%A580%25_killed-blueviolet)](https://github.com/jonnyeclectic/boost/blob/main/scripts/mutation_gate.py)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)](https://github.com/jonnyeclectic/boost/actions/workflows/ci.yml)
 [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/14275/badge)](https://www.bestpractices.dev/projects/14275)
-[![OpenSSF Baseline](https://www.bestpractices.dev/projects/14275/baseline)](https://www.bestpractices.dev/projects/14275/baseline-2)
+[![OpenSSF Baseline](https://www.bestpractices.dev/projects/14275/baseline)](https://www.bestpractices.dev/projects/14275/baseline)
 [![License](https://img.shields.io/github/license/jonnyeclectic/boost)](https://github.com/jonnyeclectic/boost/blob/main/LICENSE)
 
 **Homebrew for AI coding skills.** boost finds, installs, and version-tracks skills
@@ -17,7 +17,7 @@ Cursor, Gemini CLI, Antigravity CLI and Codex in a single pass.
 **[Docs](https://jonnyeclectic.github.io/boost/) · [Every command](https://jonnyeclectic.github.io/boost/docs/commands.html) · [Roadmap](https://jonnyeclectic.github.io/boost/docs/roadmap.html)**
 
 ```bash
-pipx install boost-skill-cli
+pipx install --python 3.13 --fetch-python=always "boost-skill-cli[rag]"
 boost quickstart                       # taps the 7 starter registries, builds the index
 boost search tdd                       # ranked by full-content BM25
 boost install test-driven-development  # → every agent, version-pinned, one lock file
@@ -275,8 +275,8 @@ narrow the skills.sh block.
 ## The registry catalog
 
 `boost tap --defaults` gives you seven registries. The full catalog is 662
-classified GitHub registries of skills, Cursor/Windsurf rules and Claude Code
-workflows, indexing roughly 50,000 items.
+classified GitHub registries (plus 25 awesome-list indexes) of skills,
+Cursor/Windsurf rules and Claude Code workflows, indexing roughly 50,000 items.
 
 ```bash
 boost tap --catalog --dry-run                 # browse the classified catalog
