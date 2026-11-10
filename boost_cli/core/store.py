@@ -5465,6 +5465,8 @@ def _install_rule(entry: dict, force: bool = False,
             # cannot say which, and :func:`preserved_agent_scope` replays this.
             **_declared_field(only_agents if explicit_agents else None, existing),
             **({"foreign": foreign_record} if foreign_record else {}),
+            # So an unchanged unversioned re-install is a no-op (same_install).
+            **content_field(entry),
         }
         lockfile.set_rule(name, record)
     except BaseException:
@@ -6454,6 +6456,8 @@ def _install_workflow(entry: dict, force: bool = False,
                else {}),
             **({"foreign": foreign_record} if foreign_record else {}),
             **({"declined": declined_record} if declined_record else {}),
+            # So an unchanged unversioned re-install is a no-op (same_install).
+            **content_field(entry),
         }
         # Before the row, so a run that fails to record it takes a fresh
         # copy's links back with the copy.
