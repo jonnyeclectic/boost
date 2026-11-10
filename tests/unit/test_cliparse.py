@@ -181,3 +181,99 @@ class TestUsageColourFollowsStderr:
         sub = cliparse.parser(prog="boost").add_subparsers().add_parser("demo")
         sub.add_argument("name")
         assert "\x1b[" not in sub.format_usage()
+
+
+class TestAnUnknownOptionOutranksAMissingArgument:
+    """argparse checks required arguments before unknown ones, so a typo'd
+    flag with no positional (`boost install -x`) was reported as a missing
+    NAME. The unknown option is named instead; a bare missing argument still
+    says what it always said."""
+
+    def _parser(self):
+        p = cliparse.parser(prog="boost demo")
+        p.add_argument("name")
+        p.add_argument("--json", action="store_true")
+        p.add_argument("-n", "--count", type=int)
+        return p
+
+    def _err(self, capsys, argv):
+        with pytest.raises(SystemExit) as exc:
+            self._parser().parse_args(argv)
+        assert exc.value.code == 2
+        return capsys.readouterr().err.splitlines()[0]
+
+    def test_an_unknown_short_flag_is_named(self, capsys):
+        assert self._err(capsys, ["-x"]) == "Error: unrecognized arguments: -x"
+
+    def test_every_unknown_option_is_named_in_order(self, capsys):
+        assert (self._err(capsys, ["--bogus=1", "--json", "-x"])
+                == "Error: unrecognized arguments: --bogus=1 -x")
+
+    def test_no_unknown_option_keeps_the_required_error(self, capsys):
+        assert (self._err(capsys, ["--json"])
+                == "Error: the following arguments are required: name")
+
+    @pytest.mark.parametrize("argv", [
+        ["--count=3"],          # a known option spelled with `=`
+        ["--cou", "3"],         # an abbreviation argparse accepts
+        ["-n3"],                # a short option with its value glued on
+    ])
+    def test_known_options_are_not_unknown(self, capsys, argv):
+        assert (self._err(capsys, argv)
+                == "Error: the following arguments are required: name")
+
+    @pytest.mark.parametrize("tok", ["-", "-5", "plain", "-x not a flag"])
+    def test_values_are_not_options(self, tok):
+        # stdin's `-`, a negative number, a bare word and a token holding a
+        # space are positionals, as argparse decides.
+        p = self._parser()
+        p._boost_argv = [tok]
+        assert p._unknown_options() == []
+
+    def test_a_spaced_option_value_keeps_the_required_error(self, capsys):
+        p = self._parser()
+        p.add_argument("--note")
+        with pytest.raises(SystemExit):
+            p.parse_args(["--note", "-x not a flag"])
+        assert (capsys.readouterr().err.splitlines()[0]
+                == "Error: the following arguments are required: name")
+
+    def test_tokens_after_a_double_dash_are_positional(self):
+        p = self._parser()
+        p._boost_argv = ["--", "-x"]
+        assert p._unknown_options() == []
+
+    def test_a_long_option_is_not_read_as_a_glued_short_one(self):
+        # `--nope`'s first two characters are `--`, never a short option;
+        # the glued-short rule must not wave a long option through.
+        p = self._parser()
+        p._boost_argv = ["--nope"]
+        assert p._unknown_options() == ["--nope"]
+
+    def test_a_hinted_error_is_left_alone(self, capsys):
+        p = self._parser()
+        p._boost_argv = ["-x"]
+        with pytest.raises(SystemExit):
+            p.error("the following arguments are required: KEY", hint="eg")
+        assert capsys.readouterr().err.splitlines()[0] == (
+            "Error: the following arguments are required: KEY")
+
+    def test_a_required_group_error_is_replaced_too(self, capsys):
+        p = cliparse.parser(prog="boost demo")
+        g = p.add_mutually_exclusive_group(required=True)
+        g.add_argument("--a", action="store_true")
+        g.add_argument("--b", action="store_true")
+        with pytest.raises(SystemExit):
+            p.parse_args(["-x"])
+        assert (capsys.readouterr().err.splitlines()[0]
+                == "Error: unrecognized arguments: -x")
+
+    def test_subparser_sees_its_own_argv(self, capsys):
+        p = cliparse.parser(prog="boost demo")
+        sub = p.add_subparsers(dest="cmd")
+        go = sub.add_parser("go")
+        go.add_argument("name")
+        with pytest.raises(SystemExit):
+            p.parse_args(["go", "-x"])
+        assert (capsys.readouterr().err.splitlines()[0]
+                == "Error: unrecognized arguments: -x")

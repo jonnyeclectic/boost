@@ -14,6 +14,8 @@ import shutil
 import subprocess
 import sys
 
+import pytest
+
 from boost_cli.core import lockfile, paths
 
 
@@ -83,6 +85,19 @@ def test_mcp_bad_action_names_the_metavar_not_the_dest(boost):
     r = boost("mcp", "bogus", expect=2)
     assert "argument ACTION: invalid choice: 'bogus'" in r.err
     assert "argument action" not in r.err
+
+
+@pytest.mark.parametrize("cmd", ["install", "uninstall", "info"])
+def test_an_unknown_flag_is_named_not_reported_as_a_missing_name(boost, cmd):
+    r = boost(cmd, "-x", expect=2)
+    assert r.err.splitlines()[0] == "Error: unrecognized arguments: -x"
+    assert "required" not in r.err
+
+
+@pytest.mark.parametrize("cmd", ["install", "uninstall", "info"])
+def test_a_missing_name_alone_still_says_it_is_required(boost, cmd):
+    r = boost(cmd, expect=2)
+    assert "the following arguments are required" in r.err.splitlines()[0]
 
 
 def test_missing_skill_in_a_named_tap_says_which_tap(boost, tapped):
