@@ -8,6 +8,8 @@ paths and ``install --dry-run`` decide whether an existing record refuses.
 """
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from boost_cli.core import lockfile, projectlock, scopes, store
@@ -436,8 +438,8 @@ class TestARequestThatAddsSomethingIsARefusal:
             store.check_existing(_same(), only_agents=["codex"])
         assert type(ei.value) is BoostError
         assert ei.value.message == "x is already installed (v1.2.3)"
-        assert ei.value.hint == ("`boost install acme/kit:x --agent codex "
-                                 "--force` to apply it")
+        assert ei.value.hint == ("`boost install acme/kit:x --agent cursor "
+                                 "--agent codex --force` to apply it")
         with pytest.raises(AlreadyInstalled):
             store.check_existing(_same(), only_agents=["cursor"])
 
@@ -459,8 +461,8 @@ class TestARequestThatAddsSomethingIsARefusal:
             store.check_existing(_same(), scope=scopes.SCOPE_PROJECT,
                                  base=repo, only_agents=["codex"])
         assert type(ei.value) is BoostError
-        assert ei.value.hint == ("`boost install acme/kit:x --agent codex "
-                                 "--local --force` to apply it")
+        assert ei.value.hint == ("`boost install acme/kit:x --agent cursor "
+                                 "--agent codex --local --force` to apply it")
 
     @pytest.mark.parametrize("kind", ["rule", "workflow"])
     def test_a_rule_or_workflow_with_another_agent(self, sandbox, kind):
@@ -470,8 +472,8 @@ class TestARequestThatAddsSomethingIsARefusal:
             store.check_existing(_same(kind), only_agents=["codex"])
         assert type(ei.value) is BoostError
         assert ei.value.message == "x is already installed"
-        assert ei.value.hint == ("`boost install acme/kit:x --agent codex "
-                                 "--force` to apply it")
+        assert ei.value.hint == ("`boost install acme/kit:x --agent cursor "
+                                 "--agent codex --force` to apply it")
 
     def test_a_workflow_with_another_as_skill(self, sandbox):
         lockfile.set_entry("workflow", "x", _rec("acme/kit", scope="user",
@@ -502,3 +504,41 @@ class TestChangedRequestHint:
     def test_bare_user_scope(self):
         assert store.changed_request_hint({"name": "x"}, None, None) == (
             "`boost install x --force` to apply it")
+
+    def test_the_hint_adds_to_the_recorded_agents(self):
+        e = {"name": "x", "tap": "acme/kit"}
+        rec = _rec("acme/kit", only_agents=["cursor"], agents=["cursor"])
+        assert store.changed_request_hint(e, ["windsurf", "cursor"], None,
+                                          existing=rec) == (
+            "`boost install acme/kit:x --agent cursor --agent windsurf "
+            "--force` to apply it")
+
+    def test_a_record_of_every_agent_keeps_the_requested_set(self):
+        rec = _rec("acme/kit", only_agents=None)
+        assert store.changed_request_hint({"name": "x"}, ["cursor"], None,
+                                          existing=rec) == (
+            "`boost install x --agent cursor --force` to apply it")
+
+    def test_a_path_with_a_space_is_one_argument(self):
+        import shlex
+        e = {"name": "x y", "tap": "acme/kit", "rel_dir": "my skills/x y"}
+        hint = store.changed_request_hint(e, ["cursor"], None)
+        cmd = re.fullmatch(r"`(.*)` to apply it", hint).group(1)
+        assert shlex.split(cmd) == ["boost", "install", "acme/kit:x y",
+                                    "--path", "my skills/x y",
+                                    "--agent", "cursor", "--force"]
+
+
+class TestInstallSpelling:
+    def test_safe_spellings_are_unchanged(self):
+        assert store.install_spelling("acme/kit", "x", "skills/x") == (
+            "boost install acme/kit:x --path skills/x")
+        assert store.install_spelling(None, "x") == "boost install x"
+        assert store.install_spelling("acme/kit", "x", ".") == (
+            "boost install acme/kit:x")
+
+    def test_spaces_are_quoted(self):
+        import shlex
+        cmd = store.install_spelling("acme/kit", "x", "a dir/x")
+        assert shlex.split(cmd) == ["boost", "install", "acme/kit:x",
+                                    "--path", "a dir/x"]

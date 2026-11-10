@@ -1988,14 +1988,14 @@ def _browse_tui(curses, entries, install=None, category=""):
         no-op: its row says so, the exit report warns, the exit stays 0, and
         its missing `requires:` are still planned and installed."""
         ok_roots = []
-        already = set()
+        already: dict = {}                      # row key -> AlreadyInstalled
         for e in roots:
             try:
                 store.check_existing(e)
             except AlreadyInstalled as err:
                 session.already.append(err)
                 key = _desc_key(e)
-                already.add(key)
+                already[key] = err
                 installed_rows.add(key)
                 status[key] = (browse.OK, "%s — nothing was changed"
                                % err.message)
@@ -2008,7 +2008,13 @@ def _browse_tui(curses, entries, install=None, category=""):
         try:
             the_plan = installplan.plan(ok_roots)
         except BoostError as err:
+            # Each pick reported once: a failed plan is the outcome for an
+            # installed pick too (its requirements were not installed), so
+            # it leaves the no-op list rather than being said both ways.
             for e in ok_roots:
+                noop = already.get(_desc_key(e))
+                if noop is not None:
+                    session.already.remove(noop)
                 fail(e, err)
             return
         session.notes.extend(the_plan.notes())

@@ -3813,6 +3813,22 @@ class TestBrowseInstallsLikeInstall:
         assert set(lockfile.installed()) == {"commit-messages",
                                              "jira-integration"}
 
+    def test_a_failed_plan_reports_an_installed_pick_once(
+            self, boost, tapped, monkeypatch):
+        from boost_cli.core import installplan
+        from boost_cli.errors import BoostError
+        boost("install", "brainstorming")
+
+        def plan(*a, **kw):
+            raise BoostError("catalog unreadable")
+        monkeypatch.setattr(installplan, "plan", plan)
+        _real_tui(monkeypatch, [ord(c) for c in "brain"] + [10])
+        r = boost("browse", expect=1)
+        err = " ".join(r.err.split())
+        assert err.count("brainstorming") == 1, err
+        assert "brainstorming: catalog unreadable" in err
+        assert "already installed" not in err
+
     def test_a_policy_refusal_is_printed_after_exit_with_rc_1(
             self, boost, tapped, monkeypatch):
         boost("policy", "set", "blocked_skills", "cowboy-coding")

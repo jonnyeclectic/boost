@@ -9,8 +9,11 @@ from __future__ import annotations
 
 import json
 import re
+import shlex
+import shutil
+import subprocess
 
-from boost_cli.core import paths
+from boost_cli.core import lockfile, paths
 
 
 def test_tap_search_install_doctor_uninstall(boost, fixture_tap_src):
@@ -157,8 +160,10 @@ def test_reinstalling_for_another_agent_is_still_a_refusal(boost, tapped):
     link = paths.home() / ".windsurf" / "skills" / "brainstorming"
     before = _disk_state()
     r = boost("install", "brainstorming", "--agent", "windsurf", expect=1)
+    # cursor is carried: `--agent windsurf --force` alone would declare
+    # windsurf only, leaving cursor's link for `sync --prune` to remove.
     hinted = ("boost install fixture-tap:brainstorming --path "
-              "skills/brainstorming --agent windsurf --force")
+              "skills/brainstorming --agent cursor --agent windsurf --force")
     # Not `boost reinstall`: it replays cursor, the scope being changed.
     assert " ".join(r.err.split()) == (
         "Error: brainstorming is already installed (v1.4.0) "
@@ -170,8 +175,35 @@ def test_reinstalling_for_another_agent_is_still_a_refusal(boost, tapped):
               expect=1)
     assert "`%s` to apply it" % hinted in " ".join(r.err.split())
     # ...and the hinted command is the one that does it.
-    boost(*hinted.split()[1:], expect=0)
+    boost(*shlex.split(hinted)[1:], expect=0)
     assert link.is_symlink()
+    assert (paths.home() / ".cursor" / "skills" / "brainstorming").is_symlink()
+    assert lockfile.get_skill("brainstorming")["only_agents"] == [
+        "cursor", "windsurf"]
+    assert "outside its declared scope" not in boost("doctor", expect=None).out
+
+
+def test_the_hint_for_a_path_with_a_space_runs_as_printed(
+        boost, fixture_tap_src, tmp_path):
+    tap = tmp_path / "spaced-tap"
+    shutil.copytree(fixture_tap_src, tap)
+    skill = tap / "my skills" / "spaced"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text(
+        "---\nname: spaced\ndescription: lives under a space\n"
+        "version: 1.0.0\n---\n\n# Spaced\n\nBody.\n", encoding="utf-8")
+    for argv in (["add", "-A"], ["commit", "-qm", "spaced"]):
+        subprocess.run(["git", "-C", str(tap), *argv], check=True,
+                       capture_output=True)
+    boost("tap", tap)
+    boost("install", "spaced", "--agent", "cursor")
+    r = boost("install", "spaced", "--agent", "windsurf", expect=1)
+    hinted = re.search(r"`(boost install [^`]*)` to apply it",
+                       " ".join(r.err.split())).group(1)
+    assert "--path 'my skills/spaced'" in hinted
+    boost(*shlex.split(hinted)[1:], expect=0)
+    assert (paths.home() / ".windsurf" / "skills" / "spaced").is_symlink()
+    assert (paths.home() / ".cursor" / "skills" / "spaced").is_symlink()
 
 
 def test_reinstalling_for_the_same_agent_is_a_no_op(boost, tapped):

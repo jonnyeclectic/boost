@@ -3196,15 +3196,29 @@ def request_changes(existing: dict, only_agents: list[str] | None = None,
 
 
 def changed_request_hint(entry: dict, only_agents: list[str] | None,
-                        as_skill: bool | None, scope: str = "user") -> str:
+                        as_skill: bool | None, scope: str = "user",
+                        existing: dict | None = None) -> str:
     """The command that applies a request :func:`request_changes` refused.
 
     Not `boost reinstall`: it replays the agent scope and ``as_skill`` the
     lock records, which is exactly what this request asked to change. The
     same install, its own flags repeated, plus ``--force``.
+
+    The agents are the ones the lock already replays *plus* the requested
+    ones. `--agent windsurf --force` alone after `--agent cursor` declares
+    windsurf only: cursor's link stays on disk, outside the declared scope,
+    where `boost doctor` flags it and `boost sync --prune` removes it — so
+    following the hint would cost the user an agent they had. A record that
+    replays every agent (``None``) has nothing to add, and the request's own
+    set is kept.
     """
     cmd = install_spelling(entry.get("tap"), entry["name"], entry.get("rel_dir"))
-    cmd += "".join(" --agent %s" % util.shell_arg(a) for a in only_agents or ())
+    agents_ = only_agents
+    if only_agents is not None and existing:
+        recorded = preserved_agent_scope(None, existing)
+        if recorded is not None:
+            agents_ = list(dict.fromkeys([*recorded, *only_agents]))
+    cmd += "".join(" --agent %s" % util.shell_arg(a) for a in agents_ or ())
     if as_skill is not None:
         cmd += " --as-skill" if as_skill else " --no-as-skill"
     if scope == scopes.SCOPE_PROJECT:
@@ -3229,7 +3243,7 @@ def _refuse_installed(entry: dict, existing: dict, message: str,
             version=str(existing.get("version")))
     elif same:
         err = BoostError(message, hint=changed_request_hint(
-            entry, only_agents, as_skill, scope))
+            entry, only_agents, as_skill, scope, existing))
     else:
         err = BoostError(message, hint=hint)
     err.wrap = wrap
@@ -3555,9 +3569,12 @@ def install_spelling(tap: str | None, name: str,
     answered "'ship' matches 2 different items", for the user who had just
     typed the qualified form that works.
     """
-    spelled = "boost install %s" % ("%s:%s" % (tap, name) if tap else name)
+    # Quoted: a hint is pasted into a shell, and a path with a space in it
+    # split into two arguments and ran a different command.
+    spelled = "boost install %s" % util.shell_arg("%s:%s" % (tap, name)
+                                                  if tap else name)
     if rel_dir and rel_dir != ".":
-        spelled += " --path %s" % rel_dir
+        spelled += " --path %s" % util.shell_arg(rel_dir)
     return spelled
 
 
