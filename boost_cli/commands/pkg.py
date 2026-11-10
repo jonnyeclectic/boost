@@ -47,7 +47,7 @@ from ..core import (
     util,
 )
 from ..core import output as out
-from ..errors import BoostError
+from ..errors import AlreadyInstalled, BoostError
 from ._common import _shadowed_kinds
 
 _tilde = paths.tilde
@@ -450,6 +450,18 @@ def _named(name: str, message: str) -> str:
     if message.startswith((name + " ", name + ":")):
         return message
     return "%s: %s" % (name, message)
+
+
+def _say_already_installed(err: AlreadyInstalled) -> None:
+    """Report an install that would change nothing: a warning, not a failure.
+
+    brew's answer to installing what is already there. Exiting 1 broke every
+    script, CI step and `boost install` re-run that only means "make sure X
+    is installed"; the hint still names `reinstall` and `update`.
+    """
+    out.warn(err.message, stream=sys.stderr, wrap=True)
+    if err.hint:
+        out.dim("  hint: " + err.hint, wrap=True)
 
 
 def _commit_hint() -> str:
@@ -1264,6 +1276,9 @@ def cmd_install(argv: list[str]) -> int:
                         out.info("  mcp   → offer to register %s with %s"
                                  % (row["name"], " · ".join(mcphost.label(h)
                                                             for h in mcp_hosts)))
+            except AlreadyInstalled as err:
+                _say_already_installed(err)
+                continue
             except BoostError as err:
                 if not multi:
                     raise
@@ -1289,6 +1304,9 @@ def cmd_install(argv: list[str]) -> int:
             res = store.install(e, force=args.force, only_agents=only,
                                 scope=args.scope, as_skill=args.as_skill,
                                 record_mcp=not _mcp_declined(args))
+        except AlreadyInstalled as err:
+            _say_already_installed(err)
+            continue
         except BoostError as err:
             if not multi:
                 raise

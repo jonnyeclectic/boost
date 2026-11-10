@@ -93,14 +93,15 @@ class TestAProjectInstallWritesIntoTheRepository:
         hit = next(ln for ln in found.splitlines() if "commit-messages" in ln)
         assert "[installed]" in hit
 
-    def test_a_second_project_install_is_refused_like_the_cli(
+    def test_a_second_project_install_is_a_no_op_like_the_cli(
             self, boost, tapped, tmp_path, monkeypatch):
         _repo(tmp_path, monkeypatch)
         _call("boost_install", name="tdd-workflow", scope="project")
         text, is_err = _call("boost_install", name="tdd-workflow",
                              scope="project")
-        assert is_err is True
-        assert "already installed" in text
+        assert is_err is False
+        assert "already installed in this project" in text
+        assert text.endswith("nothing was changed.")
 
 
 class TestProjectScopeNeverGuessesTheRepository:

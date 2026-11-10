@@ -202,9 +202,9 @@ def test_user_and_project_installs_coexist(boost, tapped, repo):
     assert projectlock.get_skill(repo, "brainstorming") is not None
 
 
-def test_a_second_local_install_is_refused_without_force(boost, tapped, repo):
+def test_a_second_local_install_is_a_no_op_without_force(boost, tapped, repo):
     boost("install", "brainstorming", "--local")
-    res = boost("install", "brainstorming", "--local", expect=1)
+    res = boost("install", "brainstorming", "--local", expect=0)
     assert "already installed in this project" in (res.out + res.err)
 
 

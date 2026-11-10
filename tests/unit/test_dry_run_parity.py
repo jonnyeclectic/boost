@@ -1112,7 +1112,8 @@ class TestAnInstalledItemIsRefusedInBothModes:
     """`install x --dry-run` over an installed ``x`` said "would upgrade" and
     exited 0, while the run refused with "already installed" and exited 1:
     the preview chose its verb from whether the lock held the name and never
-    asked the run's question. Both now ask `store.check_existing`."""
+    asked the run's question. Both now ask `store.check_existing` — and both
+    now call the same version from the same tap a no-op: a warning, rc 0."""
 
     def _both(self, boost, *argv):
         dry = boost(*argv, "--dry-run", expect=None)
@@ -1122,7 +1123,7 @@ class TestAnInstalledItemIsRefusedInBothModes:
     def test_an_installed_skill_without_force(self, boost, own_tap):
         boost("install", "brainstorming")
         dry, live = self._both(boost, "install", "brainstorming")
-        assert live.rc == 1 and dry.rc == 1
+        assert live.rc == 0 and dry.rc == 0
         assert "brainstorming is already installed (v1.4.0)" in live.err
         assert dry.err == live.err
         assert "would" not in dry.out
@@ -1154,7 +1155,7 @@ class TestAnInstalledItemIsRefusedInBothModes:
         monkeypatch.chdir(repo)
         boost("install", "brainstorming", "--local")
         dry, live = self._both(boost, "install", "brainstorming", "--local")
-        assert live.rc == 1 and dry.rc == 1
+        assert live.rc == 0 and dry.rc == 0
         assert "already installed in this project" in live.err
         assert dry.err == live.err
         forced = boost("install", "brainstorming", "--local", "--force",
@@ -1168,8 +1169,10 @@ class TestAnInstalledItemIsRefusedInBothModes:
                        if e["name"] != "brainstorming")[:1]
         assert names, "fixture tap ships only one skill"
         dry, live = self._both(boost, "install", "brainstorming", *names)
-        assert live.rc == 1 and dry.rc == 1
-        warn = "brainstorming: brainstorming is already installed (v1.4.0)"
+        # A no-op beside an install: warned about, not counted as a failure.
+        assert live.rc == 0 and dry.rc == 0
+        warn = "brainstorming is already installed (v1.4.0)"
+        assert "brainstorming: brainstorming" not in live.err
         assert warn in live.err and warn in dry.err
         assert warn not in live.out and warn not in dry.out
         assert "would install %s" % names[0] in dry.out

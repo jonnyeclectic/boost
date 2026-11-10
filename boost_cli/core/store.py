@@ -19,7 +19,7 @@ from collections.abc import Collection, Iterator, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
-from ..errors import BoostError, NotUTF8Error
+from ..errors import AlreadyInstalled, BoostError, NotUTF8Error
 from . import (
     agents,
     builtin,
@@ -3150,8 +3150,37 @@ def _lock_location(entry: dict) -> str:
     return "user scope"
 
 
+def same_install(entry: dict, existing: dict) -> bool:
+    """Whether installing ``entry`` over ``existing`` would install the same
+    thing again: one tap (or a side that names none) and one version.
+
+    Versions compare as text — a lock row and a catalog row need not agree on
+    the type — and a missing version on either side is never a match: two
+    unknowns are not evidence of sameness.
+    """
+    want, have = entry.get("version"), existing.get("version")
+    if want is None or have is None:
+        return False
+    return str(want) == str(have) and not _other_tap(entry, existing)
+
+
+def _refuse_installed(entry: dict, existing: dict, message: str,
+                      hint: str, wrap: bool = False) -> BoostError:
+    """The "already installed" refusal, as :class:`AlreadyInstalled` when
+    :func:`same_install` says re-running it would be a no-op."""
+    if same_install(entry, existing):
+        err: BoostError = AlreadyInstalled(
+            message, hint=hint, name=entry["name"],
+            version=str(existing.get("version")))
+    else:
+        err = BoostError(message, hint=hint)
+    err.wrap = wrap
+    return err
+
+
 def _check_scope_conflict(name: str, existing: dict | None, scope: str,
-                          resolved_base: Path | None, force: bool) -> None:
+                          resolved_base: Path | None, force: bool,
+                          entry: dict | None = None) -> None:
     """Refuse a name collision across install scopes before it corrupts state.
 
     Rule/workflow lock entries are keyed by bare name with no per-scope
@@ -3179,8 +3208,9 @@ def _check_scope_conflict(name: str, existing: dict | None, scope: str,
     requested_base = str(resolved_base) if resolved_base is not None else None
     if existing.get("scope", "user") == scope and existing.get("base") == requested_base:
         if not force:
-            raise BoostError("%s is already installed" % name,
-                            hint="`boost reinstall %s` to force" % name)
+            raise _refuse_installed(entry or {}, existing,
+                                    "%s is already installed" % name,
+                                    "`boost reinstall %s` to force" % name)
         return
     if existing.get("scope", "user") == scope == scopes.SCOPE_PROJECT:
         # Same scope, another repo. Calling that "a different scope" sent the
@@ -3354,7 +3384,8 @@ def check_existing(entry: dict, *, force: bool = False, scope: str = "user",
         refusal = quarantine_refusal(name, existing, kind)
         if refusal is not None:
             raise refusal
-        _check_scope_conflict(name, existing, scope, resolved_base, force)
+        _check_scope_conflict(name, existing, scope, resolved_base, force,
+                              entry)
         return existing
     if scope == scopes.SCOPE_PROJECT:
         resolved_base = _require_project_base(scope, base, name)
@@ -3376,10 +3407,11 @@ def check_existing(entry: dict, *, force: bool = False, scope: str = "user",
             # `reinstall --local` reads this repo's lock, so it reaches the
             # recorded tap even where a bare `install x` would stop at "exists
             # in multiple taps".
-            raise BoostError(
+            raise _refuse_installed(
+                entry, existing,
                 "%s is already installed in this project (v%s)"
                 % (name, existing.get("version")),
-                hint="`boost reinstall %s --local` to force" % name)
+                "`boost reinstall %s --local` to force" % name)
         return existing
     refuse_case_collision(name, lockfile.installed())
     refuse_copy_case_collision(name)
@@ -3400,8 +3432,10 @@ def check_existing(entry: dict, *, force: bool = False, scope: str = "user",
                 hint="`boost install %s --force` to replace it"
                      % util.shell_arg("%s:%s" % (entry.get("tap"), name)),
                 wrap=True)
-        raise BoostError("%s is already installed (v%s)" % (name, existing.get("version")),
-                        hint="`boost reinstall %s` to force, `boost update` to upgrade" % name)
+        raise _refuse_installed(
+            entry, existing,
+            "%s is already installed (v%s)" % (name, existing.get("version")),
+            "`boost reinstall %s` to force, `boost update` to upgrade" % name)
     return existing
 
 

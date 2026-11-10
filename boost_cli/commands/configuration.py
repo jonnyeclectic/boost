@@ -60,7 +60,7 @@ from ..core import (
     compact as compactplan,
 )
 from ..core import output as out
-from ..errors import BoostError
+from ..errors import AlreadyInstalled, BoostError
 from ._common import _s
 
 _tilde = paths.tilde
@@ -2189,7 +2189,13 @@ def _tool_install(args: dict):
     entry = catalog.resolve_one(name, path=mcp.str_arg(args, "path"))
     # The requested item's own refusal ("already installed", "is pinned")
     # first, so a refused call changes nothing — not its dependencies either.
-    store.check_existing(entry, scope=scope, base=base)
+    # Already there at this version is the state the caller asked for, not a
+    # failure: an agent that installs to be sure must not read an error.
+    try:
+        store.check_existing(entry, scope=scope, base=base)
+    except AlreadyInstalled as err:
+        return "\n".join([*([tapped_line] if tapped_line else []),
+                          "%s — nothing was changed." % err.message]), False
     the_plan = installplan.plan([entry], pbase=base)
     entries = the_plan.entries
     warnings = [*the_plan.confusions, *the_plan.dep_warnings]

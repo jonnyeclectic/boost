@@ -75,12 +75,14 @@ class TestInstallPullsInRequires:
         assert "pulling in" not in text
         assert text.startswith("installed jira-integration v2.1.0 from ")
 
-    def test_a_refused_request_installs_none_of_its_dependencies(
+    def test_an_installed_request_installs_none_of_its_dependencies(
             self, boost, tapped):
         boost("install", "jira-integration", "--no-deps")
         text, is_err = _call("boost_install", name="jira-integration")
-        assert is_err is True
-        assert "already installed" in text
+        # The state the agent asked for already holds: not an error reply.
+        assert is_err is False
+        assert text == ("jira-integration is already installed (v2.1.0) — "
+                        "nothing was changed.")
         assert "commit-messages" not in lockfile.all_installed()["skill"]
 
     def test_a_failed_dependency_is_a_warning_on_a_success(

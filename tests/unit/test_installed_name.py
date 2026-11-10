@@ -11,7 +11,7 @@ from __future__ import annotations
 import pytest
 
 from boost_cli.core import lockfile, projectlock, scopes, store
-from boost_cli.errors import BoostError
+from boost_cli.errors import AlreadyInstalled, BoostError
 
 
 def _rec(tap, **extra):
@@ -222,3 +222,108 @@ class TestCheckExisting:
         with pytest.raises(BoostError) as ei:
             store.check_existing(entry)
         assert ei.value.message == "x is already installed (v1.2.3)"
+
+
+def _same(kind="skill", name="x", **over):
+    """An entry at the version and tap ``_rec`` records."""
+    return {**_entry(kind, name), "version": "1.2.3", **over}
+
+
+class TestSameVersionIsANoOp:
+    """Installing what is already installed, at the same version from the same
+    tap, raises :class:`AlreadyInstalled` — the refusal's own words, in
+    the subclass `boost install` and MCP `boost_install` report as a no-op.
+    Every other "already installed" stays a plain :class:`BoostError`."""
+
+    def test_a_user_skill_at_the_same_version(self, sandbox):
+        lockfile.set_entry("skill", "x", _rec("acme/kit"))
+        with pytest.raises(AlreadyInstalled) as ei:
+            store.check_existing(_same())
+        assert ei.value.message == "x is already installed (v1.2.3)"
+        assert ei.value.hint == ("`boost reinstall x` to force, `boost update` "
+                                 "to upgrade")
+        assert (ei.value.name, ei.value.version) == ("x", "1.2.3")
+        assert ei.value.wrap is False
+
+    def test_a_different_version_is_still_a_refusal(self, sandbox):
+        lockfile.set_entry("skill", "x", _rec("acme/kit"))
+        with pytest.raises(BoostError) as ei:
+            store.check_existing(_entry())            # catalog has 2.0.0
+        assert type(ei.value) is BoostError
+        assert "`boost update` to upgrade" in (ei.value.hint or "")
+
+    def test_force_still_returns_the_record(self, sandbox):
+        lockfile.set_entry("skill", "x", _rec("acme/kit"))
+        assert store.check_existing(_same(), force=True)["version"] == "1.2.3"
+
+    def test_a_pin_is_still_a_refusal(self, sandbox):
+        lockfile.set_entry("skill", "x", _rec("acme/kit", pinned=True))
+        with pytest.raises(BoostError) as ei:
+            store.check_existing(_same())
+        assert type(ei.value) is BoostError
+        assert ei.value.message == "x is pinned"
+
+    def test_another_tap_is_still_a_refusal(self, sandbox):
+        lockfile.set_entry("skill", "x", _rec("zed/kit"))
+        with pytest.raises(BoostError) as ei:
+            store.check_existing(_same())
+        assert type(ei.value) is BoostError
+        assert "from zed/kit, not acme/kit" in ei.value.message
+
+    @pytest.mark.parametrize("kind", ["rule", "workflow"])
+    def test_a_rule_or_workflow_at_the_same_version(self, sandbox, kind):
+        lockfile.set_entry(kind, "x", _rec("acme/kit", scope="user"))
+        with pytest.raises(AlreadyInstalled) as ei:
+            store.check_existing(_same(kind))
+        assert ei.value.message == "x is already installed"
+        assert ei.value.hint == "`boost reinstall x` to force"
+
+    @pytest.mark.parametrize("kind", ["rule", "workflow"])
+    def test_a_rule_or_workflow_from_another_tap_is_a_refusal(self, sandbox,
+                                                              kind):
+        lockfile.set_entry(kind, "x", _rec("zed/kit", scope="user"))
+        with pytest.raises(BoostError) as ei:
+            store.check_existing(_same(kind))
+        assert type(ei.value) is BoostError
+
+    def test_a_project_skill_at_the_same_version(self, sandbox, tmp_path,
+                                                 monkeypatch):
+        repo = tmp_path / "proj"
+        (repo / ".git").mkdir(parents=True)
+        monkeypatch.chdir(repo)
+        projectlock.set_skill(repo, "x", _rec("acme/kit"))
+        with pytest.raises(AlreadyInstalled) as ei:
+            store.check_existing(_same(), scope=scopes.SCOPE_PROJECT,
+                                 base=repo)
+        assert ei.value.message == ("x is already installed in this project "
+                                    "(v1.2.3)")
+        assert ei.value.hint == "`boost reinstall x --local` to force"
+        with pytest.raises(BoostError) as ei2:
+            store.check_existing(_entry(), scope=scopes.SCOPE_PROJECT,
+                                 base=repo)
+        assert type(ei2.value) is BoostError
+
+
+class TestSameInstall:
+    def test_same_version_and_tap(self):
+        assert store.same_install(_same(), _rec("acme/kit")) is True
+
+    def test_a_different_version(self):
+        assert store.same_install(_entry(), _rec("acme/kit")) is False
+
+    def test_versions_compare_as_text(self):
+        assert store.same_install(_same(version=2), {"tap": "acme/kit",
+                                                     "version": "2"}) is True
+
+    @pytest.mark.parametrize("want,have", [(None, "1.2.3"), ("1.2.3", None),
+                                           (None, None)])
+    def test_a_missing_version_is_never_a_match(self, want, have):
+        assert store.same_install({"name": "x", "tap": "acme/kit",
+                                   "version": want},
+                                  {"tap": "acme/kit", "version": have}) is False
+
+    def test_another_tap(self):
+        assert store.same_install(_same(), _rec("zed/kit")) is False
+
+    def test_a_side_without_a_tap_is_not_another_tap(self):
+        assert store.same_install(_same(tap=None), _rec("zed/kit")) is True

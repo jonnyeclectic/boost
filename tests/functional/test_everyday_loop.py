@@ -95,8 +95,53 @@ def test_missing_skill_with_no_close_match_still_points_at_search(boost,
     assert "try `boost search zzqxv`" in r.err
 
 
-def test_multi_install_failure_does_not_repeat_the_name(boost, tapped):
+def test_multi_install_warning_does_not_repeat_the_name(boost, tapped):
     boost("install", "brainstorming")
-    r = boost("install", "brainstorming", "jira-integration", expect=1)
+    # Already installed at this version is a warning beside the install that
+    # did happen, not a failure of the run.
+    r = boost("install", "brainstorming", "jira-integration", expect=0)
     assert "brainstorming is already installed" in r.err
     assert "brainstorming: brainstorming" not in r.err
+
+
+def _disk_state():
+    """Every file and link under the sandbox's agent and store dirs, with its
+    bytes or target and mtime: what an install that changes nothing must
+    leave exactly as it found it."""
+    home = paths.home()
+    state = {}
+    for top in (".agents", ".claude", ".cursor", ".windsurf", ".gemini"):
+        root = home / top
+        if not root.exists():
+            continue
+        for p in sorted(root.rglob("*")):
+            st = p.lstat()
+            state[str(p)] = (str(p.readlink()) if p.is_symlink()
+                             else p.read_bytes() if p.is_file() else None,
+                             st.st_mtime_ns)
+    return state
+
+
+def test_reinstalling_the_same_version_is_a_warning_and_changes_nothing(
+        boost, tapped):
+    boost("install", "brainstorming")
+    before = _disk_state()
+    r = boost("install", "brainstorming", expect=0)
+    assert r.err == "  ! brainstorming is already installed (v1.4.0)\n"
+    assert ("hint: `boost reinstall brainstorming` to force, `boost update` "
+            "to upgrade") in r.out
+    assert "installed" not in r.out.replace("already installed", "")
+    assert _disk_state() == before
+
+
+def test_a_dry_run_over_an_installed_skill_still_plans_its_dependency(
+        boost, tapped):
+    # audit-cli 6: the plan named the missing dependency, then the installed
+    # skill turned the whole preview into rc 1 with its name said twice.
+    boost("install", "jira-integration", "--no-deps")
+    before = _disk_state()
+    r = boost("install", "jira-integration", "--dry-run", expect=0)
+    assert "would install commit-messages" in r.out
+    assert r.err == "  ! jira-integration is already installed (v2.1.0)\n"
+    assert "dry run — nothing was changed" in r.out
+    assert _disk_state() == before
