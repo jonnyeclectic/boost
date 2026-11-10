@@ -482,8 +482,10 @@ def cmd_list(argv):
             rows.append((name, e.get("version", "?"), e.get("tap", "?"),
                          _materialized_agents("skill", e, name),
                          " ".join(flags)))
-        # NAME is what `uninstall`/`update`/`cat` take: `brainstorm…` is not
-        # a name any of them accepts, so it is shown whole or dropped.
+        # NAME is what `uninstall`/`update`/`cat` take, and AGENTS is a list
+        # of names: `brainstorm…` is neither, so both are kept whole and the
+        # chrome beside them gives way (a narrow pane overflows rather than
+        # clip or drop either).
         out.table(rows, headers=("NAME", "VERSION", "TAP", "AGENTS", "FLAGS"),
                   keep=("NAME", "AGENTS"))
         print("  " + out.aurora("%d skill%s installed%s"

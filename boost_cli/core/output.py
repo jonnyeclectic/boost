@@ -1383,8 +1383,12 @@ def table(rows, headers=None, stream=None, keep=(), text=(),
     shrunk: the handle a later command takes as an argument, like the NAME
     that `boost uninstall` wants or the hook name `hooks remove -n` wants.
     ``brainstorm…`` is not a name any command accepts, so such a column is
-    shown whole or not at all. It is not ``keep``: two never-dropped columns
-    together can outgrow the pane with nothing left to give.
+    shown whole or not at all. Use ``keep`` instead when dropping the column
+    would lose the row's point: two ``keep`` columns can outgrow the pane
+    with nothing left to give, and then the row overflows whole. That is
+    deliberate where it is chosen — ``boost list`` (NAME, AGENTS) and ``tap
+    --dry-run`` (NAME, URL) — because a long line costs less than a clipped
+    or missing identifier.
 
     ``text`` names columns (same index-or-header resolution as ``keep``) that
     must never right-align as numeric, however their cells look: an all-digit
