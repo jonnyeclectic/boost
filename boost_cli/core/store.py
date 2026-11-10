@@ -9,10 +9,12 @@ from __future__ import annotations
 
 import contextlib
 import errno
+import json
 import operator
 import os
 import shutil
 import stat
+import sys
 import tempfile
 import time
 from collections.abc import Collection, Iterator, Mapping
@@ -3198,7 +3200,7 @@ def request_changes(existing: dict, only_agents: list[str] | None = None,
 def changed_request_hint(entry: dict, only_agents: list[str] | None,
                         as_skill: bool | None, scope: str = "user",
                         existing: dict | None = None) -> str:
-    """The command that applies a request :func:`request_changes` refused.
+    """Retry guidance for a request :func:`request_changes` refused.
 
     Not `boost reinstall`: it replays the agent scope and ``as_skill`` the
     lock records, which is exactly what this request asked to change. The
@@ -3212,18 +3214,33 @@ def changed_request_hint(entry: dict, only_agents: list[str] | None,
     replays every agent (``None``) has nothing to add, and the request's own
     set is kept.
     """
-    cmd = install_spelling(entry.get("tap"), entry["name"], entry.get("rel_dir"))
+    argv = _install_argv(entry.get("tap"), entry["name"], entry.get("rel_dir"))
     agents_ = only_agents
     if only_agents is not None and existing:
         recorded = preserved_agent_scope(None, existing)
         if recorded is not None:
             agents_ = list(dict.fromkeys([*recorded, *only_agents]))
-    cmd += "".join(" --agent %s" % util.shell_arg(a) for a in agents_ or ())
+    for agent in agents_ or ():
+        argv.extend(["--agent", agent])
     if as_skill is not None:
-        cmd += " --as-skill" if as_skill else " --no-as-skill"
+        argv.append("--as-skill" if as_skill else "--no-as-skill")
     if scope == scopes.SCOPE_PROJECT:
-        cmd += " --local"
-    return "`%s --force` to apply it" % cmd
+        argv.append("--local")
+    argv.append("--force")
+    if sys.platform == "win32" and not all(_windows_hint_arg_safe(a) for a in argv):
+        # CLI hints fold whitespace and Markdown spans; keep JSON one atomic data token.
+        encoded = json.dumps(argv, separators=(",", ":")).replace(" ", r"\u0020")
+        encoded = encoded.replace("`", r"\u0060").replace("*", r"\u002a")
+        return ("ARGUMENT LIST (JSON; not an executable command):\n"
+                + encoded
+                + "\nQuote each argument for your chosen shell before running it.")
+    return "`%s` to apply it" % util.shell_join(argv)
+
+
+def _windows_hint_arg_safe(arg: str) -> bool:
+    """Only common ASCII tokens and ordinary spaces get a runnable hint."""
+    return bool(arg) and arg.isascii() and all(
+        c.isalnum() or c in " _./:-" for c in arg)
 
 
 def _refuse_installed(entry: dict, existing: dict, message: str,
@@ -3559,6 +3576,15 @@ def _require_writable(name: str) -> None:
                          hint="%s, then re-run" % paths.write_remedy(block))
 
 
+def _install_argv(tap: str | None, name: str,
+                  rel_dir: str | None = None) -> list[str]:
+    """Raw arguments shared by installation hints."""
+    argv = ["boost", "install", f"{tap}:{name}" if tap else name]
+    if rel_dir and rel_dir != ".":
+        argv.extend(["--path", rel_dir])
+    return argv
+
+
 def install_spelling(tap: str | None, name: str,
                      rel_dir: str | None = None) -> str:
     """The `boost install` command that names exactly this one item.
@@ -3571,11 +3597,7 @@ def install_spelling(tap: str | None, name: str,
     """
     # Quoted: a hint is pasted into a shell, and a path with a space in it
     # split into two arguments and ran a different command.
-    spelled = "boost install %s" % util.shell_arg("%s:%s" % (tap, name)
-                                                  if tap else name)
-    if rel_dir and rel_dir != ".":
-        spelled += " --path %s" % util.shell_arg(rel_dir)
-    return spelled
+    return util.shell_join(_install_argv(tap, name, rel_dir))
 
 
 def _workflow_spelling(name: str) -> str:

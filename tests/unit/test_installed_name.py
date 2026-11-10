@@ -8,11 +8,12 @@ paths and ``install --dry-run`` decide whether an existing record refuses.
 """
 from __future__ import annotations
 
+import json
 import re
 
 import pytest
 
-from boost_cli.core import lockfile, projectlock, scopes, store, util
+from boost_cli.core import lockfile, output, projectlock, scopes, store, util
 from boost_cli.errors import AlreadyInstalled, BoostError
 
 
@@ -494,6 +495,85 @@ class TestARequestThatAddsSomethingIsARefusal:
 
 
 class TestChangedRequestHint:
+    @pytest.mark.parametrize("width", [20, 80])
+    @pytest.mark.parametrize("value", [
+        "skills/a  b & c", "skills/a`b`c`d`e & f", "skills/a**b**c**d**e & f",
+    ])
+    def test_windows_argument_list_survives_the_cli_renderer(
+            self, monkeypatch, capsys, width, value):
+        monkeypatch.setenv("NO_COLOR", "1")
+        monkeypatch.setattr(output, "term_width", lambda default=80, stream=None: width)
+        with monkeypatch.context() as patch:
+            patch.setattr(util.sys, "platform", "win32")
+            hint = store.changed_request_hint(
+                {"name": "x", "tap": "acme/kit", "rel_dir": value}, ["a  b"], True, scopes.SCOPE_PROJECT)
+        output.err("already installed", hint=hint)
+        rendered = capsys.readouterr().err
+        assert "not an executable command" in " ".join(rendered.split())
+        encoded = next(line.strip() for line in rendered.splitlines() if line.lstrip().startswith("["))
+        assert json.loads(encoded) == [
+            "boost", "install", "acme/kit:x", "--path", value,
+            "--agent", "a  b", "--as-skill", "--local", "--force"]
+
+    @pytest.mark.parametrize("value", [
+        "x&y", "x|y", "x(y)", "$HOME", "%PATH%", 'x"y', "x'y",
+        "x`y", "x;y", "x<y", "x>y", "x^y", "x!y", "x,y", "@args",
+        "x\ty", "x\ny", "x\ry", "x\x00y", "x\x7fy", r"x\y", "café",
+    ])
+    def test_windows_unsafe_path_is_a_literal_argument_list(
+            self, monkeypatch, value):
+        e = {"name": "x", "tap": "acme/kit", "rel_dir": value}
+        rec = _rec("acme/kit", only_agents=["cursor"], agents=["cursor"])
+        with monkeypatch.context() as patch:
+            patch.setattr(util.sys, "platform", "win32")
+            hint = store.changed_request_hint(
+                e, ["windsurf", "cursor"], False, scopes.SCOPE_PROJECT, rec)
+        assert hint.startswith("ARGUMENT LIST (JSON; not an executable command):\n")
+        label, encoded, instruction = hint.splitlines()
+        assert label == "ARGUMENT LIST (JSON; not an executable command):"
+        assert instruction == "Quote each argument for your chosen shell before running it."
+        assert json.loads(encoded) == [
+            "boost", "install", "acme/kit:x", "--path", value,
+            "--agent", "cursor", "--agent", "windsurf",
+            "--no-as-skill", "--local", "--force"]
+
+    @pytest.mark.parametrize("field", ["tap", "name", "rel_dir", "agent", "recorded_agent"])
+    @pytest.mark.parametrize("as_skill,flag", [(None, []), (True, ["--as-skill"]), (False, ["--no-as-skill"])])
+    @pytest.mark.parametrize("scope,local", [(scopes.SCOPE_USER, []), (scopes.SCOPE_PROJECT, ["--local"])])
+    def test_windows_argument_list_preserves_every_field_and_flag(
+            self, monkeypatch, field, as_skill, flag, scope, local):
+        value = 'x & "$HOME%PATH%`\t\\@args'
+        e = {"name": "x", "tap": "acme/kit", "rel_dir": "skills/x"}
+        requested, recorded = "windsurf", "cursor"
+        if field in e:
+            e[field] = value
+        elif field == "agent":
+            requested = value
+        else:
+            recorded = value
+        rec = _rec("acme/kit", only_agents=[recorded], agents=[recorded])
+        with monkeypatch.context() as patch:
+            patch.setattr(util.sys, "platform", "win32")
+            hint = store.changed_request_hint(e, [requested], as_skill, scope, rec)
+        label, encoded, instruction = hint.splitlines()
+        assert label == "ARGUMENT LIST (JSON; not an executable command):"
+        assert instruction == "Quote each argument for your chosen shell before running it."
+        assert json.loads(encoded) == [
+            "boost", "install", f"{e['tap']}:{e['name']}", "--path", e["rel_dir"],
+            "--agent", recorded, "--agent", requested, *flag, *local, "--force"]
+
+    def test_posix_keeps_shell_quoting_for_special_values(self, monkeypatch):
+        import shlex
+        value = 'skills/x & "$HOME%PATH%`\\@args'
+        e = {"name": "x", "tap": "acme/kit", "rel_dir": value}
+        with monkeypatch.context() as patch:
+            patch.setattr(util.sys, "platform", "linux")
+            hint = store.changed_request_hint(e, ["a b"], True, scopes.SCOPE_PROJECT)
+        cmd = re.fullmatch(r"`(.*)` to apply it", hint).group(1)
+        assert shlex.split(cmd) == [
+            "boost", "install", "acme/kit:x", "--path", value,
+            "--agent", "a b", "--as-skill", "--local", "--force"]
+
     @pytest.mark.parametrize("platform", ["linux", "win32"])
     def test_every_flag_in_order(self, monkeypatch, platform):
         e = {"name": "x", "tap": "acme/kit", "rel_dir": "skills/x"}

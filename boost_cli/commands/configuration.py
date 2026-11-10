@@ -2151,6 +2151,12 @@ def _project_scope_lines(base: Path, done: list[dict]) -> list[str]:
     return lines or [head]
 
 
+def _install_warning_lines(warnings: list[str]) -> list[str]:
+    """The warning footer for changed and unchanged MCP installs."""
+    return (["", "WARNING — check before you rely on this install:", *warnings]
+            if warnings else [])
+
+
 @_path_hint
 def _tool_install(args: dict):
     """`boost_install` — the same plan `boost install` makes, in text.
@@ -2200,13 +2206,14 @@ def _tool_install(args: dict):
         already = err
     the_plan = installplan.plan([entry], pbase=base)
     entries = the_plan.entries
+    warnings = [*the_plan.confusions, *the_plan.dep_warnings]
     if already is not None:
         entries = [e for e in entries if e is not entry]
         if not entries:
             return "\n".join([*([tapped_line] if tapped_line else []),
                               "%s — nothing was changed."
-                              % already.message]), False
-    warnings = [*the_plan.confusions, *the_plan.dep_warnings]
+                              % already.message,
+                              *_install_warning_lines(warnings)]), False
     lines: list[str] = [the_plan.added] if the_plan.added else []
     if tapped_line:
         lines.insert(0, tapped_line)
@@ -2235,9 +2242,7 @@ def _tool_install(args: dict):
     warnings.extend(prereq_warn)
     if prereq_hint:
         warnings.append(prereq_hint)
-    if warnings:
-        lines.extend(("", "WARNING — check before you rely on this install:"))
-        lines.extend(warnings)
+    lines.extend(_install_warning_lines(warnings))
     return "\n".join(lines), False
 
 
