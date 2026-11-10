@@ -12,6 +12,7 @@ import re
 import shlex
 import shutil
 import subprocess
+import sys
 
 from boost_cli.core import lockfile, paths
 
@@ -200,7 +201,9 @@ def test_the_hint_for_a_path_with_a_space_runs_as_printed(
     r = boost("install", "spaced", "--agent", "windsurf", expect=1)
     hinted = re.search(r"`(boost install [^`]*)` to apply it",
                        " ".join(r.err.split())).group(1)
-    assert "--path 'my skills/spaced'" in hinted
+    path = ('"my skills/spaced"' if sys.platform == "win32"
+            else "'my skills/spaced'")
+    assert f"--path {path}" in hinted
     boost(*shlex.split(hinted)[1:], expect=0)
     assert (paths.home() / ".windsurf" / "skills" / "spaced").is_symlink()
     assert (paths.home() / ".cursor" / "skills" / "spaced").is_symlink()

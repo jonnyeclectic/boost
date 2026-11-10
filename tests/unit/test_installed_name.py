@@ -12,7 +12,7 @@ import re
 
 import pytest
 
-from boost_cli.core import lockfile, projectlock, scopes, store
+from boost_cli.core import lockfile, projectlock, scopes, store, util
 from boost_cli.errors import AlreadyInstalled, BoostError
 
 
@@ -494,12 +494,17 @@ class TestARequestThatAddsSomethingIsARefusal:
 
 
 class TestChangedRequestHint:
-    def test_every_flag_in_order(self):
+    @pytest.mark.parametrize("platform", ["linux", "win32"])
+    def test_every_flag_in_order(self, monkeypatch, platform):
         e = {"name": "x", "tap": "acme/kit", "rel_dir": "skills/x"}
-        assert store.changed_request_hint(
-            e, ["cursor", "a b"], False, scopes.SCOPE_PROJECT) == (
+        with monkeypatch.context() as patch:
+            patch.setattr(util.sys, "platform", platform)
+            hint = store.changed_request_hint(
+                e, ["cursor", "a b"], False, scopes.SCOPE_PROJECT)
+        agent = '"a b"' if platform == "win32" else "'a b'"
+        assert hint == (
             "`boost install acme/kit:x --path skills/x --agent cursor "
-            "--agent 'a b' --no-as-skill --local --force` to apply it")
+            f"--agent {agent} --no-as-skill --local --force` to apply it")
 
     def test_bare_user_scope(self):
         assert store.changed_request_hint({"name": "x"}, None, None) == (
