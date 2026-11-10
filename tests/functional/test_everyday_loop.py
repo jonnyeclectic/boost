@@ -157,15 +157,21 @@ def test_reinstalling_for_another_agent_is_still_a_refusal(boost, tapped):
     link = paths.home() / ".windsurf" / "skills" / "brainstorming"
     before = _disk_state()
     r = boost("install", "brainstorming", "--agent", "windsurf", expect=1)
-    flat = " ".join(r.err.split())
-    assert "Error: brainstorming is already installed (v1.4.0)" in flat
-    assert "`boost reinstall brainstorming` to force" in flat
+    hinted = ("boost install fixture-tap:brainstorming --path "
+              "skills/brainstorming --agent windsurf --force")
+    # Not `boost reinstall`: it replays cursor, the scope being changed.
+    assert " ".join(r.err.split()) == (
+        "Error: brainstorming is already installed (v1.4.0) "
+        "hint: `%s` to apply it" % hinted)
     assert not link.is_symlink()
     assert _disk_state() == before
     # dry run agrees with the run
     r = boost("install", "brainstorming", "--agent", "windsurf", "--dry-run",
               expect=1)
-    assert "already installed" in r.err
+    assert "`%s` to apply it" % hinted in " ".join(r.err.split())
+    # ...and the hinted command is the one that does it.
+    boost(*hinted.split()[1:], expect=0)
+    assert link.is_symlink()
 
 
 def test_reinstalling_for_the_same_agent_is_a_no_op(boost, tapped):

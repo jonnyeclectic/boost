@@ -3195,18 +3195,41 @@ def request_changes(existing: dict, only_agents: list[str] | None = None,
     return as_skill is not None and as_skill != wants_skill_copy(None, existing)
 
 
+def changed_request_hint(entry: dict, only_agents: list[str] | None,
+                        as_skill: bool | None, scope: str = "user") -> str:
+    """The command that applies a request :func:`request_changes` refused.
+
+    Not `boost reinstall`: it replays the agent scope and ``as_skill`` the
+    lock records, which is exactly what this request asked to change. The
+    same install, its own flags repeated, plus ``--force``.
+    """
+    cmd = install_spelling(entry.get("tap"), entry["name"], entry.get("rel_dir"))
+    cmd += "".join(" --agent %s" % util.shell_arg(a) for a in only_agents or ())
+    if as_skill is not None:
+        cmd += " --as-skill" if as_skill else " --no-as-skill"
+    if scope == scopes.SCOPE_PROJECT:
+        cmd += " --local"
+    return "`%s --force` to apply it" % cmd
+
+
 def _refuse_installed(entry: dict, existing: dict, message: str,
                       hint: str, wrap: bool = False,
                       only_agents: list[str] | None = None,
-                      as_skill: bool | None = None) -> BoostError:
+                      as_skill: bool | None = None,
+                      scope: str = "user") -> BoostError:
     """The "already installed" refusal, as :class:`AlreadyInstalled` when
     :func:`same_install` says re-running it would be a no-op and the request
-    adds nothing to it (:func:`request_changes`)."""
-    if (same_install(entry, existing)
-            and not request_changes(existing, only_agents, as_skill)):
+    adds nothing to it (:func:`request_changes`). When the request does add
+    something, the hint names the install that applies it rather than
+    ``hint``'s reinstall."""
+    same = same_install(entry, existing)
+    if same and not request_changes(existing, only_agents, as_skill):
         err: BoostError = AlreadyInstalled(
             message, hint=hint, name=entry["name"],
             version=str(existing.get("version")))
+    elif same:
+        err = BoostError(message, hint=changed_request_hint(
+            entry, only_agents, as_skill, scope))
     else:
         err = BoostError(message, hint=hint)
     err.wrap = wrap
@@ -3249,7 +3272,7 @@ def _check_scope_conflict(name: str, existing: dict | None, scope: str,
                                     "%s is already installed" % name,
                                     "`boost reinstall %s` to force" % name,
                                     only_agents=only_agents,
-                                    as_skill=as_skill)
+                                    as_skill=as_skill, scope=scope)
         return
     if existing.get("scope", "user") == scope == scopes.SCOPE_PROJECT:
         # Same scope, another repo. Calling that "a different scope" sent the
@@ -3459,7 +3482,7 @@ def check_existing(entry: dict, *, force: bool = False, scope: str = "user",
                 "%s is already installed in this project (v%s)"
                 % (name, existing.get("version")),
                 "`boost reinstall %s --local` to force" % name,
-                only_agents=only_agents)
+                only_agents=only_agents, scope=scopes.SCOPE_PROJECT)
         return existing
     refuse_case_collision(name, lockfile.installed())
     refuse_copy_case_collision(name)

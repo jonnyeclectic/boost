@@ -436,10 +436,18 @@ class TestARequestThatAddsSomethingIsARefusal:
             store.check_existing(_same(), only_agents=["codex"])
         assert type(ei.value) is BoostError
         assert ei.value.message == "x is already installed (v1.2.3)"
-        assert ei.value.hint == ("`boost reinstall x` to force, `boost update` "
-                                 "to upgrade")
+        assert ei.value.hint == ("`boost install acme/kit:x --agent codex "
+                                 "--force` to apply it")
         with pytest.raises(AlreadyInstalled):
             store.check_existing(_same(), only_agents=["cursor"])
+
+    def test_another_version_keeps_the_generic_hint(self, sandbox):
+        # Not the same install: the request's flags are not the obstacle.
+        lockfile.set_entry("skill", "x", _rec("acme/kit", agents=["cursor"]))
+        with pytest.raises(BoostError) as ei:
+            store.check_existing(_entry(), only_agents=["codex"])
+        assert ei.value.hint == ("`boost reinstall x` to force, `boost update` "
+                                 "to upgrade")
 
     def test_a_project_skill_with_another_agent(self, sandbox, tmp_path,
                                                 monkeypatch):
@@ -451,7 +459,8 @@ class TestARequestThatAddsSomethingIsARefusal:
             store.check_existing(_same(), scope=scopes.SCOPE_PROJECT,
                                  base=repo, only_agents=["codex"])
         assert type(ei.value) is BoostError
-        assert ei.value.hint == "`boost reinstall x --local` to force"
+        assert ei.value.hint == ("`boost install acme/kit:x --agent codex "
+                                 "--local --force` to apply it")
 
     @pytest.mark.parametrize("kind", ["rule", "workflow"])
     def test_a_rule_or_workflow_with_another_agent(self, sandbox, kind):
@@ -461,6 +470,8 @@ class TestARequestThatAddsSomethingIsARefusal:
             store.check_existing(_same(kind), only_agents=["codex"])
         assert type(ei.value) is BoostError
         assert ei.value.message == "x is already installed"
+        assert ei.value.hint == ("`boost install acme/kit:x --agent codex "
+                                 "--force` to apply it")
 
     def test_a_workflow_with_another_as_skill(self, sandbox):
         lockfile.set_entry("workflow", "x", _rec("acme/kit", scope="user",
@@ -468,6 +479,8 @@ class TestARequestThatAddsSomethingIsARefusal:
         with pytest.raises(BoostError) as ei:
             store.check_existing(_same("workflow"), as_skill=True)
         assert type(ei.value) is BoostError
+        assert ei.value.hint == ("`boost install acme/kit:x --as-skill "
+                                 "--force` to apply it")
         with pytest.raises(AlreadyInstalled):
             store.check_existing(_same("workflow"), as_skill=False)
 
@@ -476,3 +489,16 @@ class TestARequestThatAddsSomethingIsARefusal:
                                              as_skill=False))
         with pytest.raises(AlreadyInstalled):
             store.check_existing(_same("rule"), as_skill=True)
+
+
+class TestChangedRequestHint:
+    def test_every_flag_in_order(self):
+        e = {"name": "x", "tap": "acme/kit", "rel_dir": "skills/x"}
+        assert store.changed_request_hint(
+            e, ["cursor", "a b"], False, scopes.SCOPE_PROJECT) == (
+            "`boost install acme/kit:x --path skills/x --agent cursor "
+            "--agent 'a b' --no-as-skill --local --force` to apply it")
+
+    def test_bare_user_scope(self):
+        assert store.changed_request_hint({"name": "x"}, None, None) == (
+            "`boost install x --force` to apply it")
