@@ -1552,6 +1552,9 @@ class InstallSession:
     was refused and why, what an interrupt cancelled, and the plan's notes.
     """
     installed: list = field(default_factory=list)   # [(entry, InstallResult)]
+    # Picks already installed at the version offered: `boost install`'s
+    # no-op, a warning and exit 0, never a failure. [AlreadyInstalled]
+    already: list = field(default_factory=list)
     failed: list = field(default_factory=list)      # [(entry, message, hint)]
     cancelled: list = field(default_factory=list)   # [entry]
     notes: list = field(default_factory=list)       # [(role, text)]
@@ -1563,7 +1566,8 @@ class InstallSession:
 
     def requested(self) -> bool:
         """True once anything was asked for — a quit with no Enter is None."""
-        return bool(self.installed or self.failed or self.cancelled)
+        return bool(self.installed or self.already or self.failed
+                    or self.cancelled)
 
     def exit_code(self) -> int:
         """``boost install``'s answer: 1 when any requested install failed."""

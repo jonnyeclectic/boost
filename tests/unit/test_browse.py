@@ -2275,3 +2275,10 @@ class TestInstallSession:
         # Sessions never share their lists.
         assert browse.InstallSession().cancelled is not \
             browse.InstallSession().cancelled
+
+    def test_an_already_installed_pick_is_a_request_and_exit_0(self):
+        s = browse.InstallSession(already=["err"])
+        assert (s.requested(), s.exit_code(), s.landed()) == (True, 0, [])
+        assert browse.InstallSession().already == []
+        assert browse.InstallSession().already is not \
+            browse.InstallSession().already

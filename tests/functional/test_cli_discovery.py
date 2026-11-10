@@ -3782,6 +3782,37 @@ class TestBrowseInstallsLikeInstall:
         assert "boost install fixture-tap:brainstorming --force" in err
         assert lockfile.installed()["brainstorming"]["tap"] == "rival-tap"
 
+    def test_enter_on_an_installed_row_is_installs_no_op_with_rc_0(
+            self, boost, tapped, monkeypatch):
+        # `boost install brainstorming` twice warns and exits 0; Enter on
+        # the same row used to report it as a failure and exit 1.
+        boost("install", "brainstorming")
+        before = lockfile.installed()["brainstorming"]
+        poll = type("P", (_Polls,), {"until": "nothing was changed"})
+        screens = _real_tui(monkeypatch, [ord(c) for c in "brain"] + [10],
+                            fake=poll)
+        r = boost("browse", expect=0)
+        err = " ".join(r.err.split())
+        assert "! brainstorming is already installed (v1.4.0)" in err
+        assert ("hint: `boost reinstall brainstorming` to force, `boost "
+                "update` to upgrade") in err
+        assert "installed brainstorming" not in r.out
+        drawn = " ".join(" ".join(screens[0].drawn).split())
+        assert ("brainstorming is already installed (v1.4.0) — nothing was "
+                "changed") in drawn
+        assert lockfile.installed()["brainstorming"] == before
+
+    def test_enter_on_an_installed_row_still_installs_its_requirement(
+            self, boost, tapped, monkeypatch):
+        boost("install", "jira-integration", "--no-deps")
+        _real_tui(monkeypatch, [ord(c) for c in "jira"] + [10])
+        r = boost("browse", expect=0)
+        assert "installed commit-messages" in r.out
+        assert "installed jira-integration" not in r.out
+        assert "! jira-integration is already installed (v2.1.0)" in r.err
+        assert set(lockfile.installed()) == {"commit-messages",
+                                             "jira-integration"}
+
     def test_a_policy_refusal_is_printed_after_exit_with_rc_1(
             self, boost, tapped, monkeypatch):
         boost("policy", "set", "blocked_skills", "cowboy-coding")
