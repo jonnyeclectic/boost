@@ -465,27 +465,35 @@ def _say_already_installed(err: AlreadyInstalled) -> None:
         out.info("hint: " + err.hint, stream=sys.stderr, wrap=True)
 
 
-def _commit_hint() -> str:
+def _commit_hint(res) -> str:
     """What a teammate needs committed to get this project install.
 
     The lock alone is not it: agents read the copies under their own skill
-    dirs (``.claude/skills/`` …), so those are named too — the top-level
-    directories this project's installs created, from the lock's record. A
-    lock that names none (older, or the dirs already existed) says
-    "the agent skill dirs" rather than guess.
+    dirs, so each copy this skill has is named, at skill level
+    (``.claude/skills/<name>``), from its lock row. Not the top-level dirs
+    the install created: a dir that already existed was left out, and
+    "commit .claude/" sweeps in the personal, git-ignored
+    ``settings.local.json`` beside it. ``.mcp.json`` is named when this
+    install recorded servers in it. A row that names no copies says "the
+    agent skill dirs" rather than guess.
     """
+    from ..core import mcpdecl
     lock_dir = "%s/" % projectlock.LOCK_DIRNAME
     try:
         base = scopes.resolve_base(scopes.SCOPE_PROJECT)
-        rows = projectlock.read(base).get(store.DIRS_CREATED_KEY)
+        row = projectlock.get_skill(base, res.name) or {}
     except (BoostError, OSError):
-        rows = None
-    tops = sorted({r.split("/", 1)[0] + "/" for r in rows
-                   if isinstance(r, str) and r and r != projectlock.LOCK_DIRNAME}
-                  ) if isinstance(rows, list) else []
-    dirs = ", ".join(tops) if tops else "the agent skill dirs"
-    return ("commit %s and %s (the copies agents read) to share these with "
-            "the team" % (lock_dir, dirs))
+        row = {}
+    rows = row.get("materializations")
+    copies = sorted({m["path"] for m in rows
+                     if isinstance(m, dict) and isinstance(m.get("path"), str)
+                     and m["path"]}) if isinstance(rows, list) else []
+    what = "%s (the copies agents read)" % (", ".join(copies)
+                                            or "the agent skill dirs")
+    if getattr(res, "mcp_recorded", None):
+        return ("commit %s, %s and %s (its MCP servers) to share this with "
+                "the team" % (lock_dir, what, mcpdecl.SIDECAR))
+    return "commit %s and %s to share this with the team" % (lock_dir, what)
 
 
 def _report_result(res: store.InstallResult, no_mcp: bool = False,
@@ -536,7 +544,7 @@ def _report_result(res: store.InstallResult, no_mcp: bool = False,
                % (" · ".join(res.linked) or "(no enabled agents)"))
         out.ok("project lock updated (%s/%s)"
                % (projectlock.LOCK_DIRNAME, projectlock.LOCK_FILENAME))
-        out.dim("  %s" % _commit_hint(), wrap=True)
+        out.dim("  %s" % _commit_hint(res), wrap=True)
         _warn_submodules(res)
         _warn_injection(res)
         _warn_secrets(res)

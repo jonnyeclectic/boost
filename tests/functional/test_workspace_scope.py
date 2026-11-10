@@ -664,11 +664,43 @@ def test_the_last_local_uninstall_removes_the_lock_and_its_dirs(boost, tapped,
     assert flat.count(".claude/") == 1
 
 
-def test_a_local_install_names_the_agent_dirs_to_commit(boost, tapped, repo):
+def test_a_local_install_names_the_copies_to_commit(boost, tapped, repo):
     res = boost("install", "brainstorming", "--local")
     flat = " ".join(res.out.split())
-    assert "commit .boost/ and .claude/" in flat
-    assert "(the copies agents read)" in flat
+    copies = sorted(m["path"] for m in projectlock.get_skill(
+        repo, "brainstorming")["materializations"])
+    assert ".claude/skills/brainstorming" in copies
+    assert ("commit .boost/ and %s (the copies agents read) to share this "
+            "with the team" % ", ".join(copies)) in flat
+    # Not the dotdir: "commit .claude/" sweeps in settings.local.json.
+    assert "commit .boost/ and .claude/ " not in flat
+    assert ".mcp.json" not in flat
+
+
+def test_the_commit_hint_names_copies_in_dirs_that_already_existed(
+        boost, tapped, repo):
+    # The dirs were there before, so the install created none of them; the
+    # hint used to fall back to "the agent skill dirs" or name only some.
+    for d in (".claude", ".cursor", ".windsurf"):
+        (repo / d / "skills").mkdir(parents=True)
+    res = boost("install", "brainstorming", "--local")
+    flat = " ".join(res.out.split())
+    assert ".claude/skills/brainstorming" in flat
+    assert ".cursor/skills/brainstorming" in flat
+    assert "the agent skill dirs" not in flat
+
+
+def test_the_commit_hint_names_mcp_json_when_the_install_wrote_it(
+        boost, fixture_tap_src, tmp_path, repo):
+    boost("tap", _mcp_skill_tap(
+        fixture_tap_src, tmp_path,
+        sidecar={"mcpServers": {"github": {"command": "npx",
+                                           "args": ["-y", "srv"]}}}))
+    res = boost("install", "mcp-proj-skill", "--local")
+    flat = " ".join(res.out.split())
+    assert ".claude/skills/mcp-proj-skill" in flat
+    assert ("(the copies agents read) and .mcp.json (its MCP servers) to "
+            "share this with the team") in flat
 
 
 def test_without_git_the_lock_goes_and_its_guard_file_stays(boost, tapped,
