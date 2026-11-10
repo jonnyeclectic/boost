@@ -2187,17 +2187,25 @@ def _tool_install(args: dict):
                                                  "" if n == 1 else "s")
     scope, base = _install_scope(args)
     entry = catalog.resolve_one(name, path=mcp.str_arg(args, "path"))
-    # The requested item's own refusal ("already installed", "is pinned")
-    # first, so a refused call changes nothing — not its dependencies either.
-    # Already there at this version is the state the caller asked for, not a
-    # failure: an agent that installs to be sure must not read an error.
+    # The requested item's own refusal ("is pinned", another tap) first, so
+    # a refused call changes nothing — not its dependencies either. Already
+    # there at this version is the state the caller asked for, not a
+    # failure: an agent that installs to be sure must not read an error. Its
+    # missing `requires:` are still installed, as `boost install` does; only
+    # with none missing is it "nothing was changed".
+    already: AlreadyInstalled | None = None
     try:
         store.check_existing(entry, scope=scope, base=base)
     except AlreadyInstalled as err:
-        return "\n".join([*([tapped_line] if tapped_line else []),
-                          "%s — nothing was changed." % err.message]), False
+        already = err
     the_plan = installplan.plan([entry], pbase=base)
     entries = the_plan.entries
+    if already is not None:
+        entries = [e for e in entries if e is not entry]
+        if not entries:
+            return "\n".join([*([tapped_line] if tapped_line else []),
+                              "%s — nothing was changed."
+                              % already.message]), False
     warnings = [*the_plan.confusions, *the_plan.dep_warnings]
     lines: list[str] = [the_plan.added] if the_plan.added else []
     if tapped_line:
@@ -2218,6 +2226,9 @@ def _tool_install(args: dict):
             continue
         lines.extend(_install_lines(res, e))
         done.append(e)
+    if already is not None:
+        lines.append("%s — left as it was; only its missing requirements "
+                     "were installed." % already.message)
     lines.extend(_scope_lines(scope, base, done))
     prereq_warn, prereq_hint = installplan.prerequisite_lines(done,
                                                               pbase=base)
