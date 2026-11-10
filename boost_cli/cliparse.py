@@ -46,6 +46,13 @@ class _BoostHelpFormatter(argparse.HelpFormatter):
         return "\n".join(indent + ln for ln in lines)
 
 
+#: argparse's own wording for a required argument (or required group) left
+#: out. Matched as a prefix; under a translated locale it simply never
+#: matches, which keeps argparse's message rather than guessing.
+_REQUIRED_ERRORS = ("the following arguments are required",
+                    "one of the arguments ")
+
+
 class BoostArgumentParser(argparse.ArgumentParser):
     def __init__(self, *args, **kwargs):
         # add_subparsers() creates each sub-parser via type(self)(**kwargs)
@@ -72,6 +79,46 @@ class BoostArgumentParser(argparse.ArgumentParser):
             kwargs.setdefault("color", False)
         super().__init__(*args, **kwargs)
 
+    def parse_known_args(self, args=None, namespace=None):  # type: ignore[override]
+        # Kept so `error()` can look at what was typed: argparse checks the
+        # required arguments before it reports unknown ones, and by the time
+        # it calls `error()` the argv is gone.
+        self._boost_argv = list(sys.argv[1:] if args is None else args)
+        return super().parse_known_args(args, namespace)
+
+    def _unknown_options(self) -> list[str]:
+        """The option-like tokens in the last argv that no option claims.
+
+        A conservative re-statement of argparse's own test, not a call into
+        ``_parse_optional`` — that one changed its return shape inside 3.12
+        and calls ``error()`` itself on an ambiguous prefix. A token is
+        *known* when its name (before any ``=``) is an option string, an
+        unambiguous-enough ``--`` prefix of one (``allow_abbrev``), or a
+        known short flag with a value or more flags glued on (``-n5``).
+        Everything after ``--`` is positional, and so is a token holding a
+        space (``--note "-not a flag"``), as argparse itself decides.
+        """
+        known = self._option_string_actions
+        found: list[str] = []
+        for tok in getattr(self, "_boost_argv", ()):
+            if tok == "--":
+                break
+            if (len(tok) < 2 or tok[0] not in self.prefix_chars
+                    or " " in tok
+                    or (self._negative_number_matcher.match(tok)
+                        and not self._has_negative_number_optionals)):
+                continue
+            name = tok.split("=", 1)[0]
+            if name in known:
+                continue
+            if (self.allow_abbrev and name.startswith("--")
+                    and any(o.startswith(name) for o in known)):
+                continue
+            if tok[1] not in self.prefix_chars and tok[:2] in known:
+                continue
+            found.append(tok)
+        return found
+
     def error(self, message: str, hint: str | None = None) -> NoReturn:
         """Print a branded error + dimmed usage, then exit 2 (argparse's code).
 
@@ -79,7 +126,17 @@ class BoostArgumentParser(argparse.ArgumentParser):
         a hand-rolled required-argument check used to attach to a
         ``BoostError`` — which exits 1, the code for "the operation failed",
         so a script could not tell a missing KEY from a refused write.
+
+        argparse reports a missing required argument before an unknown one,
+        so `boost install -x` said "arguments are required: NAME" about a
+        typo. An unknown option is the likelier mistake and the one to name
+        first, so a required-argument error is replaced by the unknown
+        options when there are any.
         """
+        if hint is None and message.startswith(_REQUIRED_ERRORS):
+            unknown = self._unknown_options()
+            if unknown:
+                message = "unrecognized arguments: %s" % " ".join(unknown)
         out.err(message, hint=hint)
         sys.stderr.write(out.c(self.format_usage(), out.DIM,
                                stream=sys.stderr))

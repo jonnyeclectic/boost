@@ -1052,7 +1052,9 @@ class TestLog:
                 "longer tapped") in r.err
         assert "imported locally" not in r.out
         r = boost("log", "brainstorming", "--json", expect=1)
-        assert r.out == ""
+        assert json.loads(r.out)["error"] == (
+            "brainstorming comes from tap fixture-tap, which is no longer "
+            "tapped")
         assert "no longer tapped" in r.err
 
     def test_name_with_diagnostics_or_crashes_is_a_usage_error(self, boost, installed):
@@ -1568,3 +1570,39 @@ class TestInfoVersionRelation:
         assert "update available" not in r.out
         assert "ahead" not in r.out
         assert not re.search(r"^\s+latest\s", r.out, re.M)
+
+
+class TestAJsonLookupErrorIsJson:
+    """`boost info nonesuch --json` printed only the human `Error:` line on
+    stderr, so a script reading stdout got nothing to parse."""
+
+    def test_the_error_is_a_json_object_on_stdout(self, boost, tapped):
+        r = boost("info", "nonesuch", "--json", expect=1)
+        data = json.loads(r.out)
+        assert set(data) == {"error", "hint"}
+        assert data["error"] == "no skill named 'nonesuch' in any tap"
+        assert data["hint"] is None or "boost search nonesuch" in data["hint"]
+        assert r.err.startswith("Error: no skill named 'nonesuch'")
+
+    def test_without_json_stdout_stays_empty(self, boost, tapped):
+        r = boost("info", "nonesuch", expect=1)
+        assert r.out == ""
+
+    def test_json_after_a_double_dash_is_not_the_flag(self):
+        from boost_cli import cli
+        assert cli.wants_json(["x", "--json"]) is True
+        assert cli.wants_json(["x", "--", "--json"]) is False
+        assert cli.wants_json(["--json", "--", "y"]) is True
+        assert cli.wants_json(["x"]) is False
+
+    @pytest.mark.parametrize("tok,want", [
+        ("--js", True), ("--jso", True), ("--json", True),
+        ("--j", False), ("--jsonl", False), ("--", False), ("-json", False)])
+    def test_an_abbreviated_flag_counts(self, tok, want):
+        from boost_cli import cli
+        assert cli.wants_json(["x", tok]) is want
+
+    def test_an_abbreviated_flag_gets_json(self, boost, tapped):
+        r = boost("info", "nonesuch", "--js", expect=1)
+        assert json.loads(r.out)["error"] == (
+            "no skill named 'nonesuch' in any tap")
