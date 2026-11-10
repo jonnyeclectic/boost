@@ -485,7 +485,7 @@ def cmd_list(argv):
         # NAME is what `uninstall`/`update`/`cat` take: `brainstorm…` is not
         # a name any of them accepts, so it is shown whole or dropped.
         out.table(rows, headers=("NAME", "VERSION", "TAP", "AGENTS", "FLAGS"),
-                  whole=("NAME",))
+                  keep=("NAME", "AGENTS"))
         print("  " + out.aurora("%d skill%s installed%s"
                                 % (len(rows), "" if len(rows) == 1 else "s",
                                    " with tag #%s" % args.tag.lstrip("#")
@@ -517,7 +517,7 @@ def cmd_list(argv):
                              if e.get("pinned") else [])))
                 for name, e in sorted(project.items())]
         out.table(rows, headers=("NAME", "VERSION", "TAP", "AGENTS", "FLAGS"),
-                  whole=("NAME",))
+                  keep=("NAME", "AGENTS"))
         print("  " + out.role("committed with the repo — %s/%s"
                               % (projectlock.LOCK_DIRNAME,
                                  projectlock.LOCK_FILENAME), "muted"))

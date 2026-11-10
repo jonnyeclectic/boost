@@ -257,6 +257,11 @@ class TestTap:
                 if "https://" in ln]
         assert len(urls) >= len(config.DEFAULT_TAPS)
         assert all(not u.endswith("…") for u in urls)
+        # NAME survives beside URL: both are identifiers, so the row
+        # overflows whole instead of dropping one.
+        assert any(ln.split()[:2] == ["NAME", "URL"] for ln in r.out.splitlines())
+        assert all(ln.split()[0] and "/" in ln.split()[0]
+                   for ln in r.out.splitlines() if "https://" in ln)
 
     def test_dry_run_marks_a_tapped_spec_as_skipped_like_the_run(
             self, boost, fixture_tap_src, tmp_path):

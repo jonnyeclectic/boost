@@ -140,3 +140,15 @@ def test_list_shows_every_agent_name_whole_while_flags_is_empty(
     assert head.startswith("NAME")
     assert "FLAGS" not in head
     assert "antigravity·claude·cursor·windsurf" in row
+
+
+def test_list_keeps_every_agent_name_and_the_skill_name_at_80(
+        boost, installed, monkeypatch):
+    """A codex-bearing row: both halves of AGENTS survive, and so does NAME;
+    the TAP column gives way."""
+    monkeypatch.setenv("BOOST_COLOR", "never")
+    monkeypatch.setenv("COLUMNS", "80")
+    head, row = boost("list").out.splitlines()[1:3]
+    assert head.split()[0] == "NAME" and row.startswith("brainstorming")
+    assert "antigravity·claude·cursor·windsurf +codex·gemini" in row
+    assert "…" not in row
