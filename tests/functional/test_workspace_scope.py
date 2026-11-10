@@ -208,6 +208,30 @@ def test_a_second_local_install_is_a_no_op_without_force(boost, tapped, repo):
     assert "already installed in this project" in (res.out + res.err)
 
 
+def _tree_state(*roots):
+    """Bytes (or link target) and mtime of every path under ``roots``."""
+    state = {}
+    for root in roots:
+        for p in sorted([root, *root.rglob("*")] if root.is_dir() else [root]):
+            st = p.lstat()
+            state[str(p)] = (str(p.readlink()) if p.is_symlink()
+                             else p.read_bytes() if p.is_file() else None,
+                             st.st_mtime_ns)
+    return state
+
+
+def test_a_same_version_local_reinstall_changes_nothing(boost, tapped, repo):
+    boost("install", "brainstorming", "--local")
+    lock = repo / ".boost" / "skill-lock.json"
+    assert lock.is_file() and (repo / ".claude").is_dir()
+    before = _tree_state(repo / ".claude", lock)
+    res = boost("install", "brainstorming", "--local", expect=0)
+    assert res.err == ("  ! brainstorming is already installed in this "
+                       "project (v1.4.0)\n  hint: `boost reinstall "
+                       "brainstorming --local` to force\n")
+    assert _tree_state(repo / ".claude", lock) == before
+
+
 def test_force_reinstalls_locally(boost, tapped, repo):
     boost("install", "brainstorming", "--local")
     boost("install", "brainstorming", "--local", "--force")

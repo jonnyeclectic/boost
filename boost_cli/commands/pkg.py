@@ -461,7 +461,8 @@ def _say_already_installed(err: AlreadyInstalled) -> None:
     """
     out.warn(err.message, stream=sys.stderr, wrap=True)
     if err.hint:
-        out.dim("  hint: " + err.hint, wrap=True)
+        # Beside the warning it qualifies, as `Error:` keeps its `hint:`.
+        out.info("hint: " + err.hint, stream=sys.stderr, wrap=True)
 
 
 def _commit_hint() -> str:

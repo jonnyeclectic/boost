@@ -127,9 +127,11 @@ def test_reinstalling_the_same_version_is_a_warning_and_changes_nothing(
     boost("install", "brainstorming")
     before = _disk_state()
     r = boost("install", "brainstorming", expect=0)
-    assert r.err == "  ! brainstorming is already installed (v1.4.0)\n"
-    assert ("hint: `boost reinstall brainstorming` to force, `boost update` "
-            "to upgrade") in r.out
+    # The hint stays beside the warning, on stderr, as `Error:`'s does.
+    assert r.err == ("  ! brainstorming is already installed (v1.4.0)\n"
+                     "  hint: `boost reinstall brainstorming` to force, "
+                     "`boost update` to upgrade\n")
+    assert "hint:" not in r.out
     assert "installed" not in r.out.replace("already installed", "")
     assert _disk_state() == before
 
@@ -142,6 +144,7 @@ def test_a_dry_run_over_an_installed_skill_still_plans_its_dependency(
     before = _disk_state()
     r = boost("install", "jira-integration", "--dry-run", expect=0)
     assert "would install commit-messages" in r.out
-    assert r.err == "  ! jira-integration is already installed (v2.1.0)\n"
+    assert r.err.startswith(
+        "  ! jira-integration is already installed (v2.1.0)\n  hint: ")
     assert "dry run — nothing was changed" in r.out
     assert _disk_state() == before

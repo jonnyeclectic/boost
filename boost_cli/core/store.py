@@ -3156,12 +3156,22 @@ def same_install(entry: dict, existing: dict) -> bool:
 
     Versions compare as text — a lock row and a catalog row need not agree on
     the type — and a missing version on either side is never a match: two
-    unknowns are not evidence of sameness.
+    unknowns are not evidence of sameness. ``catalog.UNDECLARED_VERSION`` is
+    such an unknown, spelled as a version: the scanner stamps it on every
+    item whose frontmatter names none, so an unversioned skill whose body
+    changed upstream "matched" and was reported as nothing to do. It counts
+    as the same only when the record carries the content digest and it
+    equals the entry's (CLAUDE.md: two absent digests are never a match).
     """
-    want, have = entry.get("version"), existing.get("version")
-    if want is None or have is None:
+    if _other_tap(entry, existing):
         return False
-    return str(want) == str(have) and not _other_tap(entry, existing)
+    want, have = entry.get("version"), existing.get("version")
+    if want is None or have is None or str(want) != str(have):
+        return False
+    if str(want) != catalog.UNDECLARED_VERSION:
+        return True
+    digest = existing.get("content")
+    return bool(digest) and digest == entry.get("content")
 
 
 def _refuse_installed(entry: dict, existing: dict, message: str,

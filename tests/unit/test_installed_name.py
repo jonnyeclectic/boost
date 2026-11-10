@@ -327,3 +327,57 @@ class TestSameInstall:
 
     def test_a_side_without_a_tap_is_not_another_tap(self):
         assert store.same_install(_same(tap=None), _rec("zed/kit")) is True
+
+
+class TestAnUndeclaredVersionIsUnknown:
+    """``catalog.UNDECLARED_VERSION`` is what the scanner writes when the
+    frontmatter names no version, so two of them say nothing about whether
+    the bodies agree — only a recorded content digest does."""
+
+    U = "0.0.0"
+
+    def _pair(self, have_content, want_content):
+        entry = {"name": "x", "tap": "acme/kit", "version": self.U,
+                 "content": want_content}
+        rec = {"tap": "acme/kit", "version": self.U}
+        if have_content is not None:
+            rec["content"] = have_content
+        return entry, rec
+
+    def test_the_constant_is_the_scanners(self):
+        from boost_cli.core import catalog
+        assert catalog.UNDECLARED_VERSION == self.U
+
+    def test_different_content_is_not_the_same(self):
+        assert store.same_install(*self._pair("aaa", "bbb")) is False
+
+    def test_an_equal_digest_is_the_same(self):
+        assert store.same_install(*self._pair("aaa", "aaa")) is True
+
+    def test_a_missing_digest_is_not_the_same(self):
+        assert store.same_install(*self._pair(None, "aaa")) is False
+
+    def test_two_missing_digests_are_not_the_same(self):
+        assert store.same_install(*self._pair(None, None)) is False
+
+    def test_two_empty_digests_are_not_the_same(self):
+        assert store.same_install(*self._pair("", "")) is False
+
+    def test_a_declared_version_needs_no_digest(self):
+        entry, rec = self._pair(None, "aaa")
+        entry["version"] = rec["version"] = "1.0.0"
+        assert store.same_install(entry, rec) is True
+
+    def test_another_tap_loses_even_with_an_equal_digest(self):
+        entry, rec = self._pair("aaa", "aaa")
+        rec["tap"] = "zed/kit"
+        assert store.same_install(entry, rec) is False
+
+    def test_check_existing_refuses_an_undeclared_reinstall(self, sandbox):
+        lockfile.set_entry("skill", "x", {"tap": "acme/kit",
+                                          "version": self.U})
+        with pytest.raises(BoostError) as ei:
+            store.check_existing({**self._pair(None, "aaa")[0],
+                                  "kind": "skill"})
+        assert type(ei.value) is BoostError
+        assert ei.value.message == "x is already installed (v0.0.0)"
