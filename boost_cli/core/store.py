@@ -3152,6 +3152,20 @@ def _lock_location(entry: dict) -> str:
     return "user scope"
 
 
+def content_field(entry: dict) -> dict:
+    """The catalog row's content digest, as the lock field that records it.
+
+    ``entry["content"]`` is the scanner's digest of the item's name,
+    description and body (CLAUDE.md, "two identities"). Recorded at install so
+    :func:`same_install` can tell an unversioned re-install of the same body
+    from one whose body changed upstream. Optional and additive: a row written
+    before this, or from an entry with no digest, carries no key — and an
+    absent digest never matches anything.
+    """
+    digest = entry.get("content")
+    return {"content": digest} if digest else {}
+
+
 def same_install(entry: dict, existing: dict) -> bool:
     """Whether installing ``entry`` over ``existing`` would install the same
     thing again: one tap (or a side that names none) and one version.
@@ -3716,7 +3730,8 @@ def carried_user_state(existing: dict | None) -> dict:
       without a word and ``boost verify`` went on passing.
     * **derived, rebuilt** — ``version``, ``tap``, ``source_*``, ``commit``,
       ``sha256``, ``updated_at``, ``agents``, ``refused_agents``,
-      ``source_updated_at``, ``materializations``, a workflow's ``foreign``.
+      ``source_updated_at``, ``materializations``, a workflow's ``foreign``,
+      a skill's ``content`` digest.
     * **reset on purpose** — ``quarantined`` (the content was just put back)
       and ``sidelined_by`` (the install relinks, and ``agents`` is measured
       from disk, so keeping the flag would describe links that exist). An
@@ -4064,6 +4079,7 @@ def _copy_link_record(entry: dict, name: str, src: Path, dest: Path, tap,
            else {}),
         **({"source_updated_at": dated} if dated else {}),
         **({"submodules": res.submodules} if res.submodules else {}),
+        **content_field(entry),
     })
     return res
 
@@ -4198,6 +4214,7 @@ def _install_project_skill(entry: dict, force: bool = False,
         # Recorded so `reinstall`, `update` and `sync` do not write the
         # servers an `install --local --no-mcp` left out.
         **({"no_mcp": True} if skip_mcp else {}),
+        **content_field(entry),
     # What the user ASKED for, beside what was written: without it an agent
     # enabled afterwards (here or on a teammate's machine) could not be told
     # from one narrowed away, so sync never copied into it.
@@ -9850,7 +9867,10 @@ def _record_unrecorded(name: str, why: str) -> str | None:
         record = {"version": cat.get("version", "0.0.0"), "tap": cat["tap"],
                   "tap_url": tap.url,
                   "source_dir": cat.get("rel_dir", "."),
-                  "commit": gitutil.head_commit(tap.path)}
+                  "commit": gitutil.head_commit(tap.path),
+                  # The store copy hashes as this row's files, so its digest
+                  # is the one an install of the row would have recorded.
+                  **content_field(cat)}
         # Dated as install dates it: the store copy is that tap's files.
         if dated := source_updated_at(cat["tap"], cat.get("rel_dir", ".")):
             record["source_updated_at"] = dated

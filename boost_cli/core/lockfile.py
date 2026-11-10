@@ -14,6 +14,9 @@ Skill entry schema (v3):
   entries written before it was recorded: `drift` re-taps from it, and
   `sync`, `heal`, `update` and `untap` backfill it from config.json while
   the tap is still configured — `store.backfill_tap_urls`)
+  (content is the catalog entry's content digest at install, absent on rows
+  written before it was recorded and never treated as a match when absent:
+  `store.same_install` reads it to call an unversioned re-install a no-op)
 """
 from __future__ import annotations
 
