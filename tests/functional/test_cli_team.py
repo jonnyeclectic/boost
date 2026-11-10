@@ -137,7 +137,10 @@ class TestCohort:
                                                    action, extra):
         boost("cohort", "create", "pilot", "--skills", "brainstorming")
         r = boost("cohort", action, "nosuch", *extra, expect=1)
-        assert r.out == ""
+        # Never every cohort; under --json, the error itself as JSON.
+        assert r.out == ("" if not extra else json.dumps(
+            {"error": "no cohort named nosuch",
+             "hint": "list cohorts with `boost cohort list`"}) + "\n")
         assert "Error: no cohort named nosuch" in r.err
         assert "list cohorts with `boost cohort list`" in r.err
 

@@ -368,6 +368,31 @@ def _seal_broken_stdout() -> None:
             os.close(devnull)
 
 
+def wants_json(argv: list[str]) -> bool:
+    """Whether a command's own argv asked for ``--json`` (before any ``--``),
+    spelled out or abbreviated to at least ``--js``.
+
+    Read off the argv rather than the parsed namespace because the error
+    that needs it escaped the command before it returned one.
+    """
+    head = argv[:argv.index("--")] if "--" in argv else argv
+    # argparse also accepts an unambiguous abbreviation (`--js`, `--jso`).
+    return any(len(t) >= 4 and "--json".startswith(t) for t in head)
+
+
+def emit_json_error(e: BoostError) -> None:
+    """A ``--json`` invocation's failure, as JSON on stdout.
+
+    ``boost info nonesuch --json`` printed only the human ``Error:`` line on
+    stderr, so a script parsing stdout got an empty string and a JSON decode
+    error instead of the reason. The exit code (1) and the stderr line are
+    unchanged; this adds ``{"error": ..., "hint": ...}`` where the script is
+    reading. One place, for every command that takes ``--json``.
+    """
+    import json
+    sys.stdout.write(json.dumps({"error": e.message, "hint": e.hint}) + "\n")
+
+
 def _route(argv: list[str]) -> int:
     try:
         if not argv or argv[0] in ("-h", "--help"):
@@ -402,6 +427,8 @@ def _route(argv: list[str]) -> int:
         except BoostError as e:
             logs.get_logger().info("BoostError: %s", e.message)
             rc = 1
+            if wants_json(rest):
+                emit_json_error(e)
             out.err(e.message, hint=e.hint, wrap=getattr(e, "wrap", False))
             return rc
         except KeyboardInterrupt as e:
