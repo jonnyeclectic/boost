@@ -19,7 +19,7 @@ Cursor, Gemini CLI, Antigravity CLI and Codex in a single pass.
 ```bash
 pipx install --python 3.13 --fetch-python=always "boost-skill-cli[rag]"
 boost quickstart                       # taps the 7 starter registries, builds the index
-boost search tdd                       # ranked by full-content BM25
+boost search tdd                       # hybrid: BM25 + dense vectors, fused
 boost install test-driven-development  # → every agent, version-pinned, one lock file
 ```
 
@@ -27,8 +27,8 @@ boost install test-driven-development  # → every agent, version-pinned, one lo
 [prerequisites check](#prerequisites) first.)
 
 No more copying `SKILL.md` into six agent folders and forgetting which one is
-stale. The default install is pure stdlib, with no build step and no
-dependencies.
+stale. The plain install (no `[rag]` extra) is pure stdlib, with no build step and no
+dependencies; the command above adds the `[rag]` extra for semantic search.
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/jonnyeclectic/boost/main/docs/demo.gif" alt="boost demo: tap a registry, search for a skill, install it into every agent, then run doctor" width="820">
