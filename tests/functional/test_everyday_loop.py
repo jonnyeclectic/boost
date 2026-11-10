@@ -148,3 +148,29 @@ def test_a_dry_run_over_an_installed_skill_still_plans_its_dependency(
         "  ! jira-integration is already installed (v2.1.0)\n  hint: ")
     assert "dry run — nothing was changed" in r.out
     assert _disk_state() == before
+
+
+def test_reinstalling_for_another_agent_is_still_a_refusal(boost, tapped):
+    # Same version, same tap, but the request names an agent the install did
+    # not reach: a no-op there would exit 0 with windsurf never linked.
+    boost("install", "brainstorming", "--agent", "cursor")
+    link = paths.home() / ".windsurf" / "skills" / "brainstorming"
+    before = _disk_state()
+    r = boost("install", "brainstorming", "--agent", "windsurf", expect=1)
+    flat = " ".join(r.err.split())
+    assert "Error: brainstorming is already installed (v1.4.0)" in flat
+    assert "`boost reinstall brainstorming` to force" in flat
+    assert not link.is_symlink()
+    assert _disk_state() == before
+    # dry run agrees with the run
+    r = boost("install", "brainstorming", "--agent", "windsurf", "--dry-run",
+              expect=1)
+    assert "already installed" in r.err
+
+
+def test_reinstalling_for_the_same_agent_is_a_no_op(boost, tapped):
+    boost("install", "brainstorming", "--agent", "cursor")
+    before = _disk_state()
+    r = boost("install", "brainstorming", "--agent", "cursor", expect=0)
+    assert r.err.startswith("  ! brainstorming is already installed (v1.4.0)")
+    assert _disk_state() == before

@@ -1174,7 +1174,8 @@ def cmd_install(argv: list[str]) -> int:
                     # The run's own refusal, ahead of the header: a preview
                     # must not promise a reinstall the run declines.
                     seen = store.check_existing(e, force=args.force,
-                                                scope=args.scope)
+                                                scope=args.scope,
+                                                only_agents=only)
                     _refuse_preview_by_policy(e, args.scope, pbase, seen)
                     # agents_for_scope(pbase), not enabled_agents(): project scope
                     # copies into each agent's *repo-local* dotdir, which excludes
@@ -1215,7 +1216,9 @@ def cmd_install(argv: list[str]) -> int:
                     # --force, a cross-scope clash even with it), so a record
                     # that is seen here is one --force replaces: a reinstall.
                     seen = store.check_existing(e, force=args.force,
-                                                scope=args.scope)
+                                                scope=args.scope,
+                                                only_agents=only,
+                                                as_skill=args.as_skill)
                     _refuse_preview_by_policy(e, args.scope, pbase, seen)
                     verb = "reinstall" if seen else "install"
                     where = "into this repo" if args.scope == "project" else "user config"
@@ -1243,7 +1246,8 @@ def cmd_install(argv: list[str]) -> int:
                 # Same refusal as the run ("already installed", "is pinned");
                 # past it, a seen record is one --force overwrites.
                 seen = store.check_existing(e, force=args.force,
-                                            scope=args.scope)
+                                            scope=args.scope,
+                                            only_agents=only)
                 # The run's refusal, ahead of the header, as the branches above.
                 store.refuse_unreachable_skill(only, e["name"])
                 _refuse_preview_by_policy(e, args.scope, pbase, seen)

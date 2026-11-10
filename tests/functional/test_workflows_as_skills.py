@@ -132,6 +132,17 @@ class TestInstall:
         assert not (paths.store_dir() / "reviewer").exists()
         assert not any(m["slot"] == "skill" for m in _rows())
 
+    def test_as_skill_on_an_installed_workflow_is_not_a_no_op(self, boost,
+                                                              wf_tap):
+        # The same version again, asking for the copy it was installed
+        # without: a no-op there exits 0 and writes no copy.
+        boost("install", "reviewer", "--no-as-skill")
+        r = boost("install", "reviewer", "--as-skill", expect=1)
+        assert "reviewer is already installed" in r.err
+        assert not (paths.store_dir() / "reviewer").exists()
+        r = boost("install", "reviewer", "--no-as-skill", expect=0)
+        assert "! reviewer is already installed" in r.err
+
     def test_as_skill_overrides_config_off_and_is_recorded(self, boost,
                                                            wf_tap):
         boost("config", "set", "workflows_as_skills", "false")

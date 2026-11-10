@@ -3174,11 +3174,36 @@ def same_install(entry: dict, existing: dict) -> bool:
     return bool(digest) and digest == entry.get("content")
 
 
+def request_changes(existing: dict, only_agents: list[str] | None = None,
+                    as_skill: bool | None = None) -> bool:
+    """Whether an install request asks for something ``existing`` lacks.
+
+    :func:`same_install` compares what would be copied; this compares what
+    the user asked for on top. ``install x --agent cursor`` then ``install x
+    --agent codex`` is the same version from the same tap, and calling the
+    second a no-op left codex with no link and exited 0. An explicit agent
+    set counts as a change unless it is exactly the one the lock replays
+    (:func:`preserved_agent_scope` — ``None`` there is every agent, which no
+    explicit list equals); an ``as_skill`` flag counts unless it is what the
+    workflow already does (:func:`wants_skill_copy`). Neither given: the
+    re-install replays the lock and changes nothing.
+    """
+    if only_agents is not None:
+        recorded = preserved_agent_scope(None, existing)
+        if recorded is None or set(only_agents) != set(recorded):
+            return True
+    return as_skill is not None and as_skill != wants_skill_copy(None, existing)
+
+
 def _refuse_installed(entry: dict, existing: dict, message: str,
-                      hint: str, wrap: bool = False) -> BoostError:
+                      hint: str, wrap: bool = False,
+                      only_agents: list[str] | None = None,
+                      as_skill: bool | None = None) -> BoostError:
     """The "already installed" refusal, as :class:`AlreadyInstalled` when
-    :func:`same_install` says re-running it would be a no-op."""
-    if same_install(entry, existing):
+    :func:`same_install` says re-running it would be a no-op and the request
+    adds nothing to it (:func:`request_changes`)."""
+    if (same_install(entry, existing)
+            and not request_changes(existing, only_agents, as_skill)):
         err: BoostError = AlreadyInstalled(
             message, hint=hint, name=entry["name"],
             version=str(existing.get("version")))
@@ -3190,7 +3215,9 @@ def _refuse_installed(entry: dict, existing: dict, message: str,
 
 def _check_scope_conflict(name: str, existing: dict | None, scope: str,
                           resolved_base: Path | None, force: bool,
-                          entry: dict | None = None) -> None:
+                          entry: dict | None = None,
+                          only_agents: list[str] | None = None,
+                          as_skill: bool | None = None) -> None:
     """Refuse a name collision across install scopes before it corrupts state.
 
     Rule/workflow lock entries are keyed by bare name with no per-scope
@@ -3220,7 +3247,9 @@ def _check_scope_conflict(name: str, existing: dict | None, scope: str,
         if not force:
             raise _refuse_installed(entry or {}, existing,
                                     "%s is already installed" % name,
-                                    "`boost reinstall %s` to force" % name)
+                                    "`boost reinstall %s` to force" % name,
+                                    only_agents=only_agents,
+                                    as_skill=as_skill)
         return
     if existing.get("scope", "user") == scope == scopes.SCOPE_PROJECT:
         # Same scope, another repo. Calling that "a different scope" sent the
@@ -3362,7 +3391,9 @@ def _same_place(rows: dict, scope: str, base: Path | None) -> dict:
 
 
 def check_existing(entry: dict, *, force: bool = False, scope: str = "user",
-                   base=None, kind: str | None = None) -> dict | None:
+                   base=None, kind: str | None = None,
+                   only_agents: list[str] | None = None,
+                   as_skill: bool | None = None) -> dict | None:
     """The lock record an install of ``entry`` would replace, or its refusal.
 
     Every "already installed" / "is pinned" / cross-scope refusal the install
@@ -3374,6 +3405,11 @@ def check_existing(entry: dict, *, force: bool = False, scope: str = "user",
     ``kind`` defaults to the entry's own; ``scope``/``base`` are what
     :func:`install` is called with. Returns the existing record (``None`` for a
     fresh install); a returned record therefore means ``force`` let it through.
+
+    ``only_agents`` and ``as_skill`` are the request's ``--agent`` and
+    ``--as-skill``: a same-version re-install is a no-op
+    (:class:`AlreadyInstalled`) only when they ask for nothing new
+    (:func:`request_changes`). ``as_skill`` is a workflow's alone.
     """
     kind = kind or entry.get("kind", "skill")
     name = util.check_item_name(entry["name"], kind)
@@ -3395,7 +3431,8 @@ def check_existing(entry: dict, *, force: bool = False, scope: str = "user",
         if refusal is not None:
             raise refusal
         _check_scope_conflict(name, existing, scope, resolved_base, force,
-                              entry)
+                              entry, only_agents=only_agents,
+                              as_skill=as_skill if kind == "workflow" else None)
         return existing
     if scope == scopes.SCOPE_PROJECT:
         resolved_base = _require_project_base(scope, base, name)
@@ -3421,7 +3458,8 @@ def check_existing(entry: dict, *, force: bool = False, scope: str = "user",
                 entry, existing,
                 "%s is already installed in this project (v%s)"
                 % (name, existing.get("version")),
-                "`boost reinstall %s --local` to force" % name)
+                "`boost reinstall %s --local` to force" % name,
+                only_agents=only_agents)
         return existing
     refuse_case_collision(name, lockfile.installed())
     refuse_copy_case_collision(name)
@@ -3445,7 +3483,8 @@ def check_existing(entry: dict, *, force: bool = False, scope: str = "user",
         raise _refuse_installed(
             entry, existing,
             "%s is already installed (v%s)" % (name, existing.get("version")),
-            "`boost reinstall %s` to force, `boost update` to upgrade" % name)
+            "`boost reinstall %s` to force, `boost update` to upgrade" % name,
+            only_agents=only_agents)
     return existing
 
 
@@ -3833,7 +3872,8 @@ def install(entry: dict, force: bool = False,
     # the rollback's own unlink_agents, so the store kept a copy the lock did
     # not record and the next install refused it as someone else's.
     agents.known_agents()
-    existing = check_existing(entry, force=force, kind="skill")
+    existing = check_existing(entry, force=force, kind="skill",
+                              only_agents=only_agents)
 
     # An upgrade or reinstall replaces a skill already counted, so it adds
     # none: at exactly max_skills, `boost update` declined every upgrade.
@@ -3993,7 +4033,8 @@ def _install_project_skill(entry: dict, force: bool = False,
     projectlock.refuse_unwritable(resolved_base, "install", name)
 
     existing = check_existing(entry, force=force, scope=scopes.SCOPE_PROJECT,
-                              base=resolved_base, kind="skill")
+                              base=resolved_base, kind="skill",
+                              only_agents=only_agents)
 
     refuse_by_policy(entry, projectlock.installed(resolved_base))
 
@@ -5183,7 +5224,7 @@ def _install_rule(entry: dict, force: bool = False,
     # existing-install check below, which compares against this scope/base.
     resolved_base = _require_project_base(scope, base, "rule %s" % name)
     existing = check_existing(entry, force=force, scope=scope, base=base,
-                              kind="rule")
+                              kind="rule", only_agents=only_agents)
     explicit_agents = only_agents is not None
     only_agents = preserved_agent_scope(only_agents, existing)
 
@@ -6161,7 +6202,8 @@ def _install_workflow(entry: dict, force: bool = False,
     name = entry["name"]
     resolved_base = _require_project_base(scope, base, "workflow %s" % name)
     existing = check_existing(entry, force=force, scope=scope, base=base,
-                              kind="workflow")
+                              kind="workflow", only_agents=only_agents,
+                              as_skill=as_skill)
     explicit_agents = only_agents is not None
     only_agents = preserved_agent_scope(only_agents, existing)
 

@@ -381,3 +381,98 @@ class TestAnUndeclaredVersionIsUnknown:
                                   "kind": "skill"})
         assert type(ei.value) is BoostError
         assert ei.value.message == "x is already installed (v0.0.0)"
+
+
+class TestRequestChanges:
+    """A same-version re-install is a no-op only when the request asks for
+    nothing the lock row lacks: another agent set, or another --as-skill."""
+
+    def test_no_flags_change_nothing(self):
+        assert store.request_changes(_rec("acme/kit", agents=["cursor"])) is False
+
+    def test_the_recorded_agent_set_again_changes_nothing(self):
+        rec = _rec("acme/kit", agents=["cursor", "windsurf"])
+        assert store.request_changes(rec, ["windsurf", "cursor"]) is False
+
+    def test_a_declared_set_again_changes_nothing(self):
+        rec = _rec("acme/kit", only_agents=["cursor"], agents=["cursor"])
+        assert store.request_changes(rec, ["cursor"]) is False
+
+    def test_another_agent_is_a_change(self):
+        rec = _rec("acme/kit", only_agents=["cursor"], agents=["cursor"])
+        assert store.request_changes(rec, ["codex"]) is True
+
+    def test_a_subset_is_a_change(self):
+        rec = _rec("acme/kit", agents=["cursor", "windsurf"])
+        assert store.request_changes(rec, ["cursor"]) is True
+
+    def test_any_explicit_set_differs_from_every_agent(self):
+        # A rule that records an undeclared install: every agent.
+        rec = _rec("acme/kit", only_agents=None)
+        assert store.preserved_agent_scope(None, rec) is None
+        assert store.request_changes(rec, ["cursor"]) is True
+
+    def test_the_recorded_as_skill_again_changes_nothing(self):
+        assert store.request_changes(_rec("acme/kit", as_skill=False),
+                                     as_skill=False) is False
+
+    def test_another_as_skill_is_a_change(self):
+        assert store.request_changes(_rec("acme/kit", as_skill=False),
+                                     as_skill=True) is True
+
+    def test_as_skill_absent_from_the_row_follows_the_config(self, sandbox):
+        # workflows_as_skills defaults on, so --as-skill asks for nothing new.
+        assert store.request_changes(_rec("acme/kit"), as_skill=True) is False
+        assert store.request_changes(_rec("acme/kit"), as_skill=False) is True
+
+
+class TestARequestThatAddsSomethingIsARefusal:
+    """check_existing threads the request through, so the no-op is decided on
+    what was asked as well as what is installed."""
+
+    def test_a_user_skill_with_another_agent(self, sandbox):
+        lockfile.set_entry("skill", "x", _rec("acme/kit", agents=["cursor"]))
+        with pytest.raises(BoostError) as ei:
+            store.check_existing(_same(), only_agents=["codex"])
+        assert type(ei.value) is BoostError
+        assert ei.value.message == "x is already installed (v1.2.3)"
+        assert ei.value.hint == ("`boost reinstall x` to force, `boost update` "
+                                 "to upgrade")
+        with pytest.raises(AlreadyInstalled):
+            store.check_existing(_same(), only_agents=["cursor"])
+
+    def test_a_project_skill_with_another_agent(self, sandbox, tmp_path,
+                                                monkeypatch):
+        repo = tmp_path / "proj"
+        (repo / ".git").mkdir(parents=True)
+        monkeypatch.chdir(repo)
+        projectlock.set_skill(repo, "x", _rec("acme/kit", agents=["cursor"]))
+        with pytest.raises(BoostError) as ei:
+            store.check_existing(_same(), scope=scopes.SCOPE_PROJECT,
+                                 base=repo, only_agents=["codex"])
+        assert type(ei.value) is BoostError
+        assert ei.value.hint == "`boost reinstall x --local` to force"
+
+    @pytest.mark.parametrize("kind", ["rule", "workflow"])
+    def test_a_rule_or_workflow_with_another_agent(self, sandbox, kind):
+        lockfile.set_entry(kind, "x", _rec("acme/kit", scope="user",
+                                           only_agents=["cursor"]))
+        with pytest.raises(BoostError) as ei:
+            store.check_existing(_same(kind), only_agents=["codex"])
+        assert type(ei.value) is BoostError
+        assert ei.value.message == "x is already installed"
+
+    def test_a_workflow_with_another_as_skill(self, sandbox):
+        lockfile.set_entry("workflow", "x", _rec("acme/kit", scope="user",
+                                                 as_skill=False))
+        with pytest.raises(BoostError) as ei:
+            store.check_existing(_same("workflow"), as_skill=True)
+        assert type(ei.value) is BoostError
+        with pytest.raises(AlreadyInstalled):
+            store.check_existing(_same("workflow"), as_skill=False)
+
+    def test_as_skill_is_a_workflows_alone(self, sandbox):
+        lockfile.set_entry("rule", "x", _rec("acme/kit", scope="user",
+                                             as_skill=False))
+        with pytest.raises(AlreadyInstalled):
+            store.check_existing(_same("rule"), as_skill=True)
