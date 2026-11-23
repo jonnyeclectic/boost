@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # Copyright the boost contributors.
 # SPDX-License-Identifier: Apache-2.0
-"""May tonight's ``schedule`` run of ci.yml skip the 24-shard mutation run?
+"""May tonight's ``schedule`` run of ci.yml skip the 26-shard mutation run?
 
 On 2026-11-02 run 41512174636 mutated ``b294d51c`` in full and passed. On
 2026-11-03 run 41682296301 mutated the same commit again, every shard, because

@@ -26,7 +26,7 @@ The plan
                             "counts": {qualified: <int>}}}}    # diff only
 
 ``sets`` is keyed by name so a run can carry more than one: ``full`` (the
-committed 24-way pack of every mutant in ``boost_cli/core``, selected by
+committed 26-way pack of every mutant in ``boost_cli/core``, selected by
 fnmatch patterns such as ``boost_cli.core.store.*``) and ``diff`` (the mutants
 of the functions a PR changed plus their direct callers, see
 ``mutation_diff.py``, each named exactly --
@@ -51,14 +51,14 @@ be made advisory.
 
 Usage
 -----
-  mutation_plan.py full --shards 24 --out PLAN      # every mutant, committed pack
+  mutation_plan.py full --shards 26 --out PLAN      # every mutant, committed pack
   mutation_plan.py none --reason TEXT --out PLAN    # nothing to run, and why
   mutation_plan.py base --event E --sha SHA --base-sha B --head-sha H
                                                     # the diff base, on stdout
   mutation_plan.py diff --base SHA --head SHA --stats mutants/mutmut-stats.json \
                         [--shadow] --out PLAN       # the PR's functions, or full
   mutation_plan.py nightly --base B --head H --stats S --reason R [--base-run ID] \
-                           --shards 24 --out PLAN   # full, plus the advisory diff shadow
+                           --shards 26 --out PLAN   # full, plus the advisory diff shadow
   mutation_plan.py matrix --plan PLAN [--advisory]  # [{"set":..,"index":..}, ...]
   mutation_plan.py patterns --plan PLAN --set S --index I --out FILE
                                                     # one shard's argv, NUL-separated
@@ -97,7 +97,7 @@ def _load_shards():
 ms = _load_shards()
 
 #: The full run's width. Python's copy of a number ``ci.yml`` also spells as
-#: ``full --shards 24`` and ``merge --shards 24``;
+#: ``full --shards 26`` and ``merge --shards 26``;
 #: ``tests/unit/test_mutation_shard_count.py`` pins them all to each other.
 FULL_SHARDS: int = ms.SHARDS
 

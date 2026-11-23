@@ -117,7 +117,7 @@ def test_the_skip_reason_names_the_run_and_the_tree():
     ([GOOD], None),                                          # no nightly yet
 ])
 def test_every_missing_fact_means_a_full_run(cands, last):
-    decision = pt.decide("T", cands, last)
+    decision = pt.decide("T", cands, last, now=NOW)
     assert decision.skip is False
     assert decision.reason
     assert decision.pr_run_id is None
@@ -141,7 +141,7 @@ def test_only_the_exact_word_success_proves_a_pr_run(conclusion):
     "SUCCESS", "success ",
 ])
 def test_only_the_exact_word_success_proves_the_nightly(last):
-    assert pt.decide("T", [GOOD], last).skip is False
+    assert pt.decide("T", [GOOD], last, now=NOW).skip is False
 
 
 @pytest.mark.parametrize("merge_tree,head_tree", [
@@ -236,7 +236,7 @@ def test_a_later_pr_may_be_the_proof_and_its_run_is_reported():
 
 
 def test_a_proven_tree_with_a_red_nightly_still_runs_everything():
-    decision = pt.decide("T", [GOOD], "failure")
+    decision = pt.decide("T", [GOOD], "failure", now=NOW)
     assert decision.skip is False
     assert "failure" in decision.reason
 
@@ -248,13 +248,13 @@ def test_an_unfinished_run_says_it_is_still_running():
 
 
 def test_the_reason_for_no_nightly_is_not_blamed_on_the_pr():
-    decision = pt.decide("T", [GOOD], None)
+    decision = pt.decide("T", [GOOD], None, now=NOW)
     assert decision.skip is False
     assert "nightly" in decision.reason
 
 
 def test_an_unknown_merge_tree_is_a_full_run():
-    decision = pt.decide("", [GOOD], "success")
+    decision = pt.decide("", [GOOD], "success", now=NOW)
     assert decision.skip is False
     assert "tree is unknown" in decision.reason
 
@@ -758,7 +758,7 @@ def test_the_newest_pr_run_wins_by_timestamp_not_by_list_position():
         _, cands, _ = pt.gather(api, SHA)
         assert cands[0].run_id == 2
         assert cands[0].conclusion is None
-        assert pt.decide(TREE, cands, "success").skip is False
+        assert pt.decide(TREE, cands, "success", now=NOW).skip is False
 
 
 def test_a_newer_red_run_beats_an_older_green_one():
@@ -766,7 +766,7 @@ def test_a_newer_red_run_beats_an_older_green_one():
         run(2, conclusion="failure", created="2026-10-30T11:00:00Z"),
         run(1, conclusion="success", created="2026-10-30T10:00:00Z"))}))
     _, cands, _ = pt.gather(api, SHA)
-    assert pt.decide(TREE, cands, "success").skip is False
+    assert pt.decide(TREE, cands, "success", now=NOW).skip is False
 
 
 def test_equal_timestamps_are_broken_by_run_id():
@@ -1370,10 +1370,18 @@ def test_main_two_old_whole_codebase_runs_are_as_stale_as_the_newer_one(tmp_path
 def test_the_clock_defaults_to_the_real_one_on_the_command_line(tmp_path):
     real_now = datetime.now(UTC)
 
+    def stamp(hours_old):
+        return (real_now - timedelta(hours=hours_old)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
     def verdict(hours_old, name):
         env = {"GITHUB_OUTPUT": str(tmp_path / name)}     # one file per call: it appends
-        created = (real_now - timedelta(hours=hours_old)).strftime("%Y-%m-%dT%H:%M:%SZ")
-        assert pt.main(["--sha", SHA], api=FakeApi(_routes_with_nightly(created)), env=env) == 0
+        # The PR run must be fresh against the *real* clock too: green_routes
+        # builds it with run(), whose created date is a fixed 2026-10-30T10:00Z.
+        # That aged out of the 13-day proof window on 2026-11-12 and turned this
+        # test red on every branch.
+        routes = _routes_with_nightly(stamp(hours_old),
+                                      **{pr_runs_path(HEAD): runs(run(created=stamp(1)))})
+        assert pt.main(["--sha", SHA], api=FakeApi(routes), env=env) == 0
         return _outputs(env)["skip"]
 
     assert verdict(2, "fresh") == "true"
@@ -1854,7 +1862,7 @@ def test_base_mutation_lets_api_errors_raise():
 #
 # A whole-codebase run is the mutation jobs plus `tests-extended`. Read as a
 # whole, one red or timed-out extended leg on the nightly put every later push
-# on the full 24-shard run and the full `tests` matrix until someone reran the
+# on the full 26-shard run and the full `tests` matrix until someone reran the
 # leg, for nothing: the push runs those legs itself before it can release, and
 # a platform failure says nothing about the score. ci-failure-issue.yml still
 # alarms on the run, so the red leg is reported regardless. That leg is the

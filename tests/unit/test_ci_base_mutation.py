@@ -330,7 +330,7 @@ def test_a_widened_push_plans_full_and_names_its_base(planner):
     reason = "base b5d9c4e mutation failure; planning full"
     argv, outputs = planner(WIDENED=reason)
     assert argv[argv.index("--reason") + 1] == reason
-    assert argv[argv.index("--shards") + 1] == "24"
+    assert argv[argv.index("--shards") + 1] == "26"
     assert outputs["reason"] == reason
     assert outputs["gate_set"] == "full"
 

@@ -642,7 +642,19 @@ TWELVE_SHARDS = 12
 #: 25 jobs succeeded at 27.1-115.7 min, and eight were cancelled or lost
 #: their runner, all on weights `plan` had put at a flat 43.9. The first
 #: twenty-four-wide observation is the CI run of the PR that widens it.
-SHARDS_OBSERVED = 24
+#:
+#: Raised to twenty-six on 2026-11-23 on the same terms. The weights refresh
+#: of 2026-11-11 (#1373, total 398,218,429 ms) packed twenty-four at a
+#: 153.8-min tail, 81% of the 190-min mutate cap, so it failed
+#: `test_the_real_pack_fits_with_margin`. ci.yml's rule is to split wider
+#: rather than raise the cap again. Twenty-six puts the tail at 143.5 min
+#: (76%). Twenty-five would sit at 78%, and that is less margin than it
+#: looks: main's own weights already packed twenty-four at 151.8 min (79.9%),
+#: and the planner total has swung between 375,634,454 and 398,218,429 ms
+#: over the last three refreshes. The first twenty-six-wide observation is
+#: the CI run of release train #1388, and its p50 and worst job go in that
+#: PR's body.
+SHARDS_OBSERVED = 26
 
 #: The eight-shard p50 the fit was re-checked against, named so the two
 #: widths can be compared in one assertion instead of one of them being a

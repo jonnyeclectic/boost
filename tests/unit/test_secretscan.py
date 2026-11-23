@@ -47,6 +47,29 @@ class TestRuleMatches:
     def test_openai_key(self):
         assert "openai-key" in _ids(secretscan.scan_text("sk-" + "d" * 32))
 
+    def test_detects_anthropic_api_key(self):
+        key = "sk-ant-api03-" + "Ab1_" * 20 + "-" + "z" * 8
+        assert "anthropic-key" in _ids(
+            secretscan.scan_text("export ANTHROPIC_API_KEY=" + key))
+
+    def test_detects_anthropic_admin_key(self):
+        key = "sk-ant-admin01-" + "Ab1_" * 20
+        assert "anthropic-key" in _ids(secretscan.scan_text(key))
+
+    def test_redacts_anthropic_api_key_in_snippet(self):
+        key = "sk-ant-api03-" + "Ab1_" * 20
+        got = secretscan.scan_text("ANTHROPIC_API_KEY=" + key)
+        assert got and key not in got[0].snippet
+
+    def test_detects_openai_service_account_and_admin_keys(self):
+        for prefix in ("sk-svcacct-", "sk-admin-"):
+            key = prefix + "Ab1-Cd2_" * 6
+            assert "openai-key" in _ids(secretscan.scan_text(key)), prefix
+
+    def test_detects_openai_project_key_with_underscores(self):
+        key = "sk-proj-" + "Ab1Cd2Ef3_" * 6
+        assert "openai-key" in _ids(secretscan.scan_text(key))
+
     def test_jwt(self):
         jwt = "eyJhbGciOiJIUzI1.eyJzdWIiOiIxMjM0NTY.SflKxwRJSMeKKF2QT4"
         assert "jwt" in _ids(secretscan.scan_text(jwt))
