@@ -1370,10 +1370,17 @@ def test_main_two_old_whole_codebase_runs_are_as_stale_as_the_newer_one(tmp_path
 def test_the_clock_defaults_to_the_real_one_on_the_command_line(tmp_path):
     real_now = datetime.now(UTC)
 
+    def stamp(hours_old):
+        return (real_now - timedelta(hours=hours_old)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
     def verdict(hours_old, name):
         env = {"GITHUB_OUTPUT": str(tmp_path / name)}     # one file per call: it appends
-        created = (real_now - timedelta(hours=hours_old)).strftime("%Y-%m-%dT%H:%M:%SZ")
-        assert pt.main(["--sha", SHA], api=FakeApi(_routes_with_nightly(created)), env=env) == 0
+        # The PR run must be fresh against the *real* clock too: green_routes
+        # dates it off the pinned NOW, which aged out of the 13-day proof window
+        # on 2026-11-13 and turned this test red on every branch.
+        routes = _routes_with_nightly(stamp(hours_old),
+                                      **{pr_runs_path(HEAD): runs(run(created=stamp(1)))})
+        assert pt.main(["--sha", SHA], api=FakeApi(routes), env=env) == 0
         return _outputs(env)["skip"]
 
     assert verdict(2, "fresh") == "true"
