@@ -1376,8 +1376,9 @@ def test_the_clock_defaults_to_the_real_one_on_the_command_line(tmp_path):
     def verdict(hours_old, name):
         env = {"GITHUB_OUTPUT": str(tmp_path / name)}     # one file per call: it appends
         # The PR run must be fresh against the *real* clock too: green_routes
-        # dates it off the pinned NOW, which aged out of the 13-day proof window
-        # on 2026-11-13 and turned this test red on every branch.
+        # builds it with run(), whose created date is a fixed 2026-10-30T10:00Z.
+        # That aged out of the 13-day proof window on 2026-11-12 and turned this
+        # test red on every branch.
         routes = _routes_with_nightly(stamp(hours_old),
                                       **{pr_runs_path(HEAD): runs(run(created=stamp(1)))})
         assert pt.main(["--sha", SHA], api=FakeApi(routes), env=env) == 0
