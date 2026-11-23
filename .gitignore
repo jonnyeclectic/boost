@@ -299,11 +299,11 @@ node_modules/
 # boost, and specific to one developer's machine.
 .serena/
 
-# Playwright MCP server scratch output (accessibility snapshots, console logs).
-# Written into whatever directory the session is running from, one pair of
-# files per page navigation — so a few minutes of driving a browser leaves a
-# dozen untracked files in the repo root, the same noise `.serena/` above is
-# ignored for.
+# Playwright MCP server scratch output: page snapshots (.yml), console logs and
+# screenshots, kept in a .playwright-mcp/ directory under whatever directory the
+# session runs from. Sessions run from the repo root leave it there, and it
+# grows — one checkout held 77 files by October. The same noise `.serena/`
+# above is ignored for.
 .playwright-mcp/
 
 # A SQLite artifact from a tool that passed ":memory:" as a path rather than as
