@@ -117,7 +117,7 @@ def test_the_skip_reason_names_the_run_and_the_tree():
     ([GOOD], None),                                          # no nightly yet
 ])
 def test_every_missing_fact_means_a_full_run(cands, last):
-    decision = pt.decide("T", cands, last)
+    decision = pt.decide("T", cands, last, now=NOW)
     assert decision.skip is False
     assert decision.reason
     assert decision.pr_run_id is None
@@ -141,7 +141,7 @@ def test_only_the_exact_word_success_proves_a_pr_run(conclusion):
     "SUCCESS", "success ",
 ])
 def test_only_the_exact_word_success_proves_the_nightly(last):
-    assert pt.decide("T", [GOOD], last).skip is False
+    assert pt.decide("T", [GOOD], last, now=NOW).skip is False
 
 
 @pytest.mark.parametrize("merge_tree,head_tree", [
@@ -236,7 +236,7 @@ def test_a_later_pr_may_be_the_proof_and_its_run_is_reported():
 
 
 def test_a_proven_tree_with_a_red_nightly_still_runs_everything():
-    decision = pt.decide("T", [GOOD], "failure")
+    decision = pt.decide("T", [GOOD], "failure", now=NOW)
     assert decision.skip is False
     assert "failure" in decision.reason
 
@@ -248,13 +248,13 @@ def test_an_unfinished_run_says_it_is_still_running():
 
 
 def test_the_reason_for_no_nightly_is_not_blamed_on_the_pr():
-    decision = pt.decide("T", [GOOD], None)
+    decision = pt.decide("T", [GOOD], None, now=NOW)
     assert decision.skip is False
     assert "nightly" in decision.reason
 
 
 def test_an_unknown_merge_tree_is_a_full_run():
-    decision = pt.decide("", [GOOD], "success")
+    decision = pt.decide("", [GOOD], "success", now=NOW)
     assert decision.skip is False
     assert "tree is unknown" in decision.reason
 
@@ -758,7 +758,7 @@ def test_the_newest_pr_run_wins_by_timestamp_not_by_list_position():
         _, cands, _ = pt.gather(api, SHA)
         assert cands[0].run_id == 2
         assert cands[0].conclusion is None
-        assert pt.decide(TREE, cands, "success").skip is False
+        assert pt.decide(TREE, cands, "success", now=NOW).skip is False
 
 
 def test_a_newer_red_run_beats_an_older_green_one():
@@ -766,7 +766,7 @@ def test_a_newer_red_run_beats_an_older_green_one():
         run(2, conclusion="failure", created="2026-10-30T11:00:00Z"),
         run(1, conclusion="success", created="2026-10-30T10:00:00Z"))}))
     _, cands, _ = pt.gather(api, SHA)
-    assert pt.decide(TREE, cands, "success").skip is False
+    assert pt.decide(TREE, cands, "success", now=NOW).skip is False
 
 
 def test_equal_timestamps_are_broken_by_run_id():
