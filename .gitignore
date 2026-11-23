@@ -299,6 +299,13 @@ node_modules/
 # boost, and specific to one developer's machine.
 .serena/
 
+# Playwright MCP server scratch output (accessibility snapshots, console logs).
+# Written into whatever directory the session is running from, one pair of
+# files per page navigation — so a few minutes of driving a browser leaves a
+# dozen untracked files in the repo root, the same noise `.serena/` above is
+# ignored for.
+.playwright-mcp/
+
 # A SQLite artifact from a tool that passed ":memory:" as a path rather than as
 # the in-memory sentinel. Junk either way, and on Windows it is worse than junk:
 # a colon cannot appear in a filename there, so committing it makes `git
