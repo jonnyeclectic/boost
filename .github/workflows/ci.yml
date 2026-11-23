@@ -14,7 +14,7 @@ on:
   # functions it changed, and a push to main whose tree a green PR run already
   # tested skips the suite and the shards (`proven` below), so this is where
   # the whole of boost_cli/core is still scored against 80%: the mutation jobs,
-  # and the full 24-shard plan unless the night is idle -- main still at the
+  # and the full 26-shard plan unless the night is idle -- main still at the
   # commit and tree of a green, full run created under 7 days before
   # (`idle-nightly` below), in which case it plans none and says which run it
   # inherits. A dispatch always plans full. A full nightly also runs the diff
@@ -1119,7 +1119,7 @@ jobs:
   #                    — provably not) If so, collect mutmut's test-to-function
   #                    stats ONCE and write the plan the shards run from
   #                    (scripts/mutation_plan.py).
-  #   mutation-shard   twenty-four parallel slices of the mutant set. A file heavier
+  #   mutation-shard   twenty-six parallel slices of the mutant set. A file heavier
   #                    than an even share is split per top-level function
   #                    (mutant names are addressable that way), so store.py —
   #                    18% of all mutants — is no longer a floor of its own.
@@ -1425,7 +1425,7 @@ jobs:
           BOOST_REQUIRE_MUTMUT: "1"
         run: .venv/bin/python -m pytest -q tests/unit/test_mutation_diff.py tests/unit/test_mutation_plan.py
       # Shadow mode. A pull request or merge-queue entry plans BOTH sets: the
-      # full 24-shard run, which still decides `mutation`, and the diff set
+      # full 26-shard run, which still decides `mutation`, and the diff set
       # (the functions the branch changed plus their direct callers, see
       # scripts/mutation_diff.py), which runs alongside on the same commit so
       # `mutation` can compare the two per mutant before the diff gate is
@@ -1469,7 +1469,7 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
         run: |
           plan_full() {
-            python3 scripts/mutation_plan.py full --shards 24 --reason "$1" \
+            python3 scripts/mutation_plan.py full --shards 26 --reason "$1" \
               --out mutation-plan.json
           }
           if [ "$RELEVANT" != "true" ]; then
@@ -1498,7 +1498,7 @@ jobs:
                 if DIFF_BASE="$(python3 scripts/mutation_plan.py base --event "$EVENT" \
                     --sha "$GITHUB_SHA" --base-sha "$BASE_SHA" --head-sha "$HEAD_SHA")"; then
                   # .venv: the diff planner imports mutmut, libcst and PyYAML.
-                  .venv/bin/python scripts/mutation_plan.py diff --shadow --shards 24 \
+                  .venv/bin/python scripts/mutation_plan.py diff --shadow --shards 26 \
                     --base "$DIFF_BASE" --head "$GITHUB_SHA" \
                     --stats mutants/mutmut-stats.json --out mutation-plan.json
                 else
@@ -1521,7 +1521,7 @@ jobs:
                     plan_full "$why; no nightly shadow: a re-run plans full only"
                   elif ! [[ "$SHADOW_BASE" =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ ]]; then
                     plan_full "$why; no nightly shadow: ${SHADOW_REASON:-nightly-shadow-base named no base}"
-                  elif ! .venv/bin/python scripts/mutation_plan.py nightly --shards 24 \
+                  elif ! .venv/bin/python scripts/mutation_plan.py nightly --shards 26 \
                         --base "$SHADOW_BASE" --base-run "$SHADOW_BASE_RUN" --head "$GITHUB_SHA" \
                         --stats mutants/mutmut-stats.json --reason "$why" --out mutation-plan.json \
                       || ! jq -e '.gate_set == "full" and (.sets.full.shards | length) > 0
@@ -1606,7 +1606,7 @@ jobs:
     # because its figures are a snapshot of the pack and the weights as they
     # stood then. The retraction at the end of this block is NOT part of that
     # snapshot and is dated separately. For what the cap is worth against the
-    # pack committed today, run `scripts/mutation_shards.py plan --shards 24
+    # pack committed today, run `scripts/mutation_shards.py plan --shards 26
     # --explain --timeout-minutes 190` rather than trust a number restated here.
     # 190 is the mutate step's cap, not this job's: the step's fires first.
     #
@@ -1737,7 +1737,7 @@ jobs:
     # where that purchase is worth making.
     #
     # Figures re-derived 2026-10-05 against the pack committed that day, and
-    # they go stale on the next weights refresh: run `plan --shards 24
+    # they go stale on the next weights refresh: run `plan --shards 26
     # --explain --timeout-minutes 190` for the live ones rather than trusting
     # these, and read them next to the observed 34.6 / 55.8 rather than alone.
     #
@@ -1899,9 +1899,9 @@ jobs:
       # rerun of the whole matrix to learn anything.
       fail-fast: false
       # One entry per shard of every set in the plan, {set, index}. The full
-      # set is the committed 24-way pack, so its width is still pinned by
+      # set is the committed 26-way pack, so its width is still pinned by
       # tests/unit/test_mutation_shard_count.py, through the planner's
-      # `--shards 24`.
+      # `--shards 26`.
       matrix:
         include: ${{ fromJSON(needs.mutation-plan.outputs.matrix) }}
     # NO harden-runner here, unlike every other Linux job in this file. On
@@ -2275,7 +2275,7 @@ jobs:
           name: mutation-plan
           path: ${{ runner.temp }}/mutation-plan
       # One directory per set, so neither reader can pick up the other's
-      # results: the merge re-derives the 24-way pack and reads only full
+      # results: the merge re-derives the 26-way pack and reads only full
       # shards, and the comparison reads each set from its own side.
       - name: download full shard results
         if: needs.mutation-plan.outputs.gate_set == 'full'
@@ -2438,7 +2438,7 @@ jobs:
         # partial result: mutmut counts an unrun mutant as "not checked" and the
         # gate divides by total, so silently accepting one would quietly lower
         # the score instead of failing.
-        run: python3 scripts/mutation_shards.py merge --shards 24 --into mutants --source shard-results/full --prefix mutation-full-shard-
+        run: python3 scripts/mutation_shards.py merge --shards 26 --into mutants --source shard-results/full --prefix mutation-full-shard-
       - name: mutation strength gate (>=80% killed)
         if: needs.mutation-plan.outputs.gate_set == 'full'
         run: .venv/bin/python scripts/mutation_gate.py --min 80

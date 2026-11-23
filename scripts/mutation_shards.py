@@ -138,7 +138,7 @@ WEIGHTS = Path("scripts/mutation_weights.json")
 #: spelled in two workflows, pinned against them by
 #: ``tests/unit/test_mutation_shard_count.py`` — ``timeout-minutes`` cannot be
 #: read through ``${{ }}``, so the agreement is asserted rather than derived.
-SHARDS = 24
+SHARDS = 26
 
 #: ``mutmut``'s worker count on the runner. It defaults to ``os.cpu_count()``
 #: and ``setup.cfg`` sets no ``max_children``, so on ``ubuntu-latest`` — 4 vCPU
@@ -1268,7 +1268,7 @@ PYTEST_CONFIG_NAMES = ("pytest.ini", ".pytest.ini", "pytest.toml", ".pytest.toml
 #: (`mutation_plan.py` was the third) is covered the day it lands. Only
 #: `.py`: `scripts/mutation_weights.json` sits under the same prefix and is a
 #: packing hint, never a correctness input -- a refresh moves which shard runs
-#: a mutant, not whether it is killed, so it must not buy a 24-shard run.
+#: a mutant, not whether it is killed, so it must not buy a 26-shard run.
 GATE_SCRIPT_PREFIX = "scripts/mutation_"
 GATE_SCRIPT_SUFFIX = ".py"
 

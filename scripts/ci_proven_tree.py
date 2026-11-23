@@ -40,7 +40,7 @@ only when all three facts hold:
    not the run's conclusion where only ``tests-extended`` legs are red,
    because that run is also ci.yml's ``tests-extended`` (macOS and Windows
    on 3.13/3.14): read as a whole, one red or timed-out extended leg would
-   put every later push on the full 24-shard mutation run and the full
+   put every later push on the full 26-shard mutation run and the full
    ``tests`` matrix until someone reran it, and that buys nothing -- a
    platform test failure says nothing about the mutation score, and every
    push runs those legs again itself before it can release. That is the

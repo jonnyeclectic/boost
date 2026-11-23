@@ -141,7 +141,7 @@ def test_full_refuses_zero_shards(tmp_path):
 
 
 def test_full_shards_is_the_committed_count():
-    assert mp.FULL_SHARDS == ms.SHARDS == 24
+    assert mp.FULL_SHARDS == ms.SHARDS == 26
 
 
 def test_none_plan_has_an_empty_matrix(tmp_path):
@@ -1383,7 +1383,7 @@ exit 0
         plan, log, outputs = planner(event)
         assert plan.startswith(".venv/bin/python scripts/mutation_plan.py diff "), plan
         assert " --shadow " in plan + " "
-        assert " --shards 24 " in plan
+        assert " --shards 26 " in plan
         # The base comes from `mutation_plan.py base`, given the event's facts ...
         assert any("mutation_plan.py base --event %s --sha mergecommit0 --base-sha basetip0 "
                    "--head-sha prhead0" % event in line for line in log), log
@@ -1399,7 +1399,7 @@ exit 0
     @pytest.mark.parametrize("event", ["push", "schedule", "workflow_dispatch"])
     def test_everything_else_plans_full(self, planner, event):
         plan, log, outputs = planner(event)
-        assert "python3 scripts/mutation_plan.py full --shards 24 " in plan
+        assert "python3 scripts/mutation_plan.py full --shards 26 " in plan
         assert not any("mutation_plan.py base " in line for line in log)
         assert outputs["shadow"] == "false"
         assert outputs["gate_set"] == "full"
@@ -1407,7 +1407,7 @@ exit 0
     def test_no_diff_base_falls_back_to_full(self, planner):
         # A missing or unfetched base must widen the gate, never empty it.
         plan, _, outputs = planner("pull_request", BASE_FAIL="1")
-        assert "scripts/mutation_plan.py full --shards 24 " in plan
+        assert "scripts/mutation_plan.py full --shards 26 " in plan
         assert outputs["shadow"] == "false"
 
     @pytest.mark.parametrize("event", ["pull_request", "push"])
@@ -1437,7 +1437,7 @@ exit 0
     @pytest.mark.parametrize("event", ["schedule", "workflow_dispatch"])
     def test_a_whole_codebase_run_plans_full_and_says_so(self, planner, event):
         plan, _, outputs = planner(event)
-        assert "python3 scripts/mutation_plan.py full --shards 24 " in plan
+        assert "python3 scripts/mutation_plan.py full --shards 26 " in plan
         assert "whole-codebase run (%s)" % event in plan
         assert outputs["gate_set"] == "full"
 
@@ -1467,7 +1467,7 @@ exit 0
     ], ids=["not-idle", "no-answer", "mismatch", "rerun"])
     def test_a_nightly_that_is_not_idle_plans_full_and_says_why(self, planner, extra, said):
         plan, _, outputs = planner("schedule", **extra)
-        assert "python3 scripts/mutation_plan.py full --shards 24 --reason %s" % said in plan
+        assert "python3 scripts/mutation_plan.py full --shards 26 --reason %s" % said in plan
         assert outputs["gate_set"] == "full"
 
     def test_a_dispatch_ignores_a_stray_idle_verdict(self, planner):
@@ -1511,7 +1511,7 @@ exit 0
     def test_a_full_nightly_with_a_base_plans_its_shadow(self, planner):
         plan, log, outputs = planner("schedule", **self._shadow(ADVISORY_OUT=self.ADVISORY))
         assert plan.startswith(".venv/bin/python scripts/mutation_plan.py nightly "), plan
-        assert (" nightly --shards 24 --base %s --base-run 41682296301 --head mergecommit0 "
+        assert (" nightly --shards 26 --base %s --base-run 41682296301 --head mergecommit0 "
                 "--stats mutants/mutmut-stats.json --reason %s --out mutation-plan.json"
                 % (self.BASE, self.WHY)) in plan
         assert any(line.endswith("matrix --plan mutation-plan.json --advisory") for line in log)
@@ -1522,7 +1522,7 @@ exit 0
 
     def test_a_rerun_plans_full_without_a_shadow(self, planner):
         plan, log, outputs = planner("schedule", GITHUB_RUN_ATTEMPT="2", **self._shadow())
-        assert ("scripts/mutation_plan.py full --shards 24 --reason %s; no nightly shadow: a "
+        assert ("scripts/mutation_plan.py full --shards 26 --reason %s; no nightly shadow: a "
                 "re-run plans full only --out" % self.WHY) in plan
         assert not any(_NIGHTLY in line for line in log)
         assert (outputs["shadow"], outputs["advisory_matrix"]) == ("false", "[]")
@@ -1543,12 +1543,12 @@ exit 0
 
     def test_a_sha256_base_is_planned(self, planner):
         plan, _, _ = planner("schedule", **self._shadow(SHADOW_BASE="c" * 64))
-        assert " nightly --shards 24 --base %s " % ("c" * 64) in plan
+        assert " nightly --shards 26 --base %s " % ("c" * 64) in plan
 
     def test_a_nightly_planner_that_fails_falls_back_to_full(self, planner):
         plan, log, outputs = planner("schedule", NIGHTLY_FAIL="1", **self._shadow())
-        assert any(" nightly --shards 24 " in line for line in log)
-        assert ("scripts/mutation_plan.py full --shards 24 --reason %s; no nightly shadow: "
+        assert any(" nightly --shards 26 " in line for line in log)
+        assert ("scripts/mutation_plan.py full --shards 26 --reason %s; no nightly shadow: "
                 "the nightly planner did not write a full-gated plan --out" % self.WHY) in plan
         assert outputs["gate_set"] == "full"
 
@@ -1572,7 +1572,7 @@ exit 0
         alone = ('{"gate_set":"full","reasons":["w","no nightly shadow: x"],'
                  '"sets":{"full":{"shards":[["a"]]}}}')
         plan, _, outputs = planner("schedule", NIGHTLY_OVERRIDE=alone, **self._shadow())
-        assert " nightly --shards 24 " in plan
+        assert " nightly --shards 26 " in plan
         assert outputs["reason"] == "w; no nightly shadow: x"
         assert outputs["shadow"] == "false"
 
@@ -1591,7 +1591,7 @@ exit 0
     @pytest.mark.parametrize("idle", ["mismatch", "rerun"])
     def test_an_idle_refusal_never_shadows(self, planner, idle):
         plan, log, _ = planner("schedule", IDLE=idle, **self._shadow())
-        assert "scripts/mutation_plan.py full --shards 24 " in plan
+        assert "scripts/mutation_plan.py full --shards 26 " in plan
         assert not any(_NIGHTLY in line for line in log)
 
 

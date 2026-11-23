@@ -1862,7 +1862,7 @@ def test_base_mutation_lets_api_errors_raise():
 #
 # A whole-codebase run is the mutation jobs plus `tests-extended`. Read as a
 # whole, one red or timed-out extended leg on the nightly put every later push
-# on the full 24-shard run and the full `tests` matrix until someone reran the
+# on the full 26-shard run and the full `tests` matrix until someone reran the
 # leg, for nothing: the push runs those legs itself before it can release, and
 # a platform failure says nothing about the score. ci-failure-issue.yml still
 # alarms on the run, so the red leg is reported regardless. That leg is the
