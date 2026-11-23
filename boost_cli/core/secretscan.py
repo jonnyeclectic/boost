@@ -68,8 +68,12 @@ RULES: tuple = (
          _rx(r"\b(AIza[0-9A-Za-z_\-]{35})\b"), 1, "Google API key"),
     Rule("stripe-secret-key", "high",
          _rx(r"\b((?:r|s)k_live_[A-Za-z0-9]{16,})\b"), 1, "Stripe live key"),
+    Rule("anthropic-key", "high",
+         _rx(r"\b(sk-ant-(?:api|admin)\d{2}-[A-Za-z0-9_\-]{20,})"), 1,
+         "Anthropic API key"),
     Rule("openai-key", "high",
-         _rx(r"\b(sk-(?:proj-)?[A-Za-z0-9]{20,})\b"), 1, "OpenAI-style key"),
+         _rx(r"\b(sk-(?:proj|svcacct|admin)-[A-Za-z0-9_\-]{20,}"
+             r"|sk-[A-Za-z0-9]{20,}\b)"), 1, "OpenAI-style key"),
     Rule("jwt", "medium",
          _rx(r"\b(eyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}"
              r"\.[A-Za-z0-9_\-]{8,})\b"), 1, "JSON Web Token"),
