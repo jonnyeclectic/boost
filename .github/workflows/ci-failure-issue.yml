@@ -37,9 +37,9 @@ on:
     # whole-codebase run not happening at all, which no `workflow_run` of `ci`
     # can report, since nothing completes. It fails when that run is overdue,
     # and so opens its own tracker here.
-    workflows: ["adapter-conformance", "boost-langchain", "ci", "codeql",
-      "compat", "demo", "eval-corpus-refresh", "eval-explain", "eval-scale",
-      "eval-stats", "floors", "fuzz", "html-validate", "licenses",
+    workflows: ["adapter-conformance", "boost-langchain", "ci", "clock-canary",
+      "codeql", "compat", "demo", "eval-corpus-refresh", "eval-explain",
+      "eval-scale", "eval-stats", "floors", "fuzz", "html-validate", "licenses",
       "lighthouse", "links", "lock-refresh", "markdownlint",
       "mutation-weights-refresh", "nightly-watch", "package-metadata",
       "pip-audit", "post-deploy", "prose-lint", "release", "sbom",
