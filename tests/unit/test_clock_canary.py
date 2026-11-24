@@ -367,7 +367,8 @@ class TestMain:
         assert rc == 0
         assert "no date bomb within 14 days (clock moved to 2026-12-08)" in summary
         cmd, env = fake.calls[1]
-        assert cmd[1:7] == ["-m", "pytest", "-p", cc.PLUGIN, "tests/unit", "tests/functional"]
+        assert cmd[1:8] == ["-m", "pytest", "-p", cc.PLUGIN, "--continue-on-collection-errors",
+                            "tests/unit", "tests/functional"]
         assert env[cc.DAYS_ENV] == "14" and env[cc.SENTINEL_ENV] == cc.SELF_TEST
 
     def test_a_bomb_exits_one_and_flakes_and_old_reds_only_warn(self, tmp_path, capsys):
@@ -403,6 +404,14 @@ class TestMain:
     def test_a_run_with_no_named_failure_is_an_error(self, tmp_path):
         assert _main(FakePytest((4, OK)), tmp_path)[0] == 2
         assert _main(FakePytest((1, OK)), tmp_path)[0] == 2
+
+    def test_an_interrupted_moved_run_is_an_error_even_with_failures_named(self, tmp_path):
+        # The runs continue past collection errors, so rc 2 can only mean the
+        # suite stopped part way: sorting what did fail could call the rest
+        # clean without having run it.
+        fake = FakePytest((2, {**OK, "r": "failed"}), (1, {"r": "failed"}), (1, {"r": "failed"}))
+        assert _main(fake, tmp_path)[0] == 2
+        assert len(fake.calls) == 2, "no re-run of a partial suite's failures"
 
     def test_a_rerun_that_could_not_run_is_an_error(self, tmp_path):
         fake = FakePytest((1, {**OK, "b": "failed"}), (4, {}), (0, {}))
@@ -441,9 +450,14 @@ class TestAPlantedBombIsCaught:
     """
 
     @pytest.fixture
-    def bomb(self, tmp_path):
+    def stamped(self):
+        # Today on the real clock, read from the C module the shim cannot
+        # reach: this file runs under the canary too.
         import _datetime
-        stamped = _datetime.datetime.now(_datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        return _datetime.datetime.now(_datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    @pytest.fixture
+    def bomb(self, tmp_path, stamped):
         (tmp_path / "test_bomb.py").write_text(textwrap.dedent("""
             from datetime import UTC, datetime, timedelta
             PR_RUN_CREATED = datetime.strptime("%s", "%%Y-%%m-%%dT%%H:%%M:%%SZ").replace(tzinfo=UTC)
@@ -454,12 +468,41 @@ class TestAPlantedBombIsCaught:
             """ % stamped), encoding="utf-8", newline="\n")
         return tmp_path
 
-    def _canary(self, where, days):
+    def _canary(self, where, days, *targets):
         return subprocess.run(
-            [sys.executable, str(SCRIPT), "--days", str(days), "--", "test_bomb.py",
-             "-p", "no:cacheprovider"],
+            [sys.executable, str(SCRIPT), "--days", str(days), "--",
+             *(targets or ("test_bomb.py",)), "-p", "no:cacheprovider"],
             cwd=where, env=_clean_env(), capture_output=True, text=True, timeout=300,
             check=False)
+
+    def test_one_that_goes_off_at_import_is_named_and_hides_no_other(self, bomb, stamped):
+        # A module-level bomb fails collection, and a serial pytest that hits
+        # a collection error runs no test at all and exits 2. The canary used
+        # to stop there with "cannot be told apart", naming no date, while the
+        # bomb next to it never ran.
+        (bomb / "test_import_bomb.py").write_text(textwrap.dedent("""
+            from datetime import UTC, datetime, timedelta
+            PR_RUN_CREATED = datetime.strptime("%s", "%%Y-%%m-%%dT%%H:%%M:%%SZ").replace(tzinfo=UTC)
+            assert datetime.now(UTC) - PR_RUN_CREATED < timedelta(days=13), "stale at import"
+
+            def test_unreached_when_the_import_fails():
+                pass
+            """ % stamped), encoding="utf-8", newline="\n")
+        # And one that cannot import on any date: red regardless, not a bomb.
+        (bomb / "test_broken_import.py").write_text(
+            "import a_module_no_one_ships_for_the_clock_canary\n\n"
+            "def test_unreached():\n    pass\n", encoding="utf-8", newline="\n")
+        proc = self._canary(bomb, cc.DEFAULT_DAYS, "test_bomb.py", "test_import_bomb.py",
+                            "test_broken_import.py")
+        assert proc.returncode == 1, proc.stdout + proc.stderr
+        for nodeid in ("test_import_bomb.py",
+                       "test_bomb.py::test_the_pr_run_still_proves_the_tree"):
+            assert re.search(r"::error title=clock canary \+14d::%s fails on a clock moved "
+                             r"14 days ahead \(to \d{4}-\d\d-\d\d\)" % re.escape(nodeid),
+                             proc.stdout), (nodeid, proc.stdout)
+        assert ("::warning title=clock canary +14d::test_broken_import.py fails on "
+                "today's clock as well") in proc.stdout, proc.stdout
+        assert "::error title=clock canary +14d::test_broken_import.py" not in proc.stdout
 
     def test_the_default_offset_catches_it_and_says_when(self, bomb):
         proc = self._canary(bomb, cc.DEFAULT_DAYS)

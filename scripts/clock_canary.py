@@ -35,9 +35,14 @@ clock:
   rest of the suite's company to happen lands here too, bomb or not, and the
   warning says so rather than calling it harmless.
 
+A module that fails to import is sorted the same way, by its node id: every
+run continues past collection errors, so one module going off at import
+neither hides the rest of the suite nor stops the re-runs.
+
 Exit 2 when the canary cannot answer: the shim did not take (a green run on an
 unmoved clock would prove nothing, so this is checked before the suite runs
-and again inside it), or pytest stopped without naming a failed test.
+and again inside it), pytest stopped before the whole suite ran (interrupted,
+or a usage or internal error), or it failed without naming a failed test.
 
 ``DEFAULT_DAYS`` is 14 because the longest proof window in
 ``scripts/ci_proven_tree.py`` is ``MAX_PR_RUN_AGE``, 13 days. A test that ages
@@ -200,7 +205,10 @@ def run_pytest(args: Sequence[str], env: Mapping[str, str], *,
     os.close(fd)
     report = Path(name)
     try:
-        proc = run([sys.executable, "-m", "pytest", "-p", PLUGIN, *args],
+        # A module that fails to import is a failure like any other here: a
+        # serial pytest otherwise runs nothing once one does, and exits 2.
+        proc = run([sys.executable, "-m", "pytest", "-p", PLUGIN,
+                    "--continue-on-collection-errors", *args],
                    env={**env, REPORT_ENV: str(report), SENTINEL_ENV: SELF_TEST},
                    check=False)
         return read_report(proc.returncode, report.read_text(encoding="utf-8"))
@@ -305,9 +313,13 @@ def main(argv: Sequence[str] | None = None, *, env: Mapping[str, str] | None = N
         _write_summary(base, summary(Verdict((), (), ()), days, moved_to))
         print("%s: green with the clock at %s (+%d days)" % (PREFIX, moved_to.isoformat(), days))
         return 0
-    if first.rc not in (1, 2) or not first.failed:
-        return _error("pytest exited %d on the moved clock without naming a failed test "
-                      "(usage, internal or collection trouble): read the log above" % first.rc)
+    if first.rc != 1:
+        return _error("pytest exited %d on the moved clock: interrupted, or a usage or "
+                      "internal error, so not all of the suite ran: read the log above"
+                      % first.rc)
+    if not first.failed:
+        return _error("pytest exited 1 on the moved clock without naming a failed test: "
+                      "read the log above")
 
     ids = sorted(first.failed)
     print("%s: %d failure(s) on the moved clock; re-running them apart from the rest "
