@@ -234,6 +234,28 @@ class TestAnUnmeasuredFunctionIsPricedBySize:
         assert len(holding) > 1, "every new function went to one shard"
 
 
+def _tree_is_mutated(core: Path = CORE) -> bool:
+    """True when this suite is running inside mutmut's rewritten copy.
+
+    There ``CORE`` is the mutated ``boost_cli/core``, and parsing it is what
+    each test below costs: 23.4 s apiece in run 45263898738's stats pass,
+    against well under a second on a checkout. They read source and
+    ``scripts/`` only, so they map to no mutant and skipping them there
+    kills no fewer. Same rule as ``test_mutation_shard_count.py``'s
+    ``real_tree_only``.
+    """
+    try:
+        return "__mutmut_" in (core / "store.py").read_text(encoding="utf-8")
+    except OSError:
+        return True        # can't tell -- don't parse it
+
+
+real_tree_only = pytest.mark.skipif(
+    _tree_is_mutated(), reason="tree rewritten by mutmut; parsing it costs "
+                               "23 s a test in the stats pass")
+
+
+@real_tree_only
 class TestTheInvariantHoldsOverTheRealTree:
     """The relaxation rests on a claim about this repository, so assert it.
 
@@ -284,3 +306,9 @@ class TestTheInvariantHoldsOverTheRealTree:
             "invariant above is vacuous")
         assert ms.top_level_symbols(CORE / with_classes[0]) == [], \
             "that module should be one the AST route refuses"
+
+
+def test_the_real_tree_class_skips_inside_mutants_only():
+    marks = getattr(TestTheInvariantHoldsOverTheRealTree, "pytestmark", [])
+    assert [m for m in marks if m.name == "skipif"]
+    assert _tree_is_mutated() == (ROOT.name == "mutants")

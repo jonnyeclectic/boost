@@ -62,7 +62,29 @@ def _text_calls_without_encoding(source: str) -> list[int]:
     return bad
 
 
+def _tree_is_mutated(pkg: Path = PKG) -> bool:
+    """True when this suite is running inside mutmut's rewritten copy.
+
+    The scanner below copes with that copy (it drops the mutant functions),
+    but parsing it is the cost: 30.8 s in run 45263898738's stats pass, the
+    suite's second-slowest test, against well under a second on a checkout.
+    It calls no ``boost_cli`` function, so it maps to no mutant and skipping
+    it there kills no fewer. Same rule as ``test_mutation_shard_count.py``'s
+    ``real_tree_only``; the scanner's own tests below still run there.
+    """
+    try:
+        return "__mutmut_" in (pkg / "core" / "store.py").read_text(encoding="utf-8")
+    except OSError:
+        return True        # can't tell -- don't scan it
+
+
+real_tree_only = pytest.mark.skipif(
+    _tree_is_mutated(), reason="tree rewritten by mutmut; scanning it is the "
+                               "second-slowest test in the stats pass")
+
+
 class TestNoLocaleDecoding:
+    @real_tree_only
     def test_every_text_mode_launch_names_its_encoding(self):
         offenders = [
             "%s:%d" % (path.relative_to(PKG).as_posix(), line)
@@ -72,6 +94,11 @@ class TestNoLocaleDecoding:
         assert offenders == [], (
             "text=True without encoding= decodes with the Windows code page; "
             "pass encoding=\"utf-8\", errors=\"replace\"")
+
+    def test_the_tree_scan_skips_inside_mutants_only(self):
+        scan = TestNoLocaleDecoding.test_every_text_mode_launch_names_its_encoding
+        assert [m for m in getattr(scan, "pytestmark", []) if m.name == "skipif"]
+        assert _tree_is_mutated() == (PKG.parent.name == "mutants")
 
     def test_scanner_flags_a_bare_text_launch(self):
         src = ("import subprocess\n"

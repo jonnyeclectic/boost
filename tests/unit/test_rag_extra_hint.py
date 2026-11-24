@@ -238,6 +238,28 @@ def _docstrings(tree: ast.AST) -> set[int]:
     return ids
 
 
+def _tree_is_mutated(pkg: Path = PKG) -> bool:
+    """True when this suite is running inside mutmut's rewritten copy.
+
+    There ``PKG`` is ``mutants/boost_cli``, whose ``core`` files carry every
+    mutant of every function, so the scan below parses megabytes of them:
+    41.9 s in run 45263898738's stats pass against well under a second on a
+    checkout, the slowest test in the suite. It calls no ``boost_cli``
+    function, so it maps to no mutant and skipping it there kills no fewer.
+    Same rule as ``test_mutation_shard_count.py``'s ``real_tree_only``.
+    """
+    try:
+        return "__mutmut_" in (pkg / "core" / "store.py").read_text(encoding="utf-8")
+    except OSError:
+        return True        # can't tell -- don't scan it
+
+
+real_tree_only = pytest.mark.skipif(
+    _tree_is_mutated(), reason="tree rewritten by mutmut; scanning it is the "
+                               "slowest test in the stats pass")
+
+
+@real_tree_only
 def test_the_requirement_is_spelled_in_one_place():
     """A new surface that spells the command itself fails here, not in zsh."""
     hits: list[str] = []
@@ -257,3 +279,11 @@ def _extra_spec_line() -> int:
     src = Path(dense.__file__).read_text(encoding="utf-8").splitlines()
     return next(i for i, line in enumerate(src, 1)
                 if line.startswith("EXTRA_SPEC = "))
+
+
+def test_the_scan_skips_inside_mutants_only():
+    # The mark is what keeps the scan out of mutmut's stats pass, and the
+    # guard must not fire on a checkout, where the scan is the whole check.
+    assert [m for m in getattr(test_the_requirement_is_spelled_in_one_place,
+                               "pytestmark", []) if m.name == "skipif"]
+    assert _tree_is_mutated() == (PKG.parent.name == "mutants")
