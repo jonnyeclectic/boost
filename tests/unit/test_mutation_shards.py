@@ -591,7 +591,14 @@ def test_the_carried_exit_is_the_constant_zero():
     ("boost_cli.core.store.x_install__mutmut_12", "store.py"),
     ("boost_cli.core.m.xǁA.Bǁm__mutmut_3", "m.py"),
     ("boost_cli.core.rag.bm25.xǁKǁm__mutmut_*", "rag/bm25.py"),
+    # sentinel_for's bare-key globs, as a plain plan lists them
+    ("boost_cli.core.store.x_instal[l*]", "store.py"),
+    ("boost_cli.core.rag.bm25.xǁKǁ[m*]", "rag/bm25.py"),
     # nothing a full plan writes, so nothing the merge will map
+    ("boost_cli.core.store.x_instal[l]", None),
+    ("boost_cli.core.store.x_insta[ll*]", None),
+    ("boost_cli.core.store.x_instal[*]", None),
+    ("boost_cli.core.*[x*]", None),
     ("boost_cli.core.*x", None),
     ("other.module.*", None),
     ("boost_cli.core.store.x_a__mutmut_0", None),
@@ -622,6 +629,7 @@ def test_every_key_a_selector_matches_lies_in_the_file_it_maps_to():
         return next(f for mod, f in sorted(files.items(), key=lambda t: -len(t[0]))
                     if key.startswith(mod + ".x"))
 
+    stats_keys = ["boost_cli.core.store.x_install", "boost_cli.core.rag.bm25.x_score"]
     selectors = ["boost_cli.core.store.*", "boost_cli.core.store.xǁ*",
                  "boost_cli.core.store.x_install__mutmut_*",
                  "boost_cli.core.m.xǁA.Bǁm__mutmut_*",
@@ -631,6 +639,12 @@ def test_every_key_a_selector_matches_lies_in_the_file_it_maps_to():
         hits = [k for k in keys if _fnmatch.fnmatchcase(k, sel)]
         assert hits, sel
         assert {file_of(k) for k in hits} == {ms.selector_file(sel)}, sel
+    # A sentinel selects no mutant at all, only its function's stats key,
+    # which lies in the file it maps to.
+    for sel in ("boost_cli.core.store.x_instal[l*]", "boost_cli.core.rag.bm25.x_scor[e*]"):
+        assert not [k for k in keys if _fnmatch.fnmatchcase(k, sel)], sel
+        assert [k for k in stats_keys if _fnmatch.fnmatchcase(k, sel)] == [sel.replace("[", "")[:-2]]
+        assert ms.selector_file(sel) == file_of(sel.replace("[", "")[:-2] + "__mutmut_1")
     # the anchoring that keeps `install` from swallowing `install_from_path`
     assert not _fnmatch.fnmatchcase("boost_cli.core.store.x_install_from_path__mutmut_1",
                                     "boost_cli.core.store.x_install__mutmut_*")
@@ -642,6 +656,8 @@ def test_the_committed_plans_ownership_is_the_committed_packs():
     # the owners `pack` does -- including every split file's functions.
     bins = ms.pack(_REAL_ROOT, ms.SHARDS)
     shards = [ms.patterns_for_bin(_REAL_ROOT, b) for b in bins]
+    # Including the sentinels a per-function-only bin carries.
+    assert any(ms.sentinel_for(_REAL_ROOT, u) in s for b, s in zip(bins, shards, strict=True) for u in b)
     assert ms.plan_ownership(shards) == ms.pack_ownership(_REAL_ROOT, ms.SHARDS)
 
 

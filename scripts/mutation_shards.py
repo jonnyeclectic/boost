@@ -1199,23 +1199,31 @@ CARRIED_RECORD = "mutation-carried.json"
 _MUTANT_SEP = "__mutmut_"
 _EXACT = re.compile(r"(?P<q>[^\s*?\[\]]+)%s[1-9][0-9]*" % _MUTANT_SEP)
 _GLOB = re.compile(r"[*?\[\]]")
+#: :func:`sentinel_for`'s shape: a literal, then its last character as ``[<d>*]``.
+_SENTINEL = re.compile(r"(?P<head>[^\s*?\[\]]+)\[(?P<last>[^\s*?\[\]])\*\]")
 
 
 def selector_module(selector: str) -> str | None:
     """The dotted module one full-set selector addresses, or None.
 
-    A full shard's argv holds four shapes, and each addresses exactly one
+    A full shard's argv holds five shapes, and each addresses exactly one
     module: ``<module>.*`` (a whole file, ``pattern_for``),
     ``<module>.xǁ*`` (every method of the file), ``<module>.<mangled>__mutmut_*``
-    (one function) and ``<module>.<mangled>__mutmut_<n>`` (one mutant). A
-    mangled method name may itself hold a dot (``xǁA.Bǁm``, a nested class), so
-    a function's module is cut at its ``.xǁ`` when it has one, as
-    ``mutation_diff.split_qualified`` does. Anything else -- another glob, an
-    empty module -- is None, and the merge refuses the plan rather than guess
-    which file it meant.
+    (one function), ``<module>.<mangled>__mutmut_<n>`` (one mutant) and
+    :func:`sentinel_for`'s ``<module>.<mangle>[<d>*]``, the bare stats key of
+    a function whose ``<mangled>`` is ``<mangle><d>``. A sentinel matches no
+    mutant key, so it is read as its function's own pattern, which a plain
+    plan always lists in the same shard. A mangled method name may itself
+    hold a dot (``xǁA.Bǁm``, a nested class), so a function's module is cut at
+    its ``.xǁ`` when it has one, as ``mutation_diff.split_qualified`` does.
+    Anything else -- another glob, an empty module -- is None, and the merge
+    refuses the plan rather than guess which file it meant.
     """
     if not isinstance(selector, str) or not selector:
         return None
+    sentinel = _SENTINEL.fullmatch(selector)
+    if sentinel is not None:
+        selector = sentinel["head"] + sentinel["last"] + _MUTANT_SEP + "*"
     methods = ".x%s*" % METHODS
     if selector.endswith(methods):
         module = selector[: -len(methods)]
