@@ -26,6 +26,9 @@ confirm by setting it:
 - a ledgered PR run proving its merge push (`ci_proven_tree.py`, fact 2),
   which then skips mutation and releases (`pull_request`).
 
+The first two have no switch of their own: `write` also turns on the nightly
+writer that the words do cover, so setting it confirms all three together.
+
 And "Can only under-state the score" is more than this design proves.
 "Soundness" retracts it to "carrying never adds a kill": the mutants a
 ledgered run does re-run are measured under its own selectors, which can
@@ -1175,7 +1178,7 @@ implementation does about each finding:
 |---|---|---|
 | blocker | the reversals were recorded as owner-approved with no owner words to show it | Status, "What this reverses" and both 2026-10-31 amendments now carry the owner's dated selection of 2026-11-23, quoted verbatim, and claim nothing wider than its words. What the words do not cover is listed in Status: timeouts, `workflow_dispatch` as a writer, a release resting on a ledgered score, and a ledgered PR proving its push. Each reversal is still a separate `MUTATION_LEDGER` token, unset by default, and "Rollout" says plainly that `push` gates the release. |
 | major | soundness assumed non-carried mutants run as in a plain run | "Soundness" restated; the gate no longer claims a range or a conclusive red; the A/B stop rule is per key and by direction; `forkserver` noted as the owner's separate option |
-| major | the release path would be the first test of ledgered code, after every digest reset | `push` is its own token, added after the A/B; "Rollout" says that `pull_request` alone also reaches a release, through a proven push; the nightly self-check is a dry run of the ledgered planner and merge; the mixed-argv gap is stated under "Residuals" |
+| major | the release path would be the first test of ledgered code, after every digest reset | `push` is its own token, added after the A/B; "Rollout" says that `pull_request` alone also reaches a release, through a proven push; the nightly self-check is a dry run of the ledgered planner and merge; the mixed-argv gap is stated under "Residuals". Adding `push` only after a green ledgered PR run is the owner's ordering in "Rollout"; the reader does not enforce it ("Residuals") |
 | minor | the 1,500-name cap binds on packing by time alone | two-constraint pack (time, names per bin), measured on 45290191649: max 1,500, 0 un-carried |
 | minor | a fully carried file has no owner | the merge gives it shard 0; tested |
 | minor | the pack-equality check keyed on "carries nothing" | keyed on the absence of `carried`; `apply` never writes an empty one |

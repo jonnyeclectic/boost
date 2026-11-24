@@ -205,18 +205,20 @@ owner selected the option "Survivor ledger (#5)", whose text read exactly:
 unchanged ones. Saves 65–85 min per full run. Can only under-state the
 score, but reverses 'never trust a cached verdict'." This amendment claims
 nothing wider than those words. They do not mention timeout verdicts,
-`workflow_dispatch` as a writer or releases, so each of those, below, waits
-behind its own token until the owner sets it (the design's Status lists
-them). Nothing below is in force until the owner sets the repository
-variable `MUTATION_LEDGER`; unset, no run writes or reads a ledger. For
-survived and timeout verdicts only, never killed, a survivor ledger would be
-written only by a green, unledgered `schedule`/`workflow_dispatch` run on
-`main`, as an artifact, not a cache. PR runs would read it once the owner
-adds `pull_request` to the variable. Push runs would read it only once the
-owner also adds `push`, and that includes the push run whose success
-`publish.yml` releases from, which is exactly what the sentence above rules
-out ("never restored by a release workflow"). `publish.yml` itself stays
-cache-free. Carrying a verdict never adds a kill. Design:
+`workflow_dispatch` as a writer, a release resting on a ledgered score, or a
+ledgered PR run proving its merge push. Each is behind the `MUTATION_LEDGER`
+token the design's Status names for it, and the first two share `write` with
+the nightly writer the words do cover. Nothing below is in force until the
+owner sets the repository variable `MUTATION_LEDGER`; unset, no run writes
+or reads a ledger. For survived and timeout verdicts only, never killed, a
+survivor ledger would be written only by a green, unledgered
+`schedule`/`workflow_dispatch` run on `main`, as an artifact, not a cache.
+PR runs would read it once the owner adds `pull_request` to the variable.
+Push runs would read it only once the owner also adds `push`, and that
+includes the push run whose success `publish.yml` releases from, which is
+exactly what the sentence above rules out ("never restored by a release
+workflow"). `publish.yml` itself stays cache-free. Carrying a verdict never
+adds a kill. Design:
 `docs/superpowers/specs/2026-11-24-mutation-survivor-ledger.md`.
 
 ## Goals, non-goals, anti-goals
