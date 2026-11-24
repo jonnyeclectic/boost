@@ -75,7 +75,7 @@ THE MUTATION VERDICT OF A RE-RUN (approved 2026-11-24 for the mutation verdict
 only; docs/superpowers/plans/2026-10-31-ci-speed.md, review focus 4). A PR run
 re-run for a reason that is not mutation -- typically a macOS ``tests`` cell
 cancelled with no steps after ~52 min, then "re-run failed jobs" -- used to
-send its merge push to the full 26-shard run: 42430658365 (push 42444697189,
+send its merge push to the full mutation run (24 shards then): 42430658365 (push 42444697189,
 179.6 min) and 41861286489 (push 41892921723, 187.7 min). Its tests are still
 not first-attempt evidence, so such a run never gives ``skip=true``. But when
 every mutation job of it executed exactly once, in attempt 1, and passed
@@ -332,8 +332,8 @@ MUTATION_JOB = "mutation"
 #: them: the planner (no matrix) and each shard leg, a matrix job with no
 #: `name:` over ``{"set": ..., "index": N}``, so ``mutation-shard (full, 3)``
 #: -- the shape every recorded PR run's attempts listed. ``_is_mutation_job``
-#: says which jobs a re-run must have carried over; tests/unit/
-#: test_ci_proven_tree.py ties both names to ci.yml.
+#: says which jobs a re-run must have carried over;
+#: test_the_rerun_rules_job_names_are_ci_ymls ties both names to ci.yml.
 PLAN_JOB = "mutation-plan"
 SHARD_JOB = "mutation-shard"
 _FULL_SHARD = re.compile(re.escape(SHARD_JOB) + r" \(full, (0|[1-9][0-9]{0,3})\)")

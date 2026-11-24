@@ -3747,6 +3747,28 @@ def test_the_advisory_names_fact_3_drops_are_exactly_ci_ymls(jobs):
         assert not pt.ADVISORY_JOB_NAMES.fullmatch(leg), leg
 
 
+def test_the_rerun_rules_job_names_are_ci_ymls(jobs):
+    # `_mutation_carried` finds a re-run's mutation jobs only by name. A
+    # renamed job, an added `name:` or a third matrix key would make it
+    # refuse every re-run without a test noticing; this is that test.
+    for key in (pt.PLAN_JOB, pt.SHARD_JOB, pt.MUTATION_JOB):
+        assert key in jobs, key
+        assert "name" not in jobs[key], key
+    assert jobs[pt.SHARD_JOB]["strategy"]["matrix"] == {
+        "include": "${{ fromJSON(needs.mutation-plan.outputs.matrix) }}"}
+    assert [n for n in jobs[pt.MUTATION_JOB]["needs"] if not pt._is_mutation_job(n)] == [
+        "mutation-advisory-shard"]
+    mp = _plan_module()
+    plan = {"gate_set": "full", "reasons": [],
+            "sets": {"full": {"shards": [["a"]] * 3}, "diff": {"shards": [["b"]]}}}
+    legs = ["%s (%s)" % (pt.SHARD_JOB, ", ".join(str(v) for v in entry.values()))
+            for entry in mp.matrix(plan)]
+    assert legs == ["mutation-shard (full, 0)", "mutation-shard (full, 1)",
+                    "mutation-shard (full, 2)", "mutation-shard (diff, 0)"]
+    assert all(pt._is_mutation_job(leg) for leg in legs)
+    assert [bool(pt._FULL_SHARD.fullmatch(leg)) for leg in legs] == [True, True, True, False]
+
+
 def test_the_interpreter_applies_the_implicit_success_to_grandparents():
     # Pins the rule the whole section rests on: a job whose `if:` has no
     # status function is skipped when ANY ancestor was skipped, even though

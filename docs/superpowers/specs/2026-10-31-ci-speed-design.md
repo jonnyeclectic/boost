@@ -202,7 +202,9 @@ proven in everything but that. For the mutation verdict only, a re-run now
 counts when attempt 1 ran `mutation-plan`, `mutation` and full shards
 `0..n-1`, all green, and no later attempt ran any of them again: every later
 copy has attempt 1's start and end times and was created after that start.
-The push then plans `none` for mutation and still runs its own tests, because
+The push then plans `none` for mutation, provided its base's own `mutation`
+was green (`base_mutation_green`; otherwise it falls through to the diff and
+is widened to full), and still runs its own tests, because
 a re-run's tests are not first-attempt evidence. Anything else proves nothing:
 a mutation job re-run in any later attempt (PR run 42463209202 re-ran them all
 in attempt 2, then only `lint` in attempt 3), a red attempt-1 verdict, or a
