@@ -1083,7 +1083,9 @@ def patterns_for_bin(root: Path, units: list[Unit]) -> list[str]:
 
     The single spelling of "what does this shard run", shared by ``plan
     --index`` and ``mutation_plan.py full`` so the two cannot drift apart --
-    ``merge --shards N`` re-derives the same pack and trusts that they agree.
+    ``merge --plan`` reads ownership back from these selectors and checks that
+    a plain plan is the committed pack (:func:`selector_module` reads a
+    sentinel as its function's own pattern).
 
     A bin of per-function units alone also gets each unit's
     :func:`sentinel_for`, so its clean run is those functions' tests rather
