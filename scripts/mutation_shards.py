@@ -1240,8 +1240,8 @@ def _plan_set(path: str, name: str, shards: int) -> tuple[dict[str, set[int]], d
         if file is None:
             raise ValueError("carried %r is not a boost_cli.core mutant" % carried_name)
         carried.setdefault(file, []).append(carried_name)
-    ledger = spec.get("ledger") if isinstance(spec.get("ledger"), dict) else {}
-    run = ledger.get("run_id")
+    ledger = spec.get("ledger")
+    run = ledger.get("run_id") if isinstance(ledger, dict) else None
     source = "ledger run %s" % (run if isinstance(run, int) and not isinstance(run, bool) else "?")
     return owner, carried, source
 
