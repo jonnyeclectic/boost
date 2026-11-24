@@ -1,13 +1,37 @@
 # Mutation survivor ledger: stop re-proving known survivors on full runs
 
-Status: proposed 2026-11-24, **pending owner sign-off**. It would reverse
-three recorded constraints, for **survived and timeout verdicts only, never
-killed** (see "What this reverses"). The task that commissioned this design
-said the owner approved; nothing the owner wrote in their own words shows it,
-so each reversal is asked for separately below, and the implementation is
-inert until the owner opts in through the repository variable
-`MUTATION_LEDGER` (see "Rollout"). For everything this doc does not change,
-the spec of record is still
+Status: approved by the owner on 2026-11-23; implemented, and inert until
+the owner sets the repository variable `MUTATION_LEDGER` (see "Rollout").
+
+**The approval, verbatim.** On 2026-11-23 the owner, asked which builds to
+make, selected the option labelled "Survivor ledger (#5)", whose text read
+exactly:
+
+> Days. The nightly records which mutants survived; PR and push runs skip unchanged ones. Saves 65–85 min per full run.
+> Can only under-state the score, but reverses 'never trust a cached verdict'.
+
+That is the whole record, as the task that commissioned this implementation
+relayed it on 2026-11-24 (no copy in the owner's own hand was available to
+check it against), and this doc claims no approval wider than it. It reverses
+three recorded constraints (see "What this reverses"), never for a killed
+verdict. Four things this design does are **not in those words**, and each
+waits behind the `MUTATION_LEDGER` token named beside it, for the owner to
+confirm by setting it:
+
+- carrying **timeout** verdicts as well as survived ones (`write`);
+- a `workflow_dispatch` run on `main` writing the ledger, where the text says
+  "the nightly" (`write`);
+- a **release** resting on a ledgered score: the push run whose success
+  `publish.yml` releases from reads the ledger (`push`);
+- a ledgered PR run proving its merge push (`ci_proven_tree.py`, fact 2),
+  which then skips mutation and releases (`pull_request`).
+
+And "Can only under-state the score" is more than this design proves.
+"Soundness" retracts it to "carrying never adds a kill": the mutants a
+ledgered run does re-run are measured under its own selectors, which can
+differ from a plain run's.
+
+For everything this doc does not change, the spec of record is still
 `docs/superpowers/specs/2026-10-31-ci-speed-design.md`.
 
 ## Why
@@ -47,14 +71,16 @@ Each costs 1,597.8-1,600.9 shard runner-min and 149.4-157.8 min of wall clock
 
 ## What this reverses
 
-None of these is approved in the owner's own words yet. Each is a separate
-ask, and each is switched on separately (see "Rollout"):
+The owner's selection of 2026-11-23 (see "Status") names the third of
+these in its own words and describes the first two. The last column quotes
+the words that cover each row, and says what they leave out. Each is still
+switched on separately (see "Rollout"):
 
-| where | says today | becomes |
-|---|---|---|
-| spec 2026-10-31, lines 196-200 | the whole-codebase run is "the only trusted writer of a mutation baseline (... `actions/cache/save` ... never restored by a release workflow)" | A green, unledgered `schedule` or `workflow_dispatch` run on `main` writes the ledger, as an artifact, not a cache. PR runs and push runs read it, including the push run whose success `publish.yml` releases from. `publish.yml` itself stays cache-free and reads nothing new. |
-| plan 2026-10-31, line 26 | "No PR run ever writes a mutation baseline or cache. This plan writes none at all" | The first sentence still holds, and no push writes one either. The second is superseded by this design. |
-| `scripts/mutation_diff.py:20` | the diff shards name every mutant "so no cached verdict is ever trusted" | Still true of the diff set, which this design does not touch. The full set may carry recorded survived verdicts. |
+| where | says today | becomes | the selected option's words |
+|---|---|---|---|
+| spec 2026-10-31, lines 196-200 | the whole-codebase run is "the only trusted writer of a mutation baseline (... `actions/cache/save` ... never restored by a release workflow)" | A green, unledgered `schedule` or `workflow_dispatch` run on `main` writes the ledger, as an artifact, not a cache. PR runs and push runs read it, including the push run whose success `publish.yml` releases from. `publish.yml` itself stays cache-free and reads nothing new. | "The nightly records which mutants survived; PR and push runs skip unchanged ones." Not in them: `workflow_dispatch` as a writer, timeout verdicts, and that one of those push runs gates a release. |
+| plan 2026-10-31, line 26 | "No PR run ever writes a mutation baseline or cache. This plan writes none at all" | The first sentence still holds, and no push writes one either. The second is superseded by this design. | "The nightly records which mutants survived." |
+| `scripts/mutation_diff.py:20` | the diff shards name every mutant "so no cached verdict is ever trusted" | Still true of the diff set, which this design does not touch. The full set may carry recorded survived verdicts. | "reverses 'never trust a cached verdict'" |
 
 Still binding and unchanged:
 
@@ -78,12 +104,52 @@ decision:
 | `push` | attempt 1 of an unproven push run to `main` may carry survivors. **That is the run whose success `publish.yml` releases from** (`publish.yml:70-72`), so a release would be gated directly on a score that re-ran no recorded survivor. | spec 2026-10-31:196-200 ("never restored by a release workflow") |
 
 Unset, empty or anything else: the reader job is skipped by its `if`, the
-planner stamps and applies nothing, the merge and gate run plain plans exactly
-as before (the merge's new "a plain plan is the committed pack" check is the
-one difference, and it is what the old re-derivation assumed), and no run
-writes a ledger. `scripts/mutation_ledger.py` re-checks the exact tokens
-itself; a workflow `if` is only a shortcut. `tests/unit/test_ci_proven_tree.py`
-simulates the job graph with the variable unset and set.
+planner stamps and applies nothing, and no run writes a ledger.
+`scripts/mutation_ledger.py` re-checks the exact tokens itself; a workflow
+`if` is only a shortcut. `tests/unit/test_ci_proven_tree.py` simulates the job
+graph with the variable unset and set.
+
+Unset is not byte-for-byte main (3e5fc88e). Every difference on that path:
+
+- **Plans.** Every plan gains a top-level `ledger_eligible`, and a push's
+  `mutation_plan.py full` call gains `--ledger-eligible` to set it. Only
+  `mutation_ledger.py apply` reads the field; `matrix`, `patterns`, the merge,
+  the gate and every `jq` in ci.yml give the same answer with it flipped or
+  absent.
+- **`mutation-plan`.** It `needs` the skipped `mutation-ledger`, which its
+  `!cancelled()` already runs past. It has a new output, `ledgered`
+  (`false`), with one more `jq`. Its `BOOST_REQUIRE_MUTMUT` step also runs
+  `tests/unit/test_mutation_ledger.py`, about 2 s locally, and that is a new
+  way for any relevant run's planner to go red.
+- **`mutation`.**
+  - The plan is downloaded on every full gate; main downloaded it for a
+    shadow only.
+  - The new `ledgered` step fails the job when the plan is unreadable, or
+    when it holds a ledgered plan on a whole-codebase run.
+  - The weights steps also need its `plain == 'true'`.
+  - `timeout-minutes` is 34, not 20.
+- **`merge --plan`.** It refuses a plan it cannot read, one whose full set
+  is not 26 shards, a selector it cannot map to a file, and a plain set that
+  is not the committed pack. It deletes a stale `mutation-carried.json`.
+  Main never read the plan, so each of these is a new way to go red, and none
+  can happen on a plan the planner wrote.
+- **`gate --plan`.** It exits 2 on a plan it cannot read.
+
+What does not differ, and how that is shown:
+
+- **The plan files.** `mutation_plan.py full --shards 26` on this tree,
+  plain and with `--ledger-eligible`, is main's output plus the field.
+- **The merge.** Run 45290191649's real verdicts (76 files, 54,417 mutants)
+  were laid out as 26 simulated shards of this tree's pack. Main's merge, this
+  merge and this merge with `--plan` give the same exit code, the same stdout
+  and byte-identical trees, and they still do when one shard is missing.
+- **The planner step.** It was run under bash with the test suite's stubs:
+  60 cases of event, relevance, proven and idle, main's ci.yml against this
+  one. The call log and `$GITHUB_OUTPUT` are identical, apart from the push
+  flag above and the new `ledgered=false`.
+
+These three were one-off runs on 2026-11-24, not tests. The tests that pin
+the same things are under "Test plan", "The unset path".
 
 The intended order, each step the owner's:
 
@@ -889,8 +955,10 @@ carried subsets. The test asserts:
 - It writes exactly 0, and only into keys that are `None` everywhere.
 - It refuses:
   - a carried key that some shard ran;
-  - a carried key that was not generated;
-  - a carried name in a file no shard owns.
+  - a carried key that was not generated.
+- A file whose every mutant is carried, which no selector names, gets shard
+  0's `.meta` to inject into (review minor 4). A file named by no selector
+  whose mutants are not all carried still fails "assigned to no shard".
 - It still fails closed on an uncarried `None`.
 - With no carried list, plan-derived ownership equals `pack()`'s.
 - The verifier's bug: a ledgered repack merges with `--plan` and is refused
@@ -967,6 +1035,23 @@ carried subsets. The test asserts:
 - **Caches.** No `actions/cache` in any `mutation*` job. This widens the
   existing shard-only test at `test_mutation_plan.py:1032`.
 
+**The unset path** (`test_mutation_plan.py`, `test_mutation_ledger.py`).
+
+- Every plain plan the planner writes is exactly `full_plan`'s set, and
+  `merge --plan` reads it exactly as main's plan-less merge did: same exit,
+  stdout and tree bytes, and the same refusal. That covers `full` plain and
+  `--ledger-eligible`, the shadow, the empty shadow, the three diff-to-full
+  fallbacks, and the nightly with and without its shadow.
+- The same holds at 1 to 26 shards on a tree with a split file, a class
+  file, a subpackage, two `__init__.py` and empty bins.
+- The gate prints, returns and writes the same with and without a plain
+  `--plan`, on PASS and on FAIL.
+- The `ledgered` step answers `plain=true` for every plain shape.
+- `ledger_eligible` is read by `mutation_ledger.py` alone, and `matrix` and
+  `patterns` give the same bytes with it flipped or absent.
+- An applied plan goes through the real `matrix`, then each shard's
+  `patterns` argv, then mutmut's filter, `merge --plan` and `gate --plan`.
+
 **Housekeeping.**
 
 - `make lint`.
@@ -1027,6 +1112,9 @@ machinery:
 
 ## What could not be verified locally
 
+- **The owner's selection.** The verbatim option text under "Status" is as
+  relayed by the task that commissioned this implementation. No copy in the
+  owner's own hand was available here to compare it with.
 - **A ledgered shard end to end.** That mutmut takes a mixed argv of file
   patterns, function patterns and up to 1,500 names, and what its clean run
   costs with mixed selectors. The self-check simulates shards with `fnmatch`,
@@ -1085,7 +1173,7 @@ implementation does about each finding:
 
 | severity | finding | handled |
 |---|---|---|
-| blocker | the reversals were recorded as owner-approved with no owner words to show it | Status and both 2026-10-31 amendments say *pending owner sign-off*; each reversal is a separate `MUTATION_LEDGER` token, unset by default, and "Rollout" says plainly that `push` gates the release |
+| blocker | the reversals were recorded as owner-approved with no owner words to show it | Status, "What this reverses" and both 2026-10-31 amendments now carry the owner's dated selection of 2026-11-23, quoted verbatim, and claim nothing wider than its words. What the words do not cover is listed in Status: timeouts, `workflow_dispatch` as a writer, a release resting on a ledgered score, and a ledgered PR proving its push. Each reversal is still a separate `MUTATION_LEDGER` token, unset by default, and "Rollout" says plainly that `push` gates the release. |
 | major | soundness assumed non-carried mutants run as in a plain run | "Soundness" restated; the gate no longer claims a range or a conclusive red; the A/B stop rule is per key and by direction; `forkserver` noted as the owner's separate option |
 | major | the release path would be the first test of ledgered code, after every digest reset | `push` is its own token, added after the A/B; "Rollout" says that `pull_request` alone also reaches a release, through a proven push; the nightly self-check is a dry run of the ledgered planner and merge; the mixed-argv gap is stated under "Residuals" |
 | minor | the 1,500-name cap binds on packing by time alone | two-constraint pack (time, names per bin), measured on 45290191649: max 1,500, 0 un-carried |
@@ -1103,7 +1191,8 @@ implementation does about each finding:
 ## Left to the owner
 
 - Whether to set `MUTATION_LEDGER`, and which tokens, in the order "Rollout"
-  gives.
+  gives. Setting a token is also what confirms the parts of it that the
+  selected option's words do not cover (see "Status").
 - Creating the `mutation-no-ledger` label.
 - Whether to evaluate `process_isolation = forkserver`.
 

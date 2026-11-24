@@ -1109,9 +1109,9 @@ jobs:
           git push -qf "https://x-access-token:${GH_TOKEN}@github.com/${REPO}" badges:badges
 
   # THE SURVIVOR LEDGER'S READER (docs/superpowers/specs/2026-11-24-mutation-
-  # survivor-ledger.md, "Reader"). Pending owner sign-off, and inert until the
-  # owner sets the repository variable MUTATION_LEDGER: unset, this job is
-  # skipped, the planner downloads nothing and plans exactly as before. When
+  # survivor-ledger.md, "Reader"). Approved by the owner 2026-11-23 (its
+  # Status), and inert until they set the repository variable MUTATION_LEDGER:
+  # unset, this job is skipped and the planner downloads nothing. When
   # it names `pull_request` or `push`, this job names which green real
   # whole-codebase run's ledger that event's attempt-1 run may read -- or why
   # none -- and hands the file on as this run's `mutation-ledger-in`, so the
@@ -2610,7 +2610,7 @@ jobs:
           retention-days: 7
           if-no-files-found: warn
       # THE SURVIVOR LEDGER'S WRITER (docs/superpowers/specs/2026-11-24-
-      # mutation-survivor-ledger.md, "Writer"). Pending owner sign-off: only
+      # mutation-survivor-ledger.md, "Writer"). Owner-approved 2026-11-23: only
       # when MUTATION_LEDGER names `write`, which the script re-checks with
       # the event (schedule or dispatch) and the ref (main). Only past a green
       # merge and gate (no status function below, so each `if` keeps the
