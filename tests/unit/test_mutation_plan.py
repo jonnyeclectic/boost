@@ -133,6 +133,12 @@ def test_full_plan_on_a_small_tree(tmp_path):
     # __init__.py has no addressable pattern and must not leak a None/"" in.
     assert sorted(plan["sets"]["full"]["shards"]) == [["boost_cli.core.a.*"],
                                                       ["boost_cli.core.b.*"]]
+    # Only the caller knows why it planned full, so a ledger may carry into
+    # this plan only when it says so (a push does, with --ledger-eligible).
+    assert plan["ledger_eligible"] is False
+    assert mp.main(["full", "--shards", "2", "--root", str(tmp_path), "--ledger-eligible",
+                    "--out", str(out)]) == 0
+    assert json.loads(out.read_text(encoding="utf-8"))["ledger_eligible"] is True
 
 
 def test_full_refuses_zero_shards(tmp_path):
@@ -368,6 +374,8 @@ def test_diff_plan_with_a_trigger_is_full(tmp_path, git_repo):
     assert plan["gate_set"] == "full"
     assert plan["reasons"] == ["scripts/mutation_new.py changed"]
     assert list(plan["sets"]) == ["full"]
+    # A full-run trigger never uses the survivor ledger (its design, risk 3).
+    assert plan["ledger_eligible"] is False
     assert plan["sets"]["full"]["shards"] == [["boost_cli.core.m.*"], []]
 
 
@@ -470,6 +478,7 @@ def test_a_changed_function_with_no_mutants_plans_the_full_run(
     assert plan["reasons"] == [
         "changed function has no mutants, so its callers are unknown: %s" % qualified]
     assert list(plan["sets"]) == ["full"]
+    assert plan["ledger_eligible"] is True
 
 
 @pytest.mark.usefixtures("needs_mutmut")
@@ -535,6 +544,7 @@ def test_no_diff_shard_names_more_than_max_names(tmp_path, git_repo, monkeypatch
     assert plan["reasons"] == [
         "diff scope: %d mutants in 2 functions do not pack into %d shards of at "
         "most %d mutant names" % (sum(counts.values()), md.MAX_SHARDS, widest - 1)]
+    assert plan["ledger_eligible"] is True
 
 
 @pytest.mark.usefixtures("needs_mutmut")
@@ -545,9 +555,12 @@ def test_shadow_plan_gates_on_full_and_runs_both(tmp_path, git_repo):
     assert set(plan["sets"]) == {"diff", "full"}
     assert plan["sets"]["full"]["shards"] == [["boost_cli.core.m.*"], []]
     assert plan["sets"]["diff"]["shards"]
+    assert plan["ledger_eligible"] is True
     sets = {e["set"] for e in json.loads(run_cli("matrix", "--plan",
                                                  str(tmp_path / "plan.json")))}
     assert sets == {"diff", "full"}
+    # A diff gate has no full set to carry into.
+    assert plan_diff(tmp_path, git_repo, head)["ledger_eligible"] is False
 
 
 @pytest.mark.usefixtures("needs_mutmut")
@@ -686,6 +699,8 @@ def test_a_nightly_shadow_marks_the_diff_set_advisory(tmp_path, git_repo, monkey
     assert plan["advisory"] == ["diff"]
     assert plan["gate_set"] == "full"
     assert plan["sets"] == shadow["sets"]
+    # The nightly writes the ledger and never reads one.
+    assert plan["ledger_eligible"] is False
     assert plan["reasons"] == [_WHY, "nightly shadow against %s (run 41682296301): diff "
                                "scope: 3 mutants; shadow: gating" % git_repo.base[:12]]
     assert mp.advisory_sets(plan) == ["diff"]
@@ -714,6 +729,7 @@ def test_a_real_change_since_the_base_plans_both_sets(tmp_path, git_repo):
     assert plan["sets"]["full"] == mp.full_plan(git_repo.root, 2, [])["sets"]["full"]
     assert plan["sets"]["diff"]["shards"]
     assert plan["sets"]["diff"]["base"] == git_repo.base
+    assert plan["ledger_eligible"] is False
     assert plan["reasons"][0] == _WHY
     assert plan["reasons"][1].startswith("nightly shadow against %s (run 41682296301): "
                                          "diff scope: " % git_repo.base[:12])
@@ -727,6 +743,7 @@ def test_an_empty_shadow_scope_plans_full_alone(tmp_path, git_repo):
     plan = plan_diff(tmp_path, git_repo, head, "--shadow")
     assert set(plan["sets"]) == {"full"} and plan["gate_set"] == "full"
     assert plan["reasons"][-1] == "shadow: the diff scope is empty, nothing to compare; full only"
+    assert plan["ledger_eligible"] is True
     _alone(nightly(tmp_path, git_repo, git_repo.base, head), git_repo,
            "the diff since %s plans no shadow: %s" % (git_repo.base[:12],
                                                       "; ".join(plan["reasons"])))
