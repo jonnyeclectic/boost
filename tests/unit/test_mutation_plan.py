@@ -22,6 +22,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -219,6 +220,12 @@ def test_full_plan_on_a_small_tree(tmp_path):
     # __init__.py has no addressable pattern and must not leak a None/"" in.
     assert sorted(plan["sets"]["full"]["shards"]) == [["boost_cli.core.a.*"],
                                                       ["boost_cli.core.b.*"]]
+    # Only the caller knows why it planned full, so a ledger may carry into
+    # this plan only when it says so (a push does, with --ledger-eligible).
+    assert plan["ledger_eligible"] is False
+    assert mp.main(["full", "--shards", "2", "--root", str(tmp_path), "--ledger-eligible",
+                    "--out", str(out)]) == 0
+    assert json.loads(out.read_text(encoding="utf-8"))["ledger_eligible"] is True
 
 
 def test_full_refuses_zero_shards(tmp_path):
@@ -454,6 +461,8 @@ def test_diff_plan_with_a_trigger_is_full(tmp_path, git_repo):
     assert plan["gate_set"] == "full"
     assert plan["reasons"] == ["scripts/mutation_new.py changed"]
     assert list(plan["sets"]) == ["full"]
+    # A full-run trigger never uses the survivor ledger (its design, risk 3).
+    assert plan["ledger_eligible"] is False
     assert plan["sets"]["full"]["shards"] == [["boost_cli.core.m.*"], []]
 
 
@@ -556,6 +565,7 @@ def test_a_changed_function_with_no_mutants_plans_the_full_run(
     assert plan["reasons"] == [
         "changed function has no mutants, so its callers are unknown: %s" % qualified]
     assert list(plan["sets"]) == ["full"]
+    assert plan["ledger_eligible"] is True
 
 
 @pytest.mark.usefixtures("needs_mutmut")
@@ -621,6 +631,7 @@ def test_no_diff_shard_names_more_than_max_names(tmp_path, git_repo, monkeypatch
     assert plan["reasons"] == [
         "diff scope: %d mutants in 2 functions do not pack into %d shards of at "
         "most %d mutant names" % (sum(counts.values()), md.MAX_SHARDS, widest - 1)]
+    assert plan["ledger_eligible"] is True
 
 
 @pytest.mark.usefixtures("needs_mutmut")
@@ -631,9 +642,12 @@ def test_shadow_plan_gates_on_full_and_runs_both(tmp_path, git_repo):
     assert set(plan["sets"]) == {"diff", "full"}
     assert plan["sets"]["full"]["shards"] == [["boost_cli.core.m.*"], []]
     assert plan["sets"]["diff"]["shards"]
+    assert plan["ledger_eligible"] is True
     sets = {e["set"] for e in json.loads(run_cli("matrix", "--plan",
                                                  str(tmp_path / "plan.json")))}
     assert sets == {"diff", "full"}
+    # A diff gate has no full set to carry into.
+    assert plan_diff(tmp_path, git_repo, head)["ledger_eligible"] is False
 
 
 @pytest.mark.usefixtures("needs_mutmut")
@@ -772,6 +786,8 @@ def test_a_nightly_shadow_marks_the_diff_set_advisory(tmp_path, git_repo, monkey
     assert plan["advisory"] == ["diff"]
     assert plan["gate_set"] == "full"
     assert plan["sets"] == shadow["sets"]
+    # The nightly writes the ledger and never reads one.
+    assert plan["ledger_eligible"] is False
     assert plan["reasons"] == [_WHY, "nightly shadow against %s (run 41682296301): diff "
                                "scope: 3 mutants; shadow: gating" % git_repo.base[:12]]
     assert mp.advisory_sets(plan) == ["diff"]
@@ -800,6 +816,7 @@ def test_a_real_change_since_the_base_plans_both_sets(tmp_path, git_repo):
     assert plan["sets"]["full"] == mp.full_plan(git_repo.root, 2, [])["sets"]["full"]
     assert plan["sets"]["diff"]["shards"]
     assert plan["sets"]["diff"]["base"] == git_repo.base
+    assert plan["ledger_eligible"] is False
     assert plan["reasons"][0] == _WHY
     assert plan["reasons"][1].startswith("nightly shadow against %s (run 41682296301): "
                                          "diff scope: " % git_repo.base[:12])
@@ -813,6 +830,7 @@ def test_an_empty_shadow_scope_plans_full_alone(tmp_path, git_repo):
     plan = plan_diff(tmp_path, git_repo, head, "--shadow")
     assert set(plan["sets"]) == {"full"} and plan["gate_set"] == "full"
     assert plan["reasons"][-1] == "shadow: the diff scope is empty, nothing to compare; full only"
+    assert plan["ledger_eligible"] is True
     _alone(nightly(tmp_path, git_repo, git_repo.base, head), git_repo,
            "the diff since %s plans no shadow: %s" % (git_repo.base[:12],
                                                       "; ".join(plan["reasons"])))
@@ -1116,8 +1134,11 @@ def test_the_gate_fails_when_a_shard_did_not_succeed(jobs):
 
 
 def test_no_shard_restores_a_cache(jobs):
-    for step in jobs["mutation-shard"]["steps"]:
-        assert not step.get("uses", "").startswith("actions/cache"), step
+    # Nor any mutation job: the survivor ledger is an artifact a green
+    # whole-codebase run writes, never a cache (its design, "What this reverses").
+    for name in [n for n in jobs if n.startswith("mutation")]:
+        for step in jobs[name]["steps"]:
+            assert not step.get("uses", "").startswith("actions/cache"), (name, step)
 
 
 def test_the_shard_matrix_comes_from_the_plan(jobs):
@@ -1414,6 +1435,7 @@ echo "$0 $*" >> "$CALLS"
 out=""; prev=""
 for a in "$@"; do [ "$prev" = "--out" ] && out="$a"; prev="$a"; done
 case " $* " in
+  *"mutation_ledger.py "*) [ -n "$LEDGER_FAIL" ] && exit 1; exit 0 ;;
   *" --advisory "*) echo "${ADVISORY_OUT:-[]}"; exit 0 ;;
   *" matrix "*) echo '[{"set":"full","index":0}]'; exit 0 ;;
   *"mutation_plan.py base "*) [ -n "$BASE_FAIL" ] && exit 1; echo forkpoint0; exit 0 ;;
@@ -1489,6 +1511,58 @@ exit 0
         assert not any("mutation_plan.py base " in line for line in log)
         assert outputs["shadow"] == "false"
         assert outputs["gate_set"] == "full"
+
+    # -- the survivor ledger (docs/superpowers/specs/2026-11-24-mutation-survivor-ledger.md)
+
+    @pytest.mark.parametrize("event", ["pull_request", "push", "schedule",
+                                       "workflow_dispatch", "merge_group"])
+    def test_with_mutation_ledger_unset_the_planner_is_unchanged(self, planner, event):
+        _, log, outputs = planner(event)
+        assert not any("mutation_ledger.py" in line for line in log), log
+        assert outputs["ledgered"] == "false"
+
+    @pytest.mark.parametrize("event, applies", [("pull_request", True), ("push", True),
+                                                ("schedule", False),
+                                                ("workflow_dispatch", False),
+                                                ("merge_group", False)])
+    def test_with_it_set_every_plan_is_stamped_and_only_prs_and_pushes_applied(
+            self, planner, event, applies):
+        _, log, _ = planner(event, MUTATION_LEDGER="write,pull_request,push",
+                            LEDGER_RUN="4242")
+        ledger = [line for line in log if "mutation_ledger.py" in line]
+        assert ledger[0].startswith(".venv/bin/python scripts/mutation_ledger.py stamp "
+                                    "--plan mutation-plan.json"), ledger
+        if applies:
+            (apply,) = ledger[1:]
+            assert apply.startswith(".venv/bin/python scripts/mutation_ledger.py apply "
+                                    "--plan mutation-plan.json")
+            assert "--run-id 4242 --meta mutants" in apply
+        else:
+            assert ledger[1:] == [], ledger
+
+    def test_nothing_ledgers_a_plan_with_no_work(self, planner):
+        _, log, _ = planner("pull_request", relevant="false",
+                            MUTATION_LEDGER="pull_request")
+        assert not any("mutation_ledger.py" in line for line in log), log
+
+    def test_a_failing_ledger_command_never_fails_the_planner(self, planner):
+        # `planner` asserts the step exits 0: the plan as written stands.
+        _, _, outputs = planner("push", MUTATION_LEDGER="push", LEDGER_FAIL="1")
+        assert outputs["gate_set"] == "full"
+
+    def test_only_a_push_says_its_full_plan_is_ledger_eligible(self, planner):
+        plan, _, _ = planner("push")
+        assert plan.endswith("--out mutation-plan.json --ledger-eligible")
+        plan, _, _ = planner("workflow_dispatch")
+        assert "--ledger-eligible" not in plan
+        plan, _, _ = planner("pull_request", BASE_FAIL="1")
+        assert "--ledger-eligible" not in plan
+
+    def test_the_ledgered_output_is_read_from_the_plan(self, planner):
+        _, _, outputs = planner("push", PLAN_OVERRIDE=json.dumps(
+            {"gate_set": "full", "reasons": [],
+             "sets": {"full": {"shards": [["a"]], "carried": ["m.x__mutmut_1"]}}}))
+        assert outputs["ledgered"] == "true"
 
     def test_no_diff_base_falls_back_to_full(self, planner):
         # A missing or unfetched base must widen the gate, never empty it.
@@ -1931,14 +2005,22 @@ def test_full_and_diff_results_download_to_separate_dirs(jobs):
     assert "--diff-source %s " % diff_dir in shadow
     assert "--source %s " % diff_dir in shadow
     assert "--prefix mutation-diff-shard-" in shadow
-    # The gate and compare read the plan the shards ran from.
-    assert downloads["mutation-plan"]["if"] == "needs.mutation-plan.outputs.shadow == 'true'"
+    # The merge, the gate and compare read the plan the shards ran from: the
+    # merge takes ownership from it on every full gate, ledgered or not.
+    assert downloads["mutation-plan"]["if"] == "needs.mutation-plan.outputs.gate_set == 'full'"
+
+
+#: The survivor ledger's writer steps: the only lenient steps besides the
+#: shadow, because a ledger failure must never change the run's conclusion.
+LEDGER_WRITER = ["write the survivor ledger", "self-check the survivor ledger",
+                 "upload the survivor ledger"]
 
 
 def test_only_the_shadow_step_continues_on_error(jobs):
     job = jobs["mutation"]
     lenient = [s for s in job["steps"] if s.get("continue-on-error")]
-    assert [s.get("id") for s in lenient] == ["shadow"]
+    assert lenient[0].get("id") == "shadow"
+    assert [s.get("name") for s in lenient[1:]] == LEDGER_WRITER
     shadow = lenient[0]
     assert shadow["continue-on-error"] is True
     assert shadow["if"] == "needs.mutation-plan.outputs.shadow == 'true'"
@@ -1961,9 +2043,15 @@ def test_the_binding_gate_is_the_one_gate_set_names(jobs):
     # The merge it scores comes from full shards only, and is what the weights
     # are measured from: a diff run's partial weights would repack on a sliver.
     assert "--into mutants " in _step(job, runs="mutation_shards.py merge")["run"]
+    # ...and only from a plain full set (I6): decided on the plan file by the
+    # `ledgered` step, never on an output string that could arrive empty.
+    plain = ("needs.mutation-plan.outputs.gate_set == 'full'"
+             " && steps.ledgered.outputs.plain == 'true'")
     weights = _uploads(job)["mutation-weights"]
-    assert weights["if"] == "needs.mutation-plan.outputs.gate_set == 'full'"
-    assert "--source mutants" in _step(job, runs="mutation_shards.py weights")["run"]
+    assert weights["if"] == plain
+    refresh = _step(job, runs="mutation_shards.py weights")
+    assert refresh["if"] == plain
+    assert "--source mutants" in refresh["run"]
 
 
 def test_the_shadow_report_is_summarised_and_uploaded(jobs):
@@ -2163,7 +2251,8 @@ def test_the_planner_runs_the_mutmut_backed_tests(jobs):
     step = _step(jobs["mutation-plan"], runs="-m pytest")
     assert step["run"].strip() == (".venv/bin/python -m pytest -q "
                                    "tests/unit/test_mutation_diff.py "
-                                   "tests/unit/test_mutation_plan.py")
+                                   "tests/unit/test_mutation_plan.py "
+                                   "tests/unit/test_mutation_ledger.py")
     assert step["env"] == {"BOOST_REQUIRE_MUTMUT": "1"}
     assert step["if"] == "steps.scope.outputs.relevant == 'true'"
     assert "continue-on-error" not in step
@@ -2204,3 +2293,463 @@ def test_a_required_mutmut_is_an_error_not_a_skip(tmp_path):
                           cwd=ROOT, env=env, capture_output=True, text=True)
     assert proc.returncode == 0, proc.stdout
     assert "could not import 'mutmut'" in proc.stdout, proc.stdout
+
+
+# --------------------------------------------------------------------------
+# the survivor ledger's jobs and steps
+# --------------------------------------------------------------------------
+
+DOWNLOAD_PIN = "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333"
+
+
+def test_the_ledger_reader_is_advisory_and_holds_only_read_tokens(jobs):
+    job = jobs["mutation-ledger"]
+    # Skipped unless the owner set MUTATION_LEDGER (test_ci_proven_tree.py
+    # simulates both); never on a whole-codebase run, which writes the ledger.
+    assert job["if"] == ("(github.event_name == 'pull_request' || github.event_name == 'push')"
+                         " && vars.MUTATION_LEDGER != ''")
+    assert job["continue-on-error"] is True
+    assert job["permissions"] == {"contents": "read", "actions": "read",
+                                  "pull-requests": "read"}
+    assert job["timeout-minutes"] <= 5
+    find = _step(job, step_id="find")
+    assert find["run"] == "python3 scripts/mutation_ledger.py find"
+    assert find["env"]["MUTATION_LEDGER"] == "${{ vars.MUTATION_LEDGER }}"
+    assert find["env"]["GITHUB_TOKEN"] == "${{ github.token }}"  # noqa: S105 an expression
+    download = _downloads(job)["mutation-ledger"]
+    assert download["uses"].startswith(DOWNLOAD_PIN)
+    assert download["if"] == "steps.find.outputs.run_id != ''"
+    assert download["with"]["run-id"] == "${{ steps.find.outputs.run_id }}"
+    assert download["with"]["github-token"] == "${{ github.token }}"
+    handed = _uploads(job)["mutation-ledger-in"]
+    assert handed["if"] == "steps.find.outputs.run_id != ''"
+    assert handed["with"]["retention-days"] == 1
+    assert handed["with"]["path"].endswith("/mutation-ledger/mutation-ledger.json")
+
+
+def test_the_planner_reads_the_ledger_without_a_token_and_cannot_fail_on_it(jobs):
+    plan = jobs["mutation-plan"]
+    assert "mutation-ledger" in plan["needs"]
+    assert plan["permissions"] == {"contents": "read"}
+    download = _downloads(plan)["mutation-ledger-in"]
+    assert download["continue-on-error"] is True
+    assert "github-token" not in download["with"] and "run-id" not in download["with"]
+    assert "needs.mutation-ledger.outputs.run_id != ''" in download["if"]
+    steps = plan["steps"]
+    assert steps.index(download) < steps.index(_step(plan, step_id="plan"))
+    env = _step(plan, step_id="plan")["env"]
+    assert env["MUTATION_LEDGER"] == "${{ vars.MUTATION_LEDGER }}"
+    assert env["LEDGER_RUN"] == "${{ needs.mutation-ledger.outputs.run_id }}"
+    assert plan["outputs"]["ledgered"] == "${{ steps.plan.outputs.ledgered }}"
+
+
+def test_the_gate_merges_and_scores_against_the_plan(jobs):
+    job = jobs["mutation"]
+    plan = '--plan "$RUNNER_TEMP/mutation-plan/mutation-plan.json"'
+    assert _step(job, runs="mutation_shards.py merge")["run"].endswith(plan)
+    assert _step(job, runs="scripts/mutation_gate.py")["run"] == (
+        ".venv/bin/python scripts/mutation_gate.py --min 80 " + plan)
+
+
+def test_every_step_that_reads_the_plan_runs_only_where_it_was_downloaded(jobs):
+    # Main downloaded the plan for a shadow alone. The merge, the gate and the
+    # `ledgered` step now read it on every full gate, so a step reading it
+    # where it was not downloaded would turn a plain run red on a missing
+    # file -- a PR's `diff --shadow` run included, which gates on full.
+    job = jobs["mutation"]
+    steps = job["steps"]
+    full = "needs.mutation-plan.outputs.gate_set == 'full'"
+    shadow = "needs.mutation-plan.outputs.shadow == 'true'"
+    download = _downloads(job)["mutation-plan"]
+    assert download["if"] == full
+    readers = [s for s in steps if "mutation-plan/mutation-plan.json"
+               in str(s.get("run", "")) + str(s.get("env", ""))]
+    assert {s.get("id") for s in readers} >= {"ledgered", "shadow"}
+    assert _step(job, runs="mutation_shards.py merge") in readers
+    assert _step(job, runs="scripts/mutation_gate.py") in readers
+    by_id = {s["id"]: s for s in steps if "id" in s}
+    for step in readers:
+        assert steps.index(step) > steps.index(download), step.get("name")
+        cond = step["if"]
+        # A step chained on another step's outcome inherits that step's guard.
+        while cond.startswith("steps.") and cond.endswith(".outcome == 'success'"):
+            cond = by_id[cond[len("steps."):-len(".outcome == 'success'")]]["if"]
+        assert cond in (shadow, full) or cond.startswith(full + " && "), (
+            step.get("name"), step["if"])
+    # And a shadow is a full gate: the conclusive step, ahead of the download,
+    # refuses a shadow plan that gates on anything else.
+    conclusive = _step(job, name="upstream jobs must be conclusive")
+    assert steps.index(conclusive) < steps.index(download)
+    assert '[ "$SHADOW" = "true" ] && [ "$GATE_SET" != "full" ]' in conclusive["run"]
+
+
+@needs_bash
+@pytest.mark.parametrize("event, full, rc, plain", [
+    ("pull_request", {"shards": [["a"]]}, 0, "true"),
+    ("push", {"shards": [["a"]], "carried": ["m.x__mutmut_1"]}, 0, "false"),
+    ("pull_request", {"shards": [["a"]], "carried": ["m.x__mutmut_1"]}, 0, "false"),
+    # A whole-codebase run is the writer and must only see fresh verdicts.
+    ("schedule", {"shards": [["a"]], "carried": ["m.x__mutmut_1"]}, 1, None),
+    ("workflow_dispatch", {"shards": [["a"]], "carried": ["m.x__mutmut_1"]}, 1, None),
+    ("schedule", {"shards": [["a"]]}, 0, "true"),
+    # Unreadable: the gate cannot tell, so it refuses rather than guess.
+    ("push", None, 1, None),
+])
+def test_plain_or_ledgered_is_decided_from_the_plan_file(jobs, tmp_path, event, full, rc,
+                                                          plain):
+    step = _step(jobs["mutation"], step_id="ledgered")
+    assert step["if"] == "needs.mutation-plan.outputs.gate_set == 'full'"
+    assert "continue-on-error" not in step
+    (tmp_path / "mutation-plan").mkdir()
+    sets = {} if full is None else {"full": full}
+    (tmp_path / "mutation-plan" / "mutation-plan.json").write_text(
+        json.dumps({"gate_set": "full", "sets": sets}), encoding="utf-8")
+    out = tmp_path / "out"
+    out.write_text("", encoding="utf-8")
+    proc = _bash(step, tmp_path, {"RUNNER_TEMP": str(tmp_path), "GITHUB_OUTPUT": str(out),
+                                  "EVENT": event})
+    assert proc.returncode == rc, proc.stdout + proc.stderr
+    assert _outputs(out).get("plain") == plain
+
+
+def test_the_ledger_writer_runs_only_after_a_green_plain_whole_codebase_gate(jobs):
+    job = jobs["mutation"]
+    steps = job["steps"]
+    write = _step(job, name=LEDGER_WRITER[0])
+    check = _step(job, name=LEDGER_WRITER[1])
+    upload = _step(job, name=LEDGER_WRITER[2])
+    # After the gate and the weights, in this order.
+    gate = steps.index(_step(job, runs="scripts/mutation_gate.py"))
+    assert gate < steps.index(write) < steps.index(check) < steps.index(upload)
+    # No status function anywhere, so each keeps the implicit success(): a red
+    # merge or gate writes nothing.
+    for step in (write, check, upload):
+        assert not re.search(r"\b(always|failure|cancelled|success)\(", step["if"]), step
+        assert step["continue-on-error"] is True
+        assert 0 < step["timeout-minutes"] <= 10
+    for part in ("needs.mutation-plan.outputs.gate_set == 'full'",
+                 "steps.ledgered.outputs.plain == 'true'",
+                 "(github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')",
+                 "github.ref == 'refs/heads/main'", "vars.MUTATION_LEDGER != ''"):
+        assert part in write["if"], part
+    assert write["env"] == {"MUTATION_LEDGER": "${{ vars.MUTATION_LEDGER }}"}
+    # .venv: the key and the digest need mutmut, libcst and PyYAML.
+    assert write["run"].startswith(".venv/bin/python scripts/mutation_ledger.py write ")
+    assert check["run"].startswith(".venv/bin/python scripts/mutation_ledger.py selfcheck ")
+    # outcome, not conclusion: a continue-on-error step that failed concludes
+    # "success".
+    assert check["if"] == "steps.ledger-write.outcome == 'success'"
+    assert upload["if"] == "steps.ledger-selfcheck.outcome == 'success'"
+    assert upload["with"]["name"] == "mutation-ledger"
+    assert upload["with"]["retention-days"] == 30
+    assert upload["with"]["overwrite"] is True
+    assert upload["with"]["if-no-files-found"] == "error"
+    # A hung ledger step times out as a step, never as the required check.
+    caps = sum(s["timeout-minutes"] for s in (write, check, upload))
+    assert job["timeout-minutes"] >= 20 + caps
+
+
+def test_the_ledger_age_bound_is_shorter_than_its_retention(jobs):
+    ml = _load_ledger()
+    upload = _uploads(jobs["mutation"])["mutation-ledger"]
+    assert ml.MAX_LEDGER_AGE.days < upload["with"]["retention-days"]
+
+
+def _load_ledger():
+    spec = importlib.util.spec_from_file_location("mutation_ledger_for_plan_tests",
+                                                  ROOT / "scripts" / "mutation_ledger.py")
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+# --------------------------------------------------------------------------
+# MUTATION_LEDGER unset: the merge, the gate's plan read and the plain/ledgered
+# step see every plain plan the planner writes exactly as main 3e5fc88e did
+# (docs/superpowers/specs/2026-11-24-mutation-survivor-ledger.md, "Rollout")
+# --------------------------------------------------------------------------
+
+import argparse as _argparse  # noqa: E402
+import fnmatch as _fnmatch  # noqa: E402
+
+
+def _def(name: str, body_lines: int = 3) -> str:
+    return "def %s():\n%s\n" % (name, "\n".join("    x = %d" % i for i in range(body_lines)))
+
+
+#: A tree with every shape `pack` treats differently: a file heavy enough to
+#: split into function units, a class-bearing file that never splits, a file
+#: in a subpackage, two ``__init__.py`` (which no pattern can address), and --
+#: at the wider shard counts -- more shards than units, so empty bins.
+_SHAPES = {
+    "__init__.py": "",
+    "big.py": "".join(_def("f%d" % i, 20) for i in range(8)),
+    "small.py": _def("tiny"),
+    "klass.py": "class K:\n    def m(self):\n        return 1\n\n\n" + _def("helper"),
+    "rag/__init__.py": "",
+    "rag/bm25.py": _def("score") + _def("rank"),
+}
+_SHAPE_KEYS = {
+    "big.py": ["boost_cli.core.big.x_f%d__mutmut_%d" % (i, n) for i in range(8)
+               for n in (1, 2, 3)],
+    "small.py": ["boost_cli.core.small.x_tiny__mutmut_%d" % n for n in (1, 2)],
+    "klass.py": ["boost_cli.core.klass.xǁKǁm__mutmut_1", "boost_cli.core.klass.xǁKǁm__mutmut_2",
+                 "boost_cli.core.klass.x_helper__mutmut_1"],
+    "rag/bm25.py": ["boost_cli.core.rag.bm25.x_score__mutmut_1",
+                    "boost_cli.core.rag.bm25.x_rank__mutmut_1"],
+}
+
+
+def _shape_tree(root: Path) -> Path:
+    for rel, text in _SHAPES.items():
+        path = root / "boost_cli" / "core" / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+    return root
+
+
+def _codes(keys_by_file: dict) -> dict:
+    """A deterministic mix of mutmut's verdicts: killed, survived, timeout, no tests."""
+    cycle = (1, 0, 1, 36, 1, 33, 1)
+    keys = [k for ks in keys_by_file.values() for k in ks]
+    return {k: cycle[i % len(cycle)] for i, k in enumerate(keys)}
+
+
+def _plain_artifacts(parent: Path, shards: list, keys_by_file: dict, inits=()) -> None:
+    """Every shard's .meta for every file, as mutmut leaves them: a key has a
+    code only where one of that shard's selectors fnmatches it."""
+    codes = _codes(keys_by_file)
+    for i, selectors in enumerate(shards):
+        core = parent / ("mutation-full-shard-%d" % i) / "boost_cli" / "core"
+        for rel, keys in keys_by_file.items():
+            ran = {k for k in keys if any(_fnmatch.fnmatchcase(k, s) for s in selectors)}
+            dest = core / (rel + ".meta")
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text(json.dumps({
+                "exit_code_by_key": {k: (codes[k] if k in ran else None) for k in keys},
+                "hash_by_function_name": {k.rpartition(".")[2].partition("__mutmut_")[0]:
+                                          "0123456789ab" for k in keys},
+                "type_check_error_by_key": {},
+                "durations_by_key": dict.fromkeys(sorted(ran), 0.5),
+                "estimated_durations_by_key": {}}), encoding="utf-8")
+        for rel in inits:
+            dest = core / (rel + ".meta")
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text(json.dumps({"exit_code_by_key": {}}), encoding="utf-8")
+
+
+def _tree_bytes(top: Path) -> dict:
+    return {p.relative_to(top).as_posix(): p.read_bytes()
+            for p in sorted(top.rglob("*")) if p.is_file()}
+
+
+def _merge_both_ways(root: Path, plan_path: Path, shards: int, source: Path,
+                     work: Path, capsys) -> tuple:
+    """`merge` as main ran it (no plan) and as this branch runs it (--plan)."""
+    got = []
+    for label, plan in (("main", None), ("plan", str(plan_path))):
+        into = work / ("merged-" + label)
+        args = _argparse.Namespace(root=str(root), shards=shards, into=str(into),
+                                   source=str(source), prefix="mutation-full-shard-",
+                                   plan=plan, set="full")
+        capsys.readouterr()
+        rc = ms.cmd_merge(args)
+        got.append((rc, capsys.readouterr().out, _tree_bytes(into) if into.exists() else {}))
+    return got[0], got[1]
+
+
+def _plan_variants(plan: dict) -> dict:
+    """The plan as the planner writes it, and with `ledger_eligible` flipped or
+    absent: nothing but `mutation_ledger.py apply` may read the field."""
+    out = {"as written": plan}
+    for value in (True, False, None):
+        variant = json.loads(json.dumps(plan))
+        if value is None:
+            variant.pop("ledger_eligible", None)
+        else:
+            variant["ledger_eligible"] = value
+        out["ledger_eligible=%s" % value] = variant
+    return out
+
+
+# The real tree at CI's width: test_mutation_shards.py::
+# test_the_committed_plans_ownership_is_the_committed_packs (not here: this file
+# runs on the planner's critical path, and packing the real tree costs ~9 s).
+
+
+@pytest.mark.parametrize("shards", [1, 2, 3, 5, 12, 26])
+def test_a_plain_plan_merges_byte_for_byte_as_main_merged_without_one(tmp_path, capsys,
+                                                                     shards):
+    root = _shape_tree(tmp_path / "repo")
+    plan = mp.full_plan(root, shards, ["x"])
+    full = plan["sets"]["full"]
+    if shards >= 2:
+        # the fixture reaches the split-file path it exists for
+        assert any("big.x_f0__mutmut_*" in s for shard in full["shards"] for s in shard)
+    if shards == 26:
+        assert [] in full["shards"]     # ... and empty bins
+    assert ms.plan_ownership(full["shards"]) == ms.pack_ownership(root, shards)
+    source = tmp_path / "shard-results"
+    _plain_artifacts(source, full["shards"], _SHAPE_KEYS,
+                     inits=("__init__.py", "rag/__init__.py"))
+    # Every plain shape a plan reaches the merge in: a push's (eligible), a
+    # PR shadow's (a diff set beside it), a nightly's (that set advisory).
+    shapes = {**_plan_variants(plan),
+              "shadow": {**plan, "sets": {"full": full, "diff": {"shards": [["n"]]}}},
+              "nightly": {**plan, "advisory": ["diff"],
+                          "sets": {"full": full, "diff": {"shards": [["n"]]}}}}
+    for label, shape in shapes.items():
+        path = tmp_path / ("plan-%s.json" % label.replace(" ", "-"))
+        path.write_text(json.dumps(shape), encoding="utf-8")
+        main_merge, plan_merge = _merge_both_ways(root, path, shards, source,
+                                                  tmp_path / label.replace(" ", "-"), capsys)
+        assert main_merge[0] == 0, main_merge[1]
+        assert plan_merge == main_merge, label
+        assert ms.CARRIED_RECORD not in main_merge[2]
+
+
+@pytest.mark.parametrize("shards", [2, 26])
+def test_a_refused_plain_merge_is_refused_the_same_way_with_its_plan(tmp_path, capsys,
+                                                                    shards):
+    root = _shape_tree(tmp_path / "repo")
+    plan = mp.full_plan(root, shards, ["x"])
+    source = tmp_path / "shard-results"
+    _plain_artifacts(source, plan["sets"]["full"]["shards"], _SHAPE_KEYS,
+                     inits=("__init__.py", "rag/__init__.py"))
+    owner = next(i for i, s in enumerate(plan["sets"]["full"]["shards"]) if s)
+    shutil.rmtree(source / ("mutation-full-shard-%d" % owner))
+    path = tmp_path / "plan.json"
+    path.write_text(json.dumps(plan), encoding="utf-8")
+    main_merge, plan_merge = _merge_both_ways(root, path, shards, source, tmp_path, capsys)
+    assert main_merge[0] == 1 and "INCOMPLETE" in main_merge[1]
+    assert plan_merge == main_merge
+
+
+@pytest.mark.usefixtures("needs_mutmut")
+def test_every_plain_plan_the_planner_writes_is_the_committed_pack(tmp_path, git_repo,
+                                                                   monkeypatch, capsys):
+    """Each planner path that ends in a full set -- `full` plain and eligible,
+    the three diff-to-full fallbacks, the shadow, the empty shadow, the nightly
+    with and without its shadow -- writes exactly `full_plan`'s set, which the
+    merge reads exactly as it read no plan at all. Each is checked against the
+    tree it was planned on, before the next commit changes it."""
+    root = git_repo.root
+    keys = {"m.py": ["boost_cli.core.m.x_a__mutmut_1", "boost_cli.core.m.x_c__mutmut_1",
+                     "boost_cli.core.m.xǁKǁm__mutmut_1"],
+            "n.py": ["boost_cli.core.n.x_install__mutmut_1"]}
+    seen = []
+
+    def check(label: str, plan: dict) -> None:
+        seen.append(label)
+        assert plan["gate_set"] == "full", label
+        full = plan["sets"]["full"]
+        assert "carried" not in json.dumps(plan), label
+        assert full == mp.full_plan(root, 2, [])["sets"]["full"], label
+        assert ms.plan_ownership(full["shards"]) == ms.pack_ownership(root, 2), label
+        here = {r: k for r, k in keys.items() if (root / "boost_cli/core" / r).exists()}
+        source = tmp_path / ("src-%d" % len(seen))
+        _plain_artifacts(source, full["shards"], here, inits=("__init__.py",))
+        for variant, shape in _plan_variants(plan).items():
+            path = tmp_path / ("plan-%d-%s.json" % (len(seen), variant))
+            path.write_text(json.dumps(shape), encoding="utf-8")
+            main_merge, plan_merge = _merge_both_ways(root, path, 2, source,
+                                                      path.with_suffix(""), capsys)
+            assert main_merge[0] == 0, (label, main_merge[1])
+            assert plan_merge == main_merge, (label, variant)
+
+    for label, extra in (("full", []), ("full, eligible", ["--ledger-eligible"])):
+        out = tmp_path / "full.json"
+        assert mp.main(["full", "--shards", "2", "--root", str(root), "--out", str(out),
+                        *extra]) == 0
+        check(label, json.loads(out.read_text(encoding="utf-8")))
+    check("nightly, alone", nightly(tmp_path, git_repo, git_repo.base, git_repo.base))
+    changed = git_repo.head({"boost_cli/core/m.py": _M_BASE.replace("+ 1", "+ 2")})
+    check("shadow", plan_diff(tmp_path, git_repo, changed, "--shadow"))
+    check("nightly, shadow", nightly(tmp_path, git_repo, git_repo.base, changed,
+                                     base_run="41"))
+    md = mp._load_diff()
+    with monkeypatch.context() as patch:
+        patch.setattr(mp, "_load_diff", lambda: md)
+        patch.setattr(md, "MAX_NAMES", 1)
+        wide = mp.diff_plan(root, git_repo.base, changed, git_repo.stats, shards=2)
+    assert wide["reasons"][0].startswith("diff scope: ")
+    check("diff, too wide", wide)
+
+    def diff(base: str, head: str, *extra: str) -> dict:
+        out = tmp_path / "diff.json"
+        assert mp.main(["diff", "--base", base, "--head", head, "--stats",
+                        str(git_repo.stats), "--root", str(root), "--shards", "2",
+                        "--out", str(out), *extra]) == 0
+        return json.loads(out.read_text(encoding="utf-8"))
+
+    docs = git_repo.head({"README.md": "docs\n"})
+    empty = diff(changed, docs, "--shadow")
+    assert empty["reasons"][-1].startswith("shadow: the diff scope is empty")
+    check("shadow, empty", empty)
+    trigger = git_repo.head({"scripts/mutation_new.py": "x = 1\n"})
+    triggered = diff(docs, trigger)
+    assert triggered["reasons"] == ["scripts/mutation_new.py changed"]
+    check("diff, trigger", triggered)
+    blind_base = git_repo.head({"boost_cli/core/n.py": _UNTRAMPOLINED})
+    blind = git_repo.head({"boost_cli/core/n.py": _UNTRAMPOLINED.replace(
+        "    pass\n", "    return None\n")})
+    unknown = diff(blind_base, blind)
+    assert unknown["reasons"][0].startswith("changed function has no mutants")
+    check("diff, blind", unknown)
+    assert len(seen) == 9
+
+
+@needs_bash
+@pytest.mark.parametrize("event", ["pull_request", "merge_group", "push", "schedule",
+                                   "workflow_dispatch"])
+def test_every_plain_plan_shape_is_plain_to_the_gate(jobs, tmp_path, event):
+    # The fail-closed `ledgered` step is new on the unset path; on any plan the
+    # planner writes it must answer plain, so the weights steps run as before.
+    step = _step(jobs["mutation"], step_id="ledgered")
+    root = _shape_tree(tmp_path / "repo")
+    plan = mp.full_plan(root, 3, ["x"], ledger_eligible=event == "push")
+    full = plan["sets"]["full"]
+    shapes = {"full": plan,
+              "shadow": {**plan, "sets": {"full": full, "diff": {"shards": [["n"]]}}},
+              "nightly": {**plan, "advisory": ["diff"], "ledger_eligible": False,
+                          "sets": {"full": full, "diff": {"shards": [["n"]]}}}}
+    for label, shape in shapes.items():
+        (tmp_path / "mutation-plan").mkdir(exist_ok=True)
+        (tmp_path / "mutation-plan" / "mutation-plan.json").write_text(
+            json.dumps(shape), encoding="utf-8")
+        out = tmp_path / "out"
+        out.write_text("", encoding="utf-8")
+        proc = _bash(step, tmp_path, {"RUNNER_TEMP": str(tmp_path), "GITHUB_OUTPUT": str(out),
+                                      "EVENT": event})
+        assert proc.returncode == 0, (label, proc.stdout + proc.stderr)
+        assert _outputs(out) == {"plain": "true"}, label
+
+
+def test_only_the_ledger_reads_ledger_eligible():
+    # The field every plan now carries is inert on the unset path: the planner
+    # writes it, `mutation_ledger.py apply` reads it, and nothing else that
+    # consumes a plan (matrix, patterns, the gates, compare, ci.yml's jq) does.
+    readers = {p.relative_to(ROOT).as_posix()
+               for p in [*(ROOT / "scripts").glob("*.py"), *(ROOT / ".github").rglob("*.yml")]
+               if "ledger_eligible" in p.read_text(encoding="utf-8")}
+    assert readers == {"scripts/mutation_plan.py", "scripts/mutation_ledger.py"}
+    # ci.yml names it once, as the flag a push passes the planner.
+    ci = CI.read_text(encoding="utf-8")
+    assert ci.count("--ledger-eligible") == 1
+
+
+def test_matrix_and_patterns_ignore_ledger_eligible(tmp_path):
+    root = _shape_tree(tmp_path / "repo")
+    seen = set()
+    for label, shape in _plan_variants(mp.full_plan(root, 5, ["x"])).items():
+        path = tmp_path / ("%s.json" % label)
+        path.write_text(json.dumps(shape), encoding="utf-8")
+        args = tmp_path / ("%s.args" % label)
+        got = [run_cli("matrix", "--plan", str(path))]
+        for i in range(5):
+            run_cli("patterns", "--plan", str(path), "--set", "full", "--index", str(i),
+                    "--out", str(args))
+            got.append(args.read_bytes())
+        seen.add(tuple(got))
+    assert len(seen) == 1

@@ -17,7 +17,10 @@ The scope functions are pure: the caller supplies file text through
 `read(rev, path)` and the dependency map from `mutants/mutmut-stats.json`.
 `mutation_plan.py diff` is that caller; it packs the scope with
 `pack_functions` and names every mutant a shard runs exactly, as
-`mutant_names` lists them, so no cached verdict is ever trusted.
+`mutant_names` lists them, so no cached verdict is ever trusted in the diff
+set. (The survivor ledger, `mutation_ledger.py`, carries recorded survivors
+into a PR's *full* set only, never a diff-scope function's; `compare` refuses
+a plan that does, so the shadow always compares two measurements.)
 
 Two CLIs read the shards' results back, and a third reads what the second wrote:
 
@@ -1031,6 +1034,18 @@ def cmd_compare(args: argparse.Namespace) -> int:
     problems += full_problems
     prefixes = tuple(q + MUTANT_SEP for q in functions)
     full = {k: c for k, c in full_all.items() if k.startswith(prefixes)}
+    # A ledgered full set (mutation_ledger.py) did not run its carried rows,
+    # so one inside the diff scope would read as "full: not checked" -- a
+    # disagreement that is only a carried survivor. `apply` never carries a
+    # diff-scope function; a plan that does is not one this compares.
+    carried = ((plan.get("sets") or {}).get("full") or {}).get("carried", [])
+    if not isinstance(carried, list):
+        problems.append("sets.full.carried is not a list")
+    else:
+        in_scope = sorted(n for n in carried if isinstance(n, str) and n.startswith(prefixes))
+        if in_scope:
+            problems.append(f"{len(in_scope)} diff-scope mutants were carried from a "
+                            f"ledger, not run by the full set, first: {in_scope[0]}")
 
     def name(side: dict[str, Any], key: str) -> str:
         return "absent" if key not in side else status_of(side[key])
