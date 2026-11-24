@@ -268,8 +268,10 @@ def _write_summary(env: Mapping[str, str], text: str) -> None:
             out.write(text)
 
 
-def _error(message: str) -> int:
+def _error(message: str, env: Mapping[str, str]) -> int:
+    """Exit 2, saying why on the run page as well as in the log's annotation."""
     print("::error title=%s::%s" % (PREFIX, message))
+    _write_summary(env, "### %s: could not answer\n\n%s\n" % (PREFIX, message))
     return 2
 
 
@@ -297,7 +299,7 @@ def main(argv: Sequence[str] | None = None, *, env: Mapping[str, str] | None = N
     problem = preflight(moved, days, run=run)
     if problem:
         return _error("the clock was not moved, so a green suite would prove nothing: %s"
-                      % problem)
+                      % problem, base)
     print("%s: running the suite with the clock moved +%d days, to %s"
           % (PREFIX, days, moved_to.isoformat()), flush=True)
     deselect = [arg for nodeid in sorted(ARTIFACTS) for arg in ("--deselect", nodeid)]
@@ -305,7 +307,7 @@ def main(argv: Sequence[str] | None = None, *, env: Mapping[str, str] | None = N
     if first.sentinel - {"passed"}:
         return _error("%s did not pass (%s): the moved clock did not reach the processes "
                       "running the tests, so this run proves nothing"
-                      % (SELF_TEST, ", ".join(sorted(first.sentinel))))
+                      % (SELF_TEST, ", ".join(sorted(first.sentinel))), base)
     if not first.sentinel:
         print("::warning title=%s::%s was not collected, so nothing checked that the test "
               "processes saw the moved clock" % (PREFIX, SELF_TEST))
@@ -316,10 +318,10 @@ def main(argv: Sequence[str] | None = None, *, env: Mapping[str, str] | None = N
     if first.rc != 1:
         return _error("pytest exited %d on the moved clock: interrupted, or a usage or "
                       "internal error, so not all of the suite ran: read the log above"
-                      % first.rc)
+                      % first.rc, base)
     if not first.failed:
         return _error("pytest exited 1 on the moved clock without naming a failed test: "
-                      "read the log above")
+                      "read the log above", base)
 
     ids = sorted(first.failed)
     print("%s: %d failure(s) on the moved clock; re-running them apart from the rest "
@@ -329,7 +331,7 @@ def main(argv: Sequence[str] | None = None, *, env: Mapping[str, str] | None = N
     for label, rerun in (("the moved", again), ("today's", on_today)):
         if rerun.rc not in (0, 1):
             return _error("the re-run on %s clock exited %d, so the failures cannot be "
-                          "told apart: read the log above" % (label, rerun.rc))
+                          "told apart: read the log above" % (label, rerun.rc), base)
     verdict = classify(ids, again.failed, on_today.failed)
 
     for nodeid in verdict.bombs:

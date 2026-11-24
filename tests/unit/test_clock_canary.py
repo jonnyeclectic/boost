@@ -400,32 +400,44 @@ class TestMain:
         fake = FakePytest((1, {**OK, "r": "failed"}), (1, {"r": "failed"}), (1, {"r": "failed"}))
         assert _main(fake, tmp_path)[0] == 0
 
-    def test_an_unmoved_clock_is_an_error_not_a_green(self, tmp_path, capsys):
-        rc, _ = _main(FakePytest(probe_ok=False), tmp_path)
+    # Every "cannot answer" says why in the job summary as well as in its
+    # annotation: the run page is where a red advisory run is read.
+    @staticmethod
+    def _cannot_answer(result, capsys, why):
+        rc, summary = result
         assert rc == 2
-        assert "a green suite would prove nothing" in capsys.readouterr().out
+        assert summary.startswith("### clock canary: could not answer\n\n"), summary
+        assert why in summary, summary
+        assert "::error title=clock canary::" in capsys.readouterr().out
+
+    def test_an_unmoved_clock_is_an_error_not_a_green(self, tmp_path, capsys):
+        self._cannot_answer(_main(FakePytest(probe_ok=False), tmp_path), capsys,
+                            "a green suite would prove nothing")
 
     @pytest.mark.parametrize("sentinel", ["skipped", "failed"])
-    def test_a_sentinel_that_did_not_pass_is_an_error(self, tmp_path, sentinel):
+    def test_a_sentinel_that_did_not_pass_is_an_error(self, tmp_path, capsys, sentinel):
         fake = FakePytest((1 if sentinel == "failed" else 0,
                            {cc.SELF_TEST: sentinel}))
-        assert _main(fake, tmp_path)[0] == 2
+        self._cannot_answer(_main(fake, tmp_path), capsys, "did not pass (%s)" % sentinel)
 
-    def test_a_run_with_no_named_failure_is_an_error(self, tmp_path):
-        assert _main(FakePytest((4, OK)), tmp_path)[0] == 2
-        assert _main(FakePytest((1, OK)), tmp_path)[0] == 2
+    @pytest.mark.parametrize("rc", [4, 1])
+    def test_a_run_with_no_named_failure_is_an_error(self, tmp_path, capsys, rc):
+        self._cannot_answer(_main(FakePytest((rc, OK)), tmp_path), capsys,
+                            "pytest exited %d on the moved clock" % rc)
 
-    def test_an_interrupted_moved_run_is_an_error_even_with_failures_named(self, tmp_path):
+    def test_an_interrupted_moved_run_is_an_error_even_with_failures_named(self, tmp_path,
+                                                                           capsys):
         # The runs continue past collection errors, so rc 2 can only mean the
         # suite stopped part way: sorting what did fail could call the rest
         # clean without having run it.
         fake = FakePytest((2, {**OK, "r": "failed"}), (1, {"r": "failed"}), (1, {"r": "failed"}))
-        assert _main(fake, tmp_path)[0] == 2
+        self._cannot_answer(_main(fake, tmp_path), capsys, "pytest exited 2 on the moved clock")
         assert len(fake.calls) == 2, "no re-run of a partial suite's failures"
 
-    def test_a_rerun_that_could_not_run_is_an_error(self, tmp_path):
+    def test_a_rerun_that_could_not_run_is_an_error(self, tmp_path, capsys):
         fake = FakePytest((1, {**OK, "b": "failed"}), (4, {}), (0, {}))
-        assert _main(fake, tmp_path)[0] == 2
+        self._cannot_answer(_main(fake, tmp_path), capsys,
+                            "the re-run on the moved clock exited 4")
 
     def test_artifacts_are_deselected_from_the_moved_run(self, tmp_path, monkeypatch):
         monkeypatch.setattr(cc, "ARTIFACTS", {"t.py::test_x": "why"})
