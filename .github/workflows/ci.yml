@@ -471,6 +471,16 @@ jobs:
   # so its outputs are the verdict -- and if the job fails anyway they are
   # empty, which every consumer below reads as "run everything".
   #
+  # `mutation_proven` is true whenever `skip` is, and also on the one case
+  # `skip` refuses that still proves the mutation verdict (approved
+  # 2026-11-24): the PR run is a re-run, and every mutation job in it ran
+  # once, in attempt 1, and passed -- typically a macOS `tests` cell
+  # cancelled and re-run, as on PR runs 42430658365 and 41861286489, whose
+  # pushes ran every shard again. Its tests are not first-attempt proof,
+  # so `tests` and the badge still run here (they read `skip` alone); only
+  # `mutation-plan` reads `mutation_proven`, and `pr_run_id` names the run
+  # whenever it is true.
+  #
   # It answers a second, independent question with the same token: was
   # `mutation` green on the push run of the base commit (`--before`, from
   # github.event.before)? `base_mutation_green` is "true" only when that job
@@ -506,6 +516,7 @@ jobs:
       pr_run_id: ${{ steps.decide.outputs.pr_run_id }}
       base_mutation_green: ${{ steps.decide.outputs.base_mutation_green }}
       base_mutation: ${{ steps.decide.outputs.base_mutation }}
+      mutation_proven: ${{ steps.decide.outputs.mutation_proven }}
     steps:
       - name: harden runner (egress audit)
         uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
@@ -647,8 +658,10 @@ jobs:
     needs: proven
     # Skipped only on an explicit `skip == 'true'`: a pull request (proven
     # skipped, output empty) and a push whose proven job failed (empty again)
-    # both test. Never on a nightly or a dispatch, which run the mutation jobs
-    # and `tests-extended` only.
+    # both test, and so does a push `proven` vouches for the mutation verdict
+    # of alone (`mutation_proven` without `skip`: a re-run PR run, whose tests
+    # are not first-attempt proof). Never on a nightly or a dispatch, which
+    # run the mutation jobs and `tests-extended` only.
     #
     # TWIN: `tests-extended` below runs these same steps (pinned equal by
     # tests/unit/test_ci_tests_extended.py) on the macOS/Windows legs this
@@ -1037,7 +1050,8 @@ jobs:
   # suite was skipped because `proven` said so and named a run. Anything else
   # (a red or cancelled suite, a failed `proven`) is a red job, never a green
   # badge-less one, and so is a missing artifact: no step here continues on
-  # error.
+  # error. It reads `skip`, never `mutation_proven`: a push proven for its
+  # mutation verdict alone ran its own suite, so the badge is this run's.
   #
   # The JOB does. The badge is cosmetic, and a red one must not decide whether
   # main releases: publish.yml fires on the run's conclusion, and job-level
@@ -1143,7 +1157,9 @@ jobs:
   # job on the base's push run completed with success, and the newest
   # whole-codebase run on main has a green `mutation` -- fact 3's reading,
   # an idle one only while its inheritance holds). Either `proven` vouches
-  # for this tree -- the plan is `none` with the reason "proven by PR run
+  # for this tree's mutation verdict (`mutation_proven`: `skip`, or a re-run
+  # PR run whose mutation jobs all ran once, in attempt 1, and passed) -- the
+  # plan is `none` with the reason "proven by PR run
   # <id>", no stats are collected, no shard starts and `mutation` reports the
   # planner's reason -- or the diff from github.event.before cannot move the
   # score, and the plan is `none` on the base's verdict. Any other push plans
@@ -1244,6 +1260,7 @@ jobs:
           HEAD: ${{ github.sha }}
           EVENT: ${{ github.event_name }}
           SKIP: ${{ needs.proven.outputs.skip }}
+          MUTATION_PROVEN: ${{ needs.proven.outputs.mutation_proven }}
           PR_RUN_ID: ${{ needs.proven.outputs.pr_run_id }}
           BASE_GREEN: ${{ needs.proven.outputs.base_mutation_green }}
           BASE_MUTATION: ${{ needs.proven.outputs.base_mutation }}
@@ -1268,8 +1285,17 @@ jobs:
           # have been proven and released #1285's red.
           # A proven push on a base not green falls through to the diff and
           # the widening below, like any other push.
-          if [ "$EVENT" = push ] && [ "$SKIP" = true ]; then
+          #
+          # MUTATION_PROVEN is the same proof for the mutation verdict alone,
+          # with the same base rule: the PR run is a re-run whose mutation
+          # jobs all ran once, in attempt 1, and passed (approved
+          # 2026-11-24). `tests` reads SKIP only, so that push runs its suite;
+          # this step is the one place MUTATION_PROVEN is read.
+          if [ "$EVENT" = push ] && { [ "$SKIP" = true ] || [ "$MUTATION_PROVEN" = true ]; }; then
             if [ "$BASE_GREEN" = true ]; then
+              if [ "$SKIP" != true ]; then
+                echo "mutation proven by PR run $PR_RUN_ID, a re-run whose mutation jobs all ran in its first attempt (its tests run here)"
+              fi
               echo "proven by PR run $PR_RUN_ID — nothing to collect"
               echo "relevant=false" >> "$GITHUB_OUTPUT"
               echo "proven=true" >> "$GITHUB_OUTPUT"
