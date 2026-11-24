@@ -1,0 +1,117 @@
+name: clock-canary
+
+# Runs the unit and functional suites on a clock moved 14 days ahead, so a test
+# that compares a fixed date against `now` fails here, days before it fails
+# everywhere else.
+#
+# From 2026-11-13 to 11-23 ci's nightly failed at `collect mutmut stats once`
+# every night, on one unit test that aged a fixture dated 2026-10-30 against
+# datetime.now() and a 13-day window. Nothing had changed but the date. A red
+# nightly also turns off main's proven-tree skip, so for those eleven days
+# every push ran the full ~2.5 h mutation gate. Making the stats pass tolerate
+# a failing test would score a red tree, so this finds the test first instead.
+# scripts/clock_canary.py says how, and tests/clock_canary/sitecustomize.py
+# what it moves and what it leaves alone.
+#
+# Advisory: no check here is required (tests/unit/test_clock_canary.py pins
+# that), and it is a workflow of its own rather than a ci.yml job because
+# publish.yml releases on `ci` alone, and a date that has not happened yet must
+# not hold up or skip a release. It is in ci-failure-issue.yml's `workflows:`
+# list, so a red run on main opens the "CI not green on main (clock-canary)"
+# tracker and the next green one closes it.
+
+on:
+  schedule:
+    # Daily, off the hour: clear of nightly-watch's 02:47 and 14:47, the
+    # 04:00-08:00 weekly crons, and ci's 09:30 nightly, whose mutation shards
+    # want every one of the account's 20 job slots. Daily is what makes one
+    # offset enough: each future date is probed once, 14 days before it
+    # arrives.
+    - cron: "41 3 * * *"
+  # By hand, e.g. to look further ahead once (`days`), or to confirm a fix
+  # before the tracker's next scheduled close.
+  workflow_dispatch:
+    inputs:
+      days:
+        description: "Days to move the clock ahead (empty: the script's default, 14)"
+        type: string
+        default: ""
+  # A change to the canary itself is run before it merges and again on main.
+  # test_clock_canary.py is part of it: it holds the sentinel the script reads
+  # to prove the xdist workers saw the moved clock, so a change there can turn
+  # every canary run into "proves nothing" and must be run here first.
+  # Nothing else triggers it on a PR: the suite's date bombs are found by the
+  # schedule, not by every push paying for a second full run.
+  pull_request:
+    paths:
+      - "tests/clock_canary/**"
+      - "tests/unit/test_clock_canary.py"
+      - "scripts/clock_canary.py"
+      - ".github/workflows/clock-canary.yml"
+  push:
+    branches: [main]
+    paths:
+      - "tests/clock_canary/**"
+      - "tests/unit/test_clock_canary.py"
+      - "scripts/clock_canary.py"
+      - ".github/workflows/clock-canary.yml"
+
+permissions: {}
+
+# A superseded PR run is cancelled; a run on main never is, because a
+# cancelled run concludes `cancelled`, which ci-failure-issue reads as not
+# green. Keyed on the run otherwise, because `cancel-in-progress: false` still
+# cancels an older PENDING run when a third arrives in the same group (ci.yml's
+# concurrency comment).
+concurrency:
+  group: clock-canary-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  clock-canary:
+    runs-on: ubuntu-latest
+    # ci.yml's Linux `tests` cap, for the same suite under the same `-n auto`.
+    # Expect about five minutes: on 3e5fc88e (run 45290191649) the
+    # `tests (ubuntu-latest, 3.14)` job took 4.7 min, 4.0 of them pytest,
+    # without coverage, as here. The canary adds a probe and, only when
+    # something fails, one re-run of the failures apart from the suite on
+    # each clock.
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: harden runner (egress audit)
+        uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0    # tags for setuptools-scm version resolution
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          # The interpreter of ci's mutation planner, whose stats pass is
+          # where the last bomb went off.
+          python-version: "3.14"
+      - name: git identity (fixture repos)
+        run: |
+          git config --global user.email ci@boost.test
+          git config --global user.name "Boost CI"
+      - name: install test deps
+        # The same hash-pinned file ci.yml's `tests` cells install.
+        run: |
+          python -m venv .venv
+          .venv/bin/pip -q install -r requirements/test-tools.txt
+          .venv/bin/pip -q install sqlite-vec || true
+      - name: unit + functional on the moved clock
+        # The clock moves for this step's pytest and nothing else: the shim is
+        # put on PYTHONPATH by the script, so the installs above ran on the
+        # real clock. Bombs come out as `::error::` annotations naming the
+        # offset and the date, and the step summary lists every failure.
+        env:
+          DAYS: ${{ inputs.days }}
+        run: |
+          args=()
+          if [ -n "$DAYS" ]; then args=(--days "$DAYS"); fi
+          .venv/bin/python scripts/clock_canary.py "${args[@]}" -- \
+            tests/unit tests/functional -n auto -q
