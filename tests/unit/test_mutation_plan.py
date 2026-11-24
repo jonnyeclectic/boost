@@ -29,6 +29,7 @@ import sys
 from pathlib import Path
 from typing import ClassVar
 
+import _tapped_support
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -63,6 +64,19 @@ def _tree_is_mutated() -> bool:
 
 real_tree_only = pytest.mark.skipif(
     _tree_is_mutated(), reason="tree rewritten by mutmut; packing it is slow")
+
+#: For a test that swaps mutmut's own process-global state or patches its
+#: live trampoline. Inside mutants/ ``needs_mutmut`` finds mutmut, so without
+#: this it also ran in mutmut's real passes, where that is the state mutmut
+#: is using: in ``stats`` a trampolined call in the window goes uncredited,
+#: in ``fail`` it raises mid-pass. Such a test pins mutmut for the planner,
+#: which runs it under BOOST_REQUIRE_MUTMUT=1 with no pass around it. Read at
+#: import, so it holds for the stats, forced-fail and mutant passes; the clean
+#: pass sets ``""``, but it runs only tests credited to a function, and a test
+#: the stats pass skipped is credited to none.
+outside_mutmut_only = pytest.mark.skipif(
+    _tapped_support.under_mutmut(),
+    reason="swaps mutmut's own state, which a mutmut pass is using")
 
 
 @pytest.fixture
@@ -114,6 +128,7 @@ def test_full_plan_reuses_the_committed_pack(tmp_path):
     assert plan["reasons"], "a plan must say why it is the plan it is"
 
 
+@outside_mutmut_only
 @pytest.mark.usefixtures("needs_mutmut")
 def test_mutmut_gives_a_per_function_shard_its_own_clean_run(tmp_path, monkeypatch):
     # mutation_shards.sentinel_for, against mutmut's own clean-run selection
@@ -138,6 +153,20 @@ def test_mutmut_gives_a_per_function_shard_its_own_clean_run(tmp_path, monkeypat
     assert real and len(real) < len(pats)
     assert tests_for_mutant_names(real) == set()
     assert tests_for_mutant_names(pats) == {"t_install"}
+
+
+def test_the_mutmut_state_tests_stay_out_of_mutmut_passes():
+    # The mark is all that keeps them out of a real pass inside mutants/.
+    for test in (test_mutmut_gives_a_per_function_shard_its_own_clean_run,):
+        assert outside_mutmut_only.mark in getattr(test, "pytestmark", []), \
+            test.__name__
+    # Its condition is read once, at import, and mutmut imports this module
+    # in one pass (`list_all_tests`) and can run this test in another (the
+    # clean pass, ""), so it is compared with nothing then: that would fail
+    # the clean run. Only the planner step, which runs these tests with no
+    # pass around them, needs it not to fire, or they skip where they count.
+    if os.environ.get("BOOST_REQUIRE_MUTMUT") == "1":
+        assert outside_mutmut_only.mark.args == (False,)
 
 
 def test_full_plan_on_a_small_tree(tmp_path):
