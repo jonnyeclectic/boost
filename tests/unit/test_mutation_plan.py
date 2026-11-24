@@ -2235,6 +2235,38 @@ def test_the_gate_merges_and_scores_against_the_plan(jobs):
         ".venv/bin/python scripts/mutation_gate.py --min 80 " + plan)
 
 
+def test_every_step_that_reads_the_plan_runs_only_where_it_was_downloaded(jobs):
+    # Main downloaded the plan for a shadow alone. The merge, the gate and the
+    # `ledgered` step now read it on every full gate, so a step reading it
+    # where it was not downloaded would turn a plain run red on a missing
+    # file -- a PR's `diff --shadow` run included, which gates on full.
+    job = jobs["mutation"]
+    steps = job["steps"]
+    full = "needs.mutation-plan.outputs.gate_set == 'full'"
+    shadow = "needs.mutation-plan.outputs.shadow == 'true'"
+    download = _downloads(job)["mutation-plan"]
+    assert download["if"] == full
+    readers = [s for s in steps if "mutation-plan/mutation-plan.json"
+               in str(s.get("run", "")) + str(s.get("env", ""))]
+    assert {s.get("id") for s in readers} >= {"ledgered", "shadow"}
+    assert _step(job, runs="mutation_shards.py merge") in readers
+    assert _step(job, runs="scripts/mutation_gate.py") in readers
+    by_id = {s["id"]: s for s in steps if "id" in s}
+    for step in readers:
+        assert steps.index(step) > steps.index(download), step.get("name")
+        cond = step["if"]
+        # A step chained on another step's outcome inherits that step's guard.
+        while cond.startswith("steps.") and cond.endswith(".outcome == 'success'"):
+            cond = by_id[cond[len("steps."):-len(".outcome == 'success'")]]["if"]
+        assert cond in (shadow, full) or cond.startswith(full + " && "), (
+            step.get("name"), step["if"])
+    # And a shadow is a full gate: the conclusive step, ahead of the download,
+    # refuses a shadow plan that gates on anything else.
+    conclusive = _step(job, name="upstream jobs must be conclusive")
+    assert steps.index(conclusive) < steps.index(download)
+    assert '[ "$SHADOW" = "true" ] && [ "$GATE_SET" != "full" ]' in conclusive["run"]
+
+
 @needs_bash
 @pytest.mark.parametrize("event, full, rc, plain", [
     ("pull_request", {"shards": [["a"]]}, 0, "true"),
