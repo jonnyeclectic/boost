@@ -13,19 +13,23 @@ the spec of record is still
 ## Why
 
 A full mutation run re-proves verdicts it already has, every time. Here is
-what all 26 shard artifacts of push run 45290191649 contain (research of
-2026-11-23):
+what all 26 shard artifacts of push run 45290191649 contain, tallied from
+their `.meta` exit codes and `durations_by_key` under mutmut 3.8.0's
+`status_by_exit_code` (2026-11-24; no key was run by two shards):
 
 | verdict | mutants | mutant-seconds | share of seconds |
 |---|---|---|---|
-| survived | 6,494 | 200,319 | 58.4% |
-| killed | 47,808 | 131,616 | 38.3% |
-| timeout | 61 | 11,327 | 3.3% |
+| survived | 6,496 | 199,982 | 58.6% |
+| killed | 47,797 | 131,211 | 38.5% |
+| timeout | 70 | 9,988 | 2.9% |
 | no tests | 54 | about 0 | 0% |
 
-Score 87.85%, headroom 4,274 kills above 80%. A survivor runs its whole
+Score 87.83%, headroom 4,263 kills above 80%. (The research of 2026-11-23
+read the same run as 6,494 / 47,808 / 61; the re-tally is what every
+measured figure below uses, and its 6,496 + 70 is exactly the 6,566 the
+planner carries, so no killed row is carried.) A survivor runs its whole
 covering test set to completion, while a kill exits at the first failing test.
-That is why 12% of the mutants cost 58% of the time.
+That is why 12% of the mutants cost 59% of the time.
 
 Re-running a survivor of a function whose source did not change almost always
 says "survived" again. When it does not, because a new test now kills it, the
@@ -70,8 +74,8 @@ decision:
 | token | switches on | reversal it needs |
 |---|---|---|
 | `write` | a green, plain `schedule` or `workflow_dispatch` run on `main` writes, self-checks and uploads `mutation-ledger` | spec 2026-10-31:196-200 (a baseline written outside the nightly's cache rules) |
-| `pull_request` | attempt 1 of a PR run may carry survivors into its full set | plan 2026-10-31:26, `mutation_diff.py:20` |
-| `push` | attempt 1 of a push run to `main` may carry survivors. **That is the run whose success `publish.yml` releases from** (`publish.yml:70-72`), so a release would be gated on a score that re-ran no recorded survivor. | spec 2026-10-31:196-200 ("never restored by a release workflow") |
+| `pull_request` | attempt 1 of a PR run may carry survivors into its full set. **This alone can already put a ledgered verdict under a release:** a green first-attempt PR run proves its merge push (`ci_proven_tree.py`, fact 2), which then skips the mutation run and releases. Fact 3 still needs a green plain whole-codebase run within 48 h. | plan 2026-10-31:26, `mutation_diff.py:20`, and the release reversal below (spec 2026-10-31:196-200) through the proven push. Not built: `ci_proven_tree` refusing a ledgered PR run as proof, which would close this and cost every such merge a full run. |
+| `push` | attempt 1 of an unproven push run to `main` may carry survivors. **That is the run whose success `publish.yml` releases from** (`publish.yml:70-72`), so a release would be gated directly on a score that re-ran no recorded survivor. | spec 2026-10-31:196-200 ("never restored by a release workflow") |
 
 Unset, empty or anything else: the reader job is skipped by its `if`, the
 planner stamps and applies nothing, the merge and gate run plain plans exactly
@@ -192,8 +196,8 @@ The ledger is one JSON file, `mutation-ledger.json`, in an artifact named
   the ones with survivors, because `mutants` and `ms_rerun` are what a ledgered
   run packs on (see Planner).
 - A carried mutant is stored by its `__mutmut_<n>` number, so its full name is
-  `<qualified>__mutmut_<n>`. *Estimate:* about 2,035 functions and 6,555
-  numbers, well under 1 MB.
+  `<qualified>__mutmut_<n>`. Measured on 45290191649: 6,566 numbers across
+  the 1,027 functions that have any, well under 1 MB.
 - `ms_rerun` sums `durations_by_key` over the function's mutants that are not
   carried, and `ms_carried` sums it over those that are. The merge already
   carries `durations_by_key` into the merged `.meta`
@@ -352,7 +356,7 @@ artifact needs `actions: read`.
 
 ```yaml
 mutation-ledger:
-  if: github.event_name == 'pull_request' || github.event_name == 'push'
+  if: (github.event_name == 'pull_request' || github.event_name == 'push') && vars.MUTATION_LEDGER != ''
   continue-on-error: true
   runs-on: ubuntu-latest
   timeout-minutes: 5
@@ -982,8 +986,8 @@ machinery:
 2. **The next nightly** (09:30 UTC) runs plain at 26 shards, about 1,600
    runner-min as today. On a green gate it writes, self-checks and uploads
    `mutation-ledger`.
-   - If the survivor count is still near 45290191649's 6,494 plus 61 timeouts,
-     expect about 6,500 carried numbers across about 1,026 functions.
+   - If the survivor count is still near 45290191649's 6,496 plus 70 timeouts,
+     expect about 6,566 carried numbers across about 1,027 functions.
    - If its `mutation` is red, nothing is written, and the next day decides.
 3. **The next PR or push that is neither machinery nor proven** shows three
    things:
@@ -1062,6 +1066,12 @@ machinery:
   fully would need the reader to require a green ledgered PR run under the
   same digest before a push may read the ledger. That is not built; the
   rollout asks the owner to add `push` only after one exists.
+- **A ledgered PR run can prove its merge push.** `ci_proven_tree` fact 2
+  takes a green first-attempt PR run as the push's mutation verdict, so with
+  only `pull_request` enabled a release can rest on a ledgered score (fact 3
+  still requires a green plain whole-codebase run within 48 h). Making
+  `ci_proven_tree` refuse a ledgered PR run would close it and cost each such
+  merge a full run; it is the owner's choice and not built.
 - **Selector-dependent verdicts** (review major 2) are measured by the A/B,
   not prevented. `forkserver` isolation would remove the cause, and is a
   separate decision.
@@ -1077,7 +1087,7 @@ implementation does about each finding:
 |---|---|---|
 | blocker | the reversals were recorded as owner-approved with no owner words to show it | Status and both 2026-10-31 amendments say *pending owner sign-off*; each reversal is a separate `MUTATION_LEDGER` token, unset by default, and "Rollout" says plainly that `push` gates the release |
 | major | soundness assumed non-carried mutants run as in a plain run | "Soundness" restated; the gate no longer claims a range or a conclusive red; the A/B stop rule is per key and by direction; `forkserver` noted as the owner's separate option |
-| major | the release path would be the first test of ledgered code, after every digest reset | `push` is its own token, added after the A/B; the nightly self-check is a dry run of the ledgered planner and merge; the mixed-argv gap is stated under "Residuals" |
+| major | the release path would be the first test of ledgered code, after every digest reset | `push` is its own token, added after the A/B; "Rollout" says that `pull_request` alone also reaches a release, through a proven push; the nightly self-check is a dry run of the ledgered planner and merge; the mixed-argv gap is stated under "Residuals" |
 | minor | the 1,500-name cap binds on packing by time alone | two-constraint pack (time, names per bin), measured on 45290191649: max 1,500, 0 un-carried |
 | minor | a fully carried file has no owner | the merge gives it shard 0; tested |
 | minor | the pack-equality check keyed on "carries nothing" | keyed on the absence of `carried`; `apply` never writes an empty one |
