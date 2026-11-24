@@ -481,6 +481,71 @@ def test_a_ledgered_plan_merges_through_the_real_merge(world, tmp_path, capsys):
         assert code == want, key
 
 
+def test_a_ledgered_plan_reaches_the_gate_through_the_shards_own_commands(world, tmp_path,
+                                                                         gate, capsys):
+    # End to end through every command a ledgered run's plan passes: the
+    # planner's `matrix`, each shard's `patterns` (the argv file mutmut gets),
+    # mutmut's filter over that argv, the real `merge --plan`, `gate --plan`.
+    # The self-check skips the first two; a planner bug they would catch must
+    # show here, not on the first ledgered PR.
+    import contextlib
+    import fnmatch
+    import io
+
+    mp = _load("mutation_plan_for_ledger_tests", "mutation_plan.py")
+    plan = world.apply()
+    world.plan_path.write_text(json.dumps(plan), encoding="utf-8")
+
+    def cli(*argv: str) -> str:
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            assert mp.main(list(argv)) == 0, argv
+        return out.getvalue()
+
+    entries = json.loads(cli("matrix", "--plan", str(world.plan_path)))
+    assert entries == [{"set": "full", "index": i} for i in range(world.shards)]
+    assert json.loads(cli("matrix", "--plan", str(world.plan_path), "--advisory")) == []
+    argvs = []
+    for entry in entries:
+        args = tmp_path / ("args-%d" % entry["index"])
+        cli("patterns", "--plan", str(world.plan_path), "--set", "full",
+            "--index", str(entry["index"]), "--out", str(args))
+        argv = [a.decode("utf-8") for a in args.read_bytes().split(b"\0")[:-1]]
+        assert argv == plan["sets"]["full"]["shards"][entry["index"]]
+        argvs.append(argv)
+    # What mutmut runs, read by its own filter: every key outside the carried
+    # list in exactly one shard, and no carried key in any.
+    every = world.keys()
+    ran: dict[str, int] = {}
+    for argv in argvs:
+        for k in every:
+            if any(fnmatch.fnmatchcase(k, s) for s in argv):
+                ran[k] = ran.get(k, 0) + 1
+    assert ran == dict.fromkeys(sorted(set(every) - world.survivors()), 1)
+
+    ml.simulate_shards(world.meta, argvs, tmp_path / "shards")
+    import argparse
+
+    merged = tmp_path / "merged"
+    assert ms.cmd_merge(argparse.Namespace(
+        root=str(world.root), shards=world.shards, into=str(merged),
+        source=str(tmp_path / "shards"), prefix="mutation-full-shard-",
+        plan=str(world.plan_path), set="full")) == 0, capsys.readouterr().out
+    codes = mg.merged_codes(merged)
+    killed, denominator = _count(codes)
+    # The world's survivors are its only carried rows, so the score is the
+    # plain run's to the mutant.
+    assert (killed, denominator) == _count({k: c for d in world.meta.values()
+                                            for k, c in d["codes"].items()})
+    (merged / mg.STATS_NAME).write_text(json.dumps(
+        {"killed": killed, "total": denominator, "skipped": 0}), encoding="utf-8")
+    capsys.readouterr()
+    assert gate(merged, world.plan_path) == (0 if 100.0 * killed / denominator >= 80 else 1)
+    out = capsys.readouterr().out
+    assert "mutation gate: ledgered — %d of %d mutants carried as survived" % (
+        len(world.survivors()), len(world.keys())) in out
+
+
 def _unchanged(world, plan) -> None:
     assert plan["ledger"]["used"] is False
     assert plan["reasons"][-1].startswith("ledger not used: ")
