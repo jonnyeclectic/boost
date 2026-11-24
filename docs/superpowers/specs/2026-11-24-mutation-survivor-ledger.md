@@ -201,9 +201,17 @@ Some gaps remain, and each one costs freshness, never soundness:
 
 A run may use a ledger only when its own digest equals the ledger's. So every
 ledgered verdict comes from the same planner, merge, gate and pins that a
-plain, green nightly has already run on `main`, self-check included (see
-Writer). After a merge that changes any of them, every run plans plain until
-the next nightly writes a ledger under the new machinery.
+plain, green nightly has already run on `main`. After a merge that changes any
+of them, every run plans plain until the next nightly writes a ledger under
+the new machinery.
+
+**What a plain nightly exercises, and what it does not.**
+
+- **The injection function.** The writer's self-check runs it (see Writer).
+- **The ledgered planner path, and plan-derived ownership with carried rows.**
+  A plain nightly never runs these. A bug in either surfaces in the first
+  ledgered run, as red through the fail-closed merge (I2, I3) and the gate's
+  re-check (I4), never as green.
 
 This is the push half of risk 3. Its cost, measured on `main`'s first-parent
 history: 14 of the 25 merges from 11-01 to 11-23 touched one of those files,
@@ -399,7 +407,7 @@ keep=frozenset())`.
 
 | call site | what triggered it | ledger |
 |---|---|---|
-| `mutation_plan.py:247` | `full_run_reasons` fired | **none.** Risk 3: a PR that edits the mutation machinery or the test support never uses the ledger. The plan records `"ledger": {"used": false, "why": "full-run trigger"}`. |
+| `mutation_plan.py:247` | `full_run_reasons` fired | **none.** Risk 3: a PR that hits any full-run trigger never uses the ledger. That means the mutation machinery, and also conftest, pytest config and test support (`mutation_diff.py:216-225`). The plan records `"ledger": {"used": false, "why": "full-run trigger"}`. |
 | `:284` | a changed function with no mutants | may be used, nothing kept back |
 | `:302` | the scope is too big to pack | may be used, nothing kept back |
 | `:319` | the scope is empty under shadow | may be used, nothing kept back |
@@ -410,10 +418,22 @@ depend on the scope. In the shadow plan, changed functions never match a hash
 anyway. Their callers do match, but they run in full in the full set, so the
 shadow's per-mutant comparison still compares two measurements.
 
+**The 247 rule is broader than soundness needs.** It follows the commissioning
+task, which defines the machinery as "the existing full_run_reasons infra
+triggers". That set includes the test-support triggers, but a conftest or
+`tests/_*.py` edit changes only how fresh a carried survivor is, never whether
+the score is sound. A push with the same edit computes no diff and stays
+ledgered.
+
+The cost is real: `tests/conftest.py` changed in 10 of 30 trains (spec
+2026-10-31, line 48), and each such PR plans plain. Narrowing 247 to the
+machinery triggers is a one-line change, keeping unparsable source and
+core-subpackage files plain. That choice is the owner's.
+
 A function is carried only when all of these hold:
 
-1. **The file.** The ledger is well-formed and names this run in
-   `source.run_id`.
+1. **The file.** The ledger is well-formed, and its `source.run_id` is the run
+   the reader chose (the reader job's `run_id` output).
 2. **The global key.** Every part equals this run's: the installed mutmut and
    libcst, the Python minor version, and the config digest.
 3. **The machinery.** The machinery digest equals this run's.
@@ -686,11 +706,15 @@ on runs 45290191649 and 45263898738.
   path.
 - **Which runs benefit:**
   - *While the diff gate is still in shadow* (Task 8 is blocked on the
-    DISAGREE above): PR full runs that are not infra-triggered, which were 11
-    shadow, 9 empty-scope and 4 other runs in 11-01 to 11-23, plus the 7 pushes
-    that were not proven. Fewer of those runs completed, and the machinery
-    digest switches some off.
-  - *After Task 8:* about 1 PR set and 7 pushes per 23 days, roughly
+    DISAGREE above), in 11-01 to 11-23:
+    - the 11 shadow and 9 empty-scope PR full runs;
+    - those of the 4 "other" PR runs that were forced by a changed function
+      with no mutants. The conftest and test-support ones stay plain under the
+      247 rule.
+    - the 7 pushes that were not proven.
+
+    Fewer of those runs completed, and the machinery digest switches some off.
+  - *After Task 8:* at most 1 PR set and 7 pushes per 23 days, at most about
     6,000-7,000 runner-min, again minus what the digest switches off. Pushes
     that merge machinery changes are among those 7, and the digest makes them
     plain.
@@ -807,8 +831,9 @@ machinery:
 
 1. **The implementation PR** edits `scripts/mutation_*.py` and
    `jobs.mutation*`, so it plans plain (a full-run trigger). **Its merge push**
-   finds no ledger (*"the newest real whole-codebase run R wrote no ledger"*)
-   and also plans plain.
+   is most likely proven, and then runs no mutation at all. If it is not
+   proven, it finds no ledger (*"the newest real whole-codebase run R wrote no
+   ledger"*) and plans plain.
 2. **The next nightly** (09:30 UTC) runs plain at 26 shards, about 1,600
    runner-min as today. On a green gate it writes, self-checks and uploads
    `mutation-ledger`.
@@ -826,8 +851,12 @@ machinery:
    whole run near 72-86 min. Every number here is a model until this run.
 4. **One A/B comparison on the same SHA.**
    - Open a throwaway draft PR with a test-only change, which is no trigger.
-   - After its ledgered attempt 1, choose "Re-run all jobs". Attempt 2 is plain
-     on the same merge commit.
+   - After its ledgered attempt 1, and **before re-running**, download
+     attempt 1's `mutation-full-shard-*` and `mutation-plan` artifacts. Shard
+     results are kept for 1 day (ci.yml:2013), and a re-run uploads under the
+     same names.
+   - Then choose "Re-run all jobs". Attempt 2 is plain on the same merge
+     commit.
    - Compare the two attempts' per-mutant codes:
      - non-carried keys should agree, apart from known nondeterministic kills,
        which are listed;
@@ -850,10 +879,13 @@ machinery:
 - **The real per-shard name counts.** 1,359 is the verifier's mean.
 - **The cross-run download.** `action.yml` was read at the pinned SHA, but the
   download was not run.
-- **Re-run behaviour.** Three things are unconfirmed:
+- **Re-run behaviour.** Four things are unconfirmed:
   - what `GITHUB_RUN_ATTEMPT` is on "Re-run all jobs";
   - whether a re-run's success fires `publish.yml`'s `workflow_run`;
-  - whether `vars` is read again on a re-run.
+  - whether `vars` is read again on a re-run;
+  - how artifacts with the same name behave across run attempts. The A/B
+    step, `overwrite: true` and the reader's "exactly one ledger" rule all
+    depend on it.
 - **Free artifact storage.** That artifact storage stays free on a public
   repository. It is consistent with the 90-day shadow reports already kept.
 - **The time saving.** It is a model that its own author calibrated as about 7%
