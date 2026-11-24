@@ -246,6 +246,16 @@ def test_the_suite_runs_on_the_moved_clock():
         "not load here, so the canary's green would mean nothing" % (cc.DAYS_ENV, days, moved))
 
 
+def test_the_sentinel_the_script_names_exists():
+    # The script knows its sentinel by node id alone. Renamed, moved or put in
+    # a class, the moved run never collects it, the canary only warns, and
+    # nothing proves the xdist workers saw the moved clock any more.
+    path, _, name = cc.SELF_TEST.partition("::")
+    assert re.fullmatch(r"test_\w+", name), cc.SELF_TEST
+    assert re.search(r"^def %s\(" % name, (ROOT / path).read_text(encoding="utf-8"),
+                     re.MULTILINE), "%s names no module-level test" % cc.SELF_TEST
+
+
 def test_a_plain_run_never_loads_the_shim():
     if os.environ.get(cc.DAYS_ENV):
         pytest.skip("this is the canary's run")
