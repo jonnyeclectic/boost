@@ -2314,3 +2314,294 @@ def _load_ledger():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+# --------------------------------------------------------------------------
+# MUTATION_LEDGER unset: the merge, the gate's plan read and the plain/ledgered
+# step see every plain plan the planner writes exactly as main 3e5fc88e did
+# (docs/superpowers/specs/2026-11-24-mutation-survivor-ledger.md, "Rollout")
+# --------------------------------------------------------------------------
+
+import argparse as _argparse  # noqa: E402
+import fnmatch as _fnmatch  # noqa: E402
+
+
+def _def(name: str, body_lines: int = 3) -> str:
+    return "def %s():\n%s\n" % (name, "\n".join("    x = %d" % i for i in range(body_lines)))
+
+
+#: A tree with every shape `pack` treats differently: a file heavy enough to
+#: split into function units, a class-bearing file that never splits, a file
+#: in a subpackage, two ``__init__.py`` (which no pattern can address), and --
+#: at the wider shard counts -- more shards than units, so empty bins.
+_SHAPES = {
+    "__init__.py": "",
+    "big.py": "".join(_def("f%d" % i, 20) for i in range(8)),
+    "small.py": _def("tiny"),
+    "klass.py": "class K:\n    def m(self):\n        return 1\n\n\n" + _def("helper"),
+    "rag/__init__.py": "",
+    "rag/bm25.py": _def("score") + _def("rank"),
+}
+_SHAPE_KEYS = {
+    "big.py": ["boost_cli.core.big.x_f%d__mutmut_%d" % (i, n) for i in range(8)
+               for n in (1, 2, 3)],
+    "small.py": ["boost_cli.core.small.x_tiny__mutmut_%d" % n for n in (1, 2)],
+    "klass.py": ["boost_cli.core.klass.xǁKǁm__mutmut_1", "boost_cli.core.klass.xǁKǁm__mutmut_2",
+                 "boost_cli.core.klass.x_helper__mutmut_1"],
+    "rag/bm25.py": ["boost_cli.core.rag.bm25.x_score__mutmut_1",
+                    "boost_cli.core.rag.bm25.x_rank__mutmut_1"],
+}
+
+
+def _shape_tree(root: Path) -> Path:
+    for rel, text in _SHAPES.items():
+        path = root / "boost_cli" / "core" / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+    return root
+
+
+def _codes(keys_by_file: dict) -> dict:
+    """A deterministic mix of mutmut's verdicts: killed, survived, timeout, no tests."""
+    cycle = (1, 0, 1, 36, 1, 33, 1)
+    keys = [k for ks in keys_by_file.values() for k in ks]
+    return {k: cycle[i % len(cycle)] for i, k in enumerate(keys)}
+
+
+def _plain_artifacts(parent: Path, shards: list, keys_by_file: dict, inits=()) -> None:
+    """Every shard's .meta for every file, as mutmut leaves them: a key has a
+    code only where one of that shard's selectors fnmatches it."""
+    codes = _codes(keys_by_file)
+    for i, selectors in enumerate(shards):
+        core = parent / ("mutation-full-shard-%d" % i) / "boost_cli" / "core"
+        for rel, keys in keys_by_file.items():
+            ran = {k for k in keys if any(_fnmatch.fnmatchcase(k, s) for s in selectors)}
+            dest = core / (rel + ".meta")
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text(json.dumps({
+                "exit_code_by_key": {k: (codes[k] if k in ran else None) for k in keys},
+                "hash_by_function_name": {k.rpartition(".")[2].partition("__mutmut_")[0]:
+                                          "0123456789ab" for k in keys},
+                "type_check_error_by_key": {},
+                "durations_by_key": dict.fromkeys(sorted(ran), 0.5),
+                "estimated_durations_by_key": {}}), encoding="utf-8")
+        for rel in inits:
+            dest = core / (rel + ".meta")
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text(json.dumps({"exit_code_by_key": {}}), encoding="utf-8")
+
+
+def _tree_bytes(top: Path) -> dict:
+    return {p.relative_to(top).as_posix(): p.read_bytes()
+            for p in sorted(top.rglob("*")) if p.is_file()}
+
+
+def _merge_both_ways(root: Path, plan_path: Path, shards: int, source: Path,
+                     work: Path, capsys) -> tuple:
+    """`merge` as main ran it (no plan) and as this branch runs it (--plan)."""
+    got = []
+    for label, plan in (("main", None), ("plan", str(plan_path))):
+        into = work / ("merged-" + label)
+        args = _argparse.Namespace(root=str(root), shards=shards, into=str(into),
+                                   source=str(source), prefix="mutation-full-shard-",
+                                   plan=plan, set="full")
+        capsys.readouterr()
+        rc = ms.cmd_merge(args)
+        got.append((rc, capsys.readouterr().out, _tree_bytes(into) if into.exists() else {}))
+    return got[0], got[1]
+
+
+def _plan_variants(plan: dict) -> dict:
+    """The plan as the planner writes it, and with `ledger_eligible` flipped or
+    absent: nothing but `mutation_ledger.py apply` may read the field."""
+    out = {"as written": plan}
+    for value in (True, False, None):
+        variant = json.loads(json.dumps(plan))
+        if value is None:
+            variant.pop("ledger_eligible", None)
+        else:
+            variant["ledger_eligible"] = value
+        out["ledger_eligible=%s" % value] = variant
+    return out
+
+
+# The real tree at CI's width: test_mutation_shards.py::
+# test_the_committed_plans_ownership_is_the_committed_packs (not here: this file
+# runs on the planner's critical path, and packing the real tree costs ~9 s).
+
+
+@pytest.mark.parametrize("shards", [1, 2, 3, 5, 12, 26])
+def test_a_plain_plan_merges_byte_for_byte_as_main_merged_without_one(tmp_path, capsys,
+                                                                     shards):
+    root = _shape_tree(tmp_path / "repo")
+    plan = mp.full_plan(root, shards, ["x"])
+    full = plan["sets"]["full"]
+    if shards >= 2:
+        # the fixture reaches the split-file path it exists for
+        assert any("big.x_f0__mutmut_*" in s for shard in full["shards"] for s in shard)
+    if shards == 26:
+        assert [] in full["shards"]     # ... and empty bins
+    assert ms.plan_ownership(full["shards"]) == ms.pack_ownership(root, shards)
+    source = tmp_path / "shard-results"
+    _plain_artifacts(source, full["shards"], _SHAPE_KEYS,
+                     inits=("__init__.py", "rag/__init__.py"))
+    # Every plain shape a plan reaches the merge in: a push's (eligible), a
+    # PR shadow's (a diff set beside it), a nightly's (that set advisory).
+    shapes = {**_plan_variants(plan),
+              "shadow": {**plan, "sets": {"full": full, "diff": {"shards": [["n"]]}}},
+              "nightly": {**plan, "advisory": ["diff"],
+                          "sets": {"full": full, "diff": {"shards": [["n"]]}}}}
+    for label, shape in shapes.items():
+        path = tmp_path / ("plan-%s.json" % label.replace(" ", "-"))
+        path.write_text(json.dumps(shape), encoding="utf-8")
+        main_merge, plan_merge = _merge_both_ways(root, path, shards, source,
+                                                  tmp_path / label.replace(" ", "-"), capsys)
+        assert main_merge[0] == 0, main_merge[1]
+        assert plan_merge == main_merge, label
+        assert ms.CARRIED_RECORD not in main_merge[2]
+
+
+@pytest.mark.parametrize("shards", [2, 26])
+def test_a_refused_plain_merge_is_refused_the_same_way_with_its_plan(tmp_path, capsys,
+                                                                    shards):
+    root = _shape_tree(tmp_path / "repo")
+    plan = mp.full_plan(root, shards, ["x"])
+    source = tmp_path / "shard-results"
+    _plain_artifacts(source, plan["sets"]["full"]["shards"], _SHAPE_KEYS,
+                     inits=("__init__.py", "rag/__init__.py"))
+    owner = next(i for i, s in enumerate(plan["sets"]["full"]["shards"]) if s)
+    shutil.rmtree(source / ("mutation-full-shard-%d" % owner))
+    path = tmp_path / "plan.json"
+    path.write_text(json.dumps(plan), encoding="utf-8")
+    main_merge, plan_merge = _merge_both_ways(root, path, shards, source, tmp_path, capsys)
+    assert main_merge[0] == 1 and "INCOMPLETE" in main_merge[1]
+    assert plan_merge == main_merge
+
+
+@pytest.mark.usefixtures("needs_mutmut")
+def test_every_plain_plan_the_planner_writes_is_the_committed_pack(tmp_path, git_repo,
+                                                                   monkeypatch, capsys):
+    """Each planner path that ends in a full set -- `full` plain and eligible,
+    the three diff-to-full fallbacks, the shadow, the empty shadow, the nightly
+    with and without its shadow -- writes exactly `full_plan`'s set, which the
+    merge reads exactly as it read no plan at all. Each is checked against the
+    tree it was planned on, before the next commit changes it."""
+    root = git_repo.root
+    keys = {"m.py": ["boost_cli.core.m.x_a__mutmut_1", "boost_cli.core.m.x_c__mutmut_1",
+                     "boost_cli.core.m.xǁKǁm__mutmut_1"],
+            "n.py": ["boost_cli.core.n.x_install__mutmut_1"]}
+    seen = []
+
+    def check(label: str, plan: dict) -> None:
+        seen.append(label)
+        assert plan["gate_set"] == "full", label
+        full = plan["sets"]["full"]
+        assert "carried" not in json.dumps(plan), label
+        assert full == mp.full_plan(root, 2, [])["sets"]["full"], label
+        assert ms.plan_ownership(full["shards"]) == ms.pack_ownership(root, 2), label
+        here = {r: k for r, k in keys.items() if (root / "boost_cli/core" / r).exists()}
+        source = tmp_path / ("src-%d" % len(seen))
+        _plain_artifacts(source, full["shards"], here, inits=("__init__.py",))
+        for variant, shape in _plan_variants(plan).items():
+            path = tmp_path / ("plan-%d-%s.json" % (len(seen), variant))
+            path.write_text(json.dumps(shape), encoding="utf-8")
+            main_merge, plan_merge = _merge_both_ways(root, path, 2, source,
+                                                      path.with_suffix(""), capsys)
+            assert main_merge[0] == 0, (label, main_merge[1])
+            assert plan_merge == main_merge, (label, variant)
+
+    for label, extra in (("full", []), ("full, eligible", ["--ledger-eligible"])):
+        out = tmp_path / "full.json"
+        assert mp.main(["full", "--shards", "2", "--root", str(root), "--out", str(out),
+                        *extra]) == 0
+        check(label, json.loads(out.read_text(encoding="utf-8")))
+    check("nightly, alone", nightly(tmp_path, git_repo, git_repo.base, git_repo.base))
+    changed = git_repo.head({"boost_cli/core/m.py": _M_BASE.replace("+ 1", "+ 2")})
+    check("shadow", plan_diff(tmp_path, git_repo, changed, "--shadow"))
+    check("nightly, shadow", nightly(tmp_path, git_repo, git_repo.base, changed,
+                                     base_run="41"))
+    md = mp._load_diff()
+    with monkeypatch.context() as patch:
+        patch.setattr(mp, "_load_diff", lambda: md)
+        patch.setattr(md, "MAX_NAMES", 1)
+        wide = mp.diff_plan(root, git_repo.base, changed, git_repo.stats, shards=2)
+    assert wide["reasons"][0].startswith("diff scope: ")
+    check("diff, too wide", wide)
+
+    def diff(base: str, head: str, *extra: str) -> dict:
+        out = tmp_path / "diff.json"
+        assert mp.main(["diff", "--base", base, "--head", head, "--stats",
+                        str(git_repo.stats), "--root", str(root), "--shards", "2",
+                        "--out", str(out), *extra]) == 0
+        return json.loads(out.read_text(encoding="utf-8"))
+
+    docs = git_repo.head({"README.md": "docs\n"})
+    empty = diff(changed, docs, "--shadow")
+    assert empty["reasons"][-1].startswith("shadow: the diff scope is empty")
+    check("shadow, empty", empty)
+    trigger = git_repo.head({"scripts/mutation_new.py": "x = 1\n"})
+    triggered = diff(docs, trigger)
+    assert triggered["reasons"] == ["scripts/mutation_new.py changed"]
+    check("diff, trigger", triggered)
+    blind_base = git_repo.head({"boost_cli/core/n.py": _UNTRAMPOLINED})
+    blind = git_repo.head({"boost_cli/core/n.py": _UNTRAMPOLINED.replace(
+        "    pass\n", "    return None\n")})
+    unknown = diff(blind_base, blind)
+    assert unknown["reasons"][0].startswith("changed function has no mutants")
+    check("diff, blind", unknown)
+    assert len(seen) == 9
+
+
+@needs_bash
+@pytest.mark.parametrize("event", ["pull_request", "merge_group", "push", "schedule",
+                                   "workflow_dispatch"])
+def test_every_plain_plan_shape_is_plain_to_the_gate(jobs, tmp_path, event):
+    # The fail-closed `ledgered` step is new on the unset path; on any plan the
+    # planner writes it must answer plain, so the weights steps run as before.
+    step = _step(jobs["mutation"], step_id="ledgered")
+    root = _shape_tree(tmp_path / "repo")
+    plan = mp.full_plan(root, 3, ["x"], ledger_eligible=event == "push")
+    full = plan["sets"]["full"]
+    shapes = {"full": plan,
+              "shadow": {**plan, "sets": {"full": full, "diff": {"shards": [["n"]]}}},
+              "nightly": {**plan, "advisory": ["diff"], "ledger_eligible": False,
+                          "sets": {"full": full, "diff": {"shards": [["n"]]}}}}
+    for label, shape in shapes.items():
+        (tmp_path / "mutation-plan").mkdir(exist_ok=True)
+        (tmp_path / "mutation-plan" / "mutation-plan.json").write_text(
+            json.dumps(shape), encoding="utf-8")
+        out = tmp_path / "out"
+        out.write_text("", encoding="utf-8")
+        proc = _bash(step, tmp_path, {"RUNNER_TEMP": str(tmp_path), "GITHUB_OUTPUT": str(out),
+                                      "EVENT": event})
+        assert proc.returncode == 0, (label, proc.stdout + proc.stderr)
+        assert _outputs(out) == {"plain": "true"}, label
+
+
+def test_only_the_ledger_reads_ledger_eligible():
+    # The field every plan now carries is inert on the unset path: the planner
+    # writes it, `mutation_ledger.py apply` reads it, and nothing else that
+    # consumes a plan (matrix, patterns, the gates, compare, ci.yml's jq) does.
+    readers = {p.relative_to(ROOT).as_posix()
+               for p in [*(ROOT / "scripts").glob("*.py"), *(ROOT / ".github").rglob("*.yml")]
+               if "ledger_eligible" in p.read_text(encoding="utf-8")}
+    assert readers == {"scripts/mutation_plan.py", "scripts/mutation_ledger.py"}
+    # ci.yml names it once, as the flag a push passes the planner.
+    ci = CI.read_text(encoding="utf-8")
+    assert ci.count("--ledger-eligible") == 1
+
+
+def test_matrix_and_patterns_ignore_ledger_eligible(tmp_path):
+    root = _shape_tree(tmp_path / "repo")
+    seen = set()
+    for label, shape in _plan_variants(mp.full_plan(root, 5, ["x"])).items():
+        path = tmp_path / ("%s.json" % label)
+        path.write_text(json.dumps(shape), encoding="utf-8")
+        args = tmp_path / ("%s.args" % label)
+        got = [run_cli("matrix", "--plan", str(path))]
+        for i in range(5):
+            run_cli("patterns", "--plan", str(path), "--set", "full", "--index", str(i),
+                    "--out", str(args))
+            got.append(args.read_bytes())
+        seen.add(tuple(got))
+    assert len(seen) == 1

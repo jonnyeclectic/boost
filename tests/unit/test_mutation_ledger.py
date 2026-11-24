@@ -214,6 +214,29 @@ def test_a_ledgered_fail_says_what_it_does_and_does_not_know(gate, tmp_path, cap
     assert "this FAIL is ledgered" in gate.summary.read_text(encoding="utf-8")
 
 
+@pytest.mark.parametrize("killed, rc", [(10, 0), (8, 0), (7, 1), (0, 1)])
+def test_a_plain_plan_gates_byte_for_byte_as_main_gated_without_one(gate, tmp_path, capsys,
+                                                                   killed, rc):
+    # MUTATION_LEDGER unset: every plan is plain, and `--plan` must change
+    # nothing main's `mutation_gate.py --min 80` printed, returned or wrote --
+    # whatever shape the plain plan reaching it has.
+    codes = {k: (1 if i < killed else 0) for i, k in enumerate(_KEYS)}
+    mutants, plan = _gate_tree(tmp_path, codes, killed=killed, total=10)
+    assert gate(mutants, None) == rc
+    main_out = capsys.readouterr().out
+    assert not gate.summary.exists()
+    body = json.loads(plan.read_text(encoding="utf-8"))
+    full = body["sets"]["full"]
+    shapes = [body, {**body, "ledger_eligible": True}, {**body, "ledger_eligible": False},
+              {**body, "sets": {"full": full, "diff": {"shards": [["n"]]}}},
+              {**body, "advisory": ["diff"], "sets": {"full": full, "diff": {"shards": [["n"]]}}}]
+    for shape in shapes:
+        plan.write_text(json.dumps(shape), encoding="utf-8")
+        assert gate(mutants, plan) == rc, shape
+        assert capsys.readouterr().out == main_out, shape
+        assert not gate.summary.exists(), shape
+
+
 def test_a_plain_fail_prints_no_ledger_advice(gate, tmp_path, capsys):
     codes = {k: (0 if i < 4 else 1) for i, k in enumerate(_KEYS)}
     mutants, plan = _gate_tree(tmp_path, codes, killed=6, total=10)
