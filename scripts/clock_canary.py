@@ -25,7 +25,10 @@ together, apart from the rest of the suite, once moved and once on today's
 clock:
 
 * **bomb** -- fails again moved and passes on today's clock. Its annotation
-  names the offset and the date by which it goes red for real. Exit 1.
+  names the offset and the date by which it goes red for real. Exit 1. A test
+  that compares ``datetime.now()`` with a clock the shim leaves alone gets this
+  verdict too, and the annotation names that case as the other cause:
+  ``test_logs.py``'s JSON-stamp test did, until it compared ``time.time()``.
 * **red regardless** -- fails on today's clock too, so this run cannot say
   whether the clock is involved. A warning.
 * **flaky** -- passes when re-run moved. A warning. A failure that needs the
@@ -223,10 +226,13 @@ def classify(failed: Iterable[str], again: Iterable[str],
 def bomb_line(nodeid: str, days: int, moved_to: date) -> str:
     """The annotation for one bomb: the offset, the date, and what to do."""
     return ("::error title=%s +%dd::%s fails on a clock moved %d days ahead (to %s) "
-            "and passes on today's when re-run: something it compares "
+            "and passes on today's when re-run. Either something it compares "
             "against now is fixed, and it fails on the real clock by %s at the "
-            "latest. Take now from the clock under test, as "
-            "test_ci_proven_tree.py::test_the_clock_defaults_to_the_real_one_on_the_command_line does."
+            "latest: take now from the clock under test, as "
+            "test_ci_proven_tree.py::test_the_clock_defaults_to_the_real_one_on_the_command_line does. "
+            "Or it compares datetime's now with a clock this canary leaves alone "
+            "(time.time(), file times, git's dates; tests/clock_canary/sitecustomize.py "
+            "lists them): compare like with like, or add it to ARTIFACTS with the reason."
             % (PREFIX, days, nodeid, days, moved_to.isoformat(), moved_to.isoformat()))
 
 

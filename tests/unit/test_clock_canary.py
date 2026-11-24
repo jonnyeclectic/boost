@@ -315,6 +315,11 @@ class TestReportAndVerdict:
         assert line.startswith("::error title=clock canary +14d::t.py::test_x ")
         assert "moved 14 days ahead (to 2026-12-08)" in line
         assert "by 2026-12-08 at the latest" in line
+        # The other cause of the same verdict, seen for real: test_logs.py
+        # compared datetime's now with logging's time.time() stamp, which
+        # this canary does not move, and was no date bomb.
+        assert "a clock this canary leaves alone" in line
+        assert "tests/clock_canary/sitecustomize.py" in line
 
 
 class FakePytest:
