@@ -22,10 +22,11 @@ name: clock-canary
 
 on:
   schedule:
-    # Daily, off the hour: clear of nightly-watch's 02:47, the 04:00-08:00
-    # weekly crons, and ci's 09:30 nightly, whose mutation shards want every
-    # one of the account's 20 job slots. Daily is what makes one offset
-    # enough: each future date is probed once, 14 days before it arrives.
+    # Daily, off the hour: clear of nightly-watch's 02:47 and 14:47, the
+    # 04:00-08:00 weekly crons, and ci's 09:30 nightly, whose mutation shards
+    # want every one of the account's 20 job slots. Daily is what makes one
+    # offset enough: each future date is probed once, 14 days before it
+    # arrives.
     - cron: "41 3 * * *"
   # By hand, e.g. to look further ahead once (`days`), or to confirm a fix
   # before the tracker's next scheduled close.
@@ -36,17 +37,22 @@ on:
         type: string
         default: ""
   # A change to the canary itself is run before it merges and again on main.
+  # test_clock_canary.py is part of it: it holds the sentinel the script reads
+  # to prove the xdist workers saw the moved clock, so a change there can turn
+  # every canary run into "proves nothing" and must be run here first.
   # Nothing else triggers it on a PR: the suite's date bombs are found by the
   # schedule, not by every push paying for a second full run.
   pull_request:
     paths:
       - "tests/clock_canary/**"
+      - "tests/unit/test_clock_canary.py"
       - "scripts/clock_canary.py"
       - ".github/workflows/clock-canary.yml"
   push:
     branches: [main]
     paths:
       - "tests/clock_canary/**"
+      - "tests/unit/test_clock_canary.py"
       - "scripts/clock_canary.py"
       - ".github/workflows/clock-canary.yml"
 
@@ -65,8 +71,11 @@ jobs:
   clock-canary:
     runs-on: ubuntu-latest
     # ci.yml's Linux `tests` cap, for the same suite under the same `-n auto`.
-    # The canary adds a probe and, only when something fails, a re-run of
-    # each failure alone on both clocks.
+    # Expect about five minutes: on 3e5fc88e (run 45290191649) the
+    # `tests (ubuntu-latest, 3.14)` job took 4.7 min, 4.0 of them pytest,
+    # without coverage, as here. The canary adds a probe and, only when
+    # something fails, one re-run of the failures apart from the suite on
+    # each clock.
     timeout-minutes: 30
     permissions:
       contents: read

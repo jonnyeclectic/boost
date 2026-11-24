@@ -498,8 +498,10 @@ class TestTheWorkflow:
 
     def test_a_change_to_the_canary_runs_it_before_it_merges(self):
         text = self._text()
-        for path in ("tests/clock_canary/**", "scripts/clock_canary.py",
-                     ".github/workflows/clock-canary.yml"):
+        # This file included: it holds the sentinel the script names.
+        assert cc.SELF_TEST.startswith("tests/unit/test_clock_canary.py::")
+        for path in ("tests/clock_canary/**", "tests/unit/test_clock_canary.py",
+                     "scripts/clock_canary.py", ".github/workflows/clock-canary.yml"):
             assert text.count('"%s"' % path) == 2, (path, "pull_request and push")
 
     def test_it_is_not_on_the_release_path(self):
