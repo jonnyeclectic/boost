@@ -193,6 +193,23 @@ caller more than one hop from a change. Falling from 87.8% to 80% takes about
 3,900 kills turning into survivors in one day, which no past train has come
 close to.
 
+**Amendment: a re-run PR run's mutation verdict (approved 2026-11-24).** Under
+B as first approved, only a PR run's first attempt counted. A PR run re-run
+for a reason that is not mutation (most often a macOS `tests` cell cancelled
+with no steps, then "re-run failed jobs") therefore sent its merge push to the
+full shard run: pushes 42444697189 (179.6 min) and 41892921723 (187.7 min) were
+proven in everything but that. For the mutation verdict only, a re-run now
+counts when attempt 1 ran `mutation-plan`, `mutation` and full shards
+`0..n-1`, all green, and no later attempt ran any of them again: every later
+copy has attempt 1's start and end times and was created after that start.
+The push then plans `none` for mutation and still runs its own tests, because
+a re-run's tests are not first-attempt evidence. Anything else proves nothing:
+a mutation job re-run in any later attempt (PR run 42463209202 re-ran them all
+in attempt 2, then only `lint` in attempt 3), a red attempt-1 verdict, or a
+missing field or API error. The red-nightly fallback applies unchanged. Letting
+a full-gated PR run override a red nightly was proposed alongside and was not
+approved.
+
 In either option, the run that checks the whole codebase is the only trusted
 writer of a mutation baseline (`.meta` files plus `mutmut-stats.json`, saved
 with `actions/cache/save` under `push`/`schedule` on `main` only, never
