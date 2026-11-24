@@ -1,11 +1,14 @@
 # Mutation survivor ledger: stop re-proving known survivors on full runs
 
-Status: proposed 2026-11-24. Design only; nothing here is implemented yet.
-It reverses three recorded constraints, for **survived and timeout verdicts
-only, never killed** (see "What this reverses"). The owner's approval of that
-reversal is as recorded in the task that commissioned this design
-(2026-11-24). For everything this doc does not change, the spec of record is
-still `docs/superpowers/specs/2026-10-31-ci-speed-design.md`.
+Status: proposed 2026-11-24, **pending owner sign-off**. It would reverse
+three recorded constraints, for **survived and timeout verdicts only, never
+killed** (see "What this reverses"). The task that commissioned this design
+said the owner approved; nothing the owner wrote in their own words shows it,
+so each reversal is asked for separately below, and the implementation is
+inert until the owner opts in through the repository variable
+`MUTATION_LEDGER` (see "Rollout"). For everything this doc does not change,
+the spec of record is still
+`docs/superpowers/specs/2026-10-31-ci-speed-design.md`.
 
 ## Why
 
@@ -40,8 +43,8 @@ Each costs 1,597.8-1,600.9 shard runner-min and 149.4-157.8 min of wall clock
 
 ## What this reverses
 
-The owner's approval of these three reversals is as recorded in the
-commissioning task, 2026-11-24.
+None of these is approved in the owner's own words yet. Each is a separate
+ask, and each is switched on separately (see "Rollout"):
 
 | where | says today | becomes |
 |---|---|---|
