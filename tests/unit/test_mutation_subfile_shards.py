@@ -386,7 +386,8 @@ class TestRealTree:
         # 25 of the committed width were such shards). There are no stats
         # here, so this cannot say the name matches a key: a sentinel whose
         # function mutmut never trampolines (a decorated one, such as
-        # `store.cloned_source`) matches nothing.
+        # `store.cloned_source`) matches nothing. test_mutation_plan.py
+        # checks that against the planner's stats.
         for i, b in enumerate(ms.pack(ROOT, ms.SHARDS)):
             pats = ms.patterns_for_bin(ROOT, b)
             assert any(not p.endswith("__mutmut_*") for p in pats), i

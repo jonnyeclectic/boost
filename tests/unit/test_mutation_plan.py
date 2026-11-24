@@ -155,9 +155,40 @@ def test_mutmut_gives_a_per_function_shard_its_own_clean_run(tmp_path, monkeypat
     assert tests_for_mutant_names(pats) == {"t_install"}
 
 
+@outside_mutmut_only
+@real_tree_only
+@pytest.mark.usefixtures("needs_mutmut")
+def test_no_committed_shard_falls_back_to_the_whole_suite(monkeypatch):
+    # The claim test_mutation_subfile_shards.py can only make about pattern
+    # shape, checked against real stats: each committed shard selects some
+    # test through mutmut's own clean-run selection, so none falls back to
+    # all of tests/unit (boxed/mutmut#594). A sentinel whose function mutmut
+    # never trampolines (a decorated one) has no key, and a shard of only
+    # such units would fail here. The planner step runs this after its stats
+    # run wrote the file, so there a missing file is an error, not a skip.
+    stats = ROOT / "mutants" / "mutmut-stats.json"
+    if not stats.is_file():
+        if os.environ.get("BOOST_REQUIRE_MUTMUT") == "1":
+            pytest.fail("no %s: the planner's stats run should have written it" % stats)
+        pytest.skip("no mutmut stats in this checkout")
+    from mutmut.__main__ import tests_for_mutant_names
+
+    mutmut_state = importlib.import_module("mutmut.state")
+    fresh = mutmut_state.MutmutState()
+    by_function = json.loads(stats.read_text(encoding="utf-8"))[
+        "tests_by_mangled_function_name"]
+    for name, tests in by_function.items():
+        fresh.tests_by_mangled_function_name[name] = set(tests)
+    monkeypatch.setattr(mutmut_state, "_state", fresh)
+    bins = ms.pack(ROOT, ms.SHARDS)
+    assert [i for i, b in enumerate(bins)
+            if not tests_for_mutant_names(ms.patterns_for_bin(ROOT, b))] == []
+
+
 def test_the_mutmut_state_tests_stay_out_of_mutmut_passes():
     # The mark is all that keeps them out of a real pass inside mutants/.
-    for test in (test_mutmut_gives_a_per_function_shard_its_own_clean_run,):
+    for test in (test_mutmut_gives_a_per_function_shard_its_own_clean_run,
+                 test_no_committed_shard_falls_back_to_the_whole_suite):
         assert outside_mutmut_only.mark in getattr(test, "pytestmark", []), \
             test.__name__
     # Its condition is read once, at import, and mutmut imports this module
