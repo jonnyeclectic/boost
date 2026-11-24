@@ -61,39 +61,77 @@ Still binding and unchanged:
   design never reuses a kill, so it needs none of the test-change tracking that
   driver would.
 
-## Soundness: a ledger can only make the gate stricter
+## Rollout
 
-The gate scores killed / (total - skipped) (`scripts/mutation_gate.py:47-49`)
-over `mutmut export-cicd-stats` of the merged `.meta` files. Let K be every
-mutant mutmut generates at the commit, C ⊆ K the carried set, and p(k) the
-code a plain run gives mutant k.
+The repository variable `MUTATION_LEDGER` is a comma-separated list of
+tokens. Each token switches on one thing, and each is a separate owner
+decision:
 
-- Every k not in C runs exactly as in a plain run: same commit, same stats,
-  same tests.
+| token | switches on | reversal it needs |
+|---|---|---|
+| `write` | a green, plain `schedule` or `workflow_dispatch` run on `main` writes, self-checks and uploads `mutation-ledger` | spec 2026-10-31:196-200 (a baseline written outside the nightly's cache rules) |
+| `pull_request` | attempt 1 of a PR run may carry survivors into its full set | plan 2026-10-31:26, `mutation_diff.py:20` |
+| `push` | attempt 1 of a push run to `main` may carry survivors. **That is the run whose success `publish.yml` releases from** (`publish.yml:70-72`), so a release would be gated on a score that re-ran no recorded survivor. | spec 2026-10-31:196-200 ("never restored by a release workflow") |
+
+Unset, empty or anything else: the reader job is skipped by its `if`, the
+planner stamps and applies nothing, the merge and gate run plain plans exactly
+as before (the merge's new "a plain plan is the committed pack" check is the
+one difference, and it is what the old re-derivation assumed), and no run
+writes a ledger. `scripts/mutation_ledger.py` re-checks the exact tokens
+itself; a workflow `if` is only a shortcut. `tests/unit/test_ci_proven_tree.py`
+simulates the job graph with the variable unset and set.
+
+The intended order, each step the owner's:
+
+1. `write` alone. Nightlies write and self-check ledgers; nothing reads them.
+   A self-check failure is a `::warning::`, never a red run.
+2. Add `pull_request`, and run the A/B (see "The first real observation")
+   until its stop rule has had a chance to fire.
+3. Add `push` only after the A/B passed **and** at least one green ledgered PR
+   run exists under the current machinery digest. Nothing in code enforces the
+   second half; see "Residuals".
+
+## Soundness: carrying never adds a kill
+
+*Amended 2026-11-24 after review (major 2). The first draft claimed more than
+this, and it was false.*
+
+The gate scores killed / (total - skipped) (`scripts/mutation_gate.py`) over
+`mutmut export-cicd-stats` of the merged `.meta` files. Let K be every mutant
+mutmut generates at the commit and C ⊆ K the carried set.
+
 - Every k in C gets the constant exit code 0, which mutmut's own table calls
   `survived` (`mutmut/stats.py`, `status_by_exit_code`). It adds 0 to killed
-  and 1 to the denominator.
-- In a plain run, the same k adds:
-  - (1, 1) if killed;
-  - (0, 1) for any other non-skipped verdict;
-  - (0, 0) if skipped.
+  and 1 to the denominator. No exit code is ever read from the ledger.
+- Every k not in C is **measured by this run, under this run's own
+  selectors.** That is not "exactly as in a plain run". With mutmut's default
+  `process_isolation = fork` (`configuration.py:166`, not overridden in
+  setup.cfg), the shard's parent runs the clean tests in-process
+  (`isolation.py:920-921`) and forks each mutant from that parent
+  (`isolation.py:853`). Which clean tests run depends on the selectors
+  (`tests_for_mutant_names`, `__main__.py:1089`): an exact name selects its
+  function's tests, a file pattern the file's, a function pattern none (the
+  whole suite). Core keeps module-level caches a child inherits
+  (`catalog.py:868`, `rag.py:1360`, `rag.py:1611`, `serve.py:317`). A ledgered
+  plan exact-names 35,338 of 54,417 mutants on run 45290191649's results,
+  where a plain plan names none, so a non-carried verdict can differ from what
+  a plain run of the same commit would give. The one DISAGREE on record
+  (`store.x__install_project_skill__mutmut_223`, artifact 13610263304) is
+  pattern=survived, exact=killed: the direction that would raise a ledgered
+  score.
 
-The two counts therefore relate like this:
+So the guarantee is this, and no more: **for the mutants this run measured,
+the ledger adds nothing; for the ones it did not, it adds a survivor.** A
+wrong or hostile ledger can make a run slower or redder, never add a kill. It
+is **not** a proof that a ledgered PASS implies a plain PASS, and the gate no
+longer prints a range a plain run "must lie in" or calls a red "conclusive".
+Whether selector-dependent verdicts matter in practice is what the A/B
+measures, per key and by direction (see "The first real observation").
 
-- killed, ledgered = killed, plain - |C ∩ killed, plain|
-- denominator, ledgered = denominator, plain + |C ∩ skipped, plain|
-
-The ledgered score is therefore never above the plain one, and a ledgered PASS
-implies a plain PASS. **This holds for every C**: whatever the ledger
-contains, however old it is, whoever wrote it. No exit code is ever read from
-the ledger. The ledger decides only which mutants are carried, and so only how
-fresh the score is and how much time is saved. A wrong or hostile ledger can
-turn the check red, for example by carrying every mutant. It can never turn it
-green.
-
-Nondeterministic kills hit plain runs equally, and the ledger neither causes
-nor hides them. The one DISAGREE on record is
-`store.x__install_project_skill__mutmut_223`, artifact 13610263304.
+Separately, and the owner's call: `process_isolation = forkserver` runs the
+clean tests in a child (`isolation.py:814-818`), which would take the clean
+run's side effects out of every mutant's verdict, ledgered or plain. Not part
+of this design.
 
 The implementation must keep each of these invariants, and a test pins each
 one (see Test plan):
@@ -110,16 +148,16 @@ one (see Test plan):
   refuses it rather than reconciling: the plan and the shards then disagree
   about what ran.
 - **I4. The gate checks the injection.** It scores the merged `.meta` exactly
-  as today, re-reads every carried key, and exits 2 unless each one is 0.
+  as today, re-reads every carried key, and exits 2 unless each one is 0 and
+  the installed mutmut reads 0 as `survived`.
 - **I5. The nightly never reads a ledger.** It is the only writer, and it must
   stay a plain measurement.
 - **I6. No weights from a ledgered run.** A ledgered run never uploads
-  `mutation-weights`.
+  `mutation-weights`: the CI `if` decides on the plan file, and `weights`
+  itself refuses a merge that wrote `mutation-carried.json`.
 
-Freshness is the cost. A test that newly kills a carried survivor gets no
-credit until the next ledger is written. That cost is bounded: killed, plain
-≤ killed, ledgered + |C|. So the gate can print the range a plain score must
-lie in (see Gate).
+Freshness is the other cost. A test that newly kills a carried survivor gets
+no credit until the next ledger is written.
 
 ## Data model
 
@@ -131,7 +169,7 @@ The ledger is one JSON file, `mutation-ledger.json`, in an artifact named
   "kind": "mutation-survivor-ledger",
   "schema": 1,
   "source": {"run_id": 0, "run_attempt": 1, "event": "schedule",
-             "branch": "main", "head_sha": "<commit>", "tree": "<tree>",
+             "branch": "main", "head_sha": "<commit>",
              "created_at": "<ISO 8601>"},
   "key": {"mutmut": "3.8.1", "libcst": "1.9.0", "python": "3.14",
           "config": "<sha256 of mutmut's settings>"},
@@ -169,7 +207,7 @@ mutant when the same generator ran over the same function:
 
 | part | read from | why it is in the key |
 |---|---|---|
-| `mutmut`, `libcst` | installed versions (`importlib.metadata`) | the generator, and the parser it walks |
+| `mutmut`, `libcst` | installed versions (`importlib.metadata`), read by the planner under `.venv` and stamped into the plan (`mutation_ledger.py stamp`); the writer copies them from the plan, so it never reads its own job's interpreter (review minor) | the generator, and the parser it walks |
 | `python` | major.minor of the running interpreter | the function hash is `sha256(ast.dump(node))[:12]` (`mutmut/mutation/file_mutation.py:43-60`), and `ast.dump` is version-specific |
 | `config` | sha256 of mutmut's settings, read with the parsers `full_run_reasons` already uses for setup.cfg `[mutmut]` and pyproject `[tool.mutmut]` (`mutation_diff.py:139-187`) | settings such as `source_paths` and `do_not_mutate` change what is generated |
 | per-function `hash` | the merged `.meta`'s `hash_by_function_name`, which the merge already keeps (`mutation_shards.py:1182-1183`) | an edited function regenerates all its mutants, exactly as mutmut resets them itself (`mutmut/__main__.py:200-215`, 3.8.1) |
@@ -208,13 +246,20 @@ plain, green nightly has already run on `main`. After a merge that changes any
 of them, every run plans plain until the next nightly writes a ledger under
 the new machinery.
 
-**What a plain nightly exercises, and what it does not.**
+**What a plain nightly exercises, and what it does not** (review major 3).
 
-- **The injection function.** The writer's self-check runs it (see Writer).
-- **The ledgered planner path, and plan-derived ownership with carried rows.**
-  A plain nightly never runs these. A bug in either surfaces in the first
-  ledgered run, as red through the fail-closed merge (I2, I3) and the gate's
-  re-check (I4), never as green.
+- **The ledgered planner, plan-derived ownership and the injection.** The
+  writer's self-check (see Writer) plans the nightly's own commit against the
+  ledger it just wrote, exactly as a PR would, simulates the shards that plan
+  names over the nightly's real results, and runs the real `merge --plan`. So
+  a bug in partition, name caps, anchoring, headroom, selector-to-file
+  ownership or injection fails the self-check, and no ledger is uploaded,
+  before any PR or push can read one.
+- **Real mutmut on a mixed argv.** The self-check simulates the shards; it
+  does not run mutmut. The first ledgered PR run after a digest reset is the
+  first real one. A bug there is red through the fail-closed merge (I2, I3)
+  and the gate's re-check (I4), never green. With `push` enabled, that first
+  run can be a push; see "Residuals".
 
 This is the push half of risk 3. Its cost, measured on `main`'s first-parent
 history: 14 of the 25 merges from 11-01 to 11-23 touched one of those files,
@@ -233,33 +278,47 @@ The `mutation` job of a `ci` run writes a ledger only when all of these hold:
 2. **A plain full plan.** The gate set is `full` and the plan carried
    nothing, so every verdict in it was measured on this commit.
 3. **A green gate.** The merge and `mutation_gate.py` both passed.
+4. **Opted in.** `MUTATION_LEDGER` names `write`.
 
-Three steps follow the weights steps:
+Three steps follow the weights steps. All three run under `.venv/bin/python`
+(mutmut and PyYAML exist only there), and the generator key and machinery
+digest are copied from the plan, where the planner stamped them (review
+minor):
 
 1. **Write.** `mutation_ledger.py write --meta mutants --plan PLAN --out
-   mutation-ledger.json` builds the ledger from the merged `.meta`.
+   $RUNNER_TEMP/mutation-ledger.json` builds the ledger from the merged
+   `.meta`.
    - It carries only codes whose status is `survived` or `timeout`
      (`mutation_diff.status_of`, `mutation_diff.py:482-494`). Killed, no
      tests, skipped, suspicious, segfault and type-check codes are never
      carried.
-   - It refuses a plan with a `carried` list, an event or branch outside
-     condition 1, and any `None` in the merged `.meta`.
-2. **Self-check.** `mutation_ledger.py selfcheck --meta mutants --ledger
-   mutation-ledger.json` round-trips the ledger through the merge's own
-   injection function.
-   - It copies the merged codes, sets every ledger key to `None`, and
-     re-injects them with the same function `merge` calls.
-   - It then asserts that killed and the denominator are unchanged and that no
-     `None` is left. The carried keys are exactly this run's survivors and
-     timeouts, both non-killed, so any difference is an injection bug.
-   - This is the only place the injection path runs before a PR or a push
-     relies on it, which is why the machinery digest exists.
-3. **Upload.** Only when step 2 succeeded, upload `mutation-ledger` with
-   `retention-days: 30` and `overwrite: true`, so a re-run attempt that also
-   passes replaces the ledger rather than leaving two.
+   - It refuses a plan with a `carried` list or no generator stamp, an event,
+     branch or token outside conditions 1 and 4, and any `None` in the merged
+     `.meta`.
+2. **Self-check.** `mutation_ledger.py selfcheck --meta mutants --plan PLAN
+   --ledger $RUNNER_TEMP/mutation-ledger.json` is a dry run of a ledgered PR
+   on this commit (review major 3):
+   - it plans the commit against the fresh ledger with the real ledgered
+     planner (every function is unchanged, so it carries the most it can);
+   - it writes each planned shard's `.meta` as mutmut would, running a key
+     only when one of the shard's selectors `fnmatch`es it -- compiled with
+     `fnmatch.translate`, independent of the planner's structural reading;
+   - it runs the real `merge --plan` over those shards, and checks that every
+     row came back with tonight's verdict (carried ones as exactly
+     `CARRIED_EXIT`), that killed and the denominator did not move, and that
+     the installed mutmut reads `CARRIED_EXIT` as `survived`.
+   - Measured on run 45290191649's 54,417 results: 6,566 carried from 1,027
+     functions, 70 s locally. A test pins that a merge injecting 1 instead of
+     0 fails it.
+3. **Upload.** Only when step 2's **outcome** was `success` (a failed
+   continue-on-error step *concludes* `success`), upload `mutation-ledger`
+   with `retention-days: 30` and `overwrite: true`, so a re-run attempt that
+   also passes replaces the ledger rather than leaving two.
 
-Steps 1 and 2 are `continue-on-error: true`, like `refresh balance hints`
-(ci.yml:2445-2455). **A ledger failure never changes a run's conclusion.** A
+All three steps are `continue-on-error: true`, each with its own
+`timeout-minutes` (3, 8, 3), and the job's cap grows from 20 to 34 so a hung
+ledger step times out as a step, never as the required check (review minor).
+**A ledger failure never changes a run's conclusion.** A
 red `mutation` on a nightly would switch off the proven-tree skip (fact 3) and
 open the failure tracker, over something that says nothing about the score. A
 failed write leaves no ledger on the newest real run, so the reader plans plain
@@ -324,7 +383,8 @@ Its steps:
 
 1. **The off switches.**
    - The repository variable `MUTATION_LEDGER`, read through `vars` in the
-     step's `env`. `off` means no ledger.
+     step's `env`. No ledger unless it names this run's event (see
+     "Rollout"); and no ledger on an attempt after the first.
    - On a `pull_request`, the label `mutation-no-ledger`. It is read with `GET
      pulls/{number}` when the job runs, not from the event payload, because a
      re-run replays the payload as it was.
@@ -336,9 +396,15 @@ Its steps:
    - **Its `mutation` job (latest attempt) is not `success`:** no ledger,
      *"whole-codebase run R is red (mutation: failure)"*. This is risk 2's red
      rule: no ledger is used past a red whole-codebase verdict.
-   - **It carries exactly one `inherited-tree-` marker:** step over it. That
-     is an idle night, which mutated nothing and inherits an older real run.
-   - **Otherwise it is a real run.** It must hold exactly one unexpired
+   - **More than one marker:** no ledger; what the run was is ambiguous. This
+     mirrors `ci_proven_tree._inherit` (review minor): a "Re-run all jobs" of
+     an idle night carries `inherited-tree-` from attempt 1 and
+     `mutated-tree-` plus a ledger from attempt 2.
+   - **Exactly one `inherited-tree-` marker and no `mutation-ledger`
+     artifact:** step over it. That is an idle night, which mutated nothing
+     and inherits an older real run.
+   - **Otherwise it is a real run** (a `mutated-tree-` marker or a ledger
+     artifact makes it one). It must hold exactly one unexpired
      artifact named `mutation-ledger` that belongs to that run, and that
      artifact is the ledger. Zero, two or expired means no ledger: *"the newest
      real whole-codebase run R wrote no ledger"*. The walk never reaches past a
@@ -374,30 +440,47 @@ Changes to `mutation-plan`:
 - `needs` gains `mutation-ledger`.
 - A new step, `continue-on-error: true`, downloads `mutation-ledger-in` to
   `$RUNNER_TEMP/mutation-ledger/` when the reader named a run. It lands outside
-  the workspace for the reason given at ci.yml:1941-1943.
+  the workspace for the reason given above the shard's `download the plan`.
 - The plan step decides on **the file it validates**, never on
   `needs.mutation-ledger.result`. The comment above `mutation-advisory-shard`
   notes that this result is unconfirmed for a continue-on-error job.
 
-Which plans get `--ledger`:
+**As built, the planner is unchanged and a second command rewrites its
+plan.** When `MUTATION_LEDGER` is set and the plan has work, the plan step
+runs, after the plan is written:
 
-| event | plan today | with the ledger |
+- `mutation_ledger.py stamp --plan mutation-plan.json`: the generator key and
+  machinery digest, for a whole-codebase run's writer to copy;
+- on `pull_request` and `push` only, `mutation_ledger.py apply --plan
+  mutation-plan.json --ledger L --run-id R --meta mutants`, which rewrites a
+  plain full set as a ledgered one or leaves it byte-for-byte and appends
+  *"ledger not used: <why>"*.
+
+Neither can fail the step (`|| echo ::warning::`), and `apply` writes the plan
+atomically. The plans themselves say whether a ledger may carry into them,
+as data: `full_plan(..., ledger_eligible=...)` writes a top-level
+`ledger_eligible`, and an absent one is no.
+
+| event | plan | `ledger_eligible` |
 |---|---|---|
-| `schedule`, `workflow_dispatch` | full; `nightly` (full plus an advisory diff); or none (idle) | **never** (I5). The nightly stays a plain full run at 26 on the committed weights, so its headroom test, `SHARDS` and the weights refresh keep describing one workload. |
-| `pull_request` | `diff --shadow` | `diff --shadow --ledger L` |
-| `push`, not proven | `full` | `full --ledger L`. No diff is computed; the machinery digest guards the machinery. |
-| `merge_group` | `diff --shadow` | never. The queue is not enabled (spec 2026-10-31, "Constraints"), so the path is not added. |
-| any event, `GITHUB_RUN_ATTEMPT` not 1 | as above | **never**. See below. |
+| `schedule`, `workflow_dispatch` | full; `nightly` (full plus an advisory diff); or none (idle) | **false** (I5): `nightly_plan` forces it, `full` defaults it. The nightly stays a plain full run at 26 on the committed weights. |
+| `pull_request` | `diff --shadow` | as the table under "Which functions are carried" says |
+| `push`, not proven | `full --ledger-eligible` | **true**. No diff is computed; the machinery digest stands in for the full-run triggers. |
+| `merge_group` | `diff --shadow` | `apply` refuses the event. The queue is not enabled. |
+| any event, `GITHUB_RUN_ATTEMPT` not 1 | as above | `apply` refuses the attempt. See below. |
 
 **Why a re-run never uses a ledger.** On "re-run failed jobs" GitHub keeps the
 outputs of jobs that succeeded, which is why the scope step already guards
 idle-nightly's answer on the attempt number (ci.yml:1300-1302). "Re-run all
 jobs" is also the escape from a ledgered red (see Escapes).
 
-A ledgered push plans with `.venv/bin/python`, because `--ledger` needs mutmut's
-generator; the venv exists whenever a push is mutation-relevant. Anything that
-goes wrong inside ledgered planning gives the plain plan plus a reason that
-starts `ledger not used:`. That mirrors how `nightly_plan` falls back to
+`stamp` and `apply` run with `.venv/bin/python`, which exists whenever a run
+is mutation-relevant. They need no regeneration (review minor): every key,
+function hash and mutant count comes from the planner's own `mutants/**/*.meta`,
+which the stats run (`mutmut run <one mutant>`) has just written for every file
+(`create_mutants_for_file` saves all keys and `hash_by_function_name` before
+running anything). Anything that goes wrong inside ledgered planning gives the
+plain plan plus a reason that starts `ledger not used:`. That mirrors how `nightly_plan` falls back to
 `full_plan` (`mutation_plan.py:366-367, 383-384`). Ledger trouble never fails
 the planner.
 
@@ -405,12 +488,12 @@ the planner.
 
 `diff_plan` returns the plain full plan from four places, and only the first
 one is a machinery trigger. So the decision travels as data, never read back
-out of reason strings: `full_plan(root, shards, reasons, ledger=None,
-keep=frozenset())`.
+out of reason strings: `full_plan(root, shards, reasons, ledger_eligible=...)`,
+and `keep` is the shadow plan's own `sets.diff.functions`.
 
 | call site | what triggered it | ledger |
 |---|---|---|
-| `mutation_plan.py:247` | `full_run_reasons` fired | **none.** Risk 3: a PR that hits any full-run trigger never uses the ledger. That means the mutation machinery, and also conftest, pytest config and test support (`mutation_diff.py:216-225`). The plan records `"ledger": {"used": false, "why": "full-run trigger"}`. |
+| `mutation_plan.py:247` | `full_run_reasons` fired | **none.** Risk 3: a PR that hits any full-run trigger never uses the ledger. That means the mutation machinery, and also conftest, pytest config and test support (`mutation_diff.py:216-225`). `ledger_eligible: false`, and `apply` records *"ledger not used: this plan is not eligible"*. |
 | `:284` | a changed function with no mutants | may be used, nothing kept back |
 | `:302` | the scope is too big to pack | may be used, nothing kept back |
 | `:319` | the scope is empty under shadow | may be used, nothing kept back |
@@ -441,13 +524,14 @@ A function is carried only when all of these hold:
    libcst, the Python minor version, and the config digest.
 3. **The machinery.** The machinery digest equals this run's.
 4. **The function.** Its hash and mutant count at this commit equal the
-   ledger's. Both come from `mutate_file_contents` under
-   `mutation_diff.mutmut_config` (`mutation_diff.py:345-389`).
+   ledger's. Both come from the planner's stats-run `.meta`.
 5. **The scope.** The function is not in `keep`.
 
 Its carried mutants are then the ledger's `survived` and `timeout` numbers. A
 number with no mutant at this commit means the ledger is malformed, and the
-plan is plain.
+plan is plain. So is a ledger older than 14 days, one whose `source.run_id`
+is not the run the reader chose, and one whose source is not a whole-codebase
+run on `main`.
 
 ### What the shards run, and how they are packed
 
@@ -467,67 +551,80 @@ Each unit gets one kind of selector:
 | a function with no carried mutant, in a file that has some | `<module>.<mangled>__mutmut_*` (a method spells `xǁClassǁm`) | no |
 | a function with carried mutants | the exact names of its mutants that are **not** carried | yes, at name granularity |
 
-**A ledgered plan is packed on killed-only time.** *My call.* Keeping the
-committed pack instead would leave shards uneven: on today's pack the
-killed-only phase per shard ranges from 10.5 to 36.9 min (verifier), and the
-run waits for the slowest. How the repack works:
+**A ledgered plan is packed on two constraints: time, and a name budget per
+bin** (review minor: packing on time alone puts 10 of 26 bins over the cap).
+How the repack works (`mutation_ledger.ledgered_full`, `pack_units`):
 
 - **Unit weights.**
-  - An unchanged function weighs the ledger's `ms_rerun`.
+  - A carried function's exact names weigh the ledger's `ms_rerun`; a
+    function heavier than an even share is cut into pieces.
   - A changed or un-carried function weighs `ms_rerun + ms_carried`.
   - A new function weighs the mean time per mutant times its count.
-- **Packing.** Longest first into at most 26 bins, ties broken by name. It is
-  deterministic, like `pack` (`mutation_shards.py:844-879`).
-- **No function-pattern-only bins.** Every bin gets at least one exact name or
-  file pattern. A bin of function patterns alone selects no clean-run tests,
-  so it pays the whole-suite clean run: the 11.30-min preamble measured for
-  function-only shards (`mutation_shards.py:239-247`).
+  - A file with nothing carried stays one `<module>.*` unit unless it is
+    heavier than an even share, when it splits into function patterns.
+- **Packing.** Longest first; each unit goes to the least-loaded bin **with
+  name room for it**; a named unit no bin has room for is split across the
+  bins with the most room. Deterministic: ties break on the unit's sort key
+  and the bin index.
+- **Un-carry before packing.** If the named mutants exceed 26 × 1,500, the
+  functions whose survivors are cheapest to re-run (`ms_carried`) are
+  un-carried until they fit: always sound, only slower. The plan says how
+  many.
+- **Exactly 26 non-empty bins, each anchored.** Every bin must hold an exact
+  name or a file pattern; one holding only function patterns takes the
+  lightest anchor from a bin with several. A bin of function patterns alone
+  selects no clean-run tests and pays the whole-suite clean run (the 11.30-min
+  preamble, `mutation_shards.py:239-247`). An empty or unanchorable bin
+  (review minor: `matrix` keeps empty shards and `patterns` refuses them) is
+  **plain**, with a reason.
 - **Headroom.** The pack must pass `headroom_report` at the mutate step's
-  190-min cap. It should, because every ledgered unit is at most its plain
-  counterpart.
+  190-min cap, or the plan is **plain**, with a reason.
 
-**The name cap stays at `MAX_NAMES = 1500`** (`mutation_diff.py:318-325`). It
-is a measured bound: about 110 KB of argv against ARG_MAX, and 12.3 s for
-mutmut's fnmatch filter.
+**Measured on run 45290191649's results** (`/private/tmp/claude-501/r45`, the
+26 shard artifacts, merged locally): 6,566 carried from 1,027 functions,
+0 un-carried, 35,338 names, at most 1,500 in a shard (the fullest at the
+cap), and the model's median job time per shard
+(`mutation_shards.runner_minutes`) 31.1-35.4 min. That is the
+`shard_minutes` list the plan records, for comparison with the first real run.
 
-- **Expected load.** The verifier counted 35,344 names when only the
-  non-carried mutants of functions with survivors are named. That is a mean of
-  1,359 per shard against a capacity of 26 × 1,500 = 39,000, about 9% slack.
-  The per-shard counts on the real tree are **not measured**.
-- **Over the cap, the plan degrades and never falls back to plain:**
-  1. Named functions split across bins to fill the free name room.
-  2. If the total still exceeds 39,000, functions are **un-carried**, cheapest
-     `ms_carried` first. Each becomes a function pattern that runs every
-     mutant, survivors included: always sound, only slower. This repeats until
-     the total fits.
-
-  The plan says how many functions it un-carried.
-- **Why not raise the cap.** That would trade a measured bound for an
-  extrapolated one: about 16 s and 134 KB at 1,841 names, by the verifier's
-  arithmetic. Revisit with the first run's real counts.
+**The name cap stays at `MAX_NAMES = 1500`** (`mutation_diff.py:318-325`), the
+bound the diff shards already run under: about 110 KB of argv, and mutmut's
+filter (`key in names or any(fnmatch(...))`, `__main__.py:813`) costs a
+ledgered shard what it costs a 1,500-name diff shard.
 
 **Partition check, before the plan is written.** Every generated name must be
-covered exactly once, either by the shards' selectors or by the carried list.
-The selectors are read structurally (file, function or exact name), not by
-fnmatching 51k names against 2k patterns. Any gap or overlap is a bug, and the
-plan falls back to plain.
+covered exactly once, either by the shards' selectors or by the carried list,
+and every shard must match at least one mutant (mutmut asserts on an empty
+filter, `__main__.py:815`). The selectors are read structurally -- every
+selector the planner writes is an exact name or a literal followed by one
+`*`, so fnmatch is "equal" or "starts with" -- and a test cross-checks that
+reading against `fnmatch.fnmatchcase`. Any gap or overlap is a bug, and the
+plan is plain.
 
 ### Plan fields
 
-On a ledgered plan, `sets.full` gains these fields:
+Every plan gains `ledger_eligible` (above). With `MUTATION_LEDGER` set, a
+relevant plan also gains `generator` (`{"key": {...}, "machinery": "<sha256>"}`)
+and, on a PR or push, a top-level `ledger`: `{"used": false, "why": "..."}`
+or `{"used": true}`. On a ledgered plan, `sets.full` gains:
 
 ```json
 "carried": ["boost_cli.core.store.x_install__mutmut_3", "..."],
-"ledger": {"used": true, "run_id": 0, "created_at": "<ISO 8601>",
-           "head_sha": "<commit>", "age_hours": 18.4, "carried": 6412,
-           "carried_timeouts": 59, "carried_ms": 205000000,
-           "functions_carried": 1020, "uncarried": 0},
+"ledger": {"used": true, "run_id": 0, "event": "schedule",
+           "created_at": "<ISO 8601>", "head_sha": "<commit>",
+           "age_hours": 18.4, "carried": 6566, "carried_survived": 6496,
+           "carried_timeouts": 70, "carried_ms": 209969763,
+           "functions_carried": 1027, "uncarried": 0, "max_names": 1500,
+           "slowest_tail_minutes": 67.5, "shard_minutes": [35.4, "..."]},
 "mutants": 54417
 ```
 
 - `mutants` is the planner's own count of generated names. A plain full plan
   keeps `null`.
-- The planner job gains a new output, `ledgered` (`true` or `false`).
+- `apply` never writes a `carried` list that is empty: a plan that would carry
+  nothing is the plain plan, untouched.
+- The planner job gains a new output, `ledgered` (`true` or `false`), read
+  from the plan with `jq`; `mutation` only echoes it.
 - The plan's reason line names the ledger's run, its age and the carried
   count.
 - `matrix` and `patterns` do not change (`mutation_plan.py:414-438, 559-586`).
@@ -550,15 +647,18 @@ ledgered run red.
 
 **Ownership comes from the plan.**
 
-- `merge` takes `--plan PLAN --set full`.
-- ci.yml's `download the plan` step (2271-2272) runs whenever `gate_set ==
-  'full'`, not only under shadow.
+- `merge` takes `--plan PLAN [--set full]`, and ci.yml passes it on every full
+  gate, plain or ledgered.
+- ci.yml's `download the plan` step runs whenever `gate_set == 'full'`, not
+  only under shadow.
 - Each shard's selectors map to files: `<module>.*`,
   `<module>.<mangled>__mutmut_*`, `<module>.xǁ*` and exact names each resolve
   to one file (`split_qualified`, `mutation_diff.py:330-342`).
-- On a plan that carries nothing, the plan-derived ownership must equal
+- On a plan with no `carried` list, the plan-derived ownership must equal
   `pack()`'s, or the merge refuses. That keeps today's guarantee that the
-  planner and the merge agree.
+  planner and the merge agree. The check is keyed on the list's absence, and
+  `apply` never writes an empty one or repacks without one (review minor), so
+  no ledgered plan can trip it.
 
 **Injection** happens after the per-file union (1145-1162) and before the
 unrun check (1173). For each carried name of the file:
@@ -570,9 +670,13 @@ unrun check (1173). For each carried name of the file:
 - Otherwise the code is set to `CARRIED_EXIT`.
 
 After injection, the existing check fails closed on any `None` that is left
-(I2, I3). A carried name in a file that no shard owns is also refused. The
-summary line reads *"merged N files, M mutants (C carried from ledger run R),
-from S shards"*.
+(I2, I3). **A file whose every mutant is carried** has no selector in any
+shard (review minor). Every shard writes every file's `.meta`, with `None`
+for what it did not run, so the merge gives such a file shard 0 as its owner
+and injects into shard 0's copy; a test pins it. The merge writes
+`mutation-carried.json` beside the merged `.meta` (source and carried names),
+or removes a stale one on a plain merge. The summary line reads *"merged N
+files, M mutants (C carried from ledger run R), from S shards"*.
 
 The merge runs on the runner's `python3`, which has no mutmut, so
 `CARRIED_EXIT` is a module constant there. The gate and a mutmut-backed test
@@ -586,17 +690,19 @@ The gate takes an optional `--plan PLAN`. On a ledgered plan it:
    `.meta` and exits 2 unless each one is exactly 0 and the installed mutmut
    reads `status_of(0)` as `survived` (I1, I4).
 2. **Scores** exactly as today.
-3. **Prints provenance** before the score, for example: *"ledgered: 6,412 of
-   54,417 mutants carried as survived (6,353 survived and 59 timeout on
-   record) from whole-codebase run R (schedule, 2026-11-25T09:31Z, 18 h old,
-   commit abc1234); not re-run on this commit"*.
-4. **On a FAIL, prints the range** a plain run must fall in: from
-   killed / denominator to (killed + carried) / denominator.
-   - If the top of that range is below the floor, the red is **conclusive**: no
-     fresh run could pass.
-   - Otherwise it is **inconclusive**, and the gate prints the escapes below.
+3. **Prints provenance** before the score, for example: *"ledgered: 6,566 of
+   54,417 mutants carried as survived (6,496 survived and 70 timeout on
+   record) from whole-codebase run R (schedule, 2026-11-25T09:31:00Z, 18 h
+   old, commit abc1234def56); not re-run on this commit"*. Every value is
+   validated (a commit, a UTC time, an event word, integers) before it is
+   printed, so nothing from the plan can start a workflow command.
+4. **On a FAIL**, says that it is ledgered, what the score would be if every
+   carried survivor were killed -- *"arithmetic over this run, not a forecast
+   of a plain run"* -- and prints the escapes below. It never calls a red
+   conclusive (review major 2).
 
-Exit codes do not change. The same lines go to `$GITHUB_STEP_SUMMARY`.
+Exit codes do not change. A ledgered run's lines also go to
+`$GITHUB_STEP_SUMMARY`; a plain run writes none, as before.
 
 ## Escapes from a ledgered red
 
@@ -621,9 +727,9 @@ anything:
 - **Add the label `mutation-no-ledger` and push a commit** (PR only). Attempt 1
   of the new head is plain, and a green one still proves the merge's push.
 
-The owner also has a global switch: the repository variable
-`MUTATION_LEDGER=off`. Each of these routes runs the plain full gate exactly
-as it was before this design.
+The owner also has a global switch: remove the event's token from the
+repository variable `MUTATION_LEDGER`. Each of these routes runs the plain
+full gate exactly as it was before this design.
 
 ## Diff-shadow compare
 
@@ -640,10 +746,15 @@ carries nothing.
 
 ## Weights
 
-`refresh balance hints` and `upload balance hints` (ci.yml:2445-2462) gain the
-condition `needs.mutation-plan.outputs.ledgered != 'true'` (I6). A ledgered
-run's merged `.meta` has no durations for carried keys, so `weights` would
-record killed-only time as the whole.
+`refresh balance hints` and `upload balance hints` gain the condition
+`steps.ledgered.outputs.plain == 'true'` (I6), from a step that reads the
+downloaded plan file and fails the job when it cannot tell (review minor: an
+output string could arrive empty and fail open). And `mutation_shards.py
+weights` refuses a source holding `mutation-carried.json`, so even a mis-wired
+`if` uploads nothing. A ledgered run's merged `.meta` has no durations for
+carried keys, so `weights` would record killed-only time as the whole. (Not
+"refuse any key without a duration": no-tests and type-check codes never have
+one, in plain runs too.)
 
 `mutation-weights-refresh.yml` already treats a run with no `mutation-weights`
 artifact as ordinary: its `download the measured hints` step is
@@ -653,21 +764,23 @@ artifact as ordinary: its `download the measured hints` step is
 
 | job | change | permissions |
 |---|---|---|
-| `mutation-ledger` (new) | The reader, on PR and push runs only. Job-level `continue-on-error`; a stdlib script, then the download and re-upload. | `contents: read`, `actions: read`, `pull-requests: read` |
-| `mutation-plan` | `needs` gains `mutation-ledger`. Downloads `mutation-ledger-in` (continue-on-error). The plan step passes `--ledger` as the table above says, never on an attempt after the first. New output `ledgered`. | unchanged: `contents: read` |
+| `mutation-ledger` (new) | The reader, on PR and push runs only, and only when `MUTATION_LEDGER` is set. Job-level `continue-on-error`; a stdlib script, then the download and re-upload. | `contents: read`, `actions: read`, `pull-requests: read` |
+| `mutation-plan` | `needs` gains `mutation-ledger`. Downloads `mutation-ledger-in` (continue-on-error). A push's full plan passes `--ledger-eligible`; with the variable set, the plan step runs `stamp` and, on a PR or push, `apply`. The `BOOST_REQUIRE_MUTMUT` step also runs `tests/unit/test_mutation_ledger.py` (review minor: the mutmut-backed pins would otherwise skip everywhere). New output `ledgered`. | unchanged: `contents: read` |
 | `mutation-shard`, `mutation-advisory-shard` | none | unchanged |
 | `mutation` | See the list below. | unchanged: `contents: read` |
 
-The `mutation` job changes in six places:
+The `mutation` job changes in seven places:
 
-- The conclusive step refuses `ledgered == true` on a `schedule` or
-  `workflow_dispatch` run.
 - The plan is downloaded whenever `gate_set == 'full'`.
+- A new step, `ledgered`, reads the plan file: `plain=true|false`, and it
+  fails the job on a ledgered plan on a `schedule` or `workflow_dispatch` run,
+  or when it cannot tell.
 - `merge` runs with `--plan`.
 - `mutation_gate.py` runs with `--plan`.
-- The weights steps skip ledgered runs.
-- New writer steps (continue-on-error) upload `mutation-ledger`, on green,
-  unledgered `schedule` and `workflow_dispatch` runs on `main` only.
+- The weights steps run only when `steps.ledgered.outputs.plain == 'true'`.
+- New writer steps (continue-on-error, own timeouts) upload `mutation-ledger`,
+  on green, plain `schedule` and `workflow_dispatch` runs on `main` only.
+- `timeout-minutes` 20 → 34, the writer's step caps on top.
 
 What does not change:
 
@@ -679,34 +792,51 @@ What does not change:
 - **Billing.** It stays on GitHub Free for a public repository: standard
   runners, width 26, artifacts only.
 
-The reader adds one short job ahead of the planner on every PR and push run.
-On a busy account it queues the way `proven` does. That is the price of keeping
-the planner's token at `contents: read`.
+With `MUTATION_LEDGER` set, the reader adds one short job ahead of the planner
+on every PR and push run, including ones that cannot use a ledger (machinery
+PRs, docs-only PRs whose plan is none, proven pushes). It runs beside `proven`,
+not after it, so on a push it costs the critical path only what it takes
+beyond `proven`; on a PR it is the planner's one extra dependency. On the
+20-job account cap it can queue, and that queue time is on the critical path
+(review minor). It is the price of keeping the planner's token at
+`contents: read`; the first real runs should say what it costs.
 
 ## The six risks
 
 | # | risk (from the verifier) | handled by |
 |---|---|---|
 | 1 | the only writer was down for 12 days | The reader decides on the newest real run within 14 days, and a red one, or one with no ledger, means plain. 11-13 to 11-23 would have been plain throughout. Retention is 30 days, longer than the 14-day bound. |
-| 2 | red-gate deadlock | No ledger is used past a red whole-codebase run. The gate says whether a FAIL is conclusive or not. Escapes: re-run all jobs, the label, the repository variable. |
-| 3 | a PR judging its own machinery | `full_run_reasons` gives `ledger=None`, as data rather than read from reason strings. The machinery digest keeps PRs and pushes off a ledger until a nightly under the same machinery has passed the self-check. The reader is itself a `scripts/mutation_*.py` file. |
+| 2 | red-gate deadlock | No ledger is used past a red whole-codebase run. A ledgered FAIL says it is ledgered and prints the escapes: re-run all jobs, the label, the repository variable. |
+| 3 | a PR judging its own machinery | `full_run_reasons` gives `ledger_eligible: false`, as data rather than read from reason strings. The machinery digest keeps PRs and pushes off a ledger until a nightly under the same machinery has passed the self-check, which dry-runs the ledgered planner and merge. The reader is itself a `scripts/mutation_*.py` file. Push is a separate token, added after the A/B. |
 | 4 | documented constraints | "What this reverses", plus dated pointers in the 2026-10-31 spec (196-200) and plan (26) |
-| 5 | exact names are required | Only the non-carried mutants of functions with carried ones are named, with patterns everywhere else. The cap stays at 1,500, degrading first by splitting, then by un-carrying. |
+| 5 | exact names are required | Only the non-carried mutants of functions with carried ones are named, with patterns everywhere else. The cap stays at 1,500, enforced by a two-constraint pack that splits named functions and un-carries before it would exceed it. |
 | 6 | merge ownership, injection, weights, compare, permissions, key | `merge --plan` and its injection rules; invariants I1-I6; the weights guard; compare's `keep` and its refusal; a reader job with `actions: read`; a key that identifies the mutant and never the tests |
 
 ## Expected effect
 
-*Model, not measured.* These figures are the verifier's corrected arithmetic
-on runs 45290191649 and 45263898738.
+*Model, not measured.* Runner-minutes are not money here: a public
+repository on standard runners pays nothing for them, and this design keeps
+it that way (no paid plan, no larger runners, width 26, artifacts only). What
+an affected run gains is **wall clock on the blocking path and slots under the
+20-job cap**:
 
-- **Runner-min per ledgered full set:** from 1,598-1,601 to about 760-845, a
-  saving of 757-845 (47-53%). That already allows for re-running the survivors
-  of changed functions, at the spec's re-run fractions: 8.1% median, 13.4% p75
-  (spec:44, borrowed).
-- **Wall clock per ledgered full run:** the simulated shard phase is about
-  60-72 min on 18-20 free slots, against 138-144 today. The whole run is about
-  72-86 min, against 149.4 and 157.8 measured: 65-85 min saved on the blocking
-  path.
+- **Wall clock per ledgered full run.** The two-constraint pack, run on
+  45290191649's results, models each shard's median job at 31.1-35.4 min
+  (`runner_minutes`, a model its author calibrated as about 7% optimistic),
+  against about 61.5 measured per plain shard (1,598-1,601 shard runner-min
+  over 26). Add the planner's stats
+  run, the reader ahead of it (and any queue for its slot), the 26 shards
+  queued on 18-20 free slots, and the gate. The verifier's earlier end-to-end
+  figure, 72-86 min against 149.4 and 157.8 measured, assumed packing on time
+  alone and leaves those out; treat it as an upper bound on the saving until
+  the first run. No regeneration is added: the planner reads the stats run's
+  `.meta`.
+- **Slots.** The same 26 shards, each held about half as long, so the shard
+  phase occupies the 20-slot cap about half as long, for everything else that
+  queues behind it.
+- **Runner-min, for context only:** from 1,598-1,601 to about 760-845 per
+  ledgered full set (the verifier's arithmetic, including re-runs of changed
+  functions' survivors at 8.1% median, 13.4% p75, spec:44).
 - **Which runs benefit:**
   - *While the diff gate is still in shadow* (Task 8 is blocked on the
     DISAGREE above), in 11-01 to 11-23:
@@ -721,18 +851,26 @@ on runs 45290191649 and 45263898738.
     6,000-7,000 runner-min, again minus what the digest switches off. Pushes
     that merge machinery changes are among those 7, and the digest makes them
     plain.
-- **What that adds up to.** After Task 8 the durable saving is a few runs a
-  month. Most of the value is the blocking-path wall clock on each of those
-  runs, plus the PR runs until Task 8 lands.
+- **What that adds up to, for the owner to weigh against the complexity.**
+  After Task 8 it is a few runs a month: at most 1 PR set and 7 pushes per 23
+  days, fewer once machinery merges are taken out. Until Task 8 lands, the PR
+  runs above as well.
 - **The nightly does not change:** about 1,600 runner-min. It is the
   refresher.
 
 ## Test plan
 
+*As built:* every bullet below is a test in `tests/unit/test_mutation_ledger.py`
+(soundness property, writer, planner, selfcheck, reader, gate),
+`test_mutation_shards.py` (merge and injection), `test_mutation_plan.py`
+(eligibility and the workflow), `test_mutation_diff.py` (compare) or
+`test_ci_proven_tree.py` (the job graph with `MUTATION_LEDGER` unset and set).
+
 Prove every test red first, by reverse-applying its change, never with
 `git stash`. Tests that need mutmut run in `mutation-plan`'s
-`BOOST_REQUIRE_MUTMUT` step (ci.yml:1422-1426). The rest run in every `tests`
-cell.
+`BOOST_REQUIRE_MUTMUT` step, which now names `test_mutation_ledger.py` beside
+`test_mutation_diff.py` and `test_mutation_plan.py` (`test_mutation_shards.py`
+needs no mutmut). The rest run in every `tests` cell.
 
 **Soundness property** (`tests/unit/test_mutation_ledger.py`). Use seeded
 random code assignments over mutmut's whole exit-code table, with random
@@ -763,8 +901,9 @@ carried subsets. The test asserts:
   - a ledgered plan;
   - a source run that is not on `main` or not whole-codebase;
   - a `None` in its input.
-- `selfcheck` fails when the injection function is patched to return 1, which
-  proves the check bites, and passes on a correct ledger.
+- `selfcheck` fails when the merge injects 1 instead of 0, which proves the
+  check bites; fails when `CARRIED_EXIT` means a kill; fails when the merge
+  refuses; and passes on a correct ledger.
 
 **Reader** (a fake API, as `test_ci_proven_tree.py` uses).
 
@@ -777,7 +916,8 @@ carried subsets. The test asserts:
   - a run on another branch or event;
   - the label;
   - the repository variable.
-- It steps over an idle night to a green real run's ledger.
+- It steps over an idle night to a green real run's ledger, and plans plain
+  on a run with two markers.
 
 **Planner.**
 
@@ -798,9 +938,10 @@ carried subsets. The test asserts:
 
 **Gate.**
 
-- It exits 2 on a carried key that is not 0.
-- It prints the range line.
-- It prints the conclusive and inconclusive messages.
+- It exits 2 on a carried key that is not 0, one that is missing, and when
+  mutmut does not read 0 as survived.
+- A ledgered FAIL says it is ledgered and prints the escapes; it never says
+  "conclusive" or "must lie in".
 
 **Compare.** It reports INCOMPLETE when a carried name sits in the diff scope.
 
@@ -814,10 +955,11 @@ carried subsets. The test asserts:
   - The attempt check sits in the plan step.
 - **The `mutation` job.**
   - `merge --plan` and `gate --plan`.
-  - The weights steps are guarded on `ledgered`.
+  - The weights steps are guarded on the plan-file step's `plain`.
   - The writer steps are guarded and continue-on-error, and their upload
     depends on the self-check.
-  - The conclusive step refuses a ledgered plan on a whole-codebase run.
+  - The `ledgered` step refuses a ledgered plan on a whole-codebase run, and
+    an unreadable plan.
 - **Caches.** No `actions/cache` in any `mutation*` job. This widens the
   existing shard-only test at `test_mutation_plan.py:1032`.
 
@@ -845,7 +987,8 @@ machinery:
    - If its `mutation` is red, nothing is written, and the next day decides.
 3. **The next PR or push that is neither machinery nor proven** shows three
    things:
-   - in `mutation-ledger`: *"ledger: run R (schedule, created T)"*;
+   - in `mutation-ledger`: *"mutation-ledger: ledger of whole-codebase run R
+     (schedule, T)"*;
    - in the plan reason: the carried count, the functions carried and
      un-carried, and the age;
    - in the gate: the provenance line, then the score.
@@ -860,17 +1003,21 @@ machinery:
      same names.
    - Then choose "Re-run all jobs". Attempt 2 is plain on the same merge
      commit.
-   - Compare the two attempts' per-mutant codes:
-     - non-carried keys should agree, apart from known nondeterministic kills,
-       which are listed;
-     - for carried keys, the number plain killed measures how stale the ledger
-       was;
-     - ledgered killed must not exceed plain killed, nor the ledgered score
-       the plain one. Either would be an injection bug: stop, and switch the
-       ledger off with the repository variable.
-   - Exact-name and pattern runs have already disagreed once on one SHA
-     (artifact 13610263304), so expect few non-carried disagreements, not
-     zero.
+   - Compare the two attempts' per-mutant codes, **per key, over the
+     non-carried keys, by direction** (review major 2; totals would let stale
+     carried rows hide a shift in kills):
+     - *up*: killed in the ledgered attempt, not killed in the plain one;
+     - *down*: the reverse.
+     - **Stop rule:** stop, and remove `pull_request` from
+       `MUTATION_LEDGER`, if *up* exceeds *down* plus the keys on the
+       known-flaky list (which starts with
+       `store.x__install_project_skill__mutmut_223`, artifact 13610263304,
+       pattern=survived, exact=killed). Selector-dependent verdicts that lean
+       toward "killed" are the one way a ledgered run can score above a plain
+       one.
+     - For carried keys, the number plain killed measures how stale the
+       ledger was. Any carried key not exactly 0 in the ledgered attempt is
+       an injection bug, which the gate already refuses.
    - The cost is one more plain full set, in free minutes on a public
      repository.
 
@@ -878,8 +1025,11 @@ machinery:
 
 - **A ledgered shard end to end.** That mutmut takes a mixed argv of file
   patterns, function patterns and up to 1,500 names, and what its clean run
-  costs with mixed selectors.
-- **The real per-shard name counts.** 1,359 is the verifier's mean.
+  costs with mixed selectors. The self-check simulates shards with `fnmatch`,
+  as mutmut's filter does; it does not run mutmut.
+- **The real per-shard name counts on a future commit.** On run 45290191649's
+  results the pack's maximum is 1,500 and the total 35,338, measured locally
+  by the planner itself.
 - **The cross-run download.** `action.yml` was read at the pinned SHA, but the
   download was not run.
 - **Re-run behaviour.** Four things are unconfirmed:
@@ -894,18 +1044,58 @@ machinery:
 - **The time saving.** It is a model that its own author calibrated as about 7%
   optimistic.
 - **The mutmut version.** The mutmut 3.8.1 source was read from an extracted
-  wheel. The shared local venv holds 3.8.0, and nothing was installed into it.
+  wheel. The shared local venv holds 3.8.0, and nothing was installed into it;
+  the mutmut-backed tests ran against 3.8.0.
+- **The reader against the real API, `vars` in `if:` expressions, and the
+  `MUTATION_LEDGER` variable itself.** The reader ran only against a fake API;
+  actionlint and zizmor were not run locally.
 
-## Left to the builder
+## Residuals
 
-- The exact names of subcommands, flags and plan fields. Three names are fixed:
-  - `mutation-ledger` (it must match `jobs.mutation*`);
-  - `scripts/mutation_ledger.py` (it must match `scripts/mutation_*.py`);
-  - `CARRIED_EXIT = 0`.
-- How heavy files with nothing carried are split.
-- How the ledger is compressed.
-- How the summary is formatted.
+- **After a machinery-digest reset, the first ledgered run is the first real
+  mixed-argv run under that machinery** (review major 3). With only
+  `pull_request` enabled that is a PR, and a bug there is a red PR with three
+  escapes. With `push` enabled it can be a push to `main`, whose red holds the
+  release until "Re-run all jobs" (about 150 min) or the owner removes `push`.
+  The self-check dry run moves every planner, partition, ownership and
+  injection bug to the nightly; it cannot move a mutmut one. Closing this
+  fully would need the reader to require a green ledgered PR run under the
+  same digest before a push may read the ledger. That is not built; the
+  rollout asks the owner to add `push` only after one exists.
+- **Selector-dependent verdicts** (review major 2) are measured by the A/B,
+  not prevented. `forkserver` isolation would remove the cause, and is a
+  separate decision.
+- **Freshness.** A test that kills a carried survivor gets no credit until a
+  nightly writes the next ledger.
+
+## Review findings, and where each is handled
+
+The adversarial review of this design (verdict *fix-then-ship*) and what the
+implementation does about each finding:
+
+| severity | finding | handled |
+|---|---|---|
+| blocker | the reversals were recorded as owner-approved with no owner words to show it | Status and both 2026-10-31 amendments say *pending owner sign-off*; each reversal is a separate `MUTATION_LEDGER` token, unset by default, and "Rollout" says plainly that `push` gates the release |
+| major | soundness assumed non-carried mutants run as in a plain run | "Soundness" restated; the gate no longer claims a range or a conclusive red; the A/B stop rule is per key and by direction; `forkserver` noted as the owner's separate option |
+| major | the release path would be the first test of ledgered code, after every digest reset | `push` is its own token, added after the A/B; the nightly self-check is a dry run of the ledgered planner and merge; the mixed-argv gap is stated under "Residuals" |
+| minor | the 1,500-name cap binds on packing by time alone | two-constraint pack (time, names per bin), measured on 45290191649: max 1,500, 0 un-carried |
+| minor | a fully carried file has no owner | the merge gives it shard 0; tested |
+| minor | the pack-equality check keyed on "carries nothing" | keyed on the absence of `carried`; `apply` never writes an empty one |
+| minor | the writer's interpreter and key source | `.venv/bin/python`; key and digest stamped by the planner, copied from the plan |
+| minor | the upload was not continue-on-error, and gated on conclusion | all three writer steps continue-on-error with own timeouts; gated on `outcome`; pinned in `test_mutation_plan.py` |
+| minor | the weights guard read an output string | decided from the plan file; `weights` refuses a ledgered merge's sidecar |
+| minor | mutmut-backed tests would skip in CI | `test_mutation_ledger.py` added to the `BOOST_REQUIRE_MUTMUT` step |
+| minor | regeneration and the reader's queue were missing from the cost model | no regeneration (the stats run's `.meta` is read); the reader's cost is named in "ci.yml, job by job" and "Expected effect" |
+| minor | the reader classified runs more loosely than `_inherit` | more than one marker is no ledger; a `mutated-tree-` marker or a ledger makes a run real |
+| minor | empty bins and failed headroom were unstated | exactly 26 non-empty anchored bins and a passing `headroom_report`, else plain with a reason |
+| minor | the expected effect led with runner-minutes | it leads with wall clock and slots, and the post-Task-8 run count |
+
+## Left to the owner
+
+- Whether to set `MUTATION_LEDGER`, and which tokens, in the order "Rollout"
+  gives.
 - Creating the `mutation-no-ledger` label.
+- Whether to evaluate `process_isolation = forkserver`.
 
 ## Sources
 
