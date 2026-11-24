@@ -2740,6 +2740,8 @@ SCENARIOS = {
                        "idle": ("success", "true")},
     "workflow_dispatch": {"event": "workflow_dispatch", "ref": "refs/heads/main"},
 }
+# Every scenario above models a repository with MUTATION_LEDGER unset, as it
+# is until the owner opts in; a scenario may set `vars` to model one that has.
 
 #: What each job's outputs are when it runs. The planner's matrix is a model
 #: of its `write the plan` step -- empty exactly when `proven` said skip or
@@ -2761,6 +2763,8 @@ def _outcome(name: str, scenario: dict) -> tuple[str, dict]:
     if name == "nightly-shadow-base":
         return "success", {"shadow_base": "b" * 40, "shadow_base_run": "41",
                            "shadow_reason": "diff shadow against run 41 (schedule)"}
+    if name == "mutation-ledger":
+        return "success", {"run_id": "", "reason": "no green real whole-codebase run"}
     if name == "mutation-plan":
         proven = scenario.get("proven", ("", "", ""))
         idle = scenario.get("idle", ("", ""))
@@ -2784,6 +2788,9 @@ def job_runs(jobs: dict, name: str, results: dict, outputs: dict,
             return scenario["event"]
         if ident == "github.ref":
             return scenario["ref"]
+        if ident.startswith("vars."):
+            # An unset repository variable reads as the empty string.
+            return (scenario.get("vars") or {}).get(ident[len("vars."):], "")
         parts = ident.split(".")
         if parts[0] == "needs":
             assert len(parts) >= 3 and parts[1] in direct, (
@@ -2828,6 +2835,8 @@ EXPECTED = {
     "proven":         (S,  S,     R,      R,      R,      S,     S,    S),
     "idle-nightly":   (S,  S,     S,      S,      S,      R,     R,    S),
     "nightly-shadow-base": (S, S,  S,      S,      S,      R,     R,    S),
+    # Unset MUTATION_LEDGER: never. test_the_ledger_reader_runs_only_where_it_may_be_read.
+    "mutation-ledger": (S,  S,     S,      S,      S,      S,     S,    S),
     "lint":           (R,  R,     R,      R,      R,      S,     S,    S),
     "evals":          (R,  R,     R,      R,      R,      S,     S,    S),
     "tests":          (R,  R,     S,      R,      R,      S,     S,    S),
@@ -2878,6 +2887,21 @@ def test_every_job_has_a_row(jobs):
     assert set(jobs) == set(EXPECTED)
 
 
+@pytest.mark.parametrize("value", ["write,pull_request,push", "pull_request", "write"])
+def test_the_ledger_reader_runs_only_where_it_may_be_read(jobs, value):
+    # With MUTATION_LEDGER set at all, the reader starts on pull requests and
+    # pushes only -- never on a whole-codebase run, whose job page the idle
+    # walk and fact 3 read, nor on the queue -- and changes nothing else: the
+    # script decides from the exact tokens, the `if` only spares a job.
+    for column, scenario in SCENARIOS.items():
+        sim = simulate(jobs, {**scenario, "vars": {"MUTATION_LEDGER": value}})
+        assert (sim["mutation-ledger"] != "skipped") == (scenario["event"] in
+                                                         ("pull_request", "push")), column
+        unset = simulate(jobs, scenario)
+        assert {n: r for n, r in sim.items() if n != "mutation-ledger"} == {
+            n: r for n, r in unset.items() if n != "mutation-ledger"}, column
+
+
 def test_each_job_runs_exactly_where_the_table_says(jobs):
     table = run_table(jobs)
     wrong = {name: (table[name], EXPECTED[name]) for name in jobs
@@ -2911,8 +2935,9 @@ def test_a_proven_push_still_runs_every_non_test_check(jobs):
     # PR run ran the extended legs, so `tests-extended` is never in this set.
     sim = simulate(jobs, SCENARIOS["push, proven skip=true"])
     skipped = {n for n, r in sim.items() if r == "skipped"}
+    # (mutation-ledger only because MUTATION_LEDGER is unset in this model.)
     assert skipped == {"tests", "mutation-shard", "patch-coverage", "idle-nightly",
-                       "nightly-shadow-base", "mutation-advisory-shard"}
+                       "nightly-shadow-base", "mutation-advisory-shard", "mutation-ledger"}
 
 
 def test_every_job_downstream_of_proven_names_a_status_function(jobs):
@@ -3002,7 +3027,8 @@ def test_the_shards_check_the_planner_result_now_that_they_say_not_cancelled(job
         got = job_runs(jobs, "mutation-shard", {"mutation-plan": plan_result,
                                                 "proven": "skipped",
                                                 "idle-nightly": "skipped",
-                                                "nightly-shadow-base": "skipped"},
+                                                "nightly-shadow-base": "skipped",
+                                                "mutation-ledger": "skipped"},
                        {"mutation-plan": {"matrix": matrix}},
                        SCENARIOS["pull_request"])
         assert got is runs, (plan_result, matrix)
@@ -3017,7 +3043,8 @@ ADVISORY_IF = ("${{ !cancelled() && github.event_name == 'schedule'"
 def test_the_advisory_legs_start_only_on_a_nightly_with_a_matrix(jobs):
     assert jobs["mutation-advisory-shard"]["if"] == ADVISORY_IF
     ancestors = {"mutation-plan": "success", "proven": "skipped",
-                 "idle-nightly": "success", "nightly-shadow-base": "success"}
+                 "idle-nightly": "success", "nightly-shadow-base": "success",
+                 "mutation-ledger": "skipped"}
     for name, scenario in SCENARIOS.items():
         for result, matrix, want in [("success", ONE_ADVISORY, True),
                                      ("success", "[]", False),
