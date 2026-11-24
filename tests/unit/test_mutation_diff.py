@@ -845,6 +845,29 @@ def test_compare_counts_a_key_missing_from_the_full_run_as_disagreement(tmp_path
     assert "full=not checked diff=killed" in capsys.readouterr().out
 
 
+@pytest.mark.usefixtures("statuses")
+@pytest.mark.parametrize("carried, rc, said", [
+    # outside the diff scope: the shadow compares as before
+    (["boost_cli.core.m.x_other__mutmut_1"], 3, "VACUOUS"),
+    # inside it: not a disagreement, a plan compare will not read
+    ([f"{_A}__mutmut_1"], 2, "1 diff-scope mutants were carried from a ledger"),
+    ("x", 2, "sets.full.carried is not a list"),
+])
+def test_compare_refuses_a_ledgered_full_set_that_carried_the_diff_scope(
+        tmp_path, capsys, carried, rc, said):
+    plan = tmp_path / "plan.json"
+    _diff_plan(tmp_path, [_n(_A, 1)], 1)
+    data = json.loads(plan.read_text(encoding="utf-8"))
+    data["gate_set"] = "full"
+    data["sets"]["full"] = {"shards": [["boost_cli.core.m.*"]], "mutants": 2,
+                            "carried": carried}
+    plan.write_text(json.dumps(data), encoding="utf-8")
+    _meta(tmp_path / "full", "mutation-full-shard-", 0, {f"{_A}__mutmut_1": 1})
+    _meta(tmp_path / "diff", "mutation-diff-shard-", 0, {f"{_A}__mutmut_1": 1})
+    assert _compare(tmp_path, str(plan)) == rc
+    assert said in capsys.readouterr().out
+
+
 @pytest.mark.usefixtures("needs_mutmut")
 def test_compare_with_no_full_shards_is_exit_2(tmp_path):
     plan = _diff_plan(tmp_path, [_n(_A, 1)], 1)
