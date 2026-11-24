@@ -199,6 +199,14 @@ with `actions/cache/save` under `push`/`schedule` on `main` only, never
 restored by a release workflow), so a later whole-codebase incremental mode
 remains possible without cache poisoning.
 
+**Amended 2026-11-24 (approved, not yet implemented).** For survived and
+timeout verdicts only, never killed, a survivor ledger is written only by a
+green, unledgered `schedule`/`workflow_dispatch` run on `main`, as an
+artifact, not a cache. It is read by PR and push runs, including the push run
+that `publish.yml` releases from; `publish.yml` stays cache-free. A carried
+verdict can only lower the score. Design:
+`docs/superpowers/specs/2026-11-24-mutation-survivor-ledger.md`.
+
 ## Goals, non-goals, anti-goals
 
 - Goals: typical PR `ci` ≤ ~30 min; publish soon after merge; no lost runners;
