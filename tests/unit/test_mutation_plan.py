@@ -114,6 +114,32 @@ def test_full_plan_reuses_the_committed_pack(tmp_path):
     assert plan["reasons"], "a plan must say why it is the plan it is"
 
 
+@pytest.mark.usefixtures("needs_mutmut")
+def test_mutmut_gives_a_per_function_shard_its_own_clean_run(tmp_path, monkeypatch):
+    # mutation_shards.sentinel_for, against mutmut's own clean-run selection
+    # (boxed/mutmut#594). A full shard of per-function units alone selects
+    # no test with its real patterns, so mutmut runs all of tests/unit; with
+    # the sentinels it runs exactly those functions' tests.
+    from mutmut.__main__ import tests_for_mutant_names
+
+    mutmut_state = importlib.import_module("mutmut.state")
+    src = tmp_path / "boost_cli" / "core"
+    src.mkdir(parents=True)
+    (src / "store.py").write_text(
+        "def install():\n    pass\n\n\ndef install_from_path():\n    pass\n",
+        encoding="utf-8")
+    pats = ms.patterns_for_bin(tmp_path, [ms.Unit(src / "store.py", "install")])
+    fresh = mutmut_state.MutmutState()
+    fresh.tests_by_mangled_function_name["boost_cli.core.store.x_install"] = {"t_install"}
+    fresh.tests_by_mangled_function_name[
+        "boost_cli.core.store.x_install_from_path"] = {"t_other"}
+    monkeypatch.setattr(mutmut_state, "_state", fresh)
+    real = [p for p in pats if p.endswith("__mutmut_*")]
+    assert real and len(real) < len(pats)
+    assert tests_for_mutant_names(real) == set()
+    assert tests_for_mutant_names(pats) == {"t_install"}
+
+
 def test_full_plan_on_a_small_tree(tmp_path):
     # The same contract on a tree this test controls, so it also runs inside
     # mutants/ where the real-tree test above is skipped.
