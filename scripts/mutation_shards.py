@@ -1298,7 +1298,8 @@ def cmd_merge(args: argparse.Namespace) -> int:
     record = into / CARRIED_RECORD
     if carried:
         record.write_text(json.dumps({"source": source_run, "carried": sorted(
-            n for names in carried.values() for n in names)}) + "\n", encoding="utf-8")
+            n for names in carried.values() for n in names)}) + "\n", encoding="utf-8",
+            newline="\n")
     else:
         record.unlink(missing_ok=True)
 
