@@ -193,11 +193,52 @@ caller more than one hop from a change. Falling from 87.8% to 80% takes about
 3,900 kills turning into survivors in one day, which no past train has come
 close to.
 
+**Amendment: a re-run PR run's mutation verdict (approved 2026-11-24).** Under
+B as first approved, only a PR run's first attempt counted. A PR run re-run
+for a reason that is not mutation (most often a macOS `tests` cell cancelled
+with no steps, then "re-run failed jobs") therefore sent its merge push to the
+full shard run: pushes 42444697189 (179.6 min) and 41892921723 (187.7 min) were
+proven in everything but that. For the mutation verdict only, a re-run now
+counts when attempt 1 ran `mutation-plan`, `mutation` and full shards
+`0..n-1`, all green, and no later attempt ran any of them again: every later
+copy has attempt 1's start and end times and was created after that start.
+The push then plans `none` for mutation, provided its base's own `mutation`
+was green (`base_mutation_green`; otherwise it falls through to the diff and
+is widened to full), and still runs its own tests, because
+a re-run's tests are not first-attempt evidence. Anything else proves nothing:
+a mutation job re-run in any later attempt (PR run 42463209202 re-ran them all
+in attempt 2, then only `lint` in attempt 3), a red attempt-1 verdict, or a
+missing field or API error. The red-nightly fallback applies unchanged. Letting
+a full-gated PR run override a red nightly was proposed alongside and was not
+approved.
+
 In either option, the run that checks the whole codebase is the only trusted
 writer of a mutation baseline (`.meta` files plus `mutmut-stats.json`, saved
 with `actions/cache/save` under `push`/`schedule` on `main` only, never
 restored by a release workflow), so a later whole-codebase incremental mode
 remains possible without cache poisoning.
+
+**Amendment, approved by the owner 2026-11-23, recorded 2026-11-24.** The
+owner selected the option "Survivor ledger (#5)", whose text read exactly:
+"Days. The nightly records which mutants survived; PR and push runs skip
+unchanged ones. Saves 65–85 min per full run. Can only under-state the
+score, but reverses 'never trust a cached verdict'." This amendment claims
+nothing wider than those words. They do not mention timeout verdicts,
+`workflow_dispatch` as a writer, a release resting on a ledgered score, or a
+ledgered PR run proving its merge push. Each is behind the `MUTATION_LEDGER`
+token the design's Status names for it, and the first two share `write` with
+the nightly writer the words do cover. Nothing below is in force until the
+owner sets the repository variable `MUTATION_LEDGER`; unset, no run writes
+or reads a ledger. For survived and timeout verdicts only, never killed, a
+survivor ledger would be written only by a green, unledgered
+`schedule`/`workflow_dispatch` run on `main`, as an artifact, not a cache.
+PR runs would read it once the owner adds `pull_request` to the variable.
+Push runs would read it only once the owner also adds `push`, and that
+includes the push run whose success `publish.yml` releases from, which is
+exactly what the sentence above rules out ("never restored by a release
+workflow"). `publish.yml` itself stays cache-free. Carrying a verdict never
+adds a kill. Design:
+`docs/superpowers/specs/2026-11-24-mutation-survivor-ledger.md`.
 
 ## Goals, non-goals, anti-goals
 

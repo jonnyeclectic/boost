@@ -1235,7 +1235,10 @@ def test_the_idle_step_passes_only_the_token_and_expands_nothing_in_run(jobs):
 
 def test_the_planner_waits_for_it_and_its_token_does_not_grow(jobs):
     plan = jobs["mutation-plan"]
-    assert plan["needs"] == ["proven", "idle-nightly", "nightly-shadow-base"]
+    # mutation-ledger: the survivor ledger's reader, skipped unless the owner
+    # sets MUTATION_LEDGER, and never on a schedule (test_mutation_ledger.py).
+    assert plan["needs"] == ["proven", "idle-nightly", "nightly-shadow-base",
+                             "mutation-ledger"]
     assert plan["permissions"] == {"contents": "read"}
     assert plan["if"] == "${{ !cancelled() }}"
 

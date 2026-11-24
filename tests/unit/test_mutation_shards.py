@@ -489,3 +489,308 @@ def test_pattern_is_dotted_on_every_platform(monkeypatch):
     monkeypatch.setattr(ms, "SOURCE", PureWindowsPath("boost_cli/core"))
     assert ms.SOURCE.as_posix().replace("/", ".") == "boost_cli.core"
     assert "\\" not in ms.SOURCE.as_posix()
+
+
+# --------------------------------------------------------------------------
+# merge --plan: ownership from the plan, and carried survivors
+# (docs/superpowers/specs/2026-11-24-mutation-survivor-ledger.md)
+# --------------------------------------------------------------------------
+
+import fnmatch as _fnmatch  # noqa: E402
+
+_REAL_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _real_tree_is_mutated() -> bool:
+    try:
+        return "__mutmut_" in (_REAL_ROOT / "boost_cli/core/store.py").read_text(encoding="utf-8")
+    except OSError:
+        return True
+
+
+_LEDGER_KEYS = {
+    "a.py": ["boost_cli.core.a.x_f__mutmut_%d" % n for n in (1, 2, 3)]
+            + ["boost_cli.core.a.x_g__mutmut_%d" % n for n in (1, 2)],
+    "b.py": ["boost_cli.core.b.x_h__mutmut_%d" % n for n in (1, 2)],
+    "c.py": ["boost_cli.core.c.x_k__mutmut_1"],
+}
+#: What a plain run measured: a.f2 and c.k1 survived, the rest were killed.
+_LEDGER_CODES = {k: (0 if k in ("boost_cli.core.a.x_f__mutmut_2",
+                                "boost_cli.core.c.x_k__mutmut_1") else 1)
+                 for keys in _LEDGER_KEYS.values() for k in keys}
+
+
+def _ledger_repo(tmp_path):
+    return _repo(tmp_path, {"a.py": 100, "b.py": 60, "c.py": 30})
+
+
+def _selector_artifacts(parent, shards, codes=None, prefix="mutation-full-shard-"):
+    """Each shard's .meta for every file, as mutmut writes them: a key is run
+    (has its code and a duration) only when one of the shard's selectors
+    fnmatches it -- mutmut's own filter -- and is `None` everywhere else."""
+    codes = _LEDGER_CODES if codes is None else codes
+    for i, selectors in enumerate(shards):
+        d = parent / ("%s%d" % (prefix, i))
+        d.mkdir(parents=True, exist_ok=True)
+        for name, keys in _LEDGER_KEYS.items():
+            ran = {k for k in keys if any(_fnmatch.fnmatchcase(k, s) for s in selectors)}
+            (d / (name + ".meta")).write_text(json.dumps({
+                "exit_code_by_key": {k: (codes[k] if k in ran else None) for k in keys},
+                "hash_by_function_name": {},
+                "type_check_error_by_key": {},
+                "durations_by_key": dict.fromkeys(ran, 1.5),
+                "estimated_durations_by_key": {},
+            }), encoding="utf-8")
+
+
+def _write_plan(tmp_path, shards, carried=None, run_id=7):
+    full = {"shards": shards, "mutants": None}
+    if carried is not None:
+        full["carried"] = carried
+        full["ledger"] = {"used": True, "run_id": run_id}
+    path = tmp_path / "plan.json"
+    path.write_text(json.dumps({"gate_set": "full", "reasons": [], "sets": {"full": full}}),
+                    encoding="utf-8")
+    return str(path)
+
+
+def _merge(repo, tmp_path, shards, plan=None):
+    args = _ns(root=str(repo), shards=shards, into=str(tmp_path / "m"),
+               source=str(tmp_path / "shard-results"), prefix="mutation-full-shard-")
+    args.plan = plan
+    args.set = "full"
+    return ms.cmd_merge(args)
+
+
+def _merged(tmp_path):
+    out = {}
+    for meta in (tmp_path / "m" / "boost_cli" / "core").glob("*.meta"):
+        out.update(json.loads(meta.read_text(encoding="utf-8"))["exit_code_by_key"])
+    return out
+
+
+#: A ledgered repack: a.py split by name and by function, b.py whole, and
+#: c.py's only mutant carried, so no selector names c.py at all.
+_REPACK = [["boost_cli.core.a.x_f__mutmut_1", "boost_cli.core.a.x_f__mutmut_3",
+            "boost_cli.core.b.*"],
+           ["boost_cli.core.a.x_g__mutmut_*"]]
+_CARRIED = ["boost_cli.core.a.x_f__mutmut_2", "boost_cli.core.c.x_k__mutmut_1"]
+
+
+def test_the_carried_exit_is_the_constant_zero():
+    # mutmut's table reads 0 as "survived"; test_mutation_ledger.py pins that
+    # against the installed mutmut. Here: it is a constant, not a lookup.
+    assert ms.CARRIED_EXIT == 0
+
+
+@pytest.mark.parametrize("selector, file", [
+    ("boost_cli.core.store.*", "store.py"),
+    ("boost_cli.core.rag.bm25.*", "rag/bm25.py"),
+    ("boost_cli.core.catalog.xǁ*", "catalog.py"),
+    ("boost_cli.core.store.x_install__mutmut_*", "store.py"),
+    ("boost_cli.core.store.x_install__mutmut_12", "store.py"),
+    ("boost_cli.core.m.xǁA.Bǁm__mutmut_3", "m.py"),
+    ("boost_cli.core.rag.bm25.xǁKǁm__mutmut_*", "rag/bm25.py"),
+    # sentinel_for's bare-key globs, as a plain plan lists them
+    ("boost_cli.core.store.x_instal[l*]", "store.py"),
+    ("boost_cli.core.rag.bm25.xǁKǁ[m*]", "rag/bm25.py"),
+    # nothing a full plan writes, so nothing the merge will map
+    ("boost_cli.core.store.x_instal[l]", None),
+    ("boost_cli.core.store.x_insta[ll*]", None),
+    ("boost_cli.core.store.x_instal[*]", None),
+    ("boost_cli.core.*[x*]", None),
+    ("boost_cli.core.*x", None),
+    ("other.module.*", None),
+    ("boost_cli.core.store.x_a__mutmut_0", None),
+    ("boost_cli.core.store.x_*__mutmut_*", None),
+    ("*", None),
+    ("", None),
+])
+def test_a_selector_maps_to_exactly_its_file(selector, file):
+    assert ms.selector_file(selector) == file
+
+
+def test_every_key_a_selector_matches_lies_in_the_file_it_maps_to():
+    # Cross-checked against fnmatch itself (mutmut's filter), not against the
+    # merge's own reading: whatever a shard ran, the merge reads it from the
+    # file the selector names.
+    keys = ["boost_cli.core.store.x_install__mutmut_1",
+            "boost_cli.core.store.x_install_from_path__mutmut_1",
+            "boost_cli.core.store.xǁLockǁacquire__mutmut_2",
+            "boost_cli.core.storex.x_install__mutmut_1",
+            "boost_cli.core.m.xǁA.Bǁm__mutmut_3",
+            "boost_cli.core.rag.bm25.x_score__mutmut_1",
+            "boost_cli.core.rag.x_score__mutmut_1"]
+    files = {"boost_cli.core.store": "store.py", "boost_cli.core.storex": "storex.py",
+             "boost_cli.core.m": "m.py", "boost_cli.core.rag.bm25": "rag/bm25.py",
+             "boost_cli.core.rag": "rag.py"}
+
+    def file_of(key):
+        return next(f for mod, f in sorted(files.items(), key=lambda t: -len(t[0]))
+                    if key.startswith(mod + ".x"))
+
+    stats_keys = ["boost_cli.core.store.x_install", "boost_cli.core.rag.bm25.x_score"]
+    selectors = ["boost_cli.core.store.*", "boost_cli.core.store.xǁ*",
+                 "boost_cli.core.store.x_install__mutmut_*",
+                 "boost_cli.core.m.xǁA.Bǁm__mutmut_*",
+                 "boost_cli.core.rag.bm25.*", "boost_cli.core.rag.x_score__mutmut_*",
+                 *keys]
+    for sel in selectors:
+        hits = [k for k in keys if _fnmatch.fnmatchcase(k, sel)]
+        assert hits, sel
+        assert {file_of(k) for k in hits} == {ms.selector_file(sel)}, sel
+    # A sentinel selects no mutant at all, only its function's stats key,
+    # which lies in the file it maps to.
+    for sel in ("boost_cli.core.store.x_instal[l*]", "boost_cli.core.rag.bm25.x_scor[e*]"):
+        assert not [k for k in keys if _fnmatch.fnmatchcase(k, sel)], sel
+        assert [k for k in stats_keys if _fnmatch.fnmatchcase(k, sel)] == [sel.replace("[", "")[:-2]]
+        assert ms.selector_file(sel) == file_of(sel.replace("[", "")[:-2] + "__mutmut_1")
+    # the anchoring that keeps `install` from swallowing `install_from_path`
+    assert not _fnmatch.fnmatchcase("boost_cli.core.store.x_install_from_path__mutmut_1",
+                                    "boost_cli.core.store.x_install__mutmut_*")
+
+
+@pytest.mark.skipif(_real_tree_is_mutated(), reason="tree rewritten by mutmut; packing it is slow")
+def test_the_committed_plans_ownership_is_the_committed_packs():
+    # The plain full plan, read back as the merge reads a plan, names exactly
+    # the owners `pack` does -- including every split file's functions.
+    bins = ms.pack(_REAL_ROOT, ms.SHARDS)
+    shards = [ms.patterns_for_bin(_REAL_ROOT, b) for b in bins]
+    # Including the sentinels a per-function-only bin carries.
+    assert any(ms.sentinel_for(_REAL_ROOT, u) in s for b, s in zip(bins, shards, strict=True) for u in b)
+    assert ms.plan_ownership(shards) == ms.pack_ownership(_REAL_ROOT, ms.SHARDS)
+
+
+def test_a_plain_plan_merges_exactly_as_the_pack_does(tmp_path, capsys):
+    repo = _ledger_repo(tmp_path)
+    shards = [ms.patterns_for_bin(repo, b) for b in ms.pack(repo, 2)]
+    _selector_artifacts(tmp_path / "shard-results", shards)
+    plan = _write_plan(tmp_path, shards)
+    assert _merge(repo, tmp_path, 2, plan) == 0, capsys.readouterr().out
+    assert _merged(tmp_path) == _LEDGER_CODES
+    assert not (tmp_path / "m" / ms.CARRIED_RECORD).exists()
+
+
+def test_a_plan_that_carries_nothing_must_be_the_committed_pack(tmp_path, capsys):
+    # A ledger-weighted repack that ends up carrying nothing would otherwise
+    # merge on ownership nobody checked against the committed pack.
+    repo = _ledger_repo(tmp_path)
+    moved = [["boost_cli.core.a.x_f__mutmut_*", "boost_cli.core.c.*"],
+             ["boost_cli.core.a.x_g__mutmut_*", "boost_cli.core.b.*"]]
+    _selector_artifacts(tmp_path / "shard-results", moved)
+    assert _merge(repo, tmp_path, 2, _write_plan(tmp_path, moved)) == 1
+    out = capsys.readouterr().out
+    assert "INCOMPLETE" in out and "not the committed 2-way pack" in out
+
+
+def test_a_ledgered_repack_merges_with_its_plan_and_injects_the_constant(tmp_path, capsys):
+    repo = _ledger_repo(tmp_path)
+    _selector_artifacts(tmp_path / "shard-results", _REPACK)
+    assert _merge(repo, tmp_path, 2, _write_plan(tmp_path, _REPACK, _CARRIED)) == 0, \
+        capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "(2 carried from ledger run 7)" in out
+    merged = _merged(tmp_path)
+    # Every key accounted for; the carried ones are exactly CARRIED_EXIT and
+    # the rest exactly what their shard measured.
+    assert set(merged) == set(_LEDGER_CODES)
+    for key, code in merged.items():
+        assert code == (ms.CARRIED_EXIT if key in _CARRIED else _LEDGER_CODES[key]), key
+    record = json.loads((tmp_path / "m" / ms.CARRIED_RECORD).read_text(encoding="utf-8"))
+    assert record["carried"] == sorted(_CARRIED)
+
+
+def test_the_verifiers_bug_a_ledgered_repack_without_its_plan_is_refused(tmp_path, capsys):
+    # Ownership re-derived from `pack` reads the moved mutants as unrun.
+    repo = _ledger_repo(tmp_path)
+    _selector_artifacts(tmp_path / "shard-results", _REPACK)
+    assert _merge(repo, tmp_path, 2, plan=None) == 1
+    assert "unrun" in capsys.readouterr().out
+
+
+def test_a_carried_key_a_shard_also_ran_is_refused(tmp_path, capsys):
+    repo = _ledger_repo(tmp_path)
+    ran_it_too = [_REPACK[0] + ["boost_cli.core.a.x_f__mutmut_2"], _REPACK[1]]
+    _selector_artifacts(tmp_path / "shard-results", ran_it_too)
+    assert _merge(repo, tmp_path, 2, _write_plan(tmp_path, ran_it_too, _CARRIED)) == 1
+    out = capsys.readouterr().out
+    assert "carried mutant boost_cli.core.a.x_f__mutmut_2 was also run by shard 0" in out
+
+
+def test_a_carried_key_not_generated_at_this_commit_is_refused(tmp_path, capsys):
+    repo = _ledger_repo(tmp_path)
+    _selector_artifacts(tmp_path / "shard-results", _REPACK)
+    carried = [*_CARRIED, "boost_cli.core.b.x_h__mutmut_9"]
+    assert _merge(repo, tmp_path, 2, _write_plan(tmp_path, _REPACK, carried)) == 1
+    assert "boost_cli.core.b.x_h__mutmut_9 is not generated at this commit" in \
+        capsys.readouterr().out
+
+
+def test_an_uncarried_unrun_key_still_fails_closed(tmp_path, capsys):
+    # a.f3 is neither named by any shard nor carried.
+    repo = _ledger_repo(tmp_path)
+    short = [["boost_cli.core.a.x_f__mutmut_1", "boost_cli.core.b.*"],
+             ["boost_cli.core.a.x_g__mutmut_*"]]
+    _selector_artifacts(tmp_path / "shard-results", short)
+    assert _merge(repo, tmp_path, 2, _write_plan(tmp_path, short, _CARRIED)) == 1
+    out = capsys.readouterr().out
+    assert "a.py: 1/5 mutants unrun" in out and "x_f__mutmut_3" in out
+
+
+def test_a_file_whose_every_mutant_is_carried_needs_no_selector(tmp_path, capsys):
+    # c.py is named by no selector; without an owner the backstop would call
+    # it "assigned to no shard" and every ledgered run would be red.
+    repo = _ledger_repo(tmp_path)
+    _selector_artifacts(tmp_path / "shard-results", _REPACK)
+    assert _merge(repo, tmp_path, 2, _write_plan(tmp_path, _REPACK, _CARRIED)) == 0
+    assert _merged(tmp_path)["boost_cli.core.c.x_k__mutmut_1"] == ms.CARRIED_EXIT
+    # ... and only carried rows get that pass: drop c.k1 from the carried list
+    # and c.py is unowned and unrun again.
+    capsys.readouterr()
+    assert _merge(repo, tmp_path, 2,
+                  _write_plan(tmp_path, _REPACK, _CARRIED[:1])) == 1
+    assert "c.py: mutatable but assigned to no shard" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("plan, said", [
+    ({"sets": {}}, "no set 'full'"),
+    ({"sets": {"full": {"shards": [["boost_cli.core.a.*"]]}}}, "not --shards 2"),
+    ({"sets": {"full": {"shards": [["boost_cli.core.a.*"], ["a weird *"]]}}},
+     "is not a full-set selector"),
+    ({"sets": {"full": {"shards": _REPACK, "carried": []}}}, "non-empty list"),
+    ({"sets": {"full": {"shards": _REPACK, "carried": ["boost_cli.core.a.x_f__mutmut_*"]}}},
+     "is not an exact mutant name"),
+    ({"sets": {"full": {"shards": _REPACK, "carried": _CARRIED + _CARRIED[:1]}}},
+     "distinct"),
+])
+def test_a_plan_the_merge_cannot_read_is_refused(tmp_path, capsys, plan, said):
+    repo = _ledger_repo(tmp_path)
+    _selector_artifacts(tmp_path / "shard-results", _REPACK)
+    path = tmp_path / "bad.json"
+    path.write_text(json.dumps(plan), encoding="utf-8")
+    assert _merge(repo, tmp_path, 2, str(path)) == 1
+    out = capsys.readouterr().out
+    assert "INCOMPLETE" in out and said in out
+
+
+def test_weights_refuse_a_ledgered_merge(tmp_path, capsys):
+    # A carried row has no duration, so the merged times are killed-only work.
+    repo = _ledger_repo(tmp_path)
+    _selector_artifacts(tmp_path / "shard-results", _REPACK)
+    assert _merge(repo, tmp_path, 2, _write_plan(tmp_path, _REPACK, _CARRIED)) == 0
+    args = type("A", (), {"root": str(repo), "source": str(tmp_path / "m"), "out": None})()
+    (repo / "scripts").mkdir(exist_ok=True)
+    assert ms.cmd_weights(args) == 1
+    assert ms.CARRIED_RECORD in capsys.readouterr().out
+    assert not (repo / ms.WEIGHTS).exists()
+
+
+def test_a_plain_merge_clears_a_stale_carried_record(tmp_path, capsys):
+    # The record describes the last merge into this directory, never an older one.
+    repo = _ledger_repo(tmp_path)
+    (tmp_path / "m").mkdir()
+    (tmp_path / "m" / ms.CARRIED_RECORD).write_text("{}", encoding="utf-8")
+    shards = [ms.patterns_for_bin(repo, b) for b in ms.pack(repo, 2)]
+    _selector_artifacts(tmp_path / "shard-results", shards)
+    assert _merge(repo, tmp_path, 2, _write_plan(tmp_path, shards)) == 0
+    assert not (tmp_path / "m" / ms.CARRIED_RECORD).exists()

@@ -102,16 +102,23 @@ ms = _load_shards()
 FULL_SHARDS: int = ms.SHARDS
 
 
-def full_plan(root: Path, shards: int, reasons: list[str]) -> dict[str, Any]:
+def full_plan(root: Path, shards: int, reasons: list[str], *,
+              ledger_eligible: bool = False) -> dict[str, Any]:
     """Every mutant, packed exactly as ``mutation_shards.py plan`` packs it.
 
     The same ``pack`` the gate's ``merge --shards N`` re-derives to learn which
     shard owned which file, so the two cannot disagree about ownership.
+
+    ``ledger_eligible`` is whether ``mutation_ledger.py apply`` may carry
+    survivors into this plan's full set (design: "Which functions are
+    carried"). Only the caller knows why it planned full, so it says; the
+    default, and an absent field, is no.
     """
     bins = ms.pack(root, shards)
     return {
         "gate_set": "full",
         "reasons": reasons,
+        "ledger_eligible": ledger_eligible,
         "sets": {"full": {"shards": [ms.patterns_for_bin(root, b) for b in bins],
                           # Counting needs mutmut's generated mutants, which
                           # the planner has not made; null is "not counted",
@@ -283,7 +290,7 @@ def diff_plan(root: Path, base: str, head: str, stats: Path, *,
     if blind:
         return full_plan(root, shards, [
             "changed function has no mutants, so its callers are unknown: %s" % q
-            for q in blind])
+            for q in blind], ledger_eligible=True)
 
     # `matrix` keeps an empty shard on purpose (it would be a slice of the full
     # pack that nobody ran). Here an empty bin is only arithmetic — one
@@ -301,7 +308,8 @@ def diff_plan(root: Path, base: str, head: str, stats: Path, *,
     if widest > md.MAX_NAMES:
         return full_plan(root, shards, [
             "diff scope: %d mutants in %d functions do not pack into %d shards of "
-            "at most %d mutant names" % (total, len(counts), md.MAX_SHARDS, md.MAX_NAMES)])
+            "at most %d mutant names" % (total, len(counts), md.MAX_SHARDS, md.MAX_NAMES)],
+            ledger_eligible=True)
     shard_names = [[n for q in b for n in names[q]] for b in bins]
     # Every changed function has mutants by now (see `blind`), so a scope
     # with none is one where no function changed.
@@ -317,10 +325,14 @@ def diff_plan(root: Path, base: str, head: str, stats: Path, *,
     # "core changed, no function body did" answer the binding gate needs.
     if shadow and not total:
         return full_plan(root, shards, [why, "shadow: the diff scope is empty, "
-                                             "nothing to compare; full only"])
+                                             "nothing to compare; full only"],
+                         ledger_eligible=True)
     plan: dict[str, Any] = {
         "gate_set": "diff",
         "reasons": [why],
+        # Only a shadow plan gates on a full set a ledger could carry into;
+        # `apply` keeps the diff scope's functions out of what it carries.
+        "ledger_eligible": shadow,
         "sets": {"diff": {"shards": shard_names, "mutants": total,
                           "functions": scope,
                           # Per-function, so the gate can tell one function's
@@ -389,6 +401,8 @@ def nightly_plan(root: Path, base: str, head: str, stats: Path, *, reason: str,
     got["reasons"] = [reason, "nightly shadow against %s (run %s): %s"
                       % (base[:12], run, "; ".join(got["reasons"]))]
     got["advisory"] = ["diff"]
+    # The nightly is the ledger's writer and never reads one (design: I5).
+    got["ledger_eligible"] = False
     return got
 
 
@@ -456,6 +470,8 @@ def main(argv: list[str]) -> int:
     f.add_argument("--reason", action="append", default=[],
                    help="why a full run (repeatable)")
     f.add_argument("--root", default=str(ROOT), help="repo root (default: this checkout)")
+    f.add_argument("--ledger-eligible", action="store_true",
+                   help="a push full plan: `mutation_ledger.py apply` may carry into it")
     f.add_argument("--out", required=True)
 
     n = sub.add_parser("none", help="plan nothing, and record why")
@@ -510,7 +526,8 @@ def main(argv: list[str]) -> int:
         if args.shards < 1:
             ap.error("--shards must be at least 1")
         _write(args.out, full_plan(Path(args.root), args.shards,
-                                   args.reason or ["full run"]))
+                                   args.reason or ["full run"],
+                                   ledger_eligible=args.ledger_eligible))
         return 0
     if args.cmd == "none":
         _write(args.out, none_plan(args.reason))

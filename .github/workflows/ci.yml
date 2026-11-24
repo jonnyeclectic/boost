@@ -471,6 +471,16 @@ jobs:
   # so its outputs are the verdict -- and if the job fails anyway they are
   # empty, which every consumer below reads as "run everything".
   #
+  # `mutation_proven` is true whenever `skip` is, and also on the one case
+  # `skip` refuses that still proves the mutation verdict (approved
+  # 2026-11-24): the PR run is a re-run, and every mutation job in it ran
+  # once, in attempt 1, and passed -- typically a macOS `tests` cell
+  # cancelled and re-run, as on PR runs 42430658365 and 41861286489, whose
+  # pushes ran every shard again. Its tests are not first-attempt proof,
+  # so `tests` and the badge still run here (they read `skip` alone); only
+  # `mutation-plan` reads `mutation_proven`, and `pr_run_id` names the run
+  # whenever it is true.
+  #
   # It answers a second, independent question with the same token: was
   # `mutation` green on the push run of the base commit (`--before`, from
   # github.event.before)? `base_mutation_green` is "true" only when that job
@@ -506,6 +516,7 @@ jobs:
       pr_run_id: ${{ steps.decide.outputs.pr_run_id }}
       base_mutation_green: ${{ steps.decide.outputs.base_mutation_green }}
       base_mutation: ${{ steps.decide.outputs.base_mutation }}
+      mutation_proven: ${{ steps.decide.outputs.mutation_proven }}
     steps:
       - name: harden runner (egress audit)
         uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
@@ -647,8 +658,10 @@ jobs:
     needs: proven
     # Skipped only on an explicit `skip == 'true'`: a pull request (proven
     # skipped, output empty) and a push whose proven job failed (empty again)
-    # both test. Never on a nightly or a dispatch, which run the mutation jobs
-    # and `tests-extended` only.
+    # both test, and so does a push `proven` vouches for the mutation verdict
+    # of alone (`mutation_proven` without `skip`: a re-run PR run, whose tests
+    # are not first-attempt proof). Never on a nightly or a dispatch, which
+    # run the mutation jobs and `tests-extended` only.
     #
     # TWIN: `tests-extended` below runs these same steps (pinned equal by
     # tests/unit/test_ci_tests_extended.py) on the macOS/Windows legs this
@@ -1037,7 +1050,8 @@ jobs:
   # suite was skipped because `proven` said so and named a run. Anything else
   # (a red or cancelled suite, a failed `proven`) is a red job, never a green
   # badge-less one, and so is a missing artifact: no step here continues on
-  # error.
+  # error. It reads `skip`, never `mutation_proven`: a push proven for its
+  # mutation verdict alone ran its own suite, so the badge is this run's.
   #
   # The JOB does. The badge is cosmetic, and a red one must not decide whether
   # main releases: publish.yml fires on the run's conclusion, and job-level
@@ -1108,6 +1122,68 @@ jobs:
           git add coverage.json && git commit -qm "coverage ${PCT}%"
           git push -qf "https://x-access-token:${GH_TOKEN}@github.com/${REPO}" badges:badges
 
+  # THE SURVIVOR LEDGER'S READER (docs/superpowers/specs/2026-11-24-mutation-
+  # survivor-ledger.md, "Reader"). Approved by the owner 2026-11-23 (its
+  # Status), and inert until they set the repository variable MUTATION_LEDGER:
+  # unset, this job is skipped and the planner downloads nothing. When
+  # it names `pull_request` or `push`, this job names which green real
+  # whole-codebase run's ledger that event's attempt-1 run may read -- or why
+  # none -- and hands the file on as this run's `mutation-ledger-in`, so the
+  # planner keeps `contents: read` and reads it with no token at all.
+  # scripts/mutation_ledger.py re-checks the variable's tokens itself; this
+  # `if` is only the shortcut that keeps an unset variable from costing a job.
+  # Job-level continue-on-error: the reader decides only freshness and
+  # whether a ledger is used, never soundness, so a lost or failed reader is a
+  # plain plan, never a red run. It never runs on a schedule or dispatch run,
+  # whose job page fact 3 reads.
+  mutation-ledger:
+    if: (github.event_name == 'pull_request' || github.event_name == 'push') && vars.MUTATION_LEDGER != ''
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    # Two window listings, then two requests per run looked at, each with its
+    # own 15 s timeout, and one artifact round trip.
+    timeout-minutes: 5
+    permissions:
+      contents: read        # the checkout that carries the script
+      actions: read         # ci's whole-codebase runs, their jobs and artifacts
+      pull-requests: read   # the PR's labels, read live (a re-run replays the payload)
+    outputs:
+      run_id: ${{ steps.find.outputs.run_id }}
+      reason: ${{ steps.find.outputs.reason }}
+    steps:
+      - name: harden runner (egress audit)
+        uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: which whole-codebase run's ledger may this run read?
+        id: find
+        # Stdlib only, like idle-nightly. Always exits 0: "no ledger" is an
+        # answer, written to the log and to `reason`.
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          MUTATION_LEDGER: ${{ vars.MUTATION_LEDGER }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: python3 scripts/mutation_ledger.py find
+      - name: download that run's ledger
+        if: steps.find.outputs.run_id != ''
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: mutation-ledger
+          run-id: ${{ steps.find.outputs.run_id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/mutation-ledger
+      - name: hand it on to the planner
+        if: steps.find.outputs.run_id != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mutation-ledger-in
+          path: ${{ runner.temp }}/mutation-ledger/mutation-ledger.json
+          retention-days: 1
+          if-no-files-found: error
+
   # The mutation gate runs ~10.5k mutants over boost_cli/core. As one job it took
   # ~26 minutes — three times the next-longest job in CI — so it alone decided how
   # long a pull request waited, and then how long the PyPI release waited behind
@@ -1143,7 +1219,9 @@ jobs:
   # job on the base's push run completed with success, and the newest
   # whole-codebase run on main has a green `mutation` -- fact 3's reading,
   # an idle one only while its inheritance holds). Either `proven` vouches
-  # for this tree -- the plan is `none` with the reason "proven by PR run
+  # for this tree's mutation verdict (`mutation_proven`: `skip`, or a re-run
+  # PR run whose mutation jobs all ran once, in attempt 1, and passed) -- the
+  # plan is `none` with the reason "proven by PR run
   # <id>", no stats are collected, no shard starts and `mutation` reports the
   # planner's reason -- or the diff from github.event.before cannot move the
   # score, and the plan is `none` on the base's verdict. Any other push plans
@@ -1184,11 +1262,12 @@ jobs:
   # inspection of what the upstream jobs did: `always()` on its own would report a
   # failed shard as a green required check.
   mutation-plan:
-    needs: [proven, idle-nightly, nightly-shadow-base]
+    needs: [proven, idle-nightly, nightly-shadow-base, mutation-ledger]
     # Every event, including the ones where `proven` is skipped (all but
     # push) or failed (empty outputs, so the plan is decided as before), and
-    # likewise `idle-nightly` (all but schedule; failed: the full plan) and
-    # `nightly-shadow-base` (all but schedule; failed: no shadow).
+    # likewise `idle-nightly` (all but schedule; failed: the full plan),
+    # `nightly-shadow-base` (all but schedule; failed: no shadow) and
+    # `mutation-ledger` (skipped unless MUTATION_LEDGER is set; failed: plain).
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     # The scope check takes seconds. A relevant change then pays mutant
@@ -1208,6 +1287,9 @@ jobs:
       # The plan's reasons on one line, for `mutation`'s summary when there is
       # nothing to run -- "proven by PR run <id>" is not "nothing changed".
       reason: ${{ steps.plan.outputs.reason }}
+      # "true" when the full set carries survivors from the ledger. Echoed by
+      # `mutation`; every step there that acts on it reads the plan file.
+      ledgered: ${{ steps.plan.outputs.ledgered }}
       # The shards of the plan's `advisory` sets, `[]` when it has none (every
       # event but a full nightly with a shadow). `matrix` above never holds
       # them, so `mutation-shard` runs only sets that may decide the gate.
@@ -1244,6 +1326,7 @@ jobs:
           HEAD: ${{ github.sha }}
           EVENT: ${{ github.event_name }}
           SKIP: ${{ needs.proven.outputs.skip }}
+          MUTATION_PROVEN: ${{ needs.proven.outputs.mutation_proven }}
           PR_RUN_ID: ${{ needs.proven.outputs.pr_run_id }}
           BASE_GREEN: ${{ needs.proven.outputs.base_mutation_green }}
           BASE_MUTATION: ${{ needs.proven.outputs.base_mutation }}
@@ -1268,8 +1351,17 @@ jobs:
           # have been proven and released #1285's red.
           # A proven push on a base not green falls through to the diff and
           # the widening below, like any other push.
-          if [ "$EVENT" = push ] && [ "$SKIP" = true ]; then
+          #
+          # MUTATION_PROVEN is the same proof for the mutation verdict alone,
+          # with the same base rule: the PR run is a re-run whose mutation
+          # jobs all ran once, in attempt 1, and passed (approved
+          # 2026-11-24). `tests` reads SKIP only, so that push runs its suite;
+          # this step is the one place MUTATION_PROVEN is read.
+          if [ "$EVENT" = push ] && { [ "$SKIP" = true ] || [ "$MUTATION_PROVEN" = true ]; }; then
             if [ "$BASE_GREEN" = true ]; then
+              if [ "$SKIP" != true ]; then
+                echo "mutation proven by PR run $PR_RUN_ID, a re-run whose mutation jobs all ran in its first attempt (its tests run here)"
+              fi
               echo "proven by PR run $PR_RUN_ID — nothing to collect"
               echo "relevant=false" >> "$GITHUB_OUTPUT"
               echo "proven=true" >> "$GITHUB_OUTPUT"
@@ -1423,7 +1515,17 @@ jobs:
         if: steps.scope.outputs.relevant == 'true'
         env:
           BOOST_REQUIRE_MUTMUT: "1"
-        run: .venv/bin/python -m pytest -q tests/unit/test_mutation_diff.py tests/unit/test_mutation_plan.py
+        run: .venv/bin/python -m pytest -q tests/unit/test_mutation_diff.py tests/unit/test_mutation_plan.py tests/unit/test_mutation_ledger.py
+      # The ledger the reader chose, outside the workspace (see the shard's
+      # `download the plan`). Allowed to fail: the plan step decides on the
+      # file it validates, never on whether this step or the reader ran.
+      - name: download the survivor ledger
+        if: steps.scope.outputs.relevant == 'true' && needs.mutation-ledger.outputs.run_id != ''
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: mutation-ledger-in
+          path: ${{ runner.temp }}/mutation-ledger
       # Shadow mode. A pull request or merge-queue entry plans BOTH sets: the
       # full 26-shard run, which still decides `mutation`, and the diff set
       # (the functions the branch changed plus their direct callers, see
@@ -1467,10 +1569,15 @@ jobs:
           EVENT: ${{ github.event_name }}
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
+          # The survivor ledger (see `mutation-ledger`). Empty: nothing below
+          # stamps, reads or carries anything.
+          MUTATION_LEDGER: ${{ vars.MUTATION_LEDGER }}
+          LEDGER_RUN: ${{ needs.mutation-ledger.outputs.run_id }}
+          LEDGER_REASON: ${{ needs.mutation-ledger.outputs.reason }}
         run: |
           plan_full() {
             python3 scripts/mutation_plan.py full --shards 26 --reason "$1" \
-              --out mutation-plan.json
+              --out mutation-plan.json "${@:2}"
           }
           if [ "$RELEVANT" != "true" ]; then
             if [ "$PROVEN" = "true" ]; then
@@ -1533,8 +1640,35 @@ jobs:
                   plan_full "whole-codebase run ($EVENT)"
                 fi
                 ;;
+              push)
+                # A push computes no diff, so it says itself that a ledger may
+                # carry into its full plan; the machinery digest stands in for
+                # the full-run triggers a PR's diff would have found.
+                plan_full "${WIDENED:-a mutation-relevant path changed, or there was no usable base commit}" \
+                  --ledger-eligible
+                ;;
               *)
                 plan_full "${WIDENED:-a mutation-relevant path changed, or there was no usable base commit}"
+                ;;
+            esac
+          fi
+          # The survivor ledger, only when the owner has set MUTATION_LEDGER
+          # and only on a plan with work. `stamp` records the generator key
+          # and machinery digest a whole-codebase run's writer copies; `apply`
+          # rewrites a PR's or push's plain full set as a ledgered one, or
+          # leaves it byte-for-byte and says "ledger not used: <why>". Both
+          # re-check the variable, the event and the attempt themselves, and
+          # neither can fail this step: ledger trouble is a plain plan.
+          if [ -n "$MUTATION_LEDGER" ] && [ "$RELEVANT" = true ]; then
+            .venv/bin/python scripts/mutation_ledger.py stamp --plan mutation-plan.json \
+              || echo "::warning::mutation_ledger stamp failed; no ledger can be written from this run"
+            case "$EVENT" in
+              pull_request|push)
+                echo "mutation-ledger: ${LEDGER_REASON:-the reader gave no answer}"
+                .venv/bin/python scripts/mutation_ledger.py apply --plan mutation-plan.json \
+                    --ledger "$RUNNER_TEMP/mutation-ledger/mutation-ledger.json" \
+                    --run-id "$LEDGER_RUN" --meta mutants \
+                  || echo "::warning::mutation_ledger apply failed; the plan stays as written"
                 ;;
             esac
           fi
@@ -1547,6 +1681,7 @@ jobs:
           SHADOW="$(jq -r '.sets | has("full") and has("diff")' mutation-plan.json)"
           # One line, whatever the reasons hold: a newline would end this
           # output and start another.
+          LEDGERED="$(jq -r '(.sets.full // {}) | has("carried")' mutation-plan.json)"
           REASON="$(jq -r '(.reasons // []) | join("; ")' mutation-plan.json)"
           REASON="${REASON//[$'\r\n']/ }"
           REASON="${REASON:0:500}"
@@ -1556,6 +1691,7 @@ jobs:
             echo "gate_set=$GATE_SET"
             echo "shadow=$SHADOW"
             echo "reason=$REASON"
+            echo "ledgered=$LEDGERED"
           } >> "$GITHUB_OUTPUT"
       # The markers (see "WHAT A WHOLE-CODEBASE RUN WAS" above), keyed on the
       # plan this step just wrote rather than on a second reading of its
@@ -2160,7 +2296,10 @@ jobs:
     # report even when every shard was skipped.
     if: always()
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # 20 for the gate itself, plus the ledger writer's step caps (3 + 8 + 3),
+    # so a hung ledger step times out as a step -- continue-on-error -- and
+    # never as this job, which is the required check.
+    timeout-minutes: 34
     permissions:
       contents: read
     steps:
@@ -2182,8 +2321,9 @@ jobs:
           # the advisory results is found from the artifacts by `compare`,
           # which reports INCOMPLETE.
           ADVISORY: ${{ needs.mutation-advisory-shard.result }}
+          LEDGERED: ${{ needs.mutation-plan.outputs.ledgered }}
         run: |
-          echo "plan=$PLAN shards=$SHARDS advisory=$ADVISORY gate_set=$GATE_SET shadow=$SHADOW matrix=$MATRIX advisory_matrix=$ADVISORY_MATRIX"
+          echo "plan=$PLAN shards=$SHARDS advisory=$ADVISORY gate_set=$GATE_SET shadow=$SHADOW ledgered=$LEDGERED matrix=$MATRIX advisory_matrix=$ADVISORY_MATRIX"
           # `always()` means this job runs whatever happened upstream, so it has
           # to judge for itself. Without this step a failed or cancelled shard
           # would surface as a green required check.
@@ -2268,14 +2408,41 @@ jobs:
         run: |
           python -m venv .venv
           .venv/bin/pip -q install -r requirements/mutation-tools.txt
+      # Every full gate reads its plan: the merge takes shard ownership from
+      # it (a plain plan must be exactly the committed pack, so this changes
+      # nothing for one) and the gate checks any carried survivors against it.
       - name: download the plan
-        if: needs.mutation-plan.outputs.shadow == 'true'
+        if: needs.mutation-plan.outputs.gate_set == 'full'
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: mutation-plan
           path: ${{ runner.temp }}/mutation-plan
+      # Plain or ledgered, from the file the merge and the gate read, never
+      # from an output: the weights refresh and the ledger writer below run
+      # only for a plain full set, whose every verdict this run measured. And
+      # a whole-codebase run is never ledgered (the writer must only ever see
+      # fresh verdicts), so a ledgered plan on one is refused outright.
+      - name: is the full set plain or ledgered?
+        id: ledgered
+        if: needs.mutation-plan.outputs.gate_set == 'full'
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          plan="$RUNNER_TEMP/mutation-plan/mutation-plan.json"
+          carried="$(jq -r 'if (.sets.full | type) == "object" then (.sets.full | has("carried")) else "no full set" end' "$plan")"
+          case "$carried" in
+            false) echo "plain=true" >> "$GITHUB_OUTPUT" ;;
+            true)
+              if [ "$EVENT" = schedule ] || [ "$EVENT" = workflow_dispatch ]; then
+                echo "::error::a whole-codebase run's plan carries ledgered survivors — refusing to gate"
+                exit 1
+              fi
+              echo "plain=false" >> "$GITHUB_OUTPUT" ;;
+            *) echo "::error::cannot tell whether the plan's full set is ledgered ('$carried')"
+               exit 1 ;;
+          esac
       # One directory per set, so neither reader can pick up the other's
-      # results: the merge re-derives the 26-way pack and reads only full
+      # results: the merge reads ownership from the plan and only full
       # shards, and the comparison reads each set from its own side.
       - name: download full shard results
         if: needs.mutation-plan.outputs.gate_set == 'full'
@@ -2438,12 +2605,19 @@ jobs:
         # partial result: mutmut counts an unrun mutant as "not checked" and the
         # gate divides by total, so silently accepting one would quietly lower
         # the score instead of failing.
-        run: python3 scripts/mutation_shards.py merge --shards 26 --into mutants --source shard-results/full --prefix mutation-full-shard-
+        # --plan: ownership comes from the plan's own selectors, and a
+        # ledgered plan's carried survivors are merged in as survived.
+        run: python3 scripts/mutation_shards.py merge --shards 26 --into mutants --source shard-results/full --prefix mutation-full-shard- --plan "$RUNNER_TEMP/mutation-plan/mutation-plan.json"
       - name: mutation strength gate (>=80% killed)
         if: needs.mutation-plan.outputs.gate_set == 'full'
-        run: .venv/bin/python scripts/mutation_gate.py --min 80
+        # --plan: on a ledgered run, re-check every carried row and say which
+        # whole-codebase run it came from; on a plain one, nothing changes.
+        run: .venv/bin/python scripts/mutation_gate.py --min 80 --plan "$RUNNER_TEMP/mutation-plan/mutation-plan.json"
       - name: refresh balance hints
-        if: needs.mutation-plan.outputs.gate_set == 'full'
+        # A plain full set only: a ledgered one ran a different pack and left
+        # its carried rows without a duration, so its weights would describe
+        # neither run (and `weights` refuses its merge anyway).
+        if: needs.mutation-plan.outputs.gate_set == 'full' && steps.ledgered.outputs.plain == 'true'
         # Advisory only — scripts/mutation_weights.json is an optimisation, never
         # a correctness input, so this neither gates nor commits. It is uploaded
         # so a maintainer can drop a measured file in rather than hand-editing
@@ -2454,13 +2628,55 @@ jobs:
         # shard-results/diff, so a shadow run's weights are still whole-tree.
         run: python3 scripts/mutation_shards.py weights --source mutants || true
       - name: upload balance hints
-        if: needs.mutation-plan.outputs.gate_set == 'full'
+        if: needs.mutation-plan.outputs.gate_set == 'full' && steps.ledgered.outputs.plain == 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: mutation-weights
           path: scripts/mutation_weights.json
           retention-days: 7
           if-no-files-found: warn
+      # THE SURVIVOR LEDGER'S WRITER (docs/superpowers/specs/2026-11-24-
+      # mutation-survivor-ledger.md, "Writer"). Owner-approved 2026-11-23: only
+      # when MUTATION_LEDGER names `write`, which the script re-checks with
+      # the event (schedule or dispatch) and the ref (main). Only past a green
+      # merge and gate (no status function below, so each `if` keeps the
+      # implicit success()), on a plain full set. Every step is
+      # continue-on-error with its own timeout: a ledger failure never
+      # changes this run's conclusion -- tomorrow's idle walk and fact 3 read
+      # it -- and only costs the next PRs and pushes their ledger, with the
+      # reason in their log. The upload waits for the self-check, which plans
+      # this commit as a ledgered PR would, runs the real `merge --plan` over
+      # simulated shards and checks every verdict comes back (measured on run
+      # 45290191649's 54,417 results: 70 s locally).
+      - name: write the survivor ledger
+        id: ledger-write
+        if: needs.mutation-plan.outputs.gate_set == 'full' && steps.ledgered.outputs.plain == 'true' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && vars.MUTATION_LEDGER != ''
+        continue-on-error: true
+        timeout-minutes: 3
+        env:
+          MUTATION_LEDGER: ${{ vars.MUTATION_LEDGER }}
+        run: .venv/bin/python scripts/mutation_ledger.py write --meta mutants --plan "$RUNNER_TEMP/mutation-plan/mutation-plan.json" --out "$RUNNER_TEMP/mutation-ledger.json"
+      - name: self-check the survivor ledger
+        id: ledger-selfcheck
+        if: steps.ledger-write.outcome == 'success'
+        continue-on-error: true
+        timeout-minutes: 8
+        run: .venv/bin/python scripts/mutation_ledger.py selfcheck --meta mutants --plan "$RUNNER_TEMP/mutation-plan/mutation-plan.json" --ledger "$RUNNER_TEMP/mutation-ledger.json"
+      - name: upload the survivor ledger
+        if: steps.ledger-selfcheck.outcome == 'success'
+        continue-on-error: true
+        timeout-minutes: 3
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mutation-ledger
+          path: ${{ runner.temp }}/mutation-ledger.json
+          # Longer than the reader's 14-day age bound, so a ledger always
+          # stops being used at the bound, with a reason, never at an expiry.
+          retention-days: 30
+          # A re-run attempt that also passes replaces the ledger, so the
+          # reader never sees two.
+          overwrite: true
+          if-no-files-found: error
 
   install-smoke:
     # Every gate above runs an editable `pip install -e .`, which cannot catch a

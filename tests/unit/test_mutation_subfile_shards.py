@@ -210,6 +210,144 @@ class TestPatterns:
                     "%s captures %s" % (pat, other)
 
 
+class TestSentinels:
+    """A per-function unit's clean-run sentinel: its stats key and nothing else.
+
+    mutmut fnmatches every name it is given against two sets of keys: the
+    stats keys (``<module>.x_<fn>``, no suffix), to choose the clean run's
+    tests, and the mutant keys (``<module>.x_<fn>__mutmut_<n>``), to choose
+    what runs. A sentinel must hit exactly one key of the first set and none
+    of the second, or it either misses its tests or changes the mutant set.
+    """
+
+    #: ``instal``/``install``/``install_from_path`` is the prefix hazard in
+    #: both directions; ``f`` is the shortest name, and ``a_`` puts an
+    #: underscore inside the character class.
+    NAMES = ("install", "instal", "install_from_path", "_install_rule",
+             "sync", "sync_plan", "f", "a_")
+
+    @staticmethod
+    def _stats_key(symbol):
+        return "boost_cli.core.store.x_%s" % symbol
+
+    @staticmethod
+    def _mutant(symbol, n=1):
+        return "boost_cli.core.store.x_%s__mutmut_%d" % (symbol, n)
+
+    @pytest.fixture
+    def sentinels(self, tmp_path):
+        repo = _repo(tmp_path, {"store.py": "".join(_fn(n) for n in self.NAMES)})
+        path = repo / "boost_cli/core/store.py"
+        return {n: ms.sentinel_for(repo, ms.Unit(path, n)) for n in self.NAMES}
+
+    def test_the_shape(self, tmp_path):
+        repo = _repo(tmp_path, {"store.py": _fn("install")})
+        unit = ms.Unit(repo / "boost_cli/core/store.py", "install")
+        assert ms.sentinel_for(repo, unit) == "boost_cli.core.store.x_instal[l*]"
+
+    def test_it_matches_its_own_stats_key(self, sentinels):
+        for name, sentinel in sentinels.items():
+            assert fnmatch.fnmatch(self._stats_key(name), sentinel), sentinel
+
+    def test_it_matches_no_other_functions_stats_key(self, sentinels):
+        for name, sentinel in sentinels.items():
+            for other in self.NAMES:
+                if other != name:
+                    assert not fnmatch.fnmatch(self._stats_key(other), sentinel), \
+                        "%s matches %s" % (sentinel, other)
+
+    def test_it_matches_no_mutant_at_all(self, sentinels):
+        # Not its own function's either: the shard's mutant set must be
+        # exactly what its real patterns already select.
+        for sentinel in sentinels.values():
+            for other in self.NAMES:
+                for n in (1, 9, 10, 123):
+                    assert not fnmatch.fnmatch(self._mutant(other, n), sentinel)
+
+    def test_mutmut_takes_it_down_the_glob_branch(self, sentinels):
+        # A name with no `*` goes to mutmut's exact-name lookup, which asserts
+        # `__mutmut_` is in it and would crash the shard.
+        for sentinel in sentinels.values():
+            assert "*" in sentinel and "__mutmut_" not in sentinel
+
+    def test_units_whose_pattern_already_matches_stats_keys_get_none(self, tmp_path):
+        repo = _repo(tmp_path, {"a.py": _fn("f"), "__init__.py": _fn("g")})
+        core = repo / "boost_cli/core"
+        assert ms.sentinel_for(repo, core / "a.py") is None
+        assert ms.sentinel_for(repo, ms.Unit(core / "a.py", ms.METHODS)) is None
+        assert ms.sentinel_for(repo, ms.Unit(core / "__init__.py", "g")) is None
+
+
+class TestSentinelsPerBin:
+    """Only a bin that would fall back to the whole suite gets sentinels."""
+
+    @staticmethod
+    def _units(tmp_path):
+        repo = _repo(tmp_path, {"store.py": _fn("install") + _fn("sync"),
+                                "a.py": _fn("f"), "__init__.py": _fn("g")})
+        core = repo / "boost_cli/core"
+        return repo, core, [ms.Unit(core / "store.py", "install"),
+                            ms.Unit(core / "store.py", "sync")]
+
+    @staticmethod
+    def _clean_run(patterns, stats):
+        """mutmut's ``tests_for_mutant_names`` for globbed names, by fnmatch."""
+        return {t for p in patterns if "*" in p
+                for key, tests in stats.items() if fnmatch.fnmatch(key, p)
+                for t in tests}
+
+    def test_a_per_function_bin_gets_one_sentinel_per_unit(self, tmp_path):
+        repo, _core, units = self._units(tmp_path)
+        assert ms.patterns_for_bin(repo, units) == [
+            "boost_cli.core.store.x_install__mutmut_*",
+            "boost_cli.core.store.x_sync__mutmut_*",
+            "boost_cli.core.store.x_instal[l*]",
+            "boost_cli.core.store.x_syn[c*]",
+        ]
+
+    def test_its_clean_run_is_those_functions_tests(self, tmp_path):
+        repo, _core, units = self._units(tmp_path)
+        stats = {"boost_cli.core.store.x_install": {"t_install"},
+                 "boost_cli.core.store.x_sync": {"t_sync"},
+                 "boost_cli.core.store.x_install_from_path": {"t_other"},
+                 "boost_cli.core.a.x_f": {"t_f"}}
+        real = [p for p in ms.patterns_for_bin(repo, units) if "__mutmut_" in p]
+        assert self._clean_run(real, stats) == set()    # the whole-suite fallback
+        assert self._clean_run(ms.patterns_for_bin(repo, units), stats) == \
+            {"t_install", "t_sync"}
+
+    def test_the_mutants_it_runs_are_unchanged(self, tmp_path):
+        repo, _core, units = self._units(tmp_path)
+        keys = ["boost_cli.core.store.x_%s__mutmut_%d" % (f, n)
+                for f in ("install", "sync", "install_from_path") for n in (1, 2)]
+        pats = ms.patterns_for_bin(repo, units)
+        real = [p for p in pats if "__mutmut_" in p]
+        # mutmut/__main__.py's filter, verbatim in shape.
+        chosen = [k for k in keys if k in pats
+                  or any(fnmatch.fnmatch(k, p) for p in pats)]
+        assert chosen == [k for k in keys if any(fnmatch.fnmatch(k, p) for p in real)]
+        assert chosen
+
+    def test_a_bin_with_a_whole_file_unit_is_left_alone(self, tmp_path):
+        repo, core, units = self._units(tmp_path)
+        mixed = [*units, ms.Unit(core / "a.py")]
+        assert ms.patterns_for_bin(repo, mixed) == \
+            [ms.pattern_for(repo, u) for u in mixed]
+
+    def test_a_bin_with_a_methods_unit_is_left_alone(self, tmp_path):
+        repo, core, units = self._units(tmp_path)
+        mixed = [*units, ms.Unit(core / "a.py", ms.METHODS)]
+        assert ms.patterns_for_bin(repo, mixed) == \
+            [ms.pattern_for(repo, u) for u in mixed]
+
+    def test_an_init_file_does_not_count_as_a_stats_match(self, tmp_path):
+        # `__init__.py` has no pattern at all, so it cannot save the bin from
+        # the fallback.
+        repo, core, units = self._units(tmp_path)
+        pats = ms.patterns_for_bin(repo, [ms.Unit(core / "__init__.py"), *units])
+        assert "boost_cli.core.store.x_instal[l*]" in pats
+
+
 @real_tree_only
 class TestRealTree:
     """Against the actual repo, where the numbers came from."""
@@ -241,6 +379,18 @@ class TestRealTree:
         for b in ms.pack(ROOT, 6):
             for u in b:
                 assert ms.pattern_for(ROOT, u), u
+
+    def test_every_committed_shard_has_a_pattern_shaped_to_match_a_stats_key(self):
+        # Pattern shape only: a shard needs one name not ending in
+        # `__mutmut_*`, or its clean run is all of tests/unit (shards 20 and
+        # 25 of the committed width were such shards). There are no stats
+        # here, so this cannot say the name matches a key: a sentinel whose
+        # function mutmut never trampolines (a decorated one, such as
+        # `store.cloned_source`) matches nothing. test_mutation_plan.py
+        # checks that against the planner's stats.
+        for i, b in enumerate(ms.pack(ROOT, ms.SHARDS)):
+            pats = ms.patterns_for_bin(ROOT, b)
+            assert any(not p.endswith("__mutmut_*") for p in pats), i
 
     def test_no_file_is_both_whole_and_split(self):
         bins = ms.pack(ROOT, 6)

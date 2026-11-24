@@ -116,6 +116,7 @@ Usage
   mutation_shards.py plan --shards N --explain --timeout-minutes M
                                                  # ...and does it fit in M minutes?
   mutation_shards.py merge --shards N --into mutants results/*  # rebuild results
+  mutation_shards.py merge --shards N --plan PLAN ...           # ownership from the plan
   mutation_shards.py weights --source mutants    # refresh the balance hints
   mutation_shards.py drift --candidate new.json # is a refresh worth a PR?
 """
@@ -126,6 +127,7 @@ import ast
 import contextlib
 import json
 import math
+import re
 import sys
 from pathlib import Path
 from typing import NamedTuple, cast
@@ -239,12 +241,15 @@ RUNNER_EFFICIENCY = 0.98
 #: whole-file unit paid a median 4.54 (2.30-12.16). The 14 whose shard held
 #: only per-function units paid 11.30 (7.68-12.00). Nearly all of the
 #: difference is in mutmut's ``Running clean tests``, a median 7.88 min
-#: against 1.72. Why that run is longer for such a shard has not been
-#: measured. On the 2026-11-03 weights the floor shard is ``store.install``
-#: alone, one of those, so 10.0 is 1.3 min under what that shard pays. At
-#: 11.3 its tail would be 136.9 min, 72% of the mutate step's 190 against
-#: 71% at 10.0, so the verdict does not move. Lowering this to the overall
-#: median would score the floor shard 6.5 min short of its own preamble.
+#: against 1.72. That run is the whole unit suite, because no pattern of such
+#: a shard matched a stats key (see :func:`sentinel_for`, which now gives it
+#: one). This constant has not been re-fitted since; that needs the preamble
+#: measured from a run with the sentinels. On the 2026-11-03 weights the
+#: floor shard is ``store.install`` alone, one of those, so 10.0 is 1.3 min
+#: under what that shard pays. At 11.3 its tail would be 136.9 min, 72% of
+#: the mutate step's 190 against 71% at 10.0, so the verdict does not move.
+#: Lowering this to the overall median would score the floor shard 6.5 min
+#: short of its own preamble.
 FIXED_MINUTES = 10.0
 
 #: How much worse the *worst* run of a shard is than that shard's median.
@@ -1078,9 +1083,85 @@ def patterns_for_bin(root: Path, units: list[Unit]) -> list[str]:
 
     The single spelling of "what does this shard run", shared by ``plan
     --index`` and ``mutation_plan.py full`` so the two cannot drift apart --
-    ``merge --shards N`` re-derives the same pack and trusts that they agree.
+    ``merge --plan`` reads ownership back from these selectors and checks that
+    a plain plan is the committed pack (:func:`selector_module` reads a
+    sentinel as its function's own pattern).
+
+    A bin of per-function units alone also gets each unit's
+    :func:`sentinel_for`, so its clean run is those functions' tests rather
+    than the whole suite. Only that bin: one whole-file or methods pattern
+    already matches a stats key, so mutmut's clean run is restricted, and
+    adding sentinels there would *grow* it. Replayed over run 45263898738's
+    plan and stats, sentinels on every bin cut shards 20 and 25 from 19,054
+    tests (302 s of call time) to ~2,500 (~85 s) but added 476 s across the
+    24 mixed shards, more than the two saved.
+
+    So a mixed bin's clean run leaves out its per-function units' tests,
+    and is not the per-runner check of every test its mutants are judged by
+    (shard 0 of the committed pack: 472 of 3,390). That gap predates the
+    sentinels, and this rule leaves it as it was. Closing it would give back
+    what the sentinels save: over the committed pack and one local stats
+    pass (``logs.reset`` credited to every test, as the autouse reset
+    fixture does), the clean runs total 63,113 test executions with this rule,
+    95,307 with a sentinel for every per-function unit, and 96,245 with
+    none. It would also grow the clean run's ``tmp_path`` tree, and pytest
+    9's session-end cleanup (``tmpdir.py``'s ``pytest_sessionfinish``) has
+    an early mutant's child delete that tree inside the mutant's timeout.
     """
-    return [p for p in (pattern_for(root, u) for u in units) if p]
+    addressed = [(u, p) for u in units if (p := pattern_for(root, u))]
+    patterns = [p for _, p in addressed]
+    if addressed and all(u.symbol not in (None, METHODS) for u, _ in addressed):
+        patterns += [s for u, _ in addressed if (s := sentinel_for(root, u))]
+    return patterns
+
+
+def sentinel_for(root: Path, path: Path | Unit) -> str | None:
+    """A glob matching a per-function unit's *stats* key and no mutant at all.
+
+    mutmut 3.8.1's ``tests_for_mutant_names`` picks the clean run's tests by
+    fnmatching each globbed name against ``tests_by_mangled_function_name``,
+    whose keys are ``<module>.x_<fn>`` with no ``__mutmut_`` suffix. So
+    :func:`pattern_for`'s ``<module>.x_<fn>__mutmut_*`` matches none of them,
+    and a shard whose every pattern is one of those selects no test and falls
+    back to the whole unit suite (upstream boxed/mutmut#594). That is the
+    7.88-minute clean run :data:`FIXED_MINUTES` records for such a shard,
+    against 1.72 for the rest.
+
+    ``boost_cli.core.store.x_instal[l*]`` is the fix, and each part is
+    load-bearing:
+
+    * **It contains a ``*``.** mutmut sends a name without one down its
+      exact-name branch, which asserts ``__mutmut_`` is in it, and crashes.
+    * **The ``*`` sits inside a character class.** ``[l*]`` matches one
+      character, ``l`` or a literal ``*``, so the glob matches the key
+      ``...x_install`` exactly. It cannot match ``...x_install__mutmut_3``
+      or ``...x_install_from_path``, which run on past it, and no Python
+      name ends in ``*``.
+    * **It matches no mutant**, so mutmut's run filter, which fnmatches every
+      mutant key against every name it was given, selects exactly what the
+      shard's real patterns select. That filter asserts only that the
+      combined list matched something, and those patterns still do.
+
+    ``None`` for a whole-file or methods unit, whose pattern already ends in
+    a bare ``*`` that matches the stats keys too, and for ``__init__.py``,
+    which has no pattern at all.
+
+    A sentinel matches a stats key only if mutmut trampolines the function
+    and some test reaches it. mutmut leaves a decorated function alone
+    (``file_mutation.py``: any decorator but a lone ``staticmethod`` or
+    ``classmethod``), so ``store.cloned_source``, a
+    ``contextlib.contextmanager``, has a unit and a sentinel but no key. A
+    bin of only such units would still clean-run the whole suite. That costs
+    time only: the same bin has no mutant to judge.
+    """
+    unit = path if isinstance(path, Unit) else Unit(path)
+    if unit.symbol is None or unit.symbol == METHODS:
+        return None
+    pattern = pattern_for(root, unit)
+    if not pattern:
+        return None
+    key = pattern[: -len("__mutmut_*")]
+    return "%s[%s*]" % (key[:-1], key[-1])
 
 
 def shard_meta(parent: Path, prefix: str, shard: int, name: str):
@@ -1099,6 +1180,159 @@ def shard_meta(parent: Path, prefix: str, shard: int, name: str):
     return None
 
 
+#: The exit code a carried survivor is merged in with (see
+#: docs/superpowers/specs/2026-11-24-mutation-survivor-ledger.md). A constant,
+#: never a value read from a file: whatever a ledger holds, the merge writes
+#: this. mutmut's own table reads 0 as ``survived`` (``stats.status_by_exit_code``),
+#: so a carried row adds nothing to ``killed`` and one to the denominator;
+#: ``tests/unit/test_mutation_ledger.py`` pins that against the installed
+#: mutmut, and ``mutation_gate.py --plan`` re-reads every carried row. This
+#: module runs on the runner's plain ``python3``, which has no mutmut, which is
+#: why the meaning is pinned elsewhere and not looked up here.
+CARRIED_EXIT = 0
+
+#: Written by ``merge`` beside the merged results whenever it carried a row,
+#: before any ``.meta``. ``weights`` refuses a tree that holds it: a carried
+#: row has no duration, so the tree's times are this run's killed-only work,
+#: not the whole workload the balance hints describe.
+CARRIED_RECORD = "mutation-carried.json"
+
+#: The suffix mutmut appends to a mangled function name to name a mutant.
+_MUTANT_SEP = "__mutmut_"
+_EXACT = re.compile(r"(?P<q>[^\s*?\[\]]+)%s[1-9][0-9]*" % _MUTANT_SEP)
+_GLOB = re.compile(r"[*?\[\]]")
+#: :func:`sentinel_for`'s shape: a literal, then its last character as ``[<d>*]``.
+_SENTINEL = re.compile(r"(?P<head>[^\s*?\[\]]+)\[(?P<last>[^\s*?\[\]])\*\]")
+
+
+def selector_module(selector: str) -> str | None:
+    """The dotted module one full-set selector addresses, or None.
+
+    A full shard's argv holds five shapes, and each addresses exactly one
+    module: ``<module>.*`` (a whole file, ``pattern_for``),
+    ``<module>.xǁ*`` (every method of the file), ``<module>.<mangled>__mutmut_*``
+    (one function), ``<module>.<mangled>__mutmut_<n>`` (one mutant) and
+    :func:`sentinel_for`'s ``<module>.<mangle>[<d>*]``, the bare stats key of
+    a function whose ``<mangled>`` is ``<mangle><d>``. A sentinel matches no
+    mutant key, so it is read as its function's own pattern, which a plain
+    plan always lists in the same shard. A mangled method name may itself
+    hold a dot (``xǁA.Bǁm``, a nested class), so a function's module is cut at
+    its ``.xǁ`` when it has one, as ``mutation_diff.split_qualified`` does.
+    Anything else -- another glob, an empty module -- is None, and the merge
+    refuses the plan rather than guess which file it meant.
+    """
+    if not isinstance(selector, str) or not selector:
+        return None
+    sentinel = _SENTINEL.fullmatch(selector)
+    if sentinel is not None:
+        selector = sentinel["head"] + sentinel["last"] + _MUTANT_SEP + "*"
+    methods = ".x%s*" % METHODS
+    if selector.endswith(methods):
+        module = selector[: -len(methods)]
+    elif selector.endswith(".*"):
+        module = selector[:-2]
+    else:
+        if selector.endswith(_MUTANT_SEP + "*"):
+            qualified = selector[: -len(_MUTANT_SEP) - 1]
+            if _GLOB.search(qualified):
+                return None
+        else:
+            exact = _EXACT.fullmatch(selector)
+            if exact is None:
+                return None
+            qualified = exact["q"]
+        i = qualified.find(".x" + METHODS)
+        module = qualified[:i] if i >= 0 else qualified.rpartition(".")[0]
+    if not module or _GLOB.search(module) or module.startswith(".") or ".." in module:
+        return None
+    return module
+
+
+def selector_file(selector: str) -> str | None:
+    """The file (as ``rel_name`` spells it) a full-set selector addresses, or None.
+
+    Textual, like ``pattern_for`` in reverse: ``boost_cli.core.rag.bm25.*`` is
+    ``rag/bm25.py``. A selector outside ``boost_cli.core`` is None. Which keys
+    it actually matched is never decided here: a selector that maps to the
+    wrong file leaves its own file's keys ``None`` everywhere, and the merge's
+    unrun check refuses that.
+    """
+    module = selector_module(selector)
+    package = SOURCE.as_posix().replace("/", ".") + "."
+    if module is None or not module.startswith(package):
+        return None
+    return module[len(package):].replace(".", "/") + ".py"
+
+
+def pack_ownership(root: Path, shards: int) -> dict[str, set[int]]:
+    """file -> the shards ``pack`` gives a unit of it: the committed pack's owners."""
+    owner: dict[str, set[int]] = {}
+    for i, b in enumerate(pack(root, shards)):
+        for u in b:
+            owner.setdefault(rel_name(root, u), set()).add(i)
+    return owner
+
+
+def plan_ownership(shards: list) -> dict[str, set[int]]:
+    """file -> the shards whose selectors address it, read from a plan's set.
+
+    Raises ValueError for a shard that is not a list of selectors this module
+    can map to a file.
+    """
+    if not isinstance(shards, list):
+        raise ValueError("the plan's shards are %r, not a list" % (shards,))
+    owner: dict[str, set[int]] = {}
+    for i, shard in enumerate(shards):
+        if not isinstance(shard, list):
+            raise ValueError("shard %d is %r, not a list of selectors" % (i, shard))
+        for selector in shard:
+            name = selector_file(selector)
+            if name is None:
+                raise ValueError("shard %d: %r is not a full-set selector" % (i, selector))
+            owner.setdefault(name, set()).add(i)
+    return owner
+
+
+def _plan_set(path: str, name: str, shards: int) -> tuple[dict[str, set[int]], dict[str, list[str]], str]:
+    """Ownership, carried names by file, and provenance, from the plan's set ``name``.
+
+    A set that carries nothing (no ``carried`` key) must be exactly the
+    committed pack -- the same agreement the merge has always relied on, now
+    checked rather than assumed. A set that carries rows may be packed any way
+    it likes: its own selectors say who ran what, and the unrun check below
+    still refuses every row no selector reached. Raises ValueError for any plan
+    this cannot read that way.
+    """
+    plan = json.loads(Path(path).read_text(encoding="utf-8"))
+    spec = (plan.get("sets") or {}).get(name) if isinstance(plan, dict) else None
+    if not isinstance(spec, dict):
+        raise ValueError("the plan has no set %r" % name)
+    selectors = spec.get("shards")
+    if not isinstance(selectors, list) or len(selectors) != shards:
+        raise ValueError("set %r plans %s shards, not --shards %d"
+                         % (name, len(selectors) if isinstance(selectors, list) else "no",
+                            shards))
+    owner = plan_ownership(selectors)
+    carried: dict[str, list[str]] = {}
+    if "carried" not in spec:
+        return owner, carried, ""
+    names = spec["carried"]
+    if (not isinstance(names, list) or not names
+            or len(set(map(str, names))) != len(names)):
+        raise ValueError("set %r's `carried` is not a non-empty list of distinct names" % name)
+    for carried_name in names:
+        if not isinstance(carried_name, str) or _EXACT.fullmatch(carried_name) is None:
+            raise ValueError("carried %r is not an exact mutant name" % (carried_name,))
+        file = selector_file(carried_name)
+        if file is None:
+            raise ValueError("carried %r is not a boost_cli.core mutant" % carried_name)
+        carried.setdefault(file, []).append(carried_name)
+    ledger = spec.get("ledger")
+    run = ledger.get("run_id") if isinstance(ledger, dict) else None
+    source = "ledger run %s" % (run if isinstance(run, int) and not isinstance(run, bool) else "?")
+    return owner, carried, source
+
+
 def cmd_merge(args: argparse.Namespace) -> int:
     """Collect each file's .meta from the shard that owned it.
 
@@ -1107,20 +1341,54 @@ def cmd_merge(args: argparse.Namespace) -> int:
     mutation_gate.py divides by ``total - skipped``, so a partial merge would
     quietly lower the score rather than error. We would rather say which shard
     is missing than let the gate pass or fail for the wrong reason.
+
+    With ``--plan``, who owned what is read from the plan's selectors instead
+    of re-derived from ``pack``. A plan that carries nothing must still be the
+    committed pack. A plan that carries ledgered survivors may be packed
+    differently, and each carried row is merged in as ``CARRIED_EXIT`` -- only
+    into a key every shard left ``None``, and only into a key the shards'
+    ``.meta`` list (mutmut generated it at this commit). A carried key some
+    shard ran is refused rather than reconciled: the plan and the shards then
+    disagree about what ran. Every other ``None`` still fails closed.
     """
     root = Path(args.root)
-    bins = pack(root, args.shards)
-    # A file may now be owned by SEVERAL shards, one per function, so the owner
-    # map is file -> {shards}. For a whole-file unit that set has one member and
-    # the logic below reduces to what it always did.
-    owner: dict[str, set] = {}
-    for i, b in enumerate(bins):
-        for u in b:
-            owner.setdefault(rel_name(root, u), set()).add(i)
+    plan_path = getattr(args, "plan", None)
+    carried: dict[str, list[str]] = {}
+    source_run = ""
+    if plan_path:
+        try:
+            owner, carried, source_run = _plan_set(plan_path, getattr(args, "set", "full"),
+                                                   args.shards)
+        except (OSError, ValueError) as exc:
+            print("\nmutation_shards: INCOMPLETE — refusing to gate on a plan it cannot read:")
+            print("  - %s" % exc)
+            return 1
+        if not carried and owner != pack_ownership(root, args.shards):
+            print("\nmutation_shards: INCOMPLETE — refusing to gate on partial results:")
+            print("  - the plan carries nothing, but its shards are not the committed "
+                  "%d-way pack; merge would read moved mutants as unrun" % args.shards)
+            return 1
+        # A file whose every mutant is carried has no selector, so no shard
+        # owns it; every shard still writes its .meta (each mutates the whole
+        # tree), all `None`, so shard 0's copy is the one to inject into.
+        for name in carried:
+            owner.setdefault(name, {0})
+    else:
+        # A file may now be owned by SEVERAL shards, one per function, so the
+        # owner map is file -> {shards}. For a whole-file unit that set has one
+        # member and the logic below reduces to what it always did.
+        owner = pack_ownership(root, args.shards)
 
     into = Path(args.into)
     dest_dir = into / SOURCE
     dest_dir.mkdir(parents=True, exist_ok=True)
+    record = into / CARRIED_RECORD
+    if carried:
+        record.write_text(json.dumps({"source": source_run, "carried": sorted(
+            n for names in carried.values() for n in names)}) + "\n", encoding="utf-8",
+            newline="\n")
+    else:
+        record.unlink(missing_ok=True)
 
     problems: list[str] = []
     merged: list[tuple[str, int, int]] = []
@@ -1132,6 +1400,7 @@ def cmd_merge(args: argparse.Namespace) -> int:
         # a function that no shard was assigned stays None everywhere and is
         # reported below, exactly as a dropped whole file already was.
         codes: dict[str, object] = {}
+        ran_by: dict[str, int] = {}
         extras: dict[str, dict[str, object]] = {}
         hashes: dict[str, object] = {}
         disagree = False
@@ -1145,6 +1414,8 @@ def cmd_merge(args: argparse.Namespace) -> int:
             for key, value in (data.get("exit_code_by_key") or {}).items():
                 if codes.get(key) is None:
                     codes[key] = value
+                    if value is not None:
+                        ran_by[key] = shard
             # hash_by_function_name is what a later diff-scoped run compares
             # against the merge base to find changed functions. Every shard
             # mutates the whole tree, so the same function legitimately shows up
@@ -1169,6 +1440,18 @@ def cmd_merge(args: argparse.Namespace) -> int:
                             % (name, "" if len(missing) == 1 else "s",
                                ", ".join(str(s) for s in missing),
                                args.source, args.prefix))
+            continue
+        bad = []
+        for key in carried.get(name, ()):
+            if key not in codes:
+                bad.append("carried mutant %s is not generated at this commit" % key)
+            elif codes[key] is not None:
+                bad.append("carried mutant %s was also run by shard %d" % (key, ran_by[key]))
+            else:
+                codes[key] = CARRIED_EXIT
+        if bad:
+            problems.append("%s: %s%s" % (name, bad[0], "" if len(bad) == 1
+                                          else " (and %d more)" % (len(bad) - 1)))
             continue
         unrun = sorted(k for k, v in codes.items() if v is None)
         if unrun:
@@ -1218,8 +1501,10 @@ def cmd_merge(args: argparse.Namespace) -> int:
                 "run the gate unsharded." % name)
 
     total = sum(n for _, n, _ in merged)
-    print("merged %d files, %d mutants, from %d shards"
-          % (len(merged), total, args.shards))
+    count = sum(len(v) for v in carried.values())
+    print("merged %d files, %d mutants%s, from %d shards"
+          % (len(merged), total,
+             " (%d carried from %s)" % (count, source_run) if carried else "", args.shards))
     if problems:
         print("\nmutation_shards: INCOMPLETE — refusing to gate on partial results:")
         for p in problems:
@@ -1584,6 +1869,13 @@ def cmd_weights(args: argparse.Namespace) -> int:
     it writes what it can find and reports what it found.
     """
     root = Path(args.root)
+    if (Path(args.source) / CARRIED_RECORD).exists():
+        # A merge that carried ledgered survivors: they have no durations, so
+        # every time below would be killed-only work, and the balance hints
+        # would describe a workload no nightly runs.
+        print("mutation_shards: %s holds %s — a ledgered merge's times are not the "
+              "whole workload; refusing to record them" % (args.source, CARRIED_RECORD))
+        return 1
     src = Path(args.source) / SOURCE
     counts = {}
     millis: dict[str, int] = {}
@@ -1707,6 +1999,9 @@ def main() -> int:
                    help="parent dir holding one downloaded artifact per shard")
     m.add_argument("--prefix", default="mutation-shard-",
                    help="artifact name prefix; the shard index is appended")
+    m.add_argument("--plan", help="the run's plan: ownership from its selectors, and "
+                                  "its carried survivors merged in (see CARRIED_EXIT)")
+    m.add_argument("--set", default="full", help="the plan's set to merge (default: full)")
     m.set_defaults(func=cmd_merge)
 
     s = sub.add_parser("scope", help="can the mutation score have changed?")

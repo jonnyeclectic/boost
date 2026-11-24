@@ -18,6 +18,7 @@ are safe under ``pytest -n auto``.
 """
 from __future__ import annotations
 
+import dataclasses
 import importlib.util
 import io
 import json
@@ -783,13 +784,24 @@ def test_equal_timestamps_are_broken_by_run_id():
     {"event": "push"},
     {"event": "workflow_dispatch"},
     {"head_sha": HEAD2},
-    {"attempt": 2},
 ])
 def test_a_run_the_query_should_not_have_returned_is_rejected_by_decide(wrong):
     # The query filters by head_sha and event; the answer is checked anyway.
     api = FakeApi(green_routes(**{pr_runs_path(HEAD): runs(run(**wrong))}))
     merge_tree, cands, last = pt.gather(api, SHA)
     assert pt.decide(merge_tree, cands, last, now=NOW).skip is False
+
+
+def test_a_second_attempt_never_skips_the_tests_even_when_it_proves_mutation():
+    # Review focus 4 ("a PR run that was cancelled or re-run ... must give
+    # skip=false") still holds for `skip`. Since 2026-11-24 a re-run whose
+    # mutation jobs all ran in attempt 1 proves the mutation verdict alone,
+    # and that is all it proves (the re-run section below).
+    api = FakeApi(rerun_routes(carried_rerun()))
+    merge_tree, cands, last = pt.gather(api, SHA)
+    decision = pt.decide(merge_tree, cands, last, now=NOW)
+    assert decision.skip is False
+    assert decision.mutation_only is True and decision.pr_run_id == 7
 
 
 @pytest.mark.parametrize("missing", ["event", "head_sha", "run_attempt"])
@@ -993,11 +1005,12 @@ def gh_env(tmp_path):
     return {"GITHUB_OUTPUT": str(out), "GITHUB_STEP_SUMMARY": str(summary)}
 
 
-OUTPUT_KEYS = ["skip", "pr_run_id", "base_mutation_green", "base_mutation"]
+OUTPUT_KEYS = ["skip", "pr_run_id", "base_mutation_green", "base_mutation",
+               "mutation_proven"]
 
 
 def _all_outputs(env):
-    """Every output, after checking there are exactly the four, in order."""
+    """Every output, after checking there are exactly the five, in order."""
     text = Path(env["GITHUB_OUTPUT"]).read_text(encoding="utf-8")
     pairs = dict(line.split("=", 1) for line in text.splitlines())
     assert text.endswith("\n")
@@ -1007,8 +1020,14 @@ def _all_outputs(env):
 
 
 def _outputs(env):
-    """The proven decision's two outputs (the base verdict's: _all_outputs)."""
+    """The proven decision's two outputs (the base verdict's: _all_outputs).
+
+    And ``mutation_proven`` is checked to follow ``skip``: only a re-run whose
+    mutation jobs were all carried over from attempt 1 tells them apart, and
+    no test that reads this helper builds one -- those read _all_outputs.
+    """
     pairs = _all_outputs(env)
+    assert pairs["mutation_proven"] == pairs["skip"], pairs
     return {"skip": pairs["skip"], "pr_run_id": pairs["pr_run_id"]}
 
 
@@ -1071,7 +1090,8 @@ def test_main_appends_to_the_output_file_instead_of_replacing_it(gh_env):
     text = Path(gh_env["GITHUB_OUTPUT"]).read_text(encoding="utf-8")
     assert text.startswith("earlier=step\n")
     assert text.endswith("skip=true\npr_run_id=7\n"
-                         "base_mutation_green=false\nbase_mutation=no-base\n")
+                         "base_mutation_green=false\nbase_mutation=no-base\n"
+                         "mutation_proven=true\n")
 
 
 def test_api_sourced_text_cannot_add_lines_to_the_outputs_the_log_or_the_summary(
@@ -1901,7 +1921,8 @@ def test_main_a_red_extended_leg_on_the_nightly_neither_unproves_nor_widens(gh_e
     assert pt.main(BEFORE_ARGV, api=api, env=gh_env) == 0
     assert _all_outputs(gh_env) == {"skip": "true", "pr_run_id": "7",
                                     "base_mutation_green": "true",
-                                    "base_mutation": "success"}
+                                    "base_mutation": "success",
+                                    "mutation_proven": "true"}
     assert "passed mutation" in _summary(gh_env)
 
 
@@ -1931,7 +1952,8 @@ def test_a_red_run_is_looked_past_for_extended_legs_and_nothing_else(listing, gh
     pt.main(BEFORE_ARGV, api=FakeApi(green_routes(**base_routes(**routes))), env=gh_env)
     assert _all_outputs(gh_env) == {"skip": "false", "pr_run_id": "",
                                     "base_mutation_green": "false",
-                                    "base_mutation": "nightly-red_beyond_extended"}
+                                    "base_mutation": "nightly-red_beyond_extended",
+                                    "mutation_proven": "false"}
 
 
 def test_a_dispatch_red_only_on_an_extended_leg_skips_idle_nightly_and_stays_green():
@@ -1994,7 +2016,8 @@ def test_red_advisory_jobs_beside_a_red_extended_leg_leave_the_nightly_green(red
                    env=gh_env) == 0
     assert _all_outputs(gh_env) == {"skip": "true", "pr_run_id": "7",
                                     "base_mutation_green": "true",
-                                    "base_mutation": "success"}
+                                    "base_mutation": "success",
+                                    "mutation_proven": "true"}
 
 
 @pytest.mark.parametrize("conclusion", ["failure", "cancelled", "timed_out"])
@@ -2021,7 +2044,8 @@ def test_a_run_red_only_on_advisory_jobs_is_not_a_green_nightly(red, conclusion,
     pt.main(BEFORE_ARGV, api=FakeApi(green_routes(**base_routes(**routes))), env=gh_env)
     assert _all_outputs(gh_env) == {"skip": "false", "pr_run_id": "",
                                     "base_mutation_green": "false",
-                                    "base_mutation": "nightly-red_beyond_extended"}
+                                    "base_mutation": "nightly-red_beyond_extended",
+                                    "mutation_proven": "false"}
 
 
 @pytest.mark.parametrize(("status", "conclusion"), [
@@ -2050,7 +2074,8 @@ def test_an_advisory_job_that_never_finished_is_not_dropped(advisory, status,
     pt.main(BEFORE_ARGV, api=FakeApi(green_routes(**base_routes(**routes))), env=gh_env)
     assert _all_outputs(gh_env) == {"skip": "false", "pr_run_id": "",
                                     "base_mutation_green": "false",
-                                    "base_mutation": "nightly-red_beyond_extended"}
+                                    "base_mutation": "nightly-red_beyond_extended",
+                                    "mutation_proven": "false"}
 
 
 @pytest.mark.parametrize("extended", ["failure", "success"])
@@ -2183,7 +2208,8 @@ def test_main_a_nightly_without_a_mutation_job_is_an_error_in_both_answers(gh_en
     pt.main(BEFORE_ARGV, api=FakeApi(green_routes(**base_routes(**routes))), env=gh_env)
     assert _all_outputs(gh_env) == {"skip": "false", "pr_run_id": "",
                                     "base_mutation_green": "false",
-                                    "base_mutation": "error"}
+                                    "base_mutation": "error",
+                                    "mutation_proven": "false"}
     assert "error: ValueError" in _summary(gh_env)
 
 
@@ -2208,7 +2234,8 @@ def test_main_writes_a_green_base_beside_an_unchanged_proven_verdict(gh_env):
     assert pt.main(BEFORE_ARGV, api=api, env=gh_env) == 0
     assert _all_outputs(gh_env) == {"skip": "true", "pr_run_id": "7",
                                     "base_mutation_green": "true",
-                                    "base_mutation": "success"}
+                                    "base_mutation": "success",
+                                    "mutation_proven": "true"}
     assert "- base commit's mutation: `success` (green: `true`)\n" in _summary(gh_env)
 
 
@@ -2218,7 +2245,8 @@ def test_main_writes_a_red_base_as_false_and_names_its_conclusion(gh_env):
     pt.main(BEFORE_ARGV, api=api, env=gh_env)
     assert _all_outputs(gh_env) == {"skip": "true", "pr_run_id": "7",
                                     "base_mutation_green": "false",
-                                    "base_mutation": "failure"}
+                                    "base_mutation": "failure",
+                                    "mutation_proven": "true"}
 
 
 @pytest.mark.parametrize("path", [base_runs_path(), base_jobs_path()])
@@ -2237,7 +2265,8 @@ def test_a_base_lookup_error_is_not_green_and_leaves_skip_alone(gh_env, path, ex
     assert pt.main(BEFORE_ARGV, api=api, env=gh_env) == 0
     assert _all_outputs(gh_env) == {"skip": "true", "pr_run_id": "7",
                                     "base_mutation_green": "false",
-                                    "base_mutation": "error"}
+                                    "base_mutation": "error",
+                                    "mutation_proven": "true"}
     assert "reason: tree " in _summary(gh_env)      # the proven reason, intact
 
 
@@ -2260,7 +2289,8 @@ def test_a_proven_decision_error_does_not_move_the_base_verdict(
     routes["git/commits/%s" % SHA] = urllib.error.HTTPError("u", 403, "x", None, None)
     pt.main(BEFORE_ARGV, api=FakeApi(routes), env=gh_env)
     assert _all_outputs(gh_env) == {"skip": "false", "pr_run_id": "",
-                                    "base_mutation_green": green, "base_mutation": word}
+                                    "base_mutation_green": green, "base_mutation": word,
+                                    "mutation_proven": "false"}
     assert "reason: error: HTTPError\n" in _summary(gh_env)
 
 
@@ -2272,7 +2302,8 @@ def test_the_incident_push_would_have_been_told_its_base_was_red(gh_env):
     pt.main(BEFORE_ARGV, api=FakeApi(routes), env=gh_env)
     assert _all_outputs(gh_env) == {"skip": "false", "pr_run_id": "",
                                     "base_mutation_green": "false",
-                                    "base_mutation": "failure"}
+                                    "base_mutation": "failure",
+                                    "mutation_proven": "false"}
 
 
 def test_a_bad_sha_still_lets_the_base_answer(gh_env):
@@ -2280,7 +2311,8 @@ def test_a_bad_sha_still_lets_the_base_answer(gh_env):
     pt.main(["--sha", "main", "--before", BEFORE], api=api, env=gh_env)
     assert _all_outputs(gh_env) == {"skip": "false", "pr_run_id": "",
                                     "base_mutation_green": "true",
-                                    "base_mutation": "success"}
+                                    "base_mutation": "success",
+                                    "mutation_proven": "false"}
     assert api.calls == [base_runs_path(), base_jobs_path(), SCHEDULE, DISPATCH,
                          jobs_path(100), whole_artifacts_path(100)]
 
@@ -2294,7 +2326,8 @@ def test_a_red_nightly_behind_a_green_base_push_is_written_not_green(gh_env):
     pt.main(BEFORE_ARGV, api=api, env=gh_env)
     assert _all_outputs(gh_env) == {"skip": "false", "pr_run_id": "",
                                     "base_mutation_green": "false",
-                                    "base_mutation": "nightly-failure"}
+                                    "base_mutation": "nightly-failure",
+                                    "mutation_proven": "false"}
 
 
 @pytest.mark.parametrize("path", [SCHEDULE, DISPATCH])
@@ -2306,7 +2339,8 @@ def test_a_nightly_lookup_error_is_an_error_in_both_answers(gh_env, path):
     pt.main(BEFORE_ARGV, api=FakeApi(routes), env=gh_env)
     assert _all_outputs(gh_env) == {"skip": "false", "pr_run_id": "",
                                     "base_mutation_green": "false",
-                                    "base_mutation": "error"}
+                                    "base_mutation": "error",
+                                    "mutation_proven": "false"}
 
 
 def test_a_status_of_success_is_written_as_not_green(gh_env):
@@ -2334,7 +2368,8 @@ def test_main_asks_nothing_about_an_unusable_base(gh_env, before, word):
     api = FakeApi(green_routes())
     pt.main([*ARGV, "--before", before], api=api, env=gh_env)
     assert _all_outputs(gh_env) == {"skip": "true", "pr_run_id": "7",
-                                    "base_mutation_green": "false", "base_mutation": word}
+                                    "base_mutation_green": "false", "base_mutation": word,
+                                    "mutation_proven": "true"}
     # No base run is looked up; the one jobs listing is the proven decision's
     # own read of the nightly's `mutation`.
     assert not any("event=push" in c for c in api.calls)
@@ -2358,7 +2393,8 @@ def test_a_bad_command_line_is_not_green_either(gh_env, argv):
     assert pt.main(argv, api=api, env=gh_env) == 0
     assert _all_outputs(gh_env) == {"skip": "false", "pr_run_id": "",
                                     "base_mutation_green": "false",
-                                    "base_mutation": "error"}
+                                    "base_mutation": "error",
+                                    "mutation_proven": "false"}
     assert api.calls == []
 
 
@@ -2454,7 +2490,8 @@ def test_run_as_a_script_with_a_base_and_no_credentials_is_not_green(tmp_path):
     assert proc.returncode == 0, proc.stderr
     assert out.read_text(encoding="utf-8") == ("skip=false\npr_run_id=\n"
                                               "base_mutation_green=false\n"
-                                              "base_mutation=error\n")
+                                              "base_mutation=error\n"
+                                              "mutation_proven=false\n")
 
 
 # --------------------------------------------------------------------------
@@ -2473,7 +2510,581 @@ def test_run_as_a_script_with_no_credentials_exits_zero_with_skip_false(tmp_path
     assert proc.returncode == 0, proc.stderr
     assert out.read_text(encoding="utf-8") == ("skip=false\npr_run_id=\n"
                                               "base_mutation_green=false\n"
-                                              "base_mutation=no-base\n")
+                                              "base_mutation=no-base\n"
+                                              "mutation_proven=false\n")
+
+
+# --------------------------------------------------------------------------
+# a re-run: its mutation verdict alone, and only when no attempt re-ran it
+# --------------------------------------------------------------------------
+#
+# Approved 2026-11-24 (docs/superpowers/plans/2026-10-31-ci-speed.md, review
+# focus 4). The fixtures are the six PR runs the rule was worked out on, as
+# their `actions/runs/{id}/attempts/{n}/jobs` listings recorded them: each
+# attempt's creation instant (its first job's `created_at`), how many full
+# shards it planned, and what every mutation job was in each attempt -- its
+# conclusion, and which attempt's execution it is.
+
+G1 = ("success", 1)            # green, and executed in attempt 1
+CARRIED = {"plan": G1, "shards": G1, "mutation": G1}
+
+
+def _instant(text):
+    return datetime.fromisoformat(text.replace("Z", "+00:00"))
+
+
+def _stamp(when):
+    return when.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def pr_attempts(run_id, created, shards, history):
+    """Every attempt's job listing of one PR run of ci.yml, shaped as recorded.
+
+    ``created`` holds each attempt's creation instant, attempt 1 first, and
+    ``history`` one row per attempt: for ``plan``, ``mutation`` and every
+    ``mutation-shard (full, N)`` (``shards`` of them, overridden per index by
+    an integer key), ``(conclusion, the attempt whose execution it is)``, or
+    None when that attempt listed no such job. ``extra`` adds named jobs the
+    same way. A job that ran in attempt k starts a minute (and its offset in
+    seconds) after k was created, was created 3 s before that, and ends ten
+    minutes later; a copy carried into a later attempt keeps that start and
+    end and is created with the attempt it is listed in -- what
+    45263898738's attempt 2 shows. Unless ``noise`` is False, every attempt
+    also lists what a PR run does beside them and the rule must look past:
+    ``lint`` (carried), a macOS ``tests`` cell (cancelled in attempt 1, re-run
+    after) and ``mutation-advisory-shard``, skipped, which every attempt
+    re-evaluates with a fresh start.
+    """
+    listings = []
+    for attempt, row in enumerate(history, start=1):
+        made = _instant(created[attempt - 1])
+        jobs = []
+
+        def add(name, entry, offset, row=row, attempt=attempt, made=made, jobs=jobs):
+            if entry is None:
+                return
+            conclusion, ran_in = entry
+            start = _instant(created[ran_in - 1]) + timedelta(seconds=60 + offset)
+            stamp = (start - timedelta(seconds=3) if ran_in == attempt
+                     else made + timedelta(seconds=offset % 10))
+            jobs.append({"id": attempt * 100000 + offset, "run_id": run_id,
+                         "run_attempt": attempt, "name": name, "status": "completed",
+                         "conclusion": conclusion, "created_at": _stamp(stamp),
+                         "started_at": _stamp(start),
+                         "completed_at": _stamp(start + timedelta(minutes=10))})
+
+        add("mutation-plan", row.get("plan"), 0)
+        for index in range(shards):
+            add("mutation-shard (full, %d)" % index, row.get(index, row.get("shards")),
+                1 + index)
+        add("mutation", row.get("mutation"), 200)
+        for offset, (name, entry) in enumerate(row.get("extra", ()), start=300):
+            add(name, entry, offset)
+        if row.get("noise", True):
+            add("lint", G1, 400)
+            add("tests (macos-latest, 3.12)",
+                ("cancelled", 1) if attempt == 1 else ("success", attempt), 401)
+            add("mutation-advisory-shard", ("skipped", attempt), 402)
+        listings.append(jobs)
+    return listings
+
+
+#: run id -> (attempts' creation instants, full shards, per-attempt history,
+#: what `_mutation_carried` says: None for proven, else the reason).
+RECORDED = {
+    # Attempt 1: a macOS cell cancelled with no steps after ~52 min, and
+    # patch-coverage red behind it; "re-run failed jobs" re-ran those and
+    # carried all 28 mutation jobs over. Push 45290191649's PR run.
+    45263898738: (["2026-11-23T20:53:22Z", "2026-11-23T23:22:56Z"], 26,
+                  [CARRIED, CARRIED], None),
+    # The same shape, before the widening to 26: pushes 42444697189 (179.6
+    # min) and 41892921723 (187.7 min) ran in full for these alone.
+    42430658365: (["2026-11-08T01:17:25Z", "2026-11-08T03:40:00Z"], 24,
+                  [CARRIED, CARRIED], None),
+    41861286489: (["2026-11-04T15:48:33Z", "2026-11-04T18:40:50Z"], 24,
+                  [CARRIED, CARRIED], None),
+    # Attempt 1: every shard cancelled, mutation red. Attempt 2 re-ran every
+    # mutation job; attempt 3 re-ran lint alone, so all 26 of its copies
+    # started before attempt 3 did -- carried, from attempt 2.
+    42463209202: (["2026-11-08T08:30:51Z", "2026-11-08T09:24:29Z",
+                   "2026-11-08T11:48:26Z"], 24,
+                  [{"plan": G1, "shards": ("cancelled", 1), "mutation": ("failure", 1)},
+                   {"plan": ("success", 2), "shards": ("success", 2),
+                    "mutation": ("success", 2)},
+                   {"plan": ("success", 2), "shards": ("success", 2),
+                    "mutation": ("success", 2)}],
+                  "attempt 1's mutation is completed/failure"),
+    # Attempt 1: shard 22 and mutation red; attempt 2 re-ran both.
+    41893440023: (["2026-11-04T19:04:52Z", "2026-11-04T23:25:28Z"], 24,
+                  [{"plan": G1, "shards": G1, 22: ("failure", 1),
+                    "mutation": ("failure", 1)},
+                   {"plan": G1, "shards": G1, 22: ("success", 2),
+                    "mutation": ("success", 2)}],
+                  "attempt 1's mutation is completed/failure"),
+    # Attempt 1 listed one job, `mutation`, red; attempt 2 ran everything.
+    42674048836: (["2026-11-09T18:28:04Z", "2026-11-09T18:39:05Z"], 24,
+                  [{"plan": None, "shards": None, "mutation": ("failure", 1),
+                    "noise": False},
+                   {"plan": ("success", 2), "shards": ("success", 2),
+                    "mutation": ("success", 2)}],
+                  "attempt 1 ran no mutation-plan or no mutation job"),
+}
+
+
+def recorded(run_id, *, as_run=None):
+    """RECORDED's listings for ``run_id``, its jobs saying they are ``as_run``'s."""
+    created, shards, history, _ = RECORDED[run_id]
+    return pr_attempts(as_run or run_id, created, shards, history)
+
+
+def carried_rerun(run_id=7):
+    """45263898738's two attempts, as run ``run_id``'s: mutation proven."""
+    return recorded(45263898738, as_run=run_id)
+
+
+def parsed(listings):
+    return tuple(tuple(pt._job(j) for j in jobs) for jobs in listings)
+
+
+def attempts_path(run_id, attempt, page=1):
+    return "actions/runs/%d/attempts/%d/jobs?per_page=100&page=%d" % (run_id, attempt, page)
+
+
+def rerun_routes(listings, run_id=7, **overrides):
+    """green_routes with this head's run a re-run, and every attempt's jobs routed."""
+    routes = {pr_runs_path(HEAD): runs(run(run_id, attempt=len(listings)))}
+    for attempt, jobs in enumerate(listings, start=1):
+        routes[attempts_path(run_id, attempt)] = {"total_count": len(jobs), "jobs": jobs}
+    routes.update(overrides)
+    return green_routes(**routes)
+
+
+def rerun_candidate(listings, **kwargs):
+    """A green re-run of tree ``T``, run 7, whose attempts listed ``listings``."""
+    cand = pt.Candidate("h", "T", 7, "success", run_attempt=len(listings),
+                        run_created_at=FRESH, artifacts=built(),
+                        attempts=parsed(listings))
+    return dataclasses.replace(cand, **kwargs)
+
+
+@pytest.mark.parametrize("run_id", sorted(RECORDED))
+def test_the_recorded_re_runs_prove_exactly_what_they_should(run_id):
+    expected = RECORDED[run_id][3]
+    assert pt._mutation_carried(run_id, parsed(recorded(run_id))) == expected
+
+
+@pytest.mark.parametrize("run_id", sorted(RECORDED))
+def test_decide_reads_the_recorded_re_runs_the_same_way(run_id):
+    listings = recorded(run_id, as_run=7)
+    decision = pt.decide("T", [rerun_candidate(listings)], "success", now=NOW)
+    assert decision.skip is False
+    if RECORDED[run_id][3] is None:
+        assert decision == pt.Decision(False, ANY, 7, mutation_only=True)
+        assert decision.mutation_proven is True
+        assert "mutation only" in decision.reason
+        assert "attempt %d" % len(listings) in decision.reason
+    else:
+        assert decision == pt.Decision(False, ANY, None)
+        assert decision.mutation_proven is False
+        assert RECORDED[run_id][3] in decision.reason
+
+
+def test_the_unsound_rule_would_have_proven_42463209202():
+    # "Carried over" read as "started before its own attempt was created"
+    # holds for every mutation job of 42463209202's last attempt -- carried,
+    # but from attempt 2, which re-ran them all. Comparing with attempt 1's
+    # own copy is what tells the two apart.
+    listings = parsed(recorded(42463209202))
+    last = [j for j in listings[-1] if pt._is_mutation_job(j.name)]
+    assert len(last) == 26
+    assert all(j.created_at > j.started_at for j in last)
+    # Attempt 1 that was green throughout, and still: refused, on attempt 2.
+    created, shards, history, _ = RECORDED[42463209202]
+    green_first = pr_attempts(42463209202, created, shards, [CARRIED, *history[1:]])
+    assert pt._mutation_carried(42463209202, parsed(green_first)) == (
+        "mutation ran again in attempt 2")
+
+
+RERUN_CREATED = ["2026-11-23T20:53:22Z", "2026-11-23T23:22:56Z", "2026-11-24T01:00:00Z"]
+
+
+@pytest.mark.parametrize("history, why", [
+    # "Re-run all jobs": every mutation job ran again, green or not.
+    ([CARRIED, {"plan": ("success", 2), "shards": ("success", 2),
+                "mutation": ("success", 2)}], "mutation ran again in attempt 2"),
+    # One job is enough, the gate or a single shard.
+    ([CARRIED, {**CARRIED, "mutation": ("success", 2)}],
+     "mutation ran again in attempt 2"),
+    ([CARRIED, {**CARRIED, 5: ("success", 2)}],
+     "mutation-shard (full, 5) ran again in attempt 2"),
+    ([CARRIED, {**CARRIED, "plan": ("success", 2)}],
+     "mutation-plan ran again in attempt 2"),
+    # Carried into attempt 2 and re-run in attempt 3; and carried into 3
+    # from a re-run in 2. Every attempt is read, not only the last.
+    ([CARRIED, CARRIED, {**CARRIED, 0: ("success", 3)}],
+     "mutation-shard (full, 0) ran again in attempt 3"),
+    ([CARRIED, {**CARRIED, 0: ("success", 2)}, {**CARRIED, 0: ("success", 2)}],
+     "mutation-shard (full, 0) ran again in attempt 2"),
+    # A later attempt green over a red first one is a red first verdict.
+    ([{**CARRIED, 3: ("failure", 1)}, {**CARRIED, 3: ("success", 2)}],
+     "attempt 1's mutation-shard (full, 3) is completed/failure"),
+    ([{**CARRIED, "plan": ("cancelled", 1)}, CARRIED],
+     "attempt 1's mutation-plan is completed/cancelled"),
+    # A copy that is carried but not green (a contradiction) is refused too.
+    ([CARRIED, {**CARRIED, "mutation": ("failure", 1)}],
+     "attempt 2's mutation is completed/failure"),
+    # The same mutation jobs in every attempt, no more and no fewer.
+    ([CARRIED, {**CARRIED, 2: None}],
+     "attempt 2's mutation jobs are not attempt 1's"),
+    ([CARRIED, {**CARRIED, "extra": [("mutation-shard (diff, 0)", ("success", 2))]}],
+     "attempt 2's mutation jobs are not attempt 1's"),
+    # Full shards 0..n-1, at least one: a gap, or a plan of none (its
+    # matrix-less shard is listed bare and skipped), proves nothing.
+    ([{**CARRIED, 4: None}, {**CARRIED, 4: None}],
+     "attempt 1's full mutation shards are not 0 to n-1"),
+    ([{**CARRIED, "shards": None, "extra": [("mutation-shard", ("skipped", 1))]},
+      {**CARRIED, "shards": None, "extra": [("mutation-shard", ("skipped", 2))]}],
+     "attempt 1's full mutation shards are not 0 to n-1"),
+    ([{**CARRIED, "shards": None, "extra": [("mutation-shard (full, 0)", G1),
+                                             ("mutation-shard", ("skipped", 1))]},
+      {**CARRIED, "shards": None, "extra": [("mutation-shard (full, 0)", G1),
+                                             ("mutation-shard", ("skipped", 1))]}],
+     "attempt 1's mutation-shard is completed/skipped"),
+    ([{**CARRIED, "mutation": None}, {**CARRIED, "mutation": None}],
+     "attempt 1 ran no mutation-plan or no mutation job"),
+])
+def test_any_mutation_job_run_after_attempt_1_or_red_in_it_proves_nothing(history, why):
+    listings = pr_attempts(7, RERUN_CREATED, 6, history)
+    assert pt._mutation_carried(7, parsed(listings)) == why
+
+
+@pytest.mark.parametrize("history", [
+    [CARRIED, CARRIED],
+    [CARRIED, CARRIED, CARRIED],          # re-run twice, mutation never
+    # Diff shards (shadow mode) count like full ones: carried, they prove.
+    [{**CARRIED, "extra": [("mutation-shard (diff, 0)", G1)]},
+     {**CARRIED, "extra": [("mutation-shard (diff, 0)", G1)]}],
+])
+def test_mutation_jobs_carried_from_a_green_attempt_1_prove_it(history):
+    listings = pr_attempts(7, RERUN_CREATED, 6, history)
+    assert pt._mutation_carried(7, parsed(listings)) is None
+
+
+def test_a_re_run_diff_shard_proves_nothing_either():
+    row = {**CARRIED, "extra": [("mutation-shard (diff, 0)", G1)]}
+    listings = pr_attempts(7, RERUN_CREATED, 6,
+                           [row, {**CARRIED, "extra": [("mutation-shard (diff, 0)",
+                                                        ("success", 2))]}])
+    assert pt._mutation_carried(7, parsed(listings)) == (
+        "mutation-shard (diff, 0) ran again in attempt 2")
+
+
+def test_only_the_mutation_jobs_are_read():
+    # The advisory legs are skipped on a PR and re-evaluated, with a fresh
+    # start, on every attempt; a looser `mutation*` match would refuse every
+    # re-run. Nor do the re-run test cell or lint decide anything here.
+    for name in ("mutation-advisory-shard", "mutation-advisory-shard (diff, 0)",
+                 "tests (macos-latest, 3.12)", "lint", "Mutation", "mutation-plan2",
+                 "mutation-shards (full, 0)", ""):
+        assert pt._is_mutation_job(name) is False, name
+    for name in ("mutation", "mutation-plan", "mutation-shard", "mutation-shard (full, 0)",
+                 "mutation-shard (diff, 15)"):
+        assert pt._is_mutation_job(name) is True, name
+
+
+@pytest.mark.parametrize("attempt", [0, 1])
+@pytest.mark.parametrize("field", ["run_id", "run_attempt", "status", "conclusion",
+                                   "created_at", "started_at", "completed_at"])
+@pytest.mark.parametrize("value", ["absent", None, "garbage"])
+def test_a_mutation_job_missing_a_field_the_rule_reads_proves_nothing(attempt, field, value):
+    listings = carried_rerun()
+    job = next(j for j in listings[attempt] if j["name"] == "mutation-shard (full, 3)")
+    if value == "absent":
+        del job[field]
+    else:
+        job[field] = value
+    assert pt._mutation_carried(7, parsed(listings)) is not None
+
+
+@pytest.mark.parametrize("field, value", [
+    ("run_id", 8), ("run_id", True), ("run_id", "7"),
+    ("run_attempt", 1), ("run_attempt", 3), ("run_attempt", True),
+    ("created_at", "2026-11-23T23:22:56"),          # no zone: unknown
+])
+def test_a_copy_that_says_it_is_another_run_or_attempt_proves_nothing(field, value):
+    listings = carried_rerun()
+    listings[1][0][field] = value
+    assert pt._mutation_carried(7, parsed(listings)) is not None
+
+
+def test_a_name_listed_twice_in_one_attempt_proves_nothing():
+    listings = carried_rerun()
+    listings[1].append(dict(listings[1][0], id=999999))
+    assert pt._mutation_carried(7, parsed(listings)) == "attempt 2 lists mutation-plan twice"
+
+
+def test_an_attempt_1_copy_created_after_it_started_was_not_run_there():
+    # Attempt 1 is where the jobs ran, so each was created before it started.
+    listings = carried_rerun()
+    job = listings[0][0]
+    job["created_at"] = _stamp(_instant(job["started_at"]) + timedelta(seconds=1))
+    assert pt._mutation_carried(7, parsed(listings)) == (
+        "attempt 1's mutation-plan was created after it started, so it did not run there")
+
+
+def test_a_later_copy_with_attempt_1s_times_but_created_before_them_is_not_carried():
+    listings = carried_rerun()
+    job = listings[1][0]
+    job["created_at"] = job["started_at"]
+    assert pt._mutation_carried(7, parsed(listings)) == (
+        "attempt 2's mutation-plan was not created after it started, so it is not a "
+        "carried-over copy")
+
+
+@pytest.mark.parametrize("read", [0, 1])
+def test_fewer_than_two_attempts_read_proves_nothing(read):
+    got = parsed(carried_rerun()[:read])
+    assert pt._mutation_carried(7, got) == "no later attempt's jobs were read"
+
+
+@pytest.mark.parametrize("kwargs, why", [
+    ({"attempts": ()}, "its attempts' job listings were not all read"),
+    ({"run_attempt": 3}, "its attempts' job listings were not all read"),
+    ({"run_attempt": 0}, "only a first attempt, or a re-run"),
+    ({"run_attempt": -2}, "only a first attempt, or a re-run"),
+    ({"run_attempt": pt.MAX_ATTEMPTS + 1}, "re-run more than %d times" % (pt.MAX_ATTEMPTS - 1)),
+])
+def test_a_re_run_whose_attempts_were_not_all_read_proves_nothing(kwargs, why):
+    cand = rerun_candidate(carried_rerun(), **kwargs)
+    decision = pt.decide("T", [cand], "success", now=NOW)
+    assert decision == pt.Decision(False, ANY, None)
+    assert why in decision.reason
+
+
+def test_a_proven_re_run_is_still_held_to_everything_else_a_proof_is():
+    listings = carried_rerun()
+    for kwargs in ({"artifacts": ()}, {"artifacts": built(expired=True)},
+                   {"run_created_at": NOW - timedelta(days=14)},
+                   {"run_created_at": None}, {"run_event": "push"}, {"head_tree": "X"}):
+        decision = pt.decide("T", [rerun_candidate(listings, **kwargs)], "success", now=NOW)
+        assert decision == pt.Decision(False, ANY, None), kwargs
+    for conclusion in ("failure", "cancelled"):
+        cand = pt.Candidate("h", "T", 7, conclusion, run_attempt=2, run_created_at=FRESH,
+                            artifacts=built(), attempts=parsed(listings))
+        assert pt.decide("T", [cand], "success", now=NOW).mutation_proven is False
+
+
+@pytest.mark.parametrize("last", ["failure", None, pt.RED_BEYOND_EXTENDED, pt.UNPROVEN_SKIP])
+def test_a_proven_re_run_behind_a_red_or_missing_nightly_proves_nothing(last):
+    # Fact 3 is about the mutation score: exactly what a re-run proves.
+    decision = pt.decide("T", [rerun_candidate(carried_rerun())], last, now=NOW)
+    assert decision == pt.Decision(False, ANY, None)
+    assert "every mutation job ran once, in attempt 1" in decision.reason
+
+
+def test_a_stale_nightly_behind_a_proven_re_run_proves_nothing():
+    decision = pt.decide("T", [rerun_candidate(carried_rerun())], nightly(49), now=NOW)
+    assert decision == pt.Decision(False, ANY, None)
+    assert "stale" in decision.reason
+
+
+def test_a_first_attempt_proof_beats_a_re_run_whatever_the_order():
+    first = pt.Candidate("h2", "T", 3, "success", run_created_at=FRESH, artifacts=built())
+    rerun = rerun_candidate(carried_rerun())
+    for cands in ([rerun, first], [first, rerun]):
+        assert pt.decide("T", cands, "success", now=NOW) == pt.Decision(True, ANY, 3)
+
+
+def test_the_first_re_run_that_proves_mutation_is_the_one_named():
+    red = pt.Candidate("h0", "T", 5, "failure")
+    second = dataclasses.replace(rerun_candidate(carried_rerun()), run_id=9)
+    first = rerun_candidate(carried_rerun())
+    decision = pt.decide("T", [red, first, second], "success", now=NOW)
+    assert decision == pt.Decision(False, ANY, 7, mutation_only=True)
+
+
+def test_a_decision_proves_mutation_when_it_skips_and_when_it_proves_mutation_only():
+    assert pt.Decision(True, "r", 7).mutation_proven is True
+    assert pt.Decision(False, "r", 7, mutation_only=True).mutation_proven is True
+    assert pt.Decision(False, "r").mutation_proven is False
+    # Only the booleans count: a truthy stand-in is not a proof.
+    assert pt.Decision(False, "r", 7, mutation_only=1).mutation_proven is False
+
+
+# gather: the attempts are read for a green re-run of this tree, and only then
+
+def test_gather_reads_every_attempt_of_a_green_re_run():
+    api = FakeApi(rerun_routes(carried_rerun()))
+    _, cands, _ = pt.gather(api, SHA)
+    assert [p for p in api.calls if "/attempts/" in p] == [
+        attempts_path(7, 1), attempts_path(7, 2)]
+    assert len(cands[0].attempts) == 2
+    assert cands[0].attempts == parsed(carried_rerun())
+    assert cands[0].attempts[1][0] == pt.Job(
+        "mutation-plan", 7, 2, "completed", "success",
+        datetime(2026, 11, 23, 23, 22, 56, tzinfo=UTC),
+        datetime(2026, 11, 23, 20, 54, 22, tzinfo=UTC),
+        datetime(2026, 11, 23, 21, 4, 22, tzinfo=UTC))
+
+
+@pytest.mark.parametrize("run_kwargs", [
+    {"attempt": 1},                         # a first attempt costs what it did
+    {"attempt": 2, "conclusion": "failure"},
+    {"attempt": 2, "status": "in_progress"},
+    {"attempt": pt.MAX_ATTEMPTS + 1},
+    {"attempt": True},
+    {"attempt": "2"},
+])
+def test_gather_reads_no_attempts_where_they_cannot_prove_anything(run_kwargs):
+    api = FakeApi(green_routes(**{pr_runs_path(HEAD): runs(run(**run_kwargs))}))
+    pt.gather(api, SHA)
+    assert not [p for p in api.calls if "/attempts/" in p]
+
+
+def test_gather_reads_no_attempts_for_another_tree():
+    api = FakeApi(rerun_routes(carried_rerun(), **{"git/commits/%s" % HEAD: commit(OTHER)}))
+    pt.gather(api, SHA)
+    assert not [p for p in api.calls if "/attempts/" in p]
+
+
+def test_gather_follows_a_listing_over_pages():
+    listings = carried_rerun()
+    first, second = listings[0][:30], listings[0][30:]
+    total = len(listings[0])
+    api = FakeApi(rerun_routes(listings, **{
+        attempts_path(7, 1): {"total_count": total, "jobs": first},
+        attempts_path(7, 1, 2): {"total_count": total, "jobs": second}}))
+    _, cands, _ = pt.gather(api, SHA)
+    assert cands[0].attempts == parsed(listings)
+    assert attempts_path(7, 1, 2) in api.calls
+
+
+def _paged(case, jobs):
+    """Attempt 1's listing as pages, for one way of not adding up."""
+    n, head, tail = len(jobs), jobs[:20], jobs[20:]
+    return {
+        # A page short of the count it states, with nothing after it.
+        "short": [{"total_count": n + 1, "jobs": jobs}, {"total_count": n + 1, "jobs": []}],
+        # The count moved between pages.
+        "moved": [{"total_count": n, "jobs": head}, {"total_count": n + 1, "jobs": tail}],
+        # Longer than the pages read.
+        "long": [{"total_count": 1000, "jobs": jobs}] * pt.MAX_JOB_PAGES,
+        # The first page again where the second should be: a job seen twice.
+        "twice": [{"total_count": 40, "jobs": head}, {"total_count": 40, "jobs": head}],
+        "count as text": [{"total_count": str(n), "jobs": jobs}],
+        "no count": [{"jobs": jobs}],
+        "no jobs": [{"total_count": n}],
+        "jobs not a list": [{"total_count": n, "jobs": "nope"}],
+        "a job not an object": [{"total_count": 1, "jobs": [7]}],
+        "not an object": [[]],
+    }[case]
+
+
+@pytest.mark.parametrize("case, match", [
+    ("short", "lists %d jobs, and %d came back"),
+    ("moved", "no steady integer total_count"),
+    ("long", "lists 1000 jobs, and %d came back"),
+    ("twice", "repeats a job or lacks an id"),
+    ("count as text", "no steady integer total_count"),
+    ("no count", "no steady integer total_count"),
+    ("no jobs", "no jobs list"),
+    ("jobs not a list", "no jobs list"),
+    ("a job not an object", "no jobs list"),
+    ("not an object", "no jobs list"),
+])
+def test_an_attempt_listing_that_does_not_add_up_is_an_error(case, match):
+    jobs = carried_rerun()[0]
+    n = len(jobs)
+    assert n > 20
+    if case == "short":
+        match %= (n + 1, n)
+    elif case == "long":
+        match %= n * pt.MAX_JOB_PAGES
+    routes = {attempts_path(7, 1, page): body
+              for page, body in enumerate(_paged(case, jobs), start=1)}
+    with pytest.raises(ValueError, match=re.escape(match)):
+        pt.gather(FakeApi(rerun_routes(carried_rerun(), **routes)), SHA)
+
+
+def test_a_listing_complete_on_its_first_page_asks_for_no_second():
+    api = FakeApi(rerun_routes(carried_rerun()))
+    pt.gather(api, SHA)
+    assert attempts_path(7, 1, 2) not in api.calls
+
+
+def test_an_empty_attempt_listing_is_read_and_proves_nothing():
+    api = FakeApi(rerun_routes(carried_rerun(), **{
+        attempts_path(7, 1): {"total_count": 0, "jobs": []}}))
+    merge_tree, cands, last = pt.gather(api, SHA)
+    assert cands[0].attempts[0] == ()
+    assert pt.decide(merge_tree, cands, last, now=NOW).mutation_proven is False
+
+
+def test_a_listing_whose_job_has_no_id_is_an_error():
+    listings = carried_rerun()
+    del listings[1][4]["id"]
+    with pytest.raises(ValueError, match="lacks an id"):
+        pt.gather(FakeApi(rerun_routes(listings)), SHA)
+
+
+# main: what a re-run writes
+
+def test_main_a_re_run_that_proves_mutation_writes_it_and_still_tests(gh_env):
+    api = FakeApi(rerun_routes(carried_rerun()))
+    assert pt.main(ARGV, api=api, env=gh_env) == 0
+    assert _all_outputs(gh_env) == {"skip": "false", "pr_run_id": "7",
+                                    "base_mutation_green": "false",
+                                    "base_mutation": "no-base",
+                                    "mutation_proven": "true"}
+    summary = _summary(gh_env)
+    assert "- mutation proven: `true`" in summary
+    assert "mutation only" in summary and "this push runs them" in summary
+
+
+@pytest.mark.parametrize("run_id", [r for r in sorted(RECORDED) if RECORDED[r][3]])
+def test_main_a_recorded_re_run_of_mutation_proves_nothing(gh_env, run_id):
+    api = FakeApi(rerun_routes(recorded(run_id, as_run=7)))
+    assert pt.main(ARGV, api=api, env=gh_env) == 0
+    assert _outputs(gh_env) == {"skip": "false", "pr_run_id": ""}
+    assert RECORDED[run_id][3] in _summary(gh_env)
+
+
+@pytest.mark.parametrize("exc", [
+    urllib.error.HTTPError("u", 502, "Bad Gateway", None, None),
+    urllib.error.HTTPError("u", 403, "rate limit exceeded", None, None),
+    urllib.error.URLError("timed out"),
+    TimeoutError("read timed out"),
+    ValueError("malformed JSON"),
+])
+@pytest.mark.parametrize("attempt", [1, 2])
+def test_main_an_attempt_listing_that_errors_proves_nothing(gh_env, exc, attempt):
+    api = FakeApi(rerun_routes(carried_rerun(), **{attempts_path(7, attempt): exc}))
+    assert pt.main(ARGV, api=api, env=gh_env) == 0
+    assert _outputs(gh_env) == {"skip": "false", "pr_run_id": ""}
+    assert "error: " in _summary(gh_env)
+
+
+def test_main_a_red_nightly_behind_a_proven_re_run_proves_nothing(gh_env):
+    api = FakeApi(rerun_routes(carried_rerun(), **{SCHEDULE: runs(
+        run(100, event="schedule", head_sha=SHA, conclusion="failure"))}))
+    assert pt.main(ARGV, api=api, env=gh_env) == 0
+    assert _outputs(gh_env) == {"skip": "false", "pr_run_id": ""}
+
+
+def test_main_never_writes_mutation_proven_without_a_run_to_name(gh_env, monkeypatch):
+    monkeypatch.setattr(pt, "_decide_for",
+                        lambda *a: pt.Decision(False, "x", None, mutation_only=True))
+    pt.main(ARGV, api=FakeApi(green_routes()), env=gh_env)
+    assert _all_outputs(gh_env)["mutation_proven"] == "false"
+
+
+def test_main_a_proven_re_run_leaves_the_base_verdict_alone(gh_env):
+    api = FakeApi(rerun_routes(carried_rerun(), **base_routes()))
+    assert pt.main(BEFORE_ARGV, api=api, env=gh_env) == 0
+    assert _all_outputs(gh_env) == {"skip": "false", "pr_run_id": "7",
+                                    "base_mutation_green": "true",
+                                    "base_mutation": "success",
+                                    "mutation_proven": "true"}
 
 
 # ==========================================================================
@@ -2720,26 +3331,32 @@ def _topological(jobs: dict) -> list[str]:
     return order
 
 
-#: The eight situations the plan cares about, in the column order of the
-#: table below. `proven` is (result, skip output, pr_run_id output) for the
-#: pushes, and `idle` (result, idle output) for the nightlies; on every other
-#: event each job's own `if:` decides it never runs.
+#: The nine situations the plan cares about, in the column order of the
+#: table below. `proven` is (result, skip output, pr_run_id output,
+#: mutation_proven output) for the pushes, and `idle` (result, idle output)
+#: for the nightlies; on every other event each job's own `if:` decides it
+#: never runs. "mutation proven" is a re-run PR run whose mutation jobs all
+#: ran in attempt 1 (approved 2026-11-24): the suite runs, the shards do not.
 SCENARIOS = {
     "pull_request": {"event": "pull_request", "ref": "refs/pull/7/merge"},
     "merge_group": {"event": "merge_group",
                     "ref": "refs/heads/gh-readonly-queue/main/pr-7-abc"},
     "push, proven skip=true": {"event": "push", "ref": "refs/heads/main",
-                               "proven": ("success", "true", "41")},
+                               "proven": ("success", "true", "41", "true")},
+    "push, mutation proven": {"event": "push", "ref": "refs/heads/main",
+                              "proven": ("success", "false", "41", "true")},
     "push, proven skip=false": {"event": "push", "ref": "refs/heads/main",
-                                "proven": ("success", "false", "")},
+                                "proven": ("success", "false", "", "false")},
     "push, proven job failed": {"event": "push", "ref": "refs/heads/main",
-                                "proven": ("failure", "", "")},
+                                "proven": ("failure", "", "", "")},
     "schedule": {"event": "schedule", "ref": "refs/heads/main",
                  "idle": ("success", "false")},
     "schedule, idle": {"event": "schedule", "ref": "refs/heads/main",
                        "idle": ("success", "true")},
     "workflow_dispatch": {"event": "workflow_dispatch", "ref": "refs/heads/main"},
 }
+# Every scenario above models a repository with MUTATION_LEDGER unset, as it
+# is until the owner opts in; a scenario may set `vars` to model one that has.
 
 #: What each job's outputs are when it runs. The planner's matrix is a model
 #: of its `write the plan` step -- empty exactly when `proven` said skip or
@@ -2751,20 +3368,23 @@ ONE_ADVISORY = '[{"set":"diff","index":0}]'
 
 def _outcome(name: str, scenario: dict) -> tuple[str, dict]:
     if name == "proven":
-        result, skip, run_id = scenario["proven"]
+        result, skip, run_id, mutation_proven = scenario["proven"]
         if result != "success":
             return result, {}       # a failed job's outputs are empty
-        return result, {"skip": skip, "pr_run_id": run_id}
+        return result, {"skip": skip, "pr_run_id": run_id,
+                        "mutation_proven": mutation_proven}
     if name == "idle-nightly":
         result, idle = scenario["idle"]
         return result, ({"idle": idle} if result == "success" else {})
     if name == "nightly-shadow-base":
         return "success", {"shadow_base": "b" * 40, "shadow_base_run": "41",
                            "shadow_reason": "diff shadow against run 41 (schedule)"}
+    if name == "mutation-ledger":
+        return "success", {"run_id": "", "reason": "no green real whole-codebase run"}
     if name == "mutation-plan":
-        proven = scenario.get("proven", ("", "", ""))
+        proven = scenario.get("proven", ("", "", "", ""))
         idle = scenario.get("idle", ("", ""))
-        matrix = "[]" if proven[1] == "true" or idle[1] == "true" else ONE_SHARD
+        matrix = "[]" if proven[3] == "true" or idle[1] == "true" else ONE_SHARD
         # The advisory diff legs exist only on a full nightly (C4).
         advisory = (ONE_ADVISORY if scenario["event"] == "schedule" and matrix != "[]"
                     else "[]")
@@ -2784,6 +3404,9 @@ def job_runs(jobs: dict, name: str, results: dict, outputs: dict,
             return scenario["event"]
         if ident == "github.ref":
             return scenario["ref"]
+        if ident.startswith("vars."):
+            # An unset repository variable reads as the empty string.
+            return (scenario.get("vars") or {}).get(ident[len("vars."):], "")
         parts = ident.split(".")
         if parts[0] == "needs":
             assert len(parts) >= 3 and parts[1] in direct, (
@@ -2824,23 +3447,25 @@ def simulate(jobs: dict, scenario: dict) -> dict[str, str]:
 #: A new job fails test_every_job_has_a_row until someone decides its row.
 R, S = "runs", "skipped"
 EXPECTED = {
-    #                  PR  queue  skip=T  skip=F  failed  sched  idle  dispatch
-    "proven":         (S,  S,     R,      R,      R,      S,     S,    S),
-    "idle-nightly":   (S,  S,     S,      S,      S,      R,     R,    S),
-    "nightly-shadow-base": (S, S,  S,      S,      S,      R,     R,    S),
-    "lint":           (R,  R,     R,      R,      R,      S,     S,    S),
-    "evals":          (R,  R,     R,      R,      R,      S,     S,    S),
-    "tests":          (R,  R,     S,      R,      R,      S,     S,    S),
-    "tests-extended": (S,  S,     R,      R,      R,      R,     R,    R),
-    "coverage-badge": (S,  S,     R,      R,      R,      S,     S,    S),
-    "mutation-plan":  (R,  R,     R,      R,      R,      R,     R,    R),
-    "mutation-shard": (R,  R,     S,      R,      R,      R,     S,    R),
-    "mutation-advisory-shard": (S, S, S,   S,      S,      R,     S,    S),
-    "mutation":       (R,  R,     R,      R,      R,      R,     R,    R),
-    "install-smoke":  (R,  R,     R,      R,      R,      S,     S,    S),
-    "patch-coverage": (R,  S,     S,      S,      S,      S,     S,    S),
-    "bdd":            (R,  R,     R,      R,      R,      S,     S,    S),
-    "onnx-inference": (R,  R,     R,      R,      R,      S,     S,    S),
+    #                  PR  queue  skip=T  mut  skip=F  failed  sched  idle  dispatch
+    "proven":         (S,  S,     R,      R,   R,      R,      S,     S,    S),
+    "idle-nightly":   (S,  S,     S,      S,   S,      S,      R,     R,    S),
+    "nightly-shadow-base": (S, S,  S,      S,   S,      S,      R,     R,    S),
+    # Unset MUTATION_LEDGER: never. test_the_ledger_reader_runs_only_where_it_may_be_read.
+    "mutation-ledger": (S,  S,     S,      S,   S,      S,      S,     S,    S),
+    "lint":           (R,  R,     R,      R,   R,      R,      S,     S,    S),
+    "evals":          (R,  R,     R,      R,   R,      R,      S,     S,    S),
+    "tests":          (R,  R,     S,      R,   R,      R,      S,     S,    S),
+    "tests-extended": (S,  S,     R,      R,   R,      R,      R,     R,    R),
+    "coverage-badge": (S,  S,     R,      R,   R,      R,      S,     S,    S),
+    "mutation-plan":  (R,  R,     R,      R,   R,      R,      R,     R,    R),
+    "mutation-shard": (R,  R,     S,      S,   R,      R,      R,     S,    R),
+    "mutation-advisory-shard": (S, S, S,   S,   S,      S,      R,     S,    S),
+    "mutation":       (R,  R,     R,      R,   R,      R,      R,     R,    R),
+    "install-smoke":  (R,  R,     R,      R,   R,      R,      S,     S,    S),
+    "patch-coverage": (R,  S,     S,      S,   S,      S,      S,     S,    S),
+    "bdd":            (R,  R,     R,      R,   R,      R,      S,     S,    S),
+    "onnx-inference": (R,  R,     R,      R,   R,      R,      S,     S,    S),
 }
 
 #: The only jobs a nightly or a dispatch may start: the whole-codebase
@@ -2878,6 +3503,21 @@ def test_every_job_has_a_row(jobs):
     assert set(jobs) == set(EXPECTED)
 
 
+@pytest.mark.parametrize("value", ["write,pull_request,push", "pull_request", "write"])
+def test_the_ledger_reader_runs_only_where_it_may_be_read(jobs, value):
+    # With MUTATION_LEDGER set at all, the reader starts on pull requests and
+    # pushes only -- never on a whole-codebase run, whose job page the idle
+    # walk and fact 3 read, nor on the queue -- and changes nothing else: the
+    # script decides from the exact tokens, the `if` only spares a job.
+    for column, scenario in SCENARIOS.items():
+        sim = simulate(jobs, {**scenario, "vars": {"MUTATION_LEDGER": value}})
+        assert (sim["mutation-ledger"] != "skipped") == (scenario["event"] in
+                                                         ("pull_request", "push")), column
+        unset = simulate(jobs, scenario)
+        assert {n: r for n, r in sim.items() if n != "mutation-ledger"} == {
+            n: r for n, r in unset.items() if n != "mutation-ledger"}, column
+
+
 def test_each_job_runs_exactly_where_the_table_says(jobs):
     table = run_table(jobs)
     wrong = {name: (table[name], EXPECTED[name]) for name in jobs
@@ -2911,8 +3551,34 @@ def test_a_proven_push_still_runs_every_non_test_check(jobs):
     # PR run ran the extended legs, so `tests-extended` is never in this set.
     sim = simulate(jobs, SCENARIOS["push, proven skip=true"])
     skipped = {n for n, r in sim.items() if r == "skipped"}
+    # (mutation-ledger only because MUTATION_LEDGER is unset in this model.)
     assert skipped == {"tests", "mutation-shard", "patch-coverage", "idle-nightly",
-                       "nightly-shadow-base", "mutation-advisory-shard"}
+                       "nightly-shadow-base", "mutation-advisory-shard", "mutation-ledger"}
+
+
+def test_a_push_proven_for_mutation_alone_still_runs_its_suite(jobs):
+    # A re-run PR run's tests are not first-attempt proof, so the suite (and
+    # the badge, from this run) runs; only the shards are what it proved.
+    sim = simulate(jobs, SCENARIOS["push, mutation proven"])
+    skipped = {n for n, r in sim.items() if r == "skipped"}
+    # (mutation-ledger only because MUTATION_LEDGER is unset in this model.)
+    assert skipped == {"mutation-shard", "patch-coverage", "idle-nightly",
+                       "nightly-shadow-base", "mutation-advisory-shard", "mutation-ledger"}
+
+
+def test_only_the_scope_step_reads_mutation_proven(jobs):
+    # Everything a re-run did not prove first-attempt -- the suite, the
+    # badge -- keys on `skip` and nothing else.
+    readers = []
+    for name, job in jobs.items():
+        text = json.dumps(job)
+        if "needs.proven.outputs.mutation_proven" in text:
+            readers.append(name)
+    assert readers == ["mutation-plan"]
+    plan = jobs["mutation-plan"]
+    steps = [s.get("id") for s in plan["steps"]
+             if "needs.proven.outputs.mutation_proven" in json.dumps(s)]
+    assert steps == ["scope"]
 
 
 def test_every_job_downstream_of_proven_names_a_status_function(jobs):
@@ -2969,6 +3635,13 @@ def test_the_suite_condition_case_by_case(jobs, event, skip, proven_result, runs
     assert got is runs
 
 
+@pytest.mark.parametrize("skip", ["false", ""])
+def test_a_push_proven_for_mutation_alone_runs_the_suite(jobs, skip):
+    scenario = {"event": "push", "ref": "refs/heads/main"}
+    outputs = {"proven": {"skip": skip, "mutation_proven": "true", "pr_run_id": "41"}}
+    assert job_runs(jobs, "tests", {"proven": "success"}, outputs, scenario) is True
+
+
 @pytest.mark.parametrize("event, ref, runs", [
     ("push", "refs/heads/main", True),
     ("schedule", "refs/heads/main", True),
@@ -3002,7 +3675,8 @@ def test_the_shards_check_the_planner_result_now_that_they_say_not_cancelled(job
         got = job_runs(jobs, "mutation-shard", {"mutation-plan": plan_result,
                                                 "proven": "skipped",
                                                 "idle-nightly": "skipped",
-                                                "nightly-shadow-base": "skipped"},
+                                                "nightly-shadow-base": "skipped",
+                                                "mutation-ledger": "skipped"},
                        {"mutation-plan": {"matrix": matrix}},
                        SCENARIOS["pull_request"])
         assert got is runs, (plan_result, matrix)
@@ -3017,7 +3691,8 @@ ADVISORY_IF = ("${{ !cancelled() && github.event_name == 'schedule'"
 def test_the_advisory_legs_start_only_on_a_nightly_with_a_matrix(jobs):
     assert jobs["mutation-advisory-shard"]["if"] == ADVISORY_IF
     ancestors = {"mutation-plan": "success", "proven": "skipped",
-                 "idle-nightly": "success", "nightly-shadow-base": "success"}
+                 "idle-nightly": "success", "nightly-shadow-base": "success",
+                 "mutation-ledger": "skipped"}
     for name, scenario in SCENARIOS.items():
         for result, matrix, want in [("success", ONE_ADVISORY, True),
                                      ("success", "[]", False),
@@ -3098,6 +3773,28 @@ def test_the_advisory_names_fact_3_drops_are_exactly_ci_ymls(jobs):
     for leg in ("tests-extended (macos-latest, 3.13)", "tests-extended (windows-latest, 3.14)",
                 "mutation-shard (diff, 0)", "mutation-shard (full, 0)"):
         assert not pt.ADVISORY_JOB_NAMES.fullmatch(leg), leg
+
+
+def test_the_rerun_rules_job_names_are_ci_ymls(jobs):
+    # `_mutation_carried` finds a re-run's mutation jobs only by name. A
+    # renamed job, an added `name:` or a third matrix key would make it
+    # refuse every re-run without a test noticing; this is that test.
+    for key in (pt.PLAN_JOB, pt.SHARD_JOB, pt.MUTATION_JOB):
+        assert key in jobs, key
+        assert "name" not in jobs[key], key
+    assert jobs[pt.SHARD_JOB]["strategy"]["matrix"] == {
+        "include": "${{ fromJSON(needs.mutation-plan.outputs.matrix) }}"}
+    assert [n for n in jobs[pt.MUTATION_JOB]["needs"] if not pt._is_mutation_job(n)] == [
+        "mutation-advisory-shard"]
+    mp = _plan_module()
+    plan = {"gate_set": "full", "reasons": [],
+            "sets": {"full": {"shards": [["a"]] * 3}, "diff": {"shards": [["b"]]}}}
+    legs = ["%s (%s)" % (pt.SHARD_JOB, ", ".join(str(v) for v in entry.values()))
+            for entry in mp.matrix(plan)]
+    assert legs == ["mutation-shard (full, 0)", "mutation-shard (full, 1)",
+                    "mutation-shard (full, 2)", "mutation-shard (diff, 0)"]
+    assert all(pt._is_mutation_job(leg) for leg in legs)
+    assert [bool(pt._FULL_SHARD.fullmatch(leg)) for leg in legs] == [True, True, True, False]
 
 
 def test_the_interpreter_applies_the_implicit_success_to_grandparents():
@@ -3215,7 +3912,7 @@ def test_proven_runs_only_on_push_with_read_only_scopes(jobs):
     assert job["permissions"] == {"contents": "read", "actions": "read",
                                   "pull-requests": "read"}
     assert set(job["outputs"]) == {"skip", "pr_run_id", "base_mutation_green",
-                                   "base_mutation"}
+                                   "base_mutation", "mutation_proven"}
     assert "timeout-minutes" in job
 
 
@@ -3230,7 +3927,10 @@ def test_proven_runs_the_script_with_the_token_through_env(jobs):
     assert ' --before "$BEFORE"' in step["run"]
     assert step["env"]["BEFORE"] == "${{ github.event.before }}"
     outputs = job["outputs"]
-    for key in ("skip", "pr_run_id", "base_mutation_green", "base_mutation"):
+    # Every output the script writes, and none it does not (OUTPUT_KEYS is
+    # what main() is pinned to write, in order).
+    assert set(outputs) == set(OUTPUT_KEYS)
+    for key in OUTPUT_KEYS:
         assert outputs[key] == "${{ steps.%s.outputs.%s }}" % (step["id"], key)
     # The script always exits 0; a step-level escape hatch would hide a crash.
     assert "continue-on-error" not in step
@@ -3394,6 +4094,9 @@ def _run_step(step: dict, cwd: Path, env: dict) -> subprocess.CompletedProcess:
 @needs_bash
 @pytest.mark.parametrize("tests, skip, run_id, source", [
     ("success", "false", "", "this"),        # the suite ran here and passed
+    # Proven for its mutation verdict alone: the PR run is named, and the
+    # suite ran here anyway, so the badge is this run's.
+    ("success", "false", "41", "this"),
     ("success", "", "", "this"),             # proven failed, so the suite ran
     ("skipped", "true", "41", "pr"),         # proven: the PR run measured it
     ("failure", "false", "", None),          # red suite: no badge, red job
