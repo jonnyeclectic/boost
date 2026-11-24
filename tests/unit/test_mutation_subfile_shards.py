@@ -380,10 +380,13 @@ class TestRealTree:
             for u in b:
                 assert ms.pattern_for(ROOT, u), u
 
-    def test_no_committed_shard_falls_back_to_the_whole_suite(self):
-        # A shard needs one name that can match a stats key -- anything not
-        # ending in `__mutmut_*` -- or its clean run is all of tests/unit.
-        # Shards 20 and 25 of the committed width were such shards.
+    def test_every_committed_shard_has_a_pattern_shaped_to_match_a_stats_key(self):
+        # Pattern shape only: a shard needs one name not ending in
+        # `__mutmut_*`, or its clean run is all of tests/unit (shards 20 and
+        # 25 of the committed width were such shards). There are no stats
+        # here, so this cannot say the name matches a key: a sentinel whose
+        # function mutmut never trampolines (a decorated one, such as
+        # `store.cloned_source`) matches nothing.
         for i, b in enumerate(ms.pack(ROOT, ms.SHARDS)):
             pats = ms.patterns_for_bin(ROOT, b)
             assert any(not p.endswith("__mutmut_*") for p in pats), i

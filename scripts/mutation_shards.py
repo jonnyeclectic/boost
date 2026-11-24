@@ -1091,6 +1091,18 @@ def patterns_for_bin(root: Path, units: list[Unit]) -> list[str]:
     plan and stats, sentinels on every bin cut shards 20 and 25 from 19,054
     tests (302 s of call time) to ~2,500 (~85 s) but added 476 s across the
     24 mixed shards, more than the two saved.
+
+    So a mixed bin's clean run leaves out its per-function units' tests,
+    and is not the per-runner check of every test its mutants are judged by
+    (shard 0 of the committed pack: 472 of 3,390). That gap predates the
+    sentinels, and this rule leaves it as it was. Closing it would give back
+    what the sentinels save: over the committed pack and one local stats
+    pass (``logs.reset`` credited to every test, as the autouse reset
+    fixture does), the clean runs total 63,113 test executions with this rule,
+    95,307 with a sentinel for every per-function unit, and 96,245 with
+    none. It would also grow the clean run's ``tmp_path`` tree, and pytest
+    9's session-end cleanup (``tmpdir.py``'s ``pytest_sessionfinish``) has
+    an early mutant's child delete that tree inside the mutant's timeout.
     """
     addressed = [(u, p) for u in units if (p := pattern_for(root, u))]
     patterns = [p for _, p in addressed]
@@ -1126,8 +1138,17 @@ def sentinel_for(root: Path, path: Path | Unit) -> str | None:
       shard's real patterns select. That filter asserts only that the
       combined list matched something, and those patterns still do.
 
-    ``None`` for a whole-file or methods unit and for ``__init__.py``: their
-    patterns already end in a bare ``*`` that matches the stats keys too.
+    ``None`` for a whole-file or methods unit, whose pattern already ends in
+    a bare ``*`` that matches the stats keys too, and for ``__init__.py``,
+    which has no pattern at all.
+
+    A sentinel matches a stats key only if mutmut trampolines the function
+    and some test reaches it. mutmut leaves a decorated function alone
+    (``file_mutation.py``: any decorator but a lone ``staticmethod`` or
+    ``classmethod``), so ``store.cloned_source``, a
+    ``contextlib.contextmanager``, has a unit and a sentinel but no key. A
+    bin of only such units would still clean-run the whole suite. That costs
+    time only: the same bin has no mutant to judge.
     """
     unit = path if isinstance(path, Unit) else Unit(path)
     if unit.symbol is None or unit.symbol == METHODS:
