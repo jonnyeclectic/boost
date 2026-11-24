@@ -29,6 +29,7 @@ import sys
 from pathlib import Path
 from typing import ClassVar
 
+import _tapped_support
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -63,6 +64,19 @@ def _tree_is_mutated() -> bool:
 
 real_tree_only = pytest.mark.skipif(
     _tree_is_mutated(), reason="tree rewritten by mutmut; packing it is slow")
+
+#: For a test that swaps mutmut's own process-global state or patches its
+#: live trampoline. Inside mutants/ ``needs_mutmut`` finds mutmut, so without
+#: this it also ran in mutmut's real passes, where that is the state mutmut
+#: is using: in ``stats`` a trampolined call in the window goes uncredited,
+#: in ``fail`` it raises mid-pass. Such a test pins mutmut for the planner,
+#: which runs it under BOOST_REQUIRE_MUTMUT=1 with no pass around it. Read at
+#: import, so it holds for the stats, forced-fail and mutant passes; the clean
+#: pass sets ``""``, but it runs only tests credited to a function, and a test
+#: the stats pass skipped is credited to none.
+outside_mutmut_only = pytest.mark.skipif(
+    _tapped_support.under_mutmut(),
+    reason="swaps mutmut's own state, which a mutmut pass is using")
 
 
 @pytest.fixture
@@ -112,6 +126,78 @@ def test_full_plan_reuses_the_committed_pack(tmp_path):
     assert shards == [ms.patterns_for_bin(ROOT, b) for b in ms.pack(ROOT, 24)]
     assert plan["sets"]["full"]["mutants"] is None
     assert plan["reasons"], "a plan must say why it is the plan it is"
+
+
+@outside_mutmut_only
+@pytest.mark.usefixtures("needs_mutmut")
+def test_mutmut_gives_a_per_function_shard_its_own_clean_run(tmp_path, monkeypatch):
+    # mutation_shards.sentinel_for, against mutmut's own clean-run selection
+    # (boxed/mutmut#594). A full shard of per-function units alone selects
+    # no test with its real patterns, so mutmut runs all of tests/unit; with
+    # the sentinels it runs exactly those functions' tests.
+    from mutmut.__main__ import tests_for_mutant_names
+
+    mutmut_state = importlib.import_module("mutmut.state")
+    src = tmp_path / "boost_cli" / "core"
+    src.mkdir(parents=True)
+    (src / "store.py").write_text(
+        "def install():\n    pass\n\n\ndef install_from_path():\n    pass\n",
+        encoding="utf-8")
+    pats = ms.patterns_for_bin(tmp_path, [ms.Unit(src / "store.py", "install")])
+    fresh = mutmut_state.MutmutState()
+    fresh.tests_by_mangled_function_name["boost_cli.core.store.x_install"] = {"t_install"}
+    fresh.tests_by_mangled_function_name[
+        "boost_cli.core.store.x_install_from_path"] = {"t_other"}
+    monkeypatch.setattr(mutmut_state, "_state", fresh)
+    real = [p for p in pats if p.endswith("__mutmut_*")]
+    assert real and len(real) < len(pats)
+    assert tests_for_mutant_names(real) == set()
+    assert tests_for_mutant_names(pats) == {"t_install"}
+
+
+@outside_mutmut_only
+@real_tree_only
+@pytest.mark.usefixtures("needs_mutmut")
+def test_no_committed_shard_falls_back_to_the_whole_suite(monkeypatch):
+    # The claim test_mutation_subfile_shards.py can only make about pattern
+    # shape, checked against real stats: each committed shard selects some
+    # test through mutmut's own clean-run selection, so none falls back to
+    # all of tests/unit (boxed/mutmut#594). A sentinel whose function mutmut
+    # never trampolines (a decorated one) has no key, and a shard of only
+    # such units would fail here. The planner step runs this after its stats
+    # run wrote the file, so there a missing file is an error, not a skip.
+    stats = ROOT / "mutants" / "mutmut-stats.json"
+    if not stats.is_file():
+        if os.environ.get("BOOST_REQUIRE_MUTMUT") == "1":
+            pytest.fail("no %s: the planner's stats run should have written it" % stats)
+        pytest.skip("no mutmut stats in this checkout")
+    from mutmut.__main__ import tests_for_mutant_names
+
+    mutmut_state = importlib.import_module("mutmut.state")
+    fresh = mutmut_state.MutmutState()
+    by_function = json.loads(stats.read_text(encoding="utf-8"))[
+        "tests_by_mangled_function_name"]
+    for name, tests in by_function.items():
+        fresh.tests_by_mangled_function_name[name] = set(tests)
+    monkeypatch.setattr(mutmut_state, "_state", fresh)
+    bins = ms.pack(ROOT, ms.SHARDS)
+    assert [i for i, b in enumerate(bins)
+            if not tests_for_mutant_names(ms.patterns_for_bin(ROOT, b))] == []
+
+
+def test_the_mutmut_state_tests_stay_out_of_mutmut_passes():
+    # The mark is all that keeps them out of a real pass inside mutants/.
+    for test in (test_mutmut_gives_a_per_function_shard_its_own_clean_run,
+                 test_no_committed_shard_falls_back_to_the_whole_suite):
+        assert outside_mutmut_only.mark in getattr(test, "pytestmark", []), \
+            test.__name__
+    # Its condition is read once, at import, and mutmut imports this module
+    # in one pass (`list_all_tests`) and can run this test in another (the
+    # clean pass, ""), so it is compared with nothing then: that would fail
+    # the clean run. Only the planner step, which runs these tests with no
+    # pass around them, needs it not to fire, or they skip where they count.
+    if os.environ.get("BOOST_REQUIRE_MUTMUT") == "1":
+        assert outside_mutmut_only.mark.args == (False,)
 
 
 def test_full_plan_on_a_small_tree(tmp_path):
