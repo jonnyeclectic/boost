@@ -3331,20 +3331,24 @@ def _topological(jobs: dict) -> list[str]:
     return order
 
 
-#: The eight situations the plan cares about, in the column order of the
-#: table below. `proven` is (result, skip output, pr_run_id output) for the
-#: pushes, and `idle` (result, idle output) for the nightlies; on every other
-#: event each job's own `if:` decides it never runs.
+#: The nine situations the plan cares about, in the column order of the
+#: table below. `proven` is (result, skip output, pr_run_id output,
+#: mutation_proven output) for the pushes, and `idle` (result, idle output)
+#: for the nightlies; on every other event each job's own `if:` decides it
+#: never runs. "mutation proven" is a re-run PR run whose mutation jobs all
+#: ran in attempt 1 (approved 2026-11-24): the suite runs, the shards do not.
 SCENARIOS = {
     "pull_request": {"event": "pull_request", "ref": "refs/pull/7/merge"},
     "merge_group": {"event": "merge_group",
                     "ref": "refs/heads/gh-readonly-queue/main/pr-7-abc"},
     "push, proven skip=true": {"event": "push", "ref": "refs/heads/main",
-                               "proven": ("success", "true", "41")},
+                               "proven": ("success", "true", "41", "true")},
+    "push, mutation proven": {"event": "push", "ref": "refs/heads/main",
+                              "proven": ("success", "false", "41", "true")},
     "push, proven skip=false": {"event": "push", "ref": "refs/heads/main",
-                                "proven": ("success", "false", "")},
+                                "proven": ("success", "false", "", "false")},
     "push, proven job failed": {"event": "push", "ref": "refs/heads/main",
-                                "proven": ("failure", "", "")},
+                                "proven": ("failure", "", "", "")},
     "schedule": {"event": "schedule", "ref": "refs/heads/main",
                  "idle": ("success", "false")},
     "schedule, idle": {"event": "schedule", "ref": "refs/heads/main",
@@ -3362,10 +3366,11 @@ ONE_ADVISORY = '[{"set":"diff","index":0}]'
 
 def _outcome(name: str, scenario: dict) -> tuple[str, dict]:
     if name == "proven":
-        result, skip, run_id = scenario["proven"]
+        result, skip, run_id, mutation_proven = scenario["proven"]
         if result != "success":
             return result, {}       # a failed job's outputs are empty
-        return result, {"skip": skip, "pr_run_id": run_id}
+        return result, {"skip": skip, "pr_run_id": run_id,
+                        "mutation_proven": mutation_proven}
     if name == "idle-nightly":
         result, idle = scenario["idle"]
         return result, ({"idle": idle} if result == "success" else {})
@@ -3373,9 +3378,9 @@ def _outcome(name: str, scenario: dict) -> tuple[str, dict]:
         return "success", {"shadow_base": "b" * 40, "shadow_base_run": "41",
                            "shadow_reason": "diff shadow against run 41 (schedule)"}
     if name == "mutation-plan":
-        proven = scenario.get("proven", ("", "", ""))
+        proven = scenario.get("proven", ("", "", "", ""))
         idle = scenario.get("idle", ("", ""))
-        matrix = "[]" if proven[1] == "true" or idle[1] == "true" else ONE_SHARD
+        matrix = "[]" if proven[3] == "true" or idle[1] == "true" else ONE_SHARD
         # The advisory diff legs exist only on a full nightly (C4).
         advisory = (ONE_ADVISORY if scenario["event"] == "schedule" and matrix != "[]"
                     else "[]")
@@ -3435,23 +3440,23 @@ def simulate(jobs: dict, scenario: dict) -> dict[str, str]:
 #: A new job fails test_every_job_has_a_row until someone decides its row.
 R, S = "runs", "skipped"
 EXPECTED = {
-    #                  PR  queue  skip=T  skip=F  failed  sched  idle  dispatch
-    "proven":         (S,  S,     R,      R,      R,      S,     S,    S),
-    "idle-nightly":   (S,  S,     S,      S,      S,      R,     R,    S),
-    "nightly-shadow-base": (S, S,  S,      S,      S,      R,     R,    S),
-    "lint":           (R,  R,     R,      R,      R,      S,     S,    S),
-    "evals":          (R,  R,     R,      R,      R,      S,     S,    S),
-    "tests":          (R,  R,     S,      R,      R,      S,     S,    S),
-    "tests-extended": (S,  S,     R,      R,      R,      R,     R,    R),
-    "coverage-badge": (S,  S,     R,      R,      R,      S,     S,    S),
-    "mutation-plan":  (R,  R,     R,      R,      R,      R,     R,    R),
-    "mutation-shard": (R,  R,     S,      R,      R,      R,     S,    R),
-    "mutation-advisory-shard": (S, S, S,   S,      S,      R,     S,    S),
-    "mutation":       (R,  R,     R,      R,      R,      R,     R,    R),
-    "install-smoke":  (R,  R,     R,      R,      R,      S,     S,    S),
-    "patch-coverage": (R,  S,     S,      S,      S,      S,     S,    S),
-    "bdd":            (R,  R,     R,      R,      R,      S,     S,    S),
-    "onnx-inference": (R,  R,     R,      R,      R,      S,     S,    S),
+    #                  PR  queue  skip=T  mut  skip=F  failed  sched  idle  dispatch
+    "proven":         (S,  S,     R,      R,   R,      R,      S,     S,    S),
+    "idle-nightly":   (S,  S,     S,      S,   S,      S,      R,     R,    S),
+    "nightly-shadow-base": (S, S,  S,      S,   S,      S,      R,     R,    S),
+    "lint":           (R,  R,     R,      R,   R,      R,      S,     S,    S),
+    "evals":          (R,  R,     R,      R,   R,      R,      S,     S,    S),
+    "tests":          (R,  R,     S,      R,   R,      R,      S,     S,    S),
+    "tests-extended": (S,  S,     R,      R,   R,      R,      R,     R,    R),
+    "coverage-badge": (S,  S,     R,      R,   R,      R,      S,     S,    S),
+    "mutation-plan":  (R,  R,     R,      R,   R,      R,      R,     R,    R),
+    "mutation-shard": (R,  R,     S,      S,   R,      R,      R,     S,    R),
+    "mutation-advisory-shard": (S, S, S,   S,   S,      S,      R,     S,    S),
+    "mutation":       (R,  R,     R,      R,   R,      R,      R,     R,    R),
+    "install-smoke":  (R,  R,     R,      R,   R,      R,      S,     S,    S),
+    "patch-coverage": (R,  S,     S,      S,   S,      S,      S,     S,    S),
+    "bdd":            (R,  R,     R,      R,   R,      R,      S,     S,    S),
+    "onnx-inference": (R,  R,     R,      R,   R,      R,      S,     S,    S),
 }
 
 #: The only jobs a nightly or a dispatch may start: the whole-codebase
@@ -3526,6 +3531,30 @@ def test_a_proven_push_still_runs_every_non_test_check(jobs):
                        "nightly-shadow-base", "mutation-advisory-shard"}
 
 
+def test_a_push_proven_for_mutation_alone_still_runs_its_suite(jobs):
+    # A re-run PR run's tests are not first-attempt proof, so the suite (and
+    # the badge, from this run) runs; only the shards are what it proved.
+    sim = simulate(jobs, SCENARIOS["push, mutation proven"])
+    skipped = {n for n, r in sim.items() if r == "skipped"}
+    assert skipped == {"mutation-shard", "patch-coverage", "idle-nightly",
+                       "nightly-shadow-base", "mutation-advisory-shard"}
+
+
+def test_only_the_scope_step_reads_mutation_proven(jobs):
+    # Everything a re-run did not prove first-attempt -- the suite, the
+    # badge -- keys on `skip` and nothing else.
+    readers = []
+    for name, job in jobs.items():
+        text = json.dumps(job)
+        if "needs.proven.outputs.mutation_proven" in text:
+            readers.append(name)
+    assert readers == ["mutation-plan"]
+    plan = jobs["mutation-plan"]
+    steps = [s.get("id") for s in plan["steps"]
+             if "needs.proven.outputs.mutation_proven" in json.dumps(s)]
+    assert steps == ["scope"]
+
+
 def test_every_job_downstream_of_proven_names_a_status_function(jobs):
     # The implicit `success()` reaches every ancestor, so a job anywhere below
     # `proven` without one is skipped on every pull request.
@@ -3578,6 +3607,13 @@ def test_the_suite_condition_case_by_case(jobs, event, skip, proven_result, runs
     got = job_runs(jobs, "tests", {"proven": proven_result},
                    {"proven": {"skip": skip}}, scenario)
     assert got is runs
+
+
+@pytest.mark.parametrize("skip", ["false", ""])
+def test_a_push_proven_for_mutation_alone_runs_the_suite(jobs, skip):
+    scenario = {"event": "push", "ref": "refs/heads/main"}
+    outputs = {"proven": {"skip": skip, "mutation_proven": "true", "pr_run_id": "41"}}
+    assert job_runs(jobs, "tests", {"proven": "success"}, outputs, scenario) is True
 
 
 @pytest.mark.parametrize("event, ref, runs", [
@@ -3826,7 +3862,7 @@ def test_proven_runs_only_on_push_with_read_only_scopes(jobs):
     assert job["permissions"] == {"contents": "read", "actions": "read",
                                   "pull-requests": "read"}
     assert set(job["outputs"]) == {"skip", "pr_run_id", "base_mutation_green",
-                                   "base_mutation"}
+                                   "base_mutation", "mutation_proven"}
     assert "timeout-minutes" in job
 
 
@@ -3841,7 +3877,10 @@ def test_proven_runs_the_script_with_the_token_through_env(jobs):
     assert ' --before "$BEFORE"' in step["run"]
     assert step["env"]["BEFORE"] == "${{ github.event.before }}"
     outputs = job["outputs"]
-    for key in ("skip", "pr_run_id", "base_mutation_green", "base_mutation"):
+    # Every output the script writes, and none it does not (OUTPUT_KEYS is
+    # what main() is pinned to write, in order).
+    assert set(outputs) == set(OUTPUT_KEYS)
+    for key in OUTPUT_KEYS:
         assert outputs[key] == "${{ steps.%s.outputs.%s }}" % (step["id"], key)
     # The script always exits 0; a step-level escape hatch would hide a crash.
     assert "continue-on-error" not in step
@@ -4005,6 +4044,9 @@ def _run_step(step: dict, cwd: Path, env: dict) -> subprocess.CompletedProcess:
 @needs_bash
 @pytest.mark.parametrize("tests, skip, run_id, source", [
     ("success", "false", "", "this"),        # the suite ran here and passed
+    # Proven for its mutation verdict alone: the PR run is named, and the
+    # suite ran here anyway, so the badge is this run's.
+    ("success", "false", "41", "this"),
     ("success", "", "", "this"),             # proven failed, so the suite ran
     ("skipped", "true", "41", "pr"),         # proven: the PR run measured it
     ("failure", "false", "", None),          # red suite: no badge, red job

@@ -1627,6 +1627,7 @@ class TestScopeByEvent:
         env = _step(jobs["mutation-plan"], step_id="scope")["env"]
         assert env["EVENT"] == "${{ github.event_name }}"
         assert env["SKIP"] == "${{ needs.proven.outputs.skip }}"
+        assert env["MUTATION_PROVEN"] == "${{ needs.proven.outputs.mutation_proven }}"
         assert env["PR_RUN_ID"] == "${{ needs.proven.outputs.pr_run_id }}"
         assert env["BASE_GREEN"] == "${{ needs.proven.outputs.base_mutation_green }}"
 
@@ -1650,6 +1651,35 @@ class TestScopeByEvent:
         outputs, calls = scope("push", SKIP=skip)
         assert outputs == {"relevant": "true"}
         assert any("mutation_shards.py scope" in c for c in calls), calls
+
+    def test_a_push_proven_for_mutation_alone_collects_nothing(self, scope):
+        # A re-run PR run whose mutation jobs all ran in attempt 1 (approved
+        # 2026-11-24): the same `none` plan as a skip, on the same base rule.
+        outputs, calls = scope("push", SKIP="false", MUTATION_PROVEN="true",
+                               PR_RUN_ID="4242", BASE_GREEN="true")
+        assert outputs == {"relevant": "false", "proven": "true"}
+        assert calls == []
+
+    @pytest.mark.parametrize("base_green", ["false", ""])
+    def test_a_push_proven_for_mutation_alone_on_a_base_not_green_is_not(self, scope,
+                                                                         base_green):
+        outputs, _ = scope("push", SKIP="false", MUTATION_PROVEN="true",
+                           PR_RUN_ID="4242", BASE_GREEN=base_green)
+        assert outputs.get("relevant") == "true"
+        assert "proven" not in outputs
+
+    @pytest.mark.parametrize("value", ["false", "", "TRUE", "true ", "1", "yes"])
+    def test_only_an_exact_true_proves_mutation(self, scope, value):
+        outputs, calls = scope("push", SKIP="false", MUTATION_PROVEN=value,
+                               PR_RUN_ID="4242", BASE_GREEN="true")
+        assert "proven" not in outputs
+        assert any("mutation_shards.py scope" in c for c in calls), calls
+
+    @pytest.mark.parametrize("event", ["pull_request", "merge_group"])
+    def test_mutation_proven_means_nothing_off_a_push(self, scope, event):
+        outputs, _ = scope(event, MUTATION_PROVEN="true", PR_RUN_ID="1", BASE_GREEN="true")
+        assert "proven" not in outputs
+        assert outputs["relevant"] == "true"
 
     @pytest.mark.parametrize("event", ["pull_request", "merge_group"])
     def test_skip_means_nothing_off_a_push(self, scope, event):

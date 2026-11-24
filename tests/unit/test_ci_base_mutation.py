@@ -256,6 +256,32 @@ def test_a_proven_push_onto_a_base_not_green_is_not_proven(scope, green, word, s
 
 
 @needs_bash
+@pytest.mark.parametrize("head", ["workflow-only", "core"])
+def test_a_push_proven_for_mutation_alone_onto_a_green_base_plans_nothing(scope, head):
+    # A re-run PR run whose mutation jobs all ran in attempt 1 (approved
+    # 2026-11-24): `skip` is false, so the suite runs, and the mutation plan
+    # is the proven one -- whatever the diff, as for a skip.
+    run, _ = scope
+    outputs, log = run("push", head, SKIP="false", MUTATION_PROVEN="true",
+                       PR_RUN_ID="4242", BASE_GREEN="true", BASE_MUTATION="success")
+    assert outputs == {"relevant": "false", "proven": "true"}
+    assert "mutation proven by PR run 4242" in log
+    assert "its tests run here" in log
+    assert "mutation-relevant:" not in log
+
+
+@needs_bash
+def test_a_push_proven_for_mutation_alone_onto_a_base_not_green_is_held_to_it(scope):
+    run, shas = scope
+    outputs, log = run("push", "workflow-only", SKIP="false", MUTATION_PROVEN="true",
+                       PR_RUN_ID="4242", BASE_GREEN="false", BASE_MUTATION="failure")
+    assert outputs == {"relevant": "true",
+                       "widened_reason": "base %s mutation failure; planning full"
+                       % shas["base"][:7]}
+    assert "but the base's mutation is not green" in log
+
+
+@needs_bash
 def test_a_proven_relevant_push_onto_a_base_not_green_plans_full_on_its_diff(scope):
     run, _ = scope
     outputs, log = run("push", "core", SKIP="true", PR_RUN_ID="4242",
