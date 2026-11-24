@@ -17,8 +17,14 @@ How: ``tests/clock_canary/sitecustomize.py`` shifts
 ``datetime.datetime.now/today/utcnow`` and ``datetime.date.today`` forward by
 ``BOOST_CLOCK_CANARY_DAYS`` (that file says what it leaves alone, and why).
 This script puts that directory first on ``PYTHONPATH`` for one pytest run and
-for nothing else, so a plain run never loads it. Every Python subprocess the
-suite starts, xdist workers included, inherits the variable and the shift.
+for nothing else, so a plain run never loads it. The xdist workers inherit
+the variable and the shift, and so does any Python subprocess a test starts
+with ``PYTHONPATH`` kept or added to. A test that sets ``PYTHONPATH`` outright,
+or builds its child's environment from scratch, starts that child on the real
+clock, so a bomb only that child reaches is not seen here.
+``test_sigterm_rollback.py`` and ``test_cli_pkg.py``'s
+``TestErrorFollowsItsTable`` do, and so do several unit tests, some on purpose
+(``test_mutation_plan.py`` puts its own ``sitecustomize`` there).
 
 Verdicts, for each test that fails on the moved clock. The failures are re-run
 together, apart from the rest of the suite, once moved and once on today's

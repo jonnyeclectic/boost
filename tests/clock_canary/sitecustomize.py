@@ -6,7 +6,9 @@
 sets ``BOOST_CLOCK_CANARY_DAYS``. ``site`` imports the first ``sitecustomize``
 on ``sys.path`` while the interpreter starts, before any test or boost module,
 so every later ``from datetime import datetime`` binds the stand-in below, in
-pytest, in its xdist workers and in every Python subprocess the suite starts.
+pytest, in its xdist workers and in each Python subprocess that inherits
+``PYTHONPATH`` (one started with ``PYTHONPATH`` replaced runs on the real
+clock; ``scripts/clock_canary.py`` says which tests do that).
 Nothing else puts this directory on the path: a plain run never loads it, and
 with the variable unset it changes nothing even when it is loaded.
 
