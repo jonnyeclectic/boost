@@ -41,7 +41,7 @@ class identity:** ``type(x) is datetime.datetime`` is False for every
 instance, and so is any lookup keyed on the class object taken after startup
 -- a ``functools.singledispatch`` or PyYAML representer registered on
 ``datetime.datetime``, sqlite3's default adapters. Nothing in the suite does
-that today (the canary ran clean at +14 and +30 days); a test that starts to
+that today (the canary ran clean at +14, +30 and +45 days); a test that starts to
 fails here for this shim's reason, not the calendar's, and belongs in
 ``scripts/clock_canary.py``'s ``ARTIFACTS`` saying so.
 
