@@ -542,7 +542,11 @@ def _read_json(path: Path | str) -> Any:
 
 
 def _write_json(path: Path | str, data: Any, indent: int | None = 1) -> None:
-    Path(path).write_text(json.dumps(data, indent=indent) + "\n", encoding="utf-8")
+    """Whole or not at all: a plan half-written would fail every shard's ``patterns``."""
+    path = Path(path)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(data, indent=indent) + "\n", encoding="utf-8")
+    os.replace(tmp, path)
 
 
 def stamp(plan: dict[str, Any], root: Path) -> dict[str, Any]:
@@ -962,11 +966,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "stamp":
         try:
             _write_json(args.plan, stamp(_read_json(args.plan), Path(args.root)))
-        except (OSError, ValueError, ImportError) as exc:
-            print("::warning::mutation_ledger stamp: %s" % _one_line(str(exc)))
+        except Exception as exc:    # an unstamped plan only means no ledger is written
+            print("::warning::mutation_ledger stamp: %s: %s"
+                  % (type(exc).__name__, _one_line(str(exc))))
         return 0
     if args.cmd == "apply":
-        plan = _read_json(args.plan)
+        plan = _read_json(args.plan)     # unreadable: exit 1 and the file untouched
         plan = apply(plan, root=Path(args.root),
                      ledger_path=Path(args.ledger) if args.ledger else None,
                      run_id=args.run_id, mutants=Path(args.meta), env=env, now=_now())
