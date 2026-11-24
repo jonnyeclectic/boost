@@ -52,8 +52,12 @@ cc = _load("clock_canary_under_test", SCRIPT)
 
 
 def _clean_env(**extra: str) -> dict[str, str]:
-    """This process's environment minus anything the canary sets, plus ``extra``."""
-    drop = {cc.DAYS_ENV, cc.REPORT_ENV, cc.SENTINEL_ENV, "PYTHONPATH"}
+    """This process's environment minus anything the canary sets, plus ``extra``.
+
+    The job summary goes too: a canary planted here would otherwise write its
+    verdict on a made-up bomb into the summary of the job running this file.
+    """
+    drop = {cc.DAYS_ENV, cc.REPORT_ENV, cc.SENTINEL_ENV, "PYTHONPATH", cc.SUMMARY_ENV}
     env = {k: v for k, v in os.environ.items() if k not in drop}
     env.update(extra)
     return env
@@ -279,6 +283,15 @@ class TestEnvironments:
         assert env["PYTHONPATH"] == str(SHIM_DIR)
         assert cc.DAYS_ENV not in env and cc.SENTINEL_ENV not in env
 
+    def test_the_suite_never_sees_the_job_summary(self):
+        # The summary is the canary's verdict alone. Measured before this:
+        # the suite's own children appended to it -- this file's planted
+        # canaries ("2 test(s) go red by ...") and the mutation-gate tests'
+        # stubs -- ahead of the real verdict, on every run.
+        base = {cc.SUMMARY_ENV: "/job/summary.md"}
+        for env in (cc.moved_env(base, 14), cc.today_env(base)):
+            assert cc.SUMMARY_ENV not in env
+
 
 class TestPreflight:
     def test_a_moved_interpreter_passes(self):
@@ -377,6 +390,7 @@ class TestMain:
         assert rc == 0
         assert "no date bomb within 14 days (clock moved to 2026-12-08)" in summary
         cmd, env = fake.calls[1]
+        assert cc.SUMMARY_ENV not in env, "the suite must not write the job's summary"
         assert cmd[1:8] == ["-m", "pytest", "-p", cc.PLUGIN, "--continue-on-collection-errors",
                             "tests/unit", "tests/functional"]
         assert env[cc.DAYS_ENV] == "14" and env[cc.SENTINEL_ENV] == cc.SELF_TEST
@@ -494,8 +508,8 @@ class TestAPlantedBombIsCaught:
         return subprocess.run(
             [sys.executable, str(SCRIPT), "--days", str(days), "--",
              *(targets or ("test_bomb.py",)), "-p", "no:cacheprovider"],
-            cwd=where, env=_clean_env(), capture_output=True, text=True, timeout=300,
-            check=False)
+            cwd=where, env=_clean_env(**{cc.SUMMARY_ENV: str(where / "summary.md")}),
+            capture_output=True, text=True, timeout=300, check=False)
 
     def test_one_that_goes_off_at_import_is_named_and_hides_no_other(self, bomb, stamped):
         # A module-level bomb fails collection, and a serial pytest that hits
@@ -525,6 +539,9 @@ class TestAPlantedBombIsCaught:
         assert ("::warning title=clock canary +14d::test_broken_import.py fails on "
                 "today's clock as well") in proc.stdout, proc.stdout
         assert "::error title=clock canary +14d::test_broken_import.py" not in proc.stdout
+        summary = (bomb / "summary.md").read_text(encoding="utf-8")
+        assert "2 test(s) go red by" in summary, summary
+        assert "- `test_import_bomb.py`" in summary and "- `test_broken_import.py`" in summary
 
     def test_the_default_offset_catches_it_and_says_when(self, bomb):
         proc = self._canary(bomb, cc.DEFAULT_DAYS)

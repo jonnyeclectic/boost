@@ -82,6 +82,7 @@ SHIM_DIR = ROOT / "tests" / "clock_canary"
 DAYS_ENV = "BOOST_CLOCK_CANARY_DAYS"
 REPORT_ENV = "BOOST_CLOCK_CANARY_REPORT"
 SENTINEL_ENV = "BOOST_CLOCK_CANARY_SENTINEL"
+SUMMARY_ENV = "GITHUB_STEP_SUMMARY"
 PLUGIN = "clock_canary_report"
 DEFAULT_DAYS = 14
 DEFAULT_PYTEST_ARGS = ("tests/unit", "tests/functional")
@@ -139,8 +140,15 @@ class Verdict:
 
 
 def _with_shim_path(base: Mapping[str, str]) -> dict[str, str]:
-    """``base`` with the shim's directory first on ``PYTHONPATH``, canary vars dropped."""
-    env = {k: v for k, v in base.items() if k not in (DAYS_ENV, REPORT_ENV, SENTINEL_ENV)}
+    """``base`` with the shim's directory first on ``PYTHONPATH``, canary vars dropped.
+
+    The job summary is dropped too: it holds this script's verdict and nothing
+    else. Left in, the suite's own children appended to it ahead of that
+    verdict -- the planted canaries in test_clock_canary.py announcing bombs
+    that are not in the tree, and the mutation-gate tests' stubs.
+    """
+    drop = (DAYS_ENV, REPORT_ENV, SENTINEL_ENV, SUMMARY_ENV)
+    env = {k: v for k, v in base.items() if k not in drop}
     rest = [p for p in base.get("PYTHONPATH", "").split(os.pathsep) if p]
     env["PYTHONPATH"] = os.pathsep.join([str(SHIM_DIR), *rest])
     return env
@@ -268,7 +276,7 @@ def summary(verdict: Verdict, days: int, moved_to: date) -> str:
 
 
 def _write_summary(env: Mapping[str, str], text: str) -> None:
-    path = env.get("GITHUB_STEP_SUMMARY")
+    path = env.get(SUMMARY_ENV)
     if path:
         with open(path, "a", encoding="utf-8", newline="\n") as out:
             out.write(text)
