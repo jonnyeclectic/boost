@@ -2442,7 +2442,7 @@ jobs:
                exit 1 ;;
           esac
       # One directory per set, so neither reader can pick up the other's
-      # results: the merge re-derives the 26-way pack and reads only full
+      # results: the merge reads ownership from the plan and only full
       # shards, and the comparison reads each set from its own side.
       - name: download full shard results
         if: needs.mutation-plan.outputs.gate_set == 'full'

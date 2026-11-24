@@ -1162,7 +1162,10 @@ machinery:
   only `pull_request` enabled a release can rest on a ledgered score (fact 3
   still requires a green plain whole-codebase run within 48 h). Making
   `ci_proven_tree` refuse a ledgered PR run would close it and cost each such
-  merge a full run; it is the owner's choice and not built.
+  merge a full run; it is the owner's choice and not built. The same holds
+  through `mutation_proven` (approved 2026-11-24): a re-run PR run whose
+  attempt 1 carried survivors proves its push's mutation verdict too, since
+  `_mutation_carried` reads job outcomes, not plans.
 - **Selector-dependent verdicts** (review major 2) are measured by the A/B,
   not prevented. `forkserver` isolation would remove the cause, and is a
   separate decision.
