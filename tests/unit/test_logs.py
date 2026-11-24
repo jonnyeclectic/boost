@@ -610,10 +610,13 @@ class TestJsonFileOutput:
         ts = self._records(env, monkeypatch)[0]["ts"]
         assert re.match(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$", ts), ts
         # Parsed as UTC it must be within a minute of now; a local-time stamp
-        # wearing a Z would be off by the machine's offset.
+        # wearing a Z would be off by the machine's offset. "Now" is
+        # time.time(), the clock logging stamps a record from: the clock
+        # canary (scripts/clock_canary.py) moves datetime.now() and not
+        # time.time(), so comparing the two failed there and nowhere else.
         parsed = datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ").replace(
             tzinfo=UTC)
-        assert abs((datetime.now(UTC) - parsed).total_seconds()) < 60
+        assert abs(time.time() - parsed.timestamp()) < 60
 
     def test_an_exception_is_carried_in_its_own_field(self, env, monkeypatch):
         monkeypatch.setenv("BOOST_LOG_FORMAT", "json")
