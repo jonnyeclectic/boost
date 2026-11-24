@@ -15,7 +15,8 @@ only when all three facts hold:
    A PR aimed at another branch is not counted: its ``pull_request`` run built
    the PR merged into *that* base, a different tree from the one that landed;
 2. that head's newest ``ci`` run, on the ``pull_request`` event, is a
-   first-attempt run that concluded ``success`` and was created at most 13 days
+   first-attempt run (but see THE MUTATION VERDICT OF A RE-RUN below) that
+   concluded ``success`` and was created at most 13 days
    before now. The age bound is the badge's: on a proven push ci.yml publishes
    the coverage badge from that run's ``coverage-report`` artifact, which is
    kept 14 days, so an older run cannot stand in for this push's tests. A full
@@ -70,6 +71,25 @@ the mutation shards and the coverage collection. ``tests-extended`` never reads
 it: no pull request runs those legs, so no PR run can have proven them, and
 every push to ``main`` runs them before publish.yml can release.
 
+THE MUTATION VERDICT OF A RE-RUN (approved 2026-11-24 for the mutation verdict
+only; docs/superpowers/plans/2026-10-31-ci-speed.md, review focus 4). A PR run
+re-run for a reason that is not mutation -- typically a macOS ``tests`` cell
+cancelled with no steps after ~52 min, then "re-run failed jobs" -- used to
+send its merge push to the full 26-shard run: 42430658365 (push 42444697189,
+179.6 min) and 41861286489 (push 41892921723, 187.7 min). Its tests are still
+not first-attempt evidence, so such a run never gives ``skip=true``. But when
+every mutation job of it executed exactly once, in attempt 1, and passed
+there (``_mutation_carried``), its mutation verdict is first-attempt evidence,
+and ``decide`` returns ``mutation_only``: ``skip=false`` (this push runs its
+tests) with ``mutation_proven=true`` and the run's id. Facts 1 and 3 and the
+rest of fact 2 hold exactly as for a full proof. A re-run that executed any
+mutation job again -- 42463209202 re-ran them all in attempt 2, then only
+``lint`` in attempt 3 -- proves nothing, and neither does one whose first
+mutation verdict was red (41893440023, 42674048836). ``gather`` reads every
+attempt's jobs (``actions/runs/{id}/attempts/{n}/jobs``, paginated) only for
+a green re-run of this tree of at most ``MAX_ATTEMPTS`` attempts, and any
+error there is an error like any other: nothing is proven.
+
 THE DIRECTION IS THE WHOLE POINT. A wrong "skip" ships code no mutation run has
 seen; a wrong "run" costs one mutation run. So every fact that is unknown,
 missing, errored or ambiguous gives ``skip=false`` with a reason, and exactly one
@@ -91,8 +111,10 @@ shape gives ``true``. Concretely:
   itself say ``head_branch == "main"`` (a ``workflow_dispatch`` on a feature
   branch is routine, and its result says nothing about ``main``); a run on another
   branch, or with no branch at all, is unknown, not skipped over. ``run_attempt`` has to
-  be 1: a re-run is the "cancelled or re-run" case in the plan's review focus, and
-  the cost of reading it as unproven is one extra mutation run. A run object that
+  be 1 for ``skip=true``: a re-run is the "cancelled or re-run" case in the plan's
+  review focus. Since 2026-11-24 a re-run may still prove the mutation verdict
+  alone (see above), and only on its attempts' own job listings: every
+  mutation job carried over from attempt 1, green there. A run object that
   lacks one of those fields yields a value ``decide`` rejects; absence is never
   defaulted into "fine". Likewise the artifact listing is asked for one name
   and every entry is checked for exactly that name, an ``expired`` that is the
@@ -188,9 +210,12 @@ the same discipline as the decision above.
 
 CLI. ``ci_proven_tree.py --sha SHA [--before SHA]`` reads ``GITHUB_REPOSITORY``
 and ``GITHUB_TOKEN``, appends ``skip=true|false``, ``pr_run_id=<id or empty>``,
-``base_mutation_green=true|false`` and ``base_mutation=<word>`` (see
-``base_mutation``) to ``$GITHUB_OUTPUT``, and appends the reason to
-``$GITHUB_STEP_SUMMARY``. It
+``base_mutation_green=true|false``, ``base_mutation=<word>`` (see
+``base_mutation``) and ``mutation_proven=true|false`` to ``$GITHUB_OUTPUT``,
+and appends the reason to ``$GITHUB_STEP_SUMMARY``. ``mutation_proven`` is
+true whenever ``skip`` is, and also on a re-run that proves the mutation
+verdict alone; ``pr_run_id`` names the PR run whenever ``mutation_proven`` is
+true, and is empty otherwise. It
 **always exits 0**: a nonzero exit would fail the job rather than fall back to a
 full run, and the step's outputs are what the workflow reads. The reason can
 carry strings that came from the API, so it is flattened to one bounded line
@@ -226,6 +251,17 @@ red ``tests-extended`` leg leaves the run's ``mutation`` listed: push run
 39729763526 (three attempts) listed 34 jobs under ``filter=latest``, every one
 with ``run_attempt`` 3, ``lint`` among them under a new job id but with its
 attempt-1 ``started_at`` (05:44:42Z on 10-22) -- carried over, not re-run.
+The re-run rule's one, on 2026-11-24: ``actions/runs/45263898738/attempts/
+{1,2}/jobs?per_page=100`` returned ``total_count`` 46 and 46 ``jobs`` each,
+every one carrying ``id``, ``run_id``, ``run_attempt`` (the attempt asked
+for), ``name``, ``status``, ``conclusion``, ``created_at``, ``started_at`` and
+``completed_at``; attempt 2's ``mutation`` (job 138090277492) was created at
+23:22:57Z with attempt 1's (138089484031) start and end, 23:21:27Z and
+23:22:18Z, while its re-run ``tests (macos-latest, 3.12)`` was created at
+23:22:56Z and started at 23:23:00Z. ``actions/runs/42463209202/attempts/
+{1,2,3}/jobs`` returned 44 each; attempt 3's ``mutation-shard (full, 0)``
+was created at 11:48:27Z with attempt 2's start (10:38:55Z), not attempt 1's
+(08:40:24Z).
 """
 from __future__ import annotations
 
@@ -291,6 +327,27 @@ MAX_REASON_CHARS = 500
 #: check (.github/required-checks.txt). It sets no `name:`, so the jobs API
 #: names it by its key; tests/unit/test_ci_base_mutation.py pins both.
 MUTATION_JOB = "mutation"
+
+#: The rest of a pull request run's mutation verdict, as the jobs API names
+#: them: the planner (no matrix) and each shard leg, a matrix job with no
+#: `name:` over ``{"set": ..., "index": N}``, so ``mutation-shard (full, 3)``
+#: -- the shape every recorded PR run's attempts listed. ``_is_mutation_job``
+#: says which jobs a re-run must have carried over; tests/unit/
+#: test_ci_proven_tree.py ties both names to ci.yml.
+PLAN_JOB = "mutation-plan"
+SHARD_JOB = "mutation-shard"
+_FULL_SHARD = re.compile(re.escape(SHARD_JOB) + r" \(full, (0|[1-9][0-9]{0,3})\)")
+
+#: The most attempts of one PR run that are read. Each costs a jobs request
+#: (two past 100 jobs), inside `proven`'s 5-minute job cap; the re-run PR runs
+#: on record stopped at attempt 3. A run re-run more often than this proves
+#: nothing, which costs one mutation run.
+MAX_ATTEMPTS = 5
+
+#: Pages of one attempt's job listing that are read. A pull request run lists
+#: 44-46 jobs (a full plan), plus up to 16 diff shards in shadow mode: one page.
+#: A listing that does not end inside this many is an error, not a guess.
+MAX_JOB_PAGES = 3
 
 #: One page. Asked for explicitly, and a listing whose total_count says it
 #: holds more than came back is not read: the newest run, or the one job named
@@ -389,6 +446,24 @@ class Artifact:
 
 
 @dataclass(frozen=True)
+class Job:
+    """One entry of a run attempt's job listing, as far as the re-run rule reads it.
+
+    Every field is the entry's own, or ``None`` / ``""`` when it is absent or
+    of the wrong type -- which ``_mutation_carried`` never reads as fine.
+    """
+
+    name: str
+    run_id: int | None
+    attempt: int | None
+    status: str
+    conclusion: str
+    created_at: datetime | None
+    started_at: datetime | None
+    completed_at: datetime | None
+
+
+@dataclass(frozen=True)
 class Candidate:
     """One PR head, and the newest ``ci`` run found for it.
 
@@ -409,6 +484,12 @@ class Candidate:
     built that tree", which ``decide`` never skips on. ``gather`` lists them
     for every run it finds; the server's ``name`` filter is not trusted, so
     every entry is kept for ``decide`` to check.
+
+    ``attempts`` is every attempt's job listing, attempt 1 first, and is read
+    only for a re-run (``run_attempt`` 2 to ``MAX_ATTEMPTS``): it is what
+    ``_mutation_carried`` judges. ``gather`` fills it only for a re-run that
+    concluded ``success`` on this commit's tree, and empty -- the default --
+    is "not read", which never proves anything.
     """
 
     head_sha: str
@@ -420,6 +501,7 @@ class Candidate:
     run_attempt: int = 1
     run_created_at: datetime | None = None
     artifacts: tuple[Artifact, ...] = ()
+    attempts: tuple[tuple[Job, ...], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -441,9 +523,25 @@ class Nightly:
 
 @dataclass(frozen=True)
 class Decision:
+    """The verdict ``main`` writes.
+
+    ``skip`` is the whole proof: the PR run's first attempt passed, so this
+    push skips its tests and its mutation run alike. ``mutation_only`` is the
+    narrower one, only ever beside ``skip=False``: the PR run is a re-run, so
+    its tests are not first-attempt evidence and this push runs them, but its
+    mutation jobs all ran once, in attempt 1, and passed (``_mutation_carried``).
+    ``pr_run_id`` names the PR run in both cases and is ``None`` otherwise.
+    """
+
     skip: bool
     reason: str
     pr_run_id: int | None = None
+    mutation_only: bool = False
+
+    @property
+    def mutation_proven(self) -> bool:
+        """Is this push's mutation verdict the PR run's? True for both proofs."""
+        return self.skip is True or self.mutation_only is True
 
 
 def _is_int(value: Any) -> bool:
@@ -451,56 +549,192 @@ def _is_int(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
 
-def _judge(merge_tree: str, cand: Candidate, now: datetime) -> tuple[bool, str]:
-    """Is this candidate the proof? Returns (yes, why-not-or-why)."""
+def _is_mutation_job(name: str) -> bool:
+    """Is a PR run's job of this name one the mutation verdict is made of?
+
+    ``mutation-plan``, ``mutation`` and every ``mutation-shard`` leg, whatever
+    its set (``full`` or ``diff``), and the bare ``mutation-shard`` a skipped
+    matrix is listed as. Never a looser prefix: ``mutation-advisory-shard`` is
+    skipped on every pull request, and a re-run re-evaluates a skipped job
+    with a fresh ``started_at`` -- matched, it would refuse every re-run.
+    Matching every shard name, not only ``full`` ones, is the strict
+    direction: each one matched must be green in attempt 1 and carried after.
+    """
+    return (name in (PLAN_JOB, MUTATION_JOB, SHARD_JOB)
+            or name.startswith(SHARD_JOB + " ("))
+
+
+def _mutation_jobs(jobs: tuple[Job, ...], run_id: int, attempt: int) -> dict[str, Job] | str:
+    """Attempt ``attempt``'s mutation jobs by name, or why the listing cannot say.
+
+    A name listed twice, or a job that does not say it is this run's job in
+    this attempt (absent included), is a listing this rule was not checked
+    against.
+    """
+    found: dict[str, Job] = {}
+    for job in jobs:
+        if not _is_mutation_job(job.name):
+            continue
+        if job.name in found:
+            return "attempt %d lists %s twice" % (attempt, job.name)
+        if job.run_id != run_id or job.attempt != attempt:
+            return "attempt %d lists a %s that does not say it is run %d's attempt %d" % (
+                attempt, job.name, run_id, attempt)
+        found[job.name] = job
+    return found
+
+
+def _mutation_carried(run_id: int, attempts: tuple[tuple[Job, ...], ...]) -> str | None:
+    """Did every mutation job of this re-run execute once, in attempt 1, and pass?
+
+    None when it did; otherwise why not, as a clause. ``attempts`` holds every
+    attempt's job listing, attempt 1 first. The rule (approved 2026-11-24,
+    docs/superpowers/plans/2026-10-31-ci-speed.md, review focus 4):
+
+    * attempt 1 ran ``mutation-plan``, ``mutation`` and full shards
+      ``0..n-1`` (``n`` at least 1), and every mutation job in it
+      (``_is_mutation_job``) completed with ``success``, has a start and an
+      end time, and was created no later than it started (it ran there).
+      So a PR that planned no shards is refused (its bare
+      ``mutation-shard`` is ``skipped``), and so is a run whose first
+      verdict was red, whatever a later attempt made of it;
+    * every later attempt lists exactly the same mutation jobs, and each copy
+      is attempt 1's execution carried over: completed ``success``, the same
+      ``started_at`` and ``completed_at`` as attempt 1's, and a ``created_at``
+      after that start. GitHub copies a job a re-run does not run into the new
+      attempt under a new id, keeping the old start and end and stamping the
+      new attempt's creation time (45263898738, 42430658365, 41861286489). A
+      job that ran again starts after its new attempt was created, so it fails
+      both tests.
+
+    Comparing with attempt 1's copy, rather than with the latest attempt's
+    start, is the point: 42463209202 re-ran every mutation job in attempt 2
+    and only ``lint`` in attempt 3, so attempt 3's copies all started before
+    attempt 3 did -- carried, but carried from attempt 2. Those timestamps are
+    observed, not documented by GitHub; a copy that does not match them is
+    refused, which costs one mutation run.
+    """
+    if len(attempts) < 2:
+        return "no later attempt's jobs were read"
+    first = _mutation_jobs(attempts[0], run_id, 1)
+    if isinstance(first, str):
+        return first
+    if PLAN_JOB not in first or MUTATION_JOB not in first:
+        return "attempt 1 ran no %s or no %s job" % (PLAN_JOB, MUTATION_JOB)
+    full = sorted(int(m[1]) for name in first if (m := _FULL_SHARD.fullmatch(name)))
+    if not full or full != list(range(len(full))):
+        return "attempt 1's full mutation shards are not 0 to n-1"
+    for name, job in sorted(first.items()):
+        if job.status != "completed" or job.conclusion != "success":
+            return "attempt 1's %s is %s/%s" % (name, _word(job.status), _word(job.conclusion))
+        if job.started_at is None or job.completed_at is None:
+            return "attempt 1's %s has no start or end time" % name
+        # Where it ran, so created no later than it started -- the converse
+        # of the carried-over test below, and what every recorded one shows.
+        if job.created_at is None or job.created_at > job.started_at:
+            return "attempt 1's %s was created after it started, so it did not run " \
+                   "there" % name
+    for attempt, listing in enumerate(attempts[1:], start=2):
+        later = _mutation_jobs(listing, run_id, attempt)
+        if isinstance(later, str):
+            return later
+        if set(later) != set(first):
+            return "attempt %d's mutation jobs are not attempt 1's" % attempt
+        for name, job in sorted(later.items()):
+            one = first[name]
+            if job.status != "completed" or job.conclusion != "success":
+                return "attempt %d's %s is %s/%s" % (
+                    attempt, name, _word(job.status), _word(job.conclusion))
+            if (job.started_at is None or job.started_at != one.started_at
+                    or job.completed_at != one.completed_at):
+                return "%s ran again in attempt %d" % (name, attempt)
+            if job.created_at is None or not job.created_at > job.started_at:
+                return "attempt %d's %s was not created after it started, so it is not " \
+                       "a carried-over copy" % (attempt, name)
+    return None
+
+
+def _rerun_problem(cand: Candidate) -> str | None:
+    """Why this re-run does not prove its tree's mutation, or None when it does."""
+    attempt = cand.run_attempt
+    if not _is_int(attempt) or attempt < 1:
+        return "only a first attempt, or a re-run whose mutation jobs all ran in it, counts"
+    if attempt > MAX_ATTEMPTS:
+        return "a run re-run more than %d times is not read" % (MAX_ATTEMPTS - 1)
+    run_id = cand.run_id
+    # _is_int's test, spelled out so the type checker sees an int below.
+    if len(cand.attempts) != attempt or not isinstance(run_id, int) or isinstance(run_id, bool):
+        return "its attempts' job listings were not all read"
+    return _mutation_carried(run_id, cand.attempts)
+
+
+#: What ``_judge`` says a candidate proves: everything this push would run
+#: again, its mutation verdict alone, or nothing.
+FULL = "full"
+MUTATION_ONLY = "mutation"
+
+
+def _judge(merge_tree: str, cand: Candidate, now: datetime) -> tuple[str | None, str]:
+    """What does this candidate prove? Returns (FULL | MUTATION_ONLY | None, why)."""
     head = (cand.head_sha or "?")[:12]
     if not cand.head_sha:
-        return False, "a candidate has no head sha"
+        return None, "a candidate has no head sha"
     if not cand.head_tree:
-        return False, "PR head %s: its tree is unknown" % head
+        return None, "PR head %s: its tree is unknown" % head
     if cand.head_tree != merge_tree:
-        return False, "PR head %s: tree %s differs from this commit's %s" % (
+        return None, "PR head %s: tree %s differs from this commit's %s" % (
             head, cand.head_tree[:12], merge_tree[:12])
     if not _is_int(cand.run_id):
-        return False, "PR head %s: no ci pull_request run found" % head
+        return None, "PR head %s: no ci pull_request run found" % head
     where = "PR head %s: ci run %s" % (head, cand.run_id)
     if cand.run_event != "pull_request":
-        return False, "%s was a %r run, not pull_request" % (where, cand.run_event)
+        return None, "%s was a %r run, not pull_request" % (where, cand.run_event)
     run_head = cand.head_sha if cand.run_head_sha is None else cand.run_head_sha
     if run_head != cand.head_sha:
-        return False, "%s is for head %s, not this one" % (where, run_head[:12] or "?")
+        return None, "%s is for head %s, not this one" % (where, run_head[:12] or "?")
     if cand.conclusion is None:
-        return False, "%s has no conclusion yet (still running)" % where
+        return None, "%s has no conclusion yet (still running)" % where
     if cand.conclusion != "success":
-        return False, "%s concluded %s" % (where, cand.conclusion)
+        return None, "%s concluded %s" % (where, cand.conclusion)
+    proof = FULL
     if cand.run_attempt != 1:
-        return False, "%s is attempt %s, and only a first attempt counts" % (
-            where, cand.run_attempt or "unknown")
+        # A re-run's tests are not first-attempt evidence; its mutation
+        # verdict still is when no mutation job ran after attempt 1.
+        problem = _rerun_problem(cand)
+        if problem is not None:
+            return None, "%s is attempt %s, and %s" % (
+                where, cand.run_attempt or "unknown", problem)
+        proof = MUTATION_ONLY
     # Last, so a run that is red or re-run is reported as that, not as old.
     if cand.run_created_at is None:
-        return False, "%s: created_at unknown, so its age is too" % where
+        return None, "%s: created_at unknown, so its age is too" % where
     age = now - cand.run_created_at
     if age > MAX_PR_RUN_AGE:
-        return False, ("%s is %s days old; a PR run proves a tree for %d days, "
-                       "while its coverage-report artifact (kept 14) still exists"
-                       % (where, _days(age), MAX_PR_RUN_AGE.days))
+        return None, ("%s is %s days old; a PR run proves a tree for %d days, "
+                      "while its coverage-report artifact (kept 14) still exists"
+                      % (where, _days(age), MAX_PR_RUN_AGE.days))
     if age < -CLOCK_SKEW:
-        return False, "%s: created_at is in the future (%sh ahead of this clock)" % (
+        return None, "%s: created_at is in the future (%sh ahead of this clock)" % (
             where, _hours(age))
-    # The run is green, first-attempt and fresh; did it build THIS tree? Only
-    # its own record says so: the head tree matching is not enough, because
-    # the run may have merged that head into another base (fact 2).
+    # The run is green, first-attempt (or carried its mutation jobs from
+    # there) and fresh; did it build THIS tree? Only its own record says so:
+    # the head tree matching is not enough, because the run may have merged
+    # that head into another base (fact 2).
     want = TESTED_TREE_ARTIFACT + merge_tree
     named = [a for a in cand.artifacts
              if a.name == want and a.run_id in (None, cand.run_id)]
     if not named:
-        return False, ("%s left no %s%s artifact, so nothing says it built this "
-                       "tree (it may have merged the head into another base)"
-                       % (where, TESTED_TREE_ARTIFACT, merge_tree[:12]))
+        return None, ("%s left no %s%s artifact, so nothing says it built this "
+                      "tree (it may have merged the head into another base)"
+                      % (where, TESTED_TREE_ARTIFACT, merge_tree[:12]))
     if not any(a.expired is False for a in named):
-        return False, "%s: its %s%s artifact has expired" % (
+        return None, "%s: its %s%s artifact has expired" % (
             where, TESTED_TREE_ARTIFACT, merge_tree[:12])
-    return True, "%s succeeded on this exact tree" % where
+    if proof == MUTATION_ONLY:
+        return proof, ("%s succeeded on this exact tree at attempt %d: every mutation "
+                       "job ran once, in attempt 1, and passed, so its mutation verdict "
+                       "counts and its tests do not" % (where, cand.run_attempt))
+    return proof, "%s succeeded on this exact tree" % where
 
 
 def _hours(delta: timedelta) -> str:
@@ -541,6 +775,10 @@ def decide(merge_tree: str, candidates: list[Candidate],
     now = datetime.now(UTC) if now is None else now
     reasons: list[str] = []
     winner: Candidate | None = None
+    # A re-run that proves the mutation verdict alone. Kept in case no
+    # candidate proves everything; its reason is kept as well, so a red
+    # nightly behind it still says what it would have proven.
+    partial: Candidate | None = None
     if not isinstance(merge_tree, str) or not merge_tree:
         reasons.append("this commit's tree is unknown")
     elif not candidates:
@@ -548,10 +786,12 @@ def decide(merge_tree: str, candidates: list[Candidate],
                        "(a direct push, or a PR aimed at another branch)")
     else:
         for cand in candidates:
-            ok, why = _judge(merge_tree, cand, now)
-            if ok:
+            proof, why = _judge(merge_tree, cand, now)
+            if proof == FULL:
                 winner = cand
                 break
+            if proof == MUTATION_ONLY and partial is None:
+                partial = cand
             reasons.append(why)
     if len(reasons) > MAX_REASONS:      # the nightly's reasons below are never cut
         reasons = [*reasons[:MAX_REASONS], "and %d more" % (len(reasons) - MAX_REASONS)]
@@ -580,6 +820,17 @@ def decide(merge_tree: str, candidates: list[Candidate],
             "latest whole-codebase run on main passed mutation" % (
                 merge_tree[:12], winner.head_sha[:12], winner.run_id),
             winner.run_id)
+    if partial is not None and conclusion == "success" and age_problem is None:
+        # Fact 3 holds as it does for a full proof: the nightly backstop is
+        # about the mutation score, which is exactly what this proves.
+        return Decision(
+            False,
+            "mutation only: tree %s is PR head %s's tree, and ci run %s succeeded on "
+            "it at attempt %d with every mutation job run once, in attempt 1, and "
+            "green; the latest whole-codebase run on main passed mutation. A re-run's "
+            "tests are not first-attempt proof, so this push runs them"
+            % (merge_tree[:12], partial.head_sha[:12], partial.run_id, partial.run_attempt),
+            partial.run_id, mutation_only=True)
     return Decision(False, "; ".join(reasons), None)
 
 
@@ -670,6 +921,55 @@ def _artifacts(api: Api, run_id: int, merge_tree: str) -> tuple[Artifact, ...]:
     return tuple(out)
 
 
+def _job(item: dict[str, Any]) -> Job:
+    def number(key: str) -> int | None:
+        value = item.get(key)
+        return value if _is_int(value) else None
+
+    return Job(_text(item.get("name")), number("run_id"), number("run_attempt"),
+               _text(item.get("status")), _text(item.get("conclusion")),
+               _parse_when(item.get("created_at")), _parse_when(item.get("started_at")),
+               _parse_when(item.get("completed_at")))
+
+
+def _attempt_jobs(api: Api, run_id: int, attempt: int) -> tuple[Job, ...]:
+    """Every job of run ``run_id``'s attempt ``attempt``, unjudged, or it raises.
+
+    ``actions/runs/{id}/attempts/{n}/jobs``, page by page, never
+    ``filter=all``: that lists every attempt's copies at once and overflowed
+    one page on 42463209202 (132 jobs). The pages must add up to the
+    ``total_count`` every one of them states -- a short page, a count that
+    changes between pages, a job id seen twice, more than ``MAX_JOB_PAGES``
+    pages or a listing of the wrong shape raises, as ``_page`` does: a job
+    that matters could be the one that never came back.
+    """
+    found: list[dict[str, Any]] = []
+    total: int | None = None
+    for page in range(1, MAX_JOB_PAGES + 1):
+        listing = api("actions/runs/%d/attempts/%d/jobs?per_page=%d&page=%d"
+                      % (run_id, attempt, PER_PAGE, page))
+        jobs = _dig(listing, "jobs")
+        if not isinstance(jobs, list) or not all(isinstance(j, dict) for j in jobs):
+            raise ValueError("response has no jobs list")
+        count = _dig(listing, "total_count")
+        if not _is_int(count) or (total is not None and count != total):
+            raise ValueError("attempt %d's jobs listing has no steady integer total_count"
+                             % attempt)
+        total = count
+        if not jobs:
+            break
+        found.extend(jobs)
+        if len(found) >= count:
+            break
+    if len(found) != total:
+        raise ValueError("attempt %d of run %d lists %s jobs, and %d came back"
+                         % (attempt, run_id, total, len(found)))
+    ids = [j.get("id") for j in found]
+    if not all(_is_int(i) for i in ids) or len(set(ids)) != len(ids):
+        raise ValueError("attempt %d's jobs listing repeats a job or lacks an id" % attempt)
+    return tuple(_job(j) for j in found)
+
+
 def _candidate(api: Api, head: str, merge_tree: str) -> Candidate:
     tree = _tree_sha(api("git/commits/%s" % head), "PR head %s" % head[:12])
     run = _newest(_runs(api("actions/workflows/ci.yml/runs?head_sha=%s&event=pull_request" % head)))
@@ -682,14 +982,23 @@ def _candidate(api: Api, head: str, merge_tree: str) -> Candidate:
     conclusion = run.get("conclusion")
     if (status is not None and status != "completed") or not isinstance(conclusion, str) or not conclusion:
         conclusion = None
-    attempt = run.get("run_attempt")
+    found = run.get("run_attempt")
+    attempt = found if isinstance(found, int) and not isinstance(found, bool) else 0
+    # A green re-run of this tree is asked what each attempt ran: the only
+    # requests beyond what a first attempt costs, and only where they can
+    # matter. Everything is judged again in `decide`.
+    attempts: tuple[tuple[Job, ...], ...] = ()
+    if (run_id is not None and conclusion == "success" and tree == merge_tree
+            and 2 <= attempt <= MAX_ATTEMPTS):
+        attempts = tuple(_attempt_jobs(api, run_id, n) for n in range(1, attempt + 1))
     return Candidate(
         head, tree, run_id, conclusion,
         run_event=_text(run.get("event")),
         run_head_sha=_text(run.get("head_sha")),
-        run_attempt=attempt if _is_int(attempt) else 0,
+        run_attempt=attempt,
         run_created_at=_parse_when(run.get("created_at")),
-        artifacts=() if run_id is None else _artifacts(api, run_id, merge_tree))
+        artifacts=() if run_id is None else _artifacts(api, run_id, merge_tree),
+        attempts=attempts)
 
 
 def _newest_completed_whole(api: Api) -> dict[str, Any] | None:
@@ -1527,21 +1836,24 @@ def main(argv: list[str] | None = None, *, api: Api | None = None,
     base = _base_for(argv, api, env)
     skip = "true" if decision.skip else "false"
     run_id = "" if decision.pr_run_id is None else str(decision.pr_run_id)
+    # Never without a run to name: the planner's reason names it.
+    proven = "true" if decision.mutation_proven and run_id else "false"
     reason = _oneline(decision.reason)
     green = "true" if base.green is True else "false"
     word = base.word if _BASE_WORD.fullmatch(base.word) else "unknown"
-    print("ci_proven_tree: skip=%s pr_run_id=%s base_mutation_green=%s base_mutation=%s -- %s"
-          % (skip, run_id, green, word, reason))
-    lines = "skip=%s\npr_run_id=%s\nbase_mutation_green=%s\nbase_mutation=%s\n" % (
-        skip, run_id, green, word)
+    print("ci_proven_tree: skip=%s pr_run_id=%s base_mutation_green=%s base_mutation=%s "
+          "mutation_proven=%s -- %s" % (skip, run_id, green, word, proven, reason))
+    lines = ("skip=%s\npr_run_id=%s\nbase_mutation_green=%s\nbase_mutation=%s\n"
+             "mutation_proven=%s\n" % (skip, run_id, green, word, proven))
     if env.get("GITHUB_OUTPUT"):
         _append(env["GITHUB_OUTPUT"], lines, "GITHUB_OUTPUT")
     else:
         print(lines, end="")
     if env.get("GITHUB_STEP_SUMMARY"):
         _append(env["GITHUB_STEP_SUMMARY"],
-                "### Proven-tree check\n\n- skip: `%s`\n- reason: %s\n"
-                "- base commit's mutation: `%s` (green: `%s`)\n" % (skip, reason, word, green),
+                "### Proven-tree check\n\n- skip: `%s`\n- mutation proven: `%s`\n"
+                "- reason: %s\n- base commit's mutation: `%s` (green: `%s`)\n"
+                % (skip, proven, reason, word, green),
                 "GITHUB_STEP_SUMMARY")
     return 0
 
